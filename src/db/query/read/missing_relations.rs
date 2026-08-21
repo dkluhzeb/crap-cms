@@ -12,7 +12,7 @@ use crate::{
     db::{
         DbConnection, DbValue,
         query::{
-            helpers::prefixed_name,
+            helpers::{placeholder_list, prefixed_name},
             ref_count::{walk_blocks_with, walk_nested_with},
         },
     },
@@ -233,11 +233,10 @@ fn query_existing_ids(
     if ids.is_empty() {
         return HashSet::new();
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
     let sql = format!(
         "SELECT id FROM \"{}\" WHERE id IN ({})",
         collection,
-        placeholders.join(", ")
+        placeholder_list(conn, ids.len())
     );
     let params: Vec<DbValue> = ids.iter().map(|s| DbValue::Text(s.clone())).collect();
     match conn.query_all(&sql, &params) {

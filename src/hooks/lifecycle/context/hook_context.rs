@@ -1,14 +1,12 @@
 //! Hook context types and Rust↔Lua marshalling.
 
-use mlua::{Lua, Result as LuaResult, Table, Value};
-use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use mlua::{Lua, Result as LuaResult, Table};
 
 use crate::{
     core::{Document, DocumentFields, ReqContext, event::EventUser},
-    hooks::{
-        lifecycle::{HookDepth, converters::document_to_lua_table},
-        lua_api,
+    hooks::lifecycle::{
+        HookDepth,
+        converters::{document_to_lua_table, lua_table_to_json_map, map_to_lua_table},
     },
     typegen::lua::LuaAnnotation,
 };
@@ -100,8 +98,8 @@ impl HookContext {
 
         tbl.set("collection", self.collection.as_str())?;
         tbl.set("operation", self.operation.as_str())?;
-        tbl.set("data", hashmap_to_lua(lua, &self.data)?)?;
-        tbl.set("context", hashmap_to_lua(lua, &self.context)?)?;
+        tbl.set("data", map_to_lua_table(lua, self.data.as_map())?)?;
+        tbl.set("context", map_to_lua_table(lua, self.context.as_map())?)?;
 
         let depth = lua.app_data_ref::<HookDepth>().map_or(0, |d| d.0);
         tbl.set("hook_depth", depth)?;
@@ -142,35 +140,24 @@ impl HookContext {
         self.data.clone()
     }
 
-    /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
-    pub(crate) fn read_context_back(&mut self, tbl: &Table) {
+    /// Read the `context` table from a returned Lua hook table, replacing
+    /// `self.context`. Propagates a conversion failure rather than silently
+    /// dropping the offending key — matching `read_hook_result` and
+    /// `lua_table_to_auth_user`, which both `?` on `lua_to_json`.
+    pub(crate) fn read_context_back(&mut self, tbl: &Table) -> LuaResult<()> {
         if let Ok(context_tbl) = tbl.get::<Table>("context") {
-            self.context.clear();
-
-            for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
-                if let Ok(json_val) = lua_api::lua_to_json(&v) {
-                    self.context.insert(k, json_val);
-                }
-            }
+            self.context = lua_table_to_json_map(&context_tbl)?.into();
         }
+
+        Ok(())
     }
-}
-
-/// Convert a `HashMap`<String, `JsonValue`> to a Lua table.
-fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
-
-    for (k, v) in map {
-        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
-    }
-
-    Ok(tbl)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn to_lua_table_with_locale_and_draft() {
@@ -216,7 +203,7 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&tbl);
+        ctx.read_context_back(&tbl).unwrap();
 
         assert!(
             !ctx.context.contains_key("old_key"),
@@ -236,9 +223,26 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&tbl);
+        ctx.read_context_back(&tbl).unwrap();
 
         assert!(ctx.context.contains_key("old_key"));
+    }
+
+    /// Regression: a context value that has no JSON representation (here a NaN
+    /// number) must make `read_context_back` return `Err`, not silently drop
+    /// the key. This matches `read_hook_result` / `lua_table_to_auth_user`,
+    /// which both `?` on the same conversion.
+    #[test]
+    fn read_context_back_propagates_conversion_error() {
+        let lua = mlua::Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let ctx_tbl = lua.create_table().unwrap();
+        ctx_tbl.set("bad", f64::NAN).unwrap();
+        tbl.set("context", ctx_tbl).unwrap();
+
+        let mut ctx = HookContext::builder("test", "create").build();
+
+        assert!(ctx.read_context_back(&tbl).is_err());
     }
 
     #[test]

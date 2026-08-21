@@ -3,7 +3,6 @@ use std::sync::Arc;
 use axum::{
     Extension, Json,
     extract::{Path, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde_json::json;
@@ -11,7 +10,12 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::{AdminState, handlers::shared::check_access_or_forbid},
+    admin::{
+        AdminState,
+        handlers::shared::{
+            check_access_or_forbid, json_forbidden, json_server_error, require_collection_json,
+        },
+    },
     config::LocaleConfig,
     core::{CollectionDefinition, Registry, auth::AuthUser},
     db::{DbPool, query::AccessResult},
@@ -70,12 +74,9 @@ pub async fn back_references(
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Collection not found" })),
-        )
-            .into_response();
+    let def = match require_collection_json(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     let read_access = match check_access_or_forbid(
@@ -87,13 +88,7 @@ pub async fn back_references(
         "read",
         &slug,
     ) {
-        Ok(AccessResult::Denied) | Err(_) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Access denied" })),
-            )
-                .into_response();
-        }
+        Ok(AccessResult::Denied) | Err(_) => return json_forbidden("Access denied"),
         Ok(access) => access,
     };
 
@@ -114,27 +109,15 @@ pub async fn back_references(
         Ok(Err(ServiceError::AccessDenied(_))) => {
             // Row-scoped `read` rule didn't match the target — fail closed
             // without logging (an expected denial, not a failure).
-            (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Access denied" })),
-            )
-                .into_response()
+            json_forbidden("Access denied")
         }
         Ok(Err(e)) => {
             error!("Back-reference scan error: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Back-reference scan failed" })),
-            )
-                .into_response()
+            json_server_error("Back-reference scan failed")
         }
         Err(e) => {
             error!("Back-reference task join error: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Back-reference scan failed" })),
-            )
-                .into_response()
+            json_server_error("Back-reference scan failed")
         }
     }
 }

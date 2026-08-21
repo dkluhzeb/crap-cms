@@ -2,7 +2,6 @@
 
 use axum::{
     Extension, Json,
-    http::StatusCode,
     response::{IntoResponse, Redirect, Response},
 };
 use serde_json::json;
@@ -12,7 +11,10 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
+        handlers::shared::{
+            forbidden, get_user_doc, htmx_redirect, json_conflict, json_forbidden, json_not_found,
+            json_server_error, paths,
+        },
     },
     config::LocaleConfig,
     core::ReqContext,
@@ -64,11 +66,6 @@ fn json_ok_response() -> Response {
     Json(json!({"ok": true})).into_response()
 }
 
-/// Build a JSON `{"error": "..."}` error response with 400 status.
-fn json_error_response(msg: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
-}
-
 /// DELETE handler for collection items (called from `delete_action.rs`).
 pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     state: &AdminState,
@@ -80,7 +77,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
 ) -> Response {
     let Some(def) = state.registry.get_collection(slug).cloned() else {
         if json_response {
-            return json_error_response("Collection not found");
+            return json_not_found("Collection not found");
         }
 
         return Redirect::to(paths::COLLECTIONS_ROOT).into_response();
@@ -124,39 +121,41 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
                 return json_ok_response();
             }
         }
-        Ok(Err(e)) => {
-            let msg = match &e {
-                ServiceError::AccessDenied(_) => {
-                    let deny_msg = if def.soft_delete && !force_hard_delete {
-                        "You don't have permission to trash this item"
-                    } else {
-                        "You don't have permission to permanently delete this item"
-                    };
+        Ok(Err(e)) => match &e {
+            ServiceError::AccessDenied(_) => {
+                let deny_msg = if def.soft_delete && !force_hard_delete {
+                    "You don't have permission to trash this item"
+                } else {
+                    "You don't have permission to permanently delete this item"
+                };
 
-                    if json_response {
-                        return json_error_response(deny_msg);
-                    }
+                if json_response {
+                    return json_forbidden(deny_msg);
+                }
 
-                    return forbidden(state, deny_msg).into_response();
-                }
-                ServiceError::Referenced { count, .. } => {
-                    format!("Cannot delete: referenced by {count} document(s)")
-                }
-                _ => {
-                    error!("Delete error: {}", e);
-                    "Failed to delete item".to_string()
-                }
-            };
-
-            if json_response {
-                return json_error_response(&msg);
+                return forbidden(state, deny_msg).into_response();
             }
-        }
+            ServiceError::Referenced { count, .. } => {
+                // A precondition conflict, not a client input error.
+                if json_response {
+                    return json_conflict(&format!(
+                        "Cannot delete: referenced by {count} document(s)"
+                    ));
+                }
+            }
+            _ => {
+                error!("Delete error: {}", e);
+
+                if json_response {
+                    return json_server_error("Failed to delete item");
+                }
+            }
+        },
         Err(e) => {
             error!("Delete task error: {}", e);
 
             if json_response {
-                return json_error_response("Failed to delete item");
+                return json_server_error("Failed to delete item");
             }
         }
     }
@@ -169,6 +168,7 @@ mod tests {
     use super::*;
     use crate::core::HookRef;
     use crate::core::collection::Access;
+    use axum::http::StatusCode;
 
     #[test]
     fn trash_access_falls_back_to_update() {
@@ -200,11 +200,5 @@ mod tests {
     fn json_ok_response_returns_200() {
         let resp = json_ok_response();
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn json_error_response_returns_400() {
-        let resp = json_error_response("something went wrong");
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

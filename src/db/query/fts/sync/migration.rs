@@ -12,7 +12,7 @@ use crate::db::query::fts::fields::{
     get_fts_columns, is_json_richtext_column, json_richtext_columns,
 };
 use crate::db::query::fts::search::fts_table_name;
-use crate::db::query::helpers::quote_ident;
+use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
 
@@ -152,15 +152,9 @@ fn bulk_populate_slow(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         format!("INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, to_tsvector('simple', {p2}))")
     } else {
-        let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
-            .map(|i| conn.placeholder(i))
-            .collect();
-        format!(
-            "INSERT INTO {}(id, {}) VALUES ({})",
-            fts_table,
-            field_list,
-            placeholders.join(", ")
-        )
+        // id + one placeholder per FTS field.
+        let placeholders = placeholder_list(conn, fts_fields.len() + 1);
+        format!("INSERT INTO {fts_table}(id, {field_list}) VALUES ({placeholders})")
     };
 
     for row in db_rows {

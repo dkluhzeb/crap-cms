@@ -14,12 +14,15 @@ use crate::{
         FindQuery, LocaleContext, PaginationResult,
         query::{self, filter::normalize_filter_fields},
     },
-    hooks::lua_api::crud::{
-        filter::convert_where_clause,
-        get_tx_conn,
-        helpers::{
-            check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
-            resolve_collection,
+    hooks::{
+        lifecycle::converters::document_to_lua_table,
+        lua_api::crud::{
+            filter::convert_where_clause,
+            get_tx_conn,
+            helpers::{
+                check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
+                resolve_collection,
+            },
         },
     },
     service::{FindDocumentsInput, LuaReadHooks, ServiceContext, find_documents},
@@ -329,6 +332,19 @@ fn find_inner(
             "FindResult did not serialize to a table".into(),
         ));
     };
+
+    // Rebuild `documents` through the canonical Document→Lua converter so a
+    // list read represents null/absent fields identically to `find_by_id` and
+    // every other document surface: serde `to_value` emits the `NULL` sentinel
+    // for absent timestamps and json-null fields, whereas `document_to_lua_table`
+    // omits absent timestamps and yields `nil`. Without this, `doc.field == nil`
+    // would differ between `find_by_id(...)` and an element of `find().documents`.
+    let docs_tbl = lua.create_table()?;
+    for (i, doc) in result.docs.iter().enumerate() {
+        docs_tbl.set(i + 1, document_to_lua_table(lua, doc)?)?;
+    }
+    tbl.set("documents", docs_tbl)?;
+
     Ok(tbl)
 }
 

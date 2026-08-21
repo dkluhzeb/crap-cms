@@ -3,7 +3,6 @@
 use axum::{
     Extension,
     extract::{Path, State},
-    http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
 use serde_json::json;
@@ -11,7 +10,12 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::AdminState,
+    admin::{
+        AdminState,
+        handlers::shared::{
+            json_bad_request, json_forbidden, json_server_error, require_collection_json,
+        },
+    },
     config::LocaleConfig,
     core::{
         AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport,
@@ -92,16 +96,13 @@ pub async fn empty_trash_action(
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return StatusCode::NOT_FOUND.into_response();
+    let def = match require_collection_json(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     if !def.soft_delete {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Collection does not support soft delete",
-        )
-            .into_response();
+        return json_bad_request("Collection does not support soft delete");
     }
 
     let pool = state.pool.clone();
@@ -133,22 +134,16 @@ pub async fn empty_trash_action(
 
     match result {
         Ok(Ok(count)) => Json(json!({"ok": true, "count": count})).into_response(),
-        Ok(Err(ServiceError::AccessDenied(_))) => StatusCode::FORBIDDEN.into_response(),
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            json_forbidden("You don't have permission to empty the trash")
+        }
         Ok(Err(e)) => {
             error!("Empty trash error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to empty trash"})),
-            )
-                .into_response()
+            json_server_error("Failed to empty trash")
         }
         Err(e) => {
             error!("Empty trash task error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Internal error"})),
-            )
-                .into_response()
+            json_server_error("Internal error")
         }
     }
 }

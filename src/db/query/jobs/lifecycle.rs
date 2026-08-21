@@ -135,11 +135,21 @@ pub fn insert_job_with(conn: &dyn DbConnection, opts: &InsertJobOpts) -> Result<
         ("", String::new(), None)
     };
 
+    // Write `created_at` explicitly (ISO via `now_expr()`) rather than relying on
+    // the table's DDL default: on databases created before the timestamp-format
+    // unification the baked default is still SQLite's non-ISO `datetime('now')`,
+    // and `created_at` is compared lexically against the (now ISO) date-offset
+    // expression in job age / purge queries — mixing the two formats would break
+    // those comparisons. One explicit ISO write keeps every backend and every
+    // database consistent.
+    let now = conn.now_expr();
+
     let columns = format!(
-        "id, slug, status, queue, data, max_attempts, scheduled_by, priority, unique_key{retry_after_col}"
+        "id, slug, status, queue, data, max_attempts, scheduled_by, priority, unique_key, created_at{retry_after_col}"
     );
-    let values =
-        format!("{p1}, {p2}, 'pending', {p3}, {p4}, {p5}, {p6}, {p7}, {p8}{retry_after_value}");
+    let values = format!(
+        "{p1}, {p2}, 'pending', {p3}, {p4}, {p5}, {p6}, {p7}, {p8}, {now}{retry_after_value}"
+    );
 
     // ON CONFLICT clause matches the partial unique index
     // (`idx_crap_jobs_unique_active`). Without `unique_key`, no

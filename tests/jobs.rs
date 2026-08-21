@@ -256,7 +256,7 @@ fn purge_old_jobs() {
 
     // Backdate created_at so the purge threshold catches it
     conn.execute(
-        "UPDATE _crap_jobs SET created_at = datetime('now', '-3600 seconds') WHERE id = ?1",
+        "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds') WHERE id = ?1",
         &[DbValue::Text(run.id.clone())],
     )
     .unwrap();
@@ -391,7 +391,7 @@ fn find_stale_jobs_detects_running() {
 
     // Manually backdate the heartbeat so it appears stale
     conn.execute(
-        "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
+        "UPDATE _crap_jobs SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds') WHERE id = ?1",
         &[DbValue::Text(run.id.clone())],
     )
     .unwrap();

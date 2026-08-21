@@ -9,7 +9,8 @@ use crate::{
         document::row_to_document,
         query::{
             get_column_names, get_locale_select_columns_full, group_locale_fields,
-            helpers::quote_ident, hydrate_document, hydrate_documents,
+            helpers::{placeholder_list, quote_ident},
+            hydrate_document, hydrate_documents,
         },
     },
 };
@@ -100,12 +101,11 @@ pub fn find_by_ids(
 
     let select_exprs = select_columns(def, locale_ctx)?;
 
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
     let mut sql = format!(
         "SELECT {} FROM \"{}\" WHERE id IN ({})",
         select_exprs.join(", "),
         slug,
-        placeholders.join(", ")
+        placeholder_list(conn, ids.len())
     );
 
     if def.soft_delete {

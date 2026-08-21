@@ -551,7 +551,7 @@ mod tests {
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
         // Set job as running with a stale heartbeat
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-3600 seconds') WHERE id = ?1",
+            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds') WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
         ).unwrap();
 
@@ -569,17 +569,17 @@ mod tests {
         let (_dir, conn) = setup_db();
         // Insert a recently failed job
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f1', 'test', 'failed', datetime('now'))",
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f1', 'test', 'failed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             &[],
         ).unwrap();
         // Insert an old failed job
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f2', 'test', 'failed', datetime('now', '-48 hours'))",
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f2', 'test', 'failed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-48 hours'))",
             &[],
         ).unwrap();
         // Insert a completed job (should not count)
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now'))",
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             &[],
         ).unwrap();
 
@@ -595,12 +595,12 @@ mod tests {
         let (_dir, conn) = setup_db();
         // Insert a pending job from 10 minutes ago
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p1', 'test', 'pending', datetime('now', '-600 seconds'))",
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p1', 'test', 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds'))",
             &[],
         ).unwrap();
         // Insert a recent pending job
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p2', 'test', 'pending', datetime('now'))",
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p2', 'test', 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             &[],
         ).unwrap();
 
@@ -621,11 +621,11 @@ mod tests {
 
         // Add a completed run
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now', '-1 hour'))",
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))",
             &[],
         ).unwrap();
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c2', 'test', 'completed', datetime('now'))",
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c2', 'test', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             &[],
         ).unwrap();
 

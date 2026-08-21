@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use crate::{
     core::{DocumentFields, HookRef, collection::Hooks},
     hooks::{
-        lifecycle::{HookEvent, context::HookContext},
+        lifecycle::{HookEvent, context::HookContext, converters::lua_table_to_json_map},
         lua_api,
     },
 };
@@ -154,17 +154,10 @@ pub(crate) fn call_registered_hooks(
 /// Read hook result data and context back from a returned Lua table into the `HookContext`.
 pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()> {
     if let Ok(data_tbl) = tbl.get::<Table>("data") {
-        let mut new_data = DocumentFields::new();
-
-        for pair in data_tbl.pairs::<String, Value>() {
-            let (k, v) = pair?;
-            new_data.insert(k, lua_api::lua_to_json(&v)?);
-        }
-
-        ctx.data = new_data;
+        ctx.data = DocumentFields::from(lua_table_to_json_map(&data_tbl)?);
     }
 
-    ctx.read_context_back(tbl);
+    ctx.read_context_back(tbl)?;
 
     Ok(())
 }

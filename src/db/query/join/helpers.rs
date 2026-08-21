@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::db::{DbConnection, DbValue};
+use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 
 /// Build the SELECT for a junction/join table's rows for one parent — the
 /// locale-optional `WHERE parent_id [AND _locale] ORDER BY _order` read that
@@ -37,6 +37,49 @@ pub(super) fn select_junction_rows(
             vec![DbValue::Text(parent_id.to_string())],
         )
     }
+}
+
+/// Batched twin of [`select_junction_rows`]: read junction rows for MANY
+/// parents in one query — `WHERE parent_id IN (…) [AND _locale] ORDER BY
+/// parent_id, _order`. Callers differ only in `select_cols`, so the WHERE
+/// branch, the `IN (…)` placeholder numbering, and the ORDER BY live here once.
+/// Caller must ensure `parent_ids` is non-empty (`IN ()` is invalid SQL).
+pub(super) fn select_junction_rows_batch(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    select_cols: &str,
+    parent_ids: &[&str],
+    locale: Option<&str>,
+) -> (String, Vec<DbValue>) {
+    let in_placeholders = placeholder_list(conn, parent_ids.len());
+    let mut params: Vec<DbValue> = parent_ids
+        .iter()
+        .map(|id| DbValue::Text((*id).to_string()))
+        .collect();
+
+    if let Some(loc) = locale {
+        // The locale placeholder sits just past the IN list, at N+1.
+        let loc_ph = conn.placeholder(parent_ids.len() + 1);
+        params.push(DbValue::Text(loc.to_string()));
+
+        return (
+            format!(
+                "SELECT {select_cols} FROM \"{table_name}\" \
+                 WHERE parent_id IN ({in_placeholders}) AND _locale = {loc_ph} \
+                 ORDER BY parent_id, _order"
+            ),
+            params,
+        );
+    }
+
+    (
+        format!(
+            "SELECT {select_cols} FROM \"{table_name}\" \
+             WHERE parent_id IN ({in_placeholders}) \
+             ORDER BY parent_id, _order"
+        ),
+        params,
+    )
 }
 
 /// Delete rows from a junction/join table for a given parent, optionally filtered by locale.

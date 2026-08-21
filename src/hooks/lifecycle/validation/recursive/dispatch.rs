@@ -4,8 +4,7 @@
 use mlua::Lua;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, validate::FieldError},
-    db::query::helpers::prefixed_name,
+    core::{DocumentFields, FieldDefinition, FieldType, validate::FieldError, walk_leaf_fields},
     hooks::ValidationCtx,
 };
 
@@ -48,33 +47,23 @@ impl<'a> ValidationWalker<'a> {
         inherited_localized: bool,
         errors: &mut Vec<FieldError>,
     ) {
-        for field in fields {
-            match field.field_type {
-                FieldType::Group => {
-                    let new_prefix = prefixed_name(prefix, &field.name);
-                    self.walk(
-                        &field.fields,
-                        &new_prefix,
-                        inherited_localized || field.localized,
-                        errors,
-                    );
+        // The shared leaf walk: Group accumulates a `group__` prefix,
+        // Row/Collapsible/Tabs pass through, and every leaf reaches the visitor —
+        // so this and every other layout descent stay in lockstep. `Join` is a
+        // virtual field with no data to validate.
+        walk_leaf_fields(
+            fields,
+            prefix,
+            inherited_localized,
+            &mut |field, prefix, loc| {
+                if !matches!(field.field_type, FieldType::Join) {
+                    self.scalar(field, prefix, loc, errors);
                 }
-                FieldType::Row | FieldType::Collapsible => {
-                    self.walk(&field.fields, prefix, inherited_localized, errors);
-                }
-                FieldType::Tabs => {
-                    for tab in &field.tabs {
-                        self.walk(&tab.fields, prefix, inherited_localized, errors);
-                    }
-                }
-                FieldType::Join => {
-                    // Virtual field — no data to validate
-                }
-                _ => {
-                    self.scalar(field, prefix, inherited_localized, errors);
-                }
-            }
-        }
+
+                Ok(())
+            },
+        )
+        .expect("validation walk visitor never returns Err");
     }
 }
 

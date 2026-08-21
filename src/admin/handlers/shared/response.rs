@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -290,6 +291,60 @@ pub fn require_global(state: &AdminState, slug: &str) -> Result<GlobalDefinition
         .get_global(slug)
         .cloned()
         .ok_or_else(|| Box::new(not_found(state, &format!("Global '{slug}' not found"))))
+}
+
+/// Build a JSON error response `{"error": message}` with the given status.
+///
+/// The chokepoint for admin XHR/`fetch()` endpoints (back-references, the
+/// delete/empty-trash dialog): the HTML `not_found`/`forbidden`/`bad_request`
+/// helpers above render error *pages* for navigations, while these return the
+/// `{"error": …}` envelope the JS consumers read — so sibling JSON endpoints
+/// can't drift on status code or body shape.
+pub fn json_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// JSON 404 `{"error": message}`.
+pub fn json_not_found(message: &str) -> Response {
+    json_error(StatusCode::NOT_FOUND, message)
+}
+
+/// JSON 403 `{"error": message}`.
+pub fn json_forbidden(message: &str) -> Response {
+    json_error(StatusCode::FORBIDDEN, message)
+}
+
+/// JSON 400 `{"error": message}`.
+pub fn json_bad_request(message: &str) -> Response {
+    json_error(StatusCode::BAD_REQUEST, message)
+}
+
+/// JSON 409 `{"error": message}` — a precondition conflict, e.g. deleting a
+/// document other documents still reference.
+pub fn json_conflict(message: &str) -> Response {
+    json_error(StatusCode::CONFLICT, message)
+}
+
+/// JSON 500 `{"error": message}`.
+pub fn json_server_error(message: &str) -> Response {
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
+/// Look up a collection for a JSON/XHR endpoint, returning the owned clone or a
+/// boxed JSON 404. The `fetch()` companion to [`require_collection`].
+///
+/// # Errors
+///
+/// Returns the boxed JSON 404 [`Response`] when no collection matches `slug`.
+pub fn require_collection_json(
+    state: &AdminState,
+    slug: &str,
+) -> Result<CollectionDefinition, Box<Response>> {
+    state
+        .registry
+        .get_collection(slug)
+        .cloned()
+        .ok_or_else(|| Box::new(json_not_found(&format!("Collection '{slug}' not found"))))
 }
 
 /// Convert a [`ServiceError`] into an admin HTML response.

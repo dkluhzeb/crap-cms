@@ -7,8 +7,8 @@ use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::{
-    core::{FieldType, parse_truthy},
-    db::{DbValue, types::real_to_json_number},
+    core::{CollectionDefinition, FieldType, parse_truthy},
+    db::{DbConnection, DbValue, types::real_to_json_number},
 };
 
 use super::sanitize_locale;
@@ -464,11 +464,48 @@ pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condi
     *has_where = true;
 }
 
+/// Append the soft-delete exclusion `_deleted_at IS NULL` when the collection
+/// soft-deletes and the caller hasn't asked to include trashed rows. The single
+/// decision point shared by the find runner and the count / `max_updated_at`
+/// readers, so "when is trash hidden" can't drift between listing and counting.
+pub(crate) fn append_soft_delete_filter(
+    def: &CollectionDefinition,
+    include_deleted: bool,
+    sql: &mut String,
+    has_where: &mut bool,
+) {
+    if def.soft_delete && !include_deleted {
+        append_sql_condition(sql, has_where, "_deleted_at IS NULL");
+    }
+}
+
+/// Build a comma-separated positional placeholder list — `?1, ?2, … ?N` on
+/// `SQLite`, `$1, … $N` on Postgres — via [`DbConnection::placeholder`],
+/// numbered from 1. Empty string when `count == 0`. One source for every
+/// `IN (…)` / multi-value clause so the 1-based start and the backend dialect
+/// can't drift per call site.
+#[must_use]
+pub(crate) fn placeholder_list(conn: &dyn DbConnection, count: usize) -> String {
+    (1..=count)
+        .map(|i| conn.placeholder(i))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn placeholder_list_numbers_from_one_and_empties_at_zero() {
+        let conn = crate::db::InMemoryConn::open();
+        assert_eq!(placeholder_list(&conn, 0), "");
+        assert_eq!(placeholder_list(&conn, 1), "?1");
+        assert_eq!(placeholder_list(&conn, 3), "?1, ?2, ?3");
+    }
 
     // ── normalize_date_value tests ──────────────────────────────────────
 

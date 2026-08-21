@@ -820,7 +820,7 @@ mod tests {
         job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
-             heartbeat_at = datetime('now', '-600 seconds')",
+             heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
         )
         .unwrap();
 
@@ -849,7 +849,7 @@ mod tests {
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
-             heartbeat_at = datetime('now', '-600 seconds')",
+             heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
         )
         .unwrap();
 
@@ -878,7 +878,7 @@ mod tests {
 
         job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
         conn.execute_batch(
-            "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = datetime('now')",
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         )
         .unwrap();
 
@@ -964,12 +964,16 @@ mod tests {
         // path so we can't drift from production. `_crap_cron_fired`
         // is colocated here since these tests exercise the cron loop.
         let conn = pool.get().unwrap();
-        crate::db::migrate::create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
-            .expect("create_jobs_table");
+        crate::db::migrate::create_jobs_table(
+            &conn,
+            "TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            "TEXT",
+        )
+        .expect("create_jobs_table");
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS _crap_cron_fired (
                 slug TEXT PRIMARY KEY,
-                fired_at TEXT NOT NULL DEFAULT (datetime('now'))
+                fired_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );",
         )
         .unwrap();

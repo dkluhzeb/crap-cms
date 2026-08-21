@@ -319,7 +319,7 @@ fn purge_soft_deleted_removes_expired_docs() {
     // Backdate the "old" doc's _deleted_at to 2 hours ago (past the 1h retention)
     conn.execute(
         &format!(
-            "UPDATE articles SET _deleted_at = datetime('now', '-7200 seconds') WHERE id = {}",
+            "UPDATE articles SET _deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7200 seconds') WHERE id = {}",
             conn.placeholder(1)
         ),
         &[DbValue::Text(id_old.clone())],

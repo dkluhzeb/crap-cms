@@ -268,7 +268,7 @@ fn recover_stale_jobs_on_full_setup() {
 
     // Backdate the heartbeat to make it appear stale
     conn.execute(
-        "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
+        "UPDATE _crap_jobs SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds') WHERE id = ?1",
         &[DbValue::Text(run.id.clone())],
     )
     .unwrap();

@@ -90,11 +90,11 @@ mod tests {
         let (_dir, conn) = setup_db();
         // Insert a completed job with old timestamp
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('old1', 'test', 'completed', datetime('now', '-30 days'))",
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('old1', 'test', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days'))",
             &[],
         ).unwrap();
         conn.execute(
-            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('new1', 'test', 'completed', datetime('now'))",
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('new1', 'test', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             &[],
         ).unwrap();
 

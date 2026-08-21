@@ -1264,6 +1264,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`updated_at` no longer sorts inconsistently on SQLite after a publish /
+  unpublish.** Ordinary writes stamp `updated_at` with an ISO-8601
+  (`…THH:MM:SS.mmmZ`) timestamp, but a status change wrote the same column via
+  SQLite's `datetime('now')`, which produces a space-separated form with no
+  milliseconds or `Z`. Because `updated_at` is a lexically-compared sort and
+  cursor-pagination key, and a space sorts before `T`, a status-changed row
+  collated before every normally-edited row — corrupting "sort by last updated"
+  and keyset pages. SQLite's `now_expr()` (and its date-offset expression, used
+  for job retry scheduling) now emit the same ISO-8601 `…Z` shape as the
+  app-side clock and as Postgres, so every timestamp on both backends is one
+  format. (Rows written before the upgrade are still normalized to ISO on read.)
+
+- **Lua `crap.collections.find(...)` now represents null fields the same way as
+  `find_by_id`.** A list read serialized its documents through a different path
+  than every other document-returning API, so a null or absent field came back
+  as the `NULL` sentinel (truthy, `~= nil`) instead of `nil`. `doc.field == nil`
+  was true via `find_by_id` but false via an element of `find().documents` for
+  the same document. Both now flow through the shared document→Lua converter.
+
 - **Column names that collide with SQL reserved words (`order`, `select`,
   `group`, …) now work end to end.** Field names were validated as safe
   identifiers but interpolated into `CREATE TABLE` / `INSERT` / `SELECT` /
@@ -2626,6 +2645,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Admin JSON/XHR endpoints return consistent error status codes and a uniform
+  `{"error": …}` envelope.** The back-references, delete-dialog, and
+  empty-trash endpoints previously each hand-rolled their error responses and
+  disagreed: a missing collection returned 404, 400, or a bodyless status
+  depending on the endpoint, and access denials came back as 403 with a body,
+  403 with no body, or 400. They now share one set of JSON response helpers.
+  The most visible change: deleting a document that is still referenced by
+  others returns **409 Conflict** (was 400) on the dialog path, with the same
+  `{"error": …}` message. (Browser clients read `response.ok` and the `error`
+  field, so the UI is unaffected.)
+
+- **A hook that stores an unrepresentable value in `ctx.context` now fails
+  loudly instead of silently dropping it.** When a hook returned a `context`
+  entry that could not be converted to JSON (a NaN/∞ number, invalid UTF-8),
+  the read-back silently discarded that key, unlike the data read-back and the
+  auth-strategy read-back, which both surface the error. All three now behave
+  the same and propagate the conversion failure.
+
 - **`CRAP_NO_UNICODE` / `CRAP_FORCE_UNICODE` accept any truthy value.**
   Previously only the exact string `1` enabled them (`CRAP_NO_UNICODE=true` was
   silently ignored). They now accept `1`, `true`, `yes`, or `on`
@@ -2670,6 +2707,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Scattered duplicate logic pulled behind shared chokepoints (no behavior
   change).** These are refactors that give each concern a single source of
   truth so sibling call sites can't drift apart:
+  - Positional SQL placeholder lists (`?1, ?2, … ?N`) are built by one
+    `placeholder_list` helper instead of eight hand-rolled `(1..=n)` loops.
+  - Batched junction-table reads share a `select_junction_rows_batch` helper
+    (the many-parent twin of the existing `select_junction_rows`); the two
+    relationship readers now differ only in their projected columns.
+  - The soft-delete "hide trashed rows unless asked" predicate is one
+    `append_soft_delete_filter` used by the find runner and both count readers.
+  - Map→Lua-table conversion is one `map_to_lua_table` (the inverse of
+    `lua_table_to_json_map`); the three hand-rolled table→map loops now call the
+    shared converter, and the Document→Lua converter shares its entry loop.
+  - The last bespoke validation layout walk migrated onto the shared
+    `walk_leaf_fields` primitive.
+  - Admin JSON error responses go through shared `json_not_found` /
+    `json_forbidden` / `json_conflict` / `json_bad_request` / `json_server_error`
+    and `require_collection_json` helpers.
   - The reserved auto-column names (`id`, `parent_id`, `created_at`,
     `updated_at`) now live in one `AUTO_COLUMNS` constant shared by the
     `is_system_column` predicate and the Lua field-name reservation.

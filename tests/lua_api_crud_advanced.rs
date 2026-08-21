@@ -993,3 +993,37 @@ fn context_flows_to_after_hooks() {
         "after_change hook should receive the context set by before-hooks"
     );
 }
+
+/// Regression: a list read (`crap.collections.find`) must represent an
+/// absent/null field identically to `find_by_id` — both `nil`. `find`
+/// previously serialized its documents via serde `to_value`, which emits the
+/// `NULL` lightuserdata sentinel (not `nil`) for null fields, so
+/// `doc.password == nil` was true via `find_by_id` but false via
+/// `find().documents[1]` for the same document. Both now flow through the
+/// shared `document_to_lua_table` converter.
+#[test]
+fn find_and_find_by_id_agree_on_nil_for_absent_field() {
+    let (_tmp, pool, _registry, runner) = setup_with_db();
+
+    // `wifi_networks` has two optional scalar fields; leave `password` unset.
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local created = crap.collections.create("wifi_networks", { ssid = "home" })
+        local id = created.id
+
+        local single = crap.collections.find_by_id("wifi_networks", id)
+        local list = crap.collections.find("wifi_networks")
+        local row = list.documents[1]
+
+        if row == nil then return "NO_ROW" end
+        if single.password ~= nil then return "SINGLE_NOT_NIL" end
+        if row.password ~= nil then return "LIST_NOT_NIL" end
+        if (single.password == nil) ~= (row.password == nil) then return "MISMATCH" end
+        return "ok"
+    "#,
+    );
+
+    assert_eq!(result, "ok");
+}

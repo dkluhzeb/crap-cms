@@ -13,7 +13,7 @@ use crate::db::query::filter::{build_where_clause, resolve_filter_column, resolv
 use crate::db::query::read::select::apply_select_filter;
 use crate::db::query::{
     fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
-    helpers::{append_sql_condition, quote_ident},
+    helpers::{append_soft_delete_filter, append_sql_condition, quote_ident},
     validate_query_fields,
 };
 use crate::db::{
@@ -184,16 +184,15 @@ fn apply_fts(
     }
 }
 
-/// Exclude soft-deleted documents unless explicitly requested.
+/// Exclude soft-deleted documents unless explicitly requested. Adapts the
+/// `FindQuery` to the shared [`append_soft_delete_filter`] decision.
 fn apply_soft_delete(
     def: &CollectionDefinition,
     query: &FindQuery,
     sql: &mut String,
     has_where: &mut bool,
 ) {
-    if def.soft_delete && !query.include_deleted {
-        append_sql_condition(sql, has_where, "_deleted_at IS NULL");
-    }
+    append_soft_delete_filter(def, query.include_deleted, sql, has_where);
 }
 
 /// Append LIMIT and OFFSET clauses.

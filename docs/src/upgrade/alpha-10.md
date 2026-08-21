@@ -741,6 +741,20 @@ What changed:
 
 ## Bug fixes (no action needed)
 
+- **`updated_at` sorts correctly on SQLite after a publish/unpublish.** A status
+  change stamped `updated_at` via SQLite's `datetime('now')` (space separator,
+  no milliseconds or `Z`) while ordinary edits use the ISO-8601 form. Since
+  `updated_at` is a lexically-compared sort and cursor key, status-changed rows
+  collated ahead of edited ones, breaking "sort by last updated" and keyset
+  pages. SQLite's current-time expressions now emit the same ISO-8601 `…Z` shape
+  as everything else. Existing rows are normalized to ISO on read, so no data
+  migration is needed. (Postgres was never affected.)
+- **Lua `crap.collections.find(...)` reports null fields as `nil`.** A field that
+  was null or unset came back from a list read as the `NULL` sentinel (truthy),
+  while `find_by_id` returned `nil` — so `doc.field == nil` disagreed between the
+  two for the same document. Both now return `nil`. If a hook worked around this
+  by comparing against the sentinel instead of `nil`, switch it to a plain
+  `== nil` check.
 - **Field names that are SQL reserved words (`order`, `select`, `group`, …)
   now work.** They passed the identifier validator but were interpolated into
   generated SQL unquoted, so writing to such a field failed with a syntax error
@@ -825,6 +839,15 @@ What changed:
   matching gRPC and admin. (Soft-deletes still keep the files.)
 
 ## Behavior changes (likely no action)
+
+- **Admin JSON/XHR endpoints use consistent error status codes.** The
+  back-references, delete-dialog, and empty-trash endpoints previously
+  disagreed on the status code for the same error; they now share one set of
+  helpers. The one visible change: deleting a document still referenced by
+  others returns **409 Conflict** (was 400) on the dialog path, with the same
+  `{"error": …}` body. The admin UI reads `response.ok` and the `error` field,
+  so it is unaffected; only a custom client that branched on the exact `400`
+  would notice.
 
 - **Scheduler reliability + defaults.** A crashed worker's in-flight jobs are
   now requeued and re-run by surviving nodes (at-least-once) — **make job

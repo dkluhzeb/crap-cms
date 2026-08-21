@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::{delete_junction_rows, select_junction_rows};
+use super::helpers::{delete_junction_rows, select_junction_rows, select_junction_rows_batch};
 
 /// Set the related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
@@ -226,38 +226,13 @@ pub fn find_related_ids_batch(
 
     let table_name = join_table(collection, field);
 
-    // Build "?1, ?2, …, ?N" for the IN clause. The trailing placeholder
-    // (when locale is set) sits at position N+1.
-    let in_placeholders = (1..=parent_ids.len())
-        .map(|i| conn.placeholder(i))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let (sql, params) = if let Some(loc) = locale {
-        let loc_ph = conn.placeholder(parent_ids.len() + 1);
-        let sql = format!(
-            "SELECT parent_id, related_id FROM \"{table_name}\" \
-             WHERE parent_id IN ({in_placeholders}) AND _locale = {loc_ph} \
-             ORDER BY parent_id, _order"
-        );
-        let mut params: Vec<DbValue> = parent_ids
-            .iter()
-            .map(|id| DbValue::Text((*id).to_string()))
-            .collect();
-        params.push(DbValue::Text(loc.to_string()));
-        (sql, params)
-    } else {
-        let sql = format!(
-            "SELECT parent_id, related_id FROM \"{table_name}\" \
-             WHERE parent_id IN ({in_placeholders}) \
-             ORDER BY parent_id, _order"
-        );
-        let params: Vec<DbValue> = parent_ids
-            .iter()
-            .map(|id| DbValue::Text((*id).to_string()))
-            .collect();
-        (sql, params)
-    };
+    let (sql, params) = select_junction_rows_batch(
+        conn,
+        &table_name,
+        "parent_id, related_id",
+        parent_ids,
+        locale,
+    );
 
     let rows = conn.query_all(&sql, &params)?;
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
@@ -324,36 +299,13 @@ pub fn find_polymorphic_related_batch(
 
     let table_name = join_table(collection, field);
 
-    let in_placeholders = (1..=parent_ids.len())
-        .map(|i| conn.placeholder(i))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let (sql, params) = if let Some(loc) = locale {
-        let loc_ph = conn.placeholder(parent_ids.len() + 1);
-        let sql = format!(
-            "SELECT parent_id, related_collection, related_id FROM \"{table_name}\" \
-             WHERE parent_id IN ({in_placeholders}) AND _locale = {loc_ph} \
-             ORDER BY parent_id, _order"
-        );
-        let mut params: Vec<DbValue> = parent_ids
-            .iter()
-            .map(|id| DbValue::Text((*id).to_string()))
-            .collect();
-        params.push(DbValue::Text(loc.to_string()));
-        (sql, params)
-    } else {
-        let sql = format!(
-            "SELECT parent_id, related_collection, related_id FROM \"{table_name}\" \
-             WHERE parent_id IN ({in_placeholders}) \
-             ORDER BY parent_id, _order"
-        );
-        let params: Vec<DbValue> = parent_ids
-            .iter()
-            .map(|id| DbValue::Text((*id).to_string()))
-            .collect();
-        (sql, params)
-    };
+    let (sql, params) = select_junction_rows_batch(
+        conn,
+        &table_name,
+        "parent_id, related_collection, related_id",
+        parent_ids,
+        locale,
+    );
 
     let rows = conn.query_all(&sql, &params)?;
     let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();

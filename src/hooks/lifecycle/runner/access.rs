@@ -1,7 +1,5 @@
 //! `HookRunner` methods for auth strategies and access control.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{LuaSerdeExt, Value};
 use serde_json::Map;
@@ -22,27 +20,23 @@ use crate::{
                 strip_read_access_data_aware, strip_read_access_with_lua,
                 strip_write_access_with_lua,
             },
+            converters::lua_table_to_json_map,
             execution::resolve_hook_function,
             types::TxContextGuard,
         },
-        lua_api,
     },
 };
 
 /// Convert a Lua table returned by an auth strategy into a Document.
 fn lua_table_to_auth_user(tbl: &mlua::Table) -> Result<Document> {
     let id: String = tbl.get("id")?;
-    let mut fields = HashMap::new();
 
-    for pair in tbl.pairs::<String, Value>() {
-        let (k, v) = pair?;
-
-        if k == "id" || k == "created_at" || k == "updated_at" {
-            continue;
-        }
-
-        fields.insert(k, lua_api::lua_to_json(&v)?);
-    }
+    // Reuse the shared table→map converter (the inverse of
+    // `document_to_lua_table`), then drop the reserved keys carried separately.
+    let mut fields = lua_table_to_json_map(tbl)?;
+    fields.remove("id");
+    fields.remove("created_at");
+    fields.remove("updated_at");
 
     let created_at: Option<String> = tbl.get("created_at").ok();
     let updated_at: Option<String> = tbl.get("updated_at").ok();

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context as _, Result, bail};
 use tracing::{debug, trace};
 
-use crate::db::{DbConnection, DbValue};
+use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 
 use super::outgoing_ref::OutgoingRef;
 
@@ -64,8 +64,7 @@ pub(super) fn apply_deltas(
     }
 
     for ((collection, delta), ids) in &groups {
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
-        let in_clause = placeholders.join(", ");
+        let in_clause = placeholder_list(conn, ids.len());
 
         let clamped = conn.greatest_expr("0", &format!("_ref_count + ({delta})"));
         let sql =
@@ -111,8 +110,7 @@ pub(super) fn apply_deltas(
 /// Find which ids from a batch are missing from the table. Used only on
 /// the error path to produce a specific error message.
 fn find_missing_ids(conn: &dyn DbConnection, collection: &str, ids: &[&str]) -> String {
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
-    let in_clause = placeholders.join(", ");
+    let in_clause = placeholder_list(conn, ids.len());
     let sql = format!("SELECT id FROM \"{collection}\" WHERE id IN ({in_clause})");
 
     let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();

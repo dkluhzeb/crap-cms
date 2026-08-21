@@ -325,7 +325,7 @@ mod tests {
         insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
 
         conn.execute(
-            "UPDATE _crap_jobs SET retry_after = datetime('now', '+3600 seconds')",
+            "UPDATE _crap_jobs SET retry_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+3600 seconds')",
             &[],
         )
         .unwrap();
@@ -341,7 +341,7 @@ mod tests {
         insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
 
         conn.execute(
-            "UPDATE _crap_jobs SET retry_after = datetime('now', '-10 seconds')",
+            "UPDATE _crap_jobs SET retry_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 seconds')",
             &[],
         )
         .unwrap();
@@ -386,7 +386,7 @@ mod tests {
         let (_dir, conn) = setup_db();
         insert_job(&conn, "old_low", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute(
-            "UPDATE _crap_jobs SET created_at = datetime('now', '-120 seconds') \
+            "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds') \
              WHERE slug = 'old_low'",
             &[],
         )
@@ -400,7 +400,7 @@ mod tests {
             insert_job(&conn2, "old_low", "{}", "manual", 1, "default", 0).unwrap();
             conn2
                 .execute(
-                    "UPDATE _crap_jobs SET created_at = datetime('now', '-120 seconds') \
+                    "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds') \
                      WHERE slug = 'old_low'",
                     &[],
                 )

@@ -87,7 +87,10 @@ fn sqlite_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) 
     let abs = seconds.unsigned_abs();
     let sign = if seconds >= 0 { "-" } else { "+" };
     (
-        format!("datetime('now', ?{param_pos})"),
+        // Same ISO-8601 `…Z` shape as `now_expr()` (see there): the offset and
+        // "now" are compared lexically (e.g. `retry_after <= now_expr()`), so
+        // both sides must share one format.
+        format!("strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?{param_pos})"),
         DbValue::Text(format!("{sign}{abs} seconds")),
     )
 }
@@ -129,8 +132,10 @@ fn sqlite_vacuum_into(conn: &dyn DbConnection, dest: &std::path::Path) -> Result
 
 const SQLITE_SIDECAR_EXTENSIONS: &[&str] = &["db-wal", "db-shm"];
 
-/// Normalize `SQLite`'s `"YYYY-MM-DD HH:MM:SS"` to ISO 8601 `"YYYY-MM-DDTHH:MM:SS.000Z"`.
-/// Already-normalized values pass through unchanged.
+/// Normalize `SQLite`'s legacy `"YYYY-MM-DD HH:MM:SS"` to ISO 8601
+/// `"YYYY-MM-DDTHH:MM:SS.000Z"`. Already-normalized values pass through
+/// unchanged. Since `now_expr()` now emits the ISO form directly, this is a
+/// read-path compat shim for rows written before that change.
 fn sqlite_normalize_timestamp(ts: &str) -> String {
     if ts.len() == 19
         && ts.as_bytes().get(10) == Some(&b' ')
@@ -176,7 +181,15 @@ macro_rules! sqlite_shared_methods {
         }
 
         fn now_expr(&self) -> &'static str {
-            "datetime('now')"
+            // ISO-8601 UTC with milliseconds and a `Z` suffix, byte-compatible
+            // with `utc_now()` and Postgres `pg_now_expr()`. `datetime('now')`
+            // would emit `YYYY-MM-DD HH:MM:SS` (space separator, no millis/Z),
+            // which collates BEFORE the ISO form ('T' > ' ') — so a column
+            // written by both this expr and a bound `utc_now()` (e.g. a doc's
+            // `updated_at`, set by `set_document_status` here vs a normal write
+            // there) would sort and cursor-page incorrectly. One format on
+            // both write paths keeps the sort/cursor key monotonic.
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
         }
 
         fn greatest_expr(&self, a: &str, b: &str) -> String {
@@ -204,7 +217,8 @@ macro_rules! sqlite_shared_methods {
         }
 
         fn timestamp_column_default(&self) -> &'static str {
-            "TEXT DEFAULT (datetime('now'))"
+            // ISO-8601 `…Z`, matching `now_expr()` and Postgres — see `now_expr`.
+            "TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         }
 
         fn timestamp_column_type(&self) -> &'static str {
@@ -763,7 +777,48 @@ mod tests {
     #[test]
     fn now_expr_format() {
         let (_dir, conn) = temp_conn();
-        assert_eq!(conn.now_expr(), "datetime('now')");
+        assert_eq!(conn.now_expr(), "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    }
+
+    /// Regression: `now_expr()` must produce the SAME ISO-8601 `…Z` shape as
+    /// `utc_now()` (bound on normal writes) and Postgres `pg_now_expr()`.
+    /// `datetime('now')` (space separator, no millis/`Z`) collates before the
+    /// ISO form, so a column written by both paths — e.g. a doc's `updated_at`,
+    /// set via `now_expr()` on a status change but via bound `utc_now()` on a
+    /// normal edit — would sort and cursor-page incorrectly.
+    #[test]
+    fn now_expr_runtime_is_iso_utc() {
+        let (_dir, conn) = temp_conn();
+        let sql = format!("SELECT {} AS ts", conn.now_expr());
+        let ts = conn
+            .query_one(&sql, &[])
+            .unwrap()
+            .unwrap()
+            .get_string("ts")
+            .unwrap();
+
+        assert_eq!(ts.len(), 24, "expected ISO-8601 length, got {ts:?}");
+        assert_eq!(ts.as_bytes()[10], b'T', "separator must be 'T', got {ts:?}");
+        assert_eq!(ts.as_bytes()[19], b'.', "must carry millis, got {ts:?}");
+        assert!(ts.ends_with('Z'), "must end with 'Z', got {ts:?}");
+    }
+
+    /// Regression: `date_offset_expr()` shares `now_expr()`'s ISO shape so the
+    /// two compare lexically (`retry_after <= now_expr()`).
+    #[test]
+    fn date_offset_expr_runtime_is_iso_utc() {
+        let (_dir, conn) = temp_conn();
+        let (expr, param) = conn.date_offset_expr(30, 1);
+        let ts = conn
+            .query_one(&format!("SELECT {expr} AS ts"), &[param])
+            .unwrap()
+            .unwrap()
+            .get_string("ts")
+            .unwrap();
+
+        assert_eq!(ts.len(), 24, "expected ISO-8601 length, got {ts:?}");
+        assert_eq!(ts.as_bytes()[10], b'T', "separator must be 'T', got {ts:?}");
+        assert!(ts.ends_with('Z'), "must end with 'Z', got {ts:?}");
     }
 
     #[test]
@@ -903,7 +958,7 @@ mod tests {
     fn date_offset_expr_sql_format() {
         let (expr, _value) = sqlite_date_offset_expr(30, 3);
         assert_eq!(
-            expr, "datetime('now', ?3)",
+            expr, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?3)",
             "SQL expression should use the given param position"
         );
     }

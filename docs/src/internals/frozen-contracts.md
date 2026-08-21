@@ -30,6 +30,16 @@ stored data, or clients.
   stored as a JSON **object** (`{…}`), not a one-element array — the block form
   parser selects a row's sub-field defs from its `_block_type` so the group is
   recognized as a single-object composite.
+- **Timestamp write format is one ISO-8601 `…Z` shape on every backend.** Both
+  the app-side clock (`utc_now()`, bound as a parameter) and the SQL "current
+  time" expression (`DbConnection::now_expr()`, plus `date_offset_expr()` for job
+  retry scheduling) produce `YYYY-MM-DDTHH:MM:SS.mmmZ`. This matters because
+  timestamp columns are `TEXT` and compared **lexically** (sort keys, cursor
+  pagination, `retry_after <= now`), and a column such as `updated_at` is written
+  by both paths — a status change uses `now_expr()`, an ordinary edit binds
+  `utc_now()`. SQLite must not fall back to `datetime('now')` (space separator,
+  no millis/`Z`), which collates before the ISO form. Legacy rows written before
+  this are normalized to ISO on read (`normalize_timestamp`).
 - **Column types.** Timestamps and dates are `TEXT` (ISO-8601) on every backend;
   numbers are floating point (`REAL`/`DOUBLE PRECISION`); integers/flags are
   `BIGINT` on Postgres. Whole-valued numbers serialize back as JSON integers.
@@ -225,10 +235,19 @@ changing a representation is a breaking change to every consumer.
   only if it has a parent column (`has_parent_column()`); a has-many
   relationship/upload (no column) is rejected at the 400 param gate, never passed
   to the query layer.
-- **Admin JSON/lazy-load endpoints return real HTTP status codes.** Version
-  restore returns 403 on denial (not a silent redirect); back-references and
-  evaluate-conditions return 404 (unknown), 403 (denied), or 500 (error) with
-  their JSON body — never `200` with an error payload.
+- **Admin JSON/lazy-load endpoints return real HTTP status codes through shared
+  helpers.** Version restore returns 403 on denial (not a silent redirect);
+  back-references, the delete dialog, and empty-trash go through
+  `json_not_found` / `json_forbidden` / `json_conflict` / `json_bad_request` /
+  `json_server_error` (and `require_collection_json`), so a given error is one
+  status code and one `{"error": …}` envelope across sibling endpoints — 404
+  (unknown), 403 (denied), 409 (a referenced document blocking delete), 400
+  (bad input), 500 (failure). Two deliberate exceptions: the relationship-search
+  autocomplete always answers `200` with a JSON array (a missing collection is
+  an empty list; a real DB failure is logged, not surfaced), and
+  evaluate-conditions returns its `field → bool` map — `{}` on the error path,
+  because its JS consumer iterates the body as that map, so an `{"error": …}`
+  envelope would inject a bogus field name.
 - **Response status is mapped from the typed `ServiceError`, never re-derived by
   matching the error's `Display` string.** The gRPC surface owns the canonical
   `ServiceError → tonic::Status` mapping; the HTTP upload-delete surface mirrors

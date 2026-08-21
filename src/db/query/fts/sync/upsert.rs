@@ -10,7 +10,7 @@ use crate::db::query::fts::fields::{
     build_node_searchable_map, is_json_richtext_column, json_richtext_columns,
 };
 use crate::db::query::fts::search::fts_table_name;
-use crate::db::query::helpers::quote_ident;
+use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::{DbConnection, DbValue};
 
 use super::helpers::get_fts_table_columns;
@@ -153,18 +153,13 @@ fn upsert_sqlite(
         values.push(DbValue::Text(text));
     }
 
-    let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
+    let placeholders = placeholder_list(conn, values.len());
     let quoted_cols = fts_cols
         .iter()
         .map(|c| quote_ident(c))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!(
-        "INSERT INTO {}(id, {}) VALUES ({})",
-        fts_table,
-        quoted_cols,
-        placeholders.join(", ")
-    );
+    let sql = format!("INSERT INTO {fts_table}(id, {quoted_cols}) VALUES ({placeholders})");
 
     conn.execute(&sql, &values)
         .with_context(|| format!("FTS upsert in {fts_table}"))?;

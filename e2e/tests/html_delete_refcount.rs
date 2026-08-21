@@ -71,8 +71,8 @@ async fn hard_delete_blocked_when_referenced() {
         .unwrap();
     assert_eq!(
         resp.status(),
-        StatusCode::BAD_REQUEST,
-        "ref-count violation should return 400 on the dialog path"
+        StatusCode::CONFLICT,
+        "ref-count violation should return 409 Conflict on the dialog path"
     );
     let body = body_string(resp.into_body()).await;
     assert!(

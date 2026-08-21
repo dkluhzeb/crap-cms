@@ -54,15 +54,38 @@ pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, Str
     Ok(map)
 }
 
+/// Set each `(key, json)` entry onto `tbl`, converting values via `json_to_lua`.
+/// The shared inner loop of every map→Lua-table builder.
+fn set_json_entries<'a, I>(lua: &Lua, tbl: &Table, entries: I) -> LuaResult<()>
+where
+    I: IntoIterator<Item = (&'a String, &'a JsonValue)>,
+{
+    for (k, v) in entries {
+        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
+    }
+
+    Ok(())
+}
+
+/// Convert a `map<String, JsonValue>` to a fresh Lua table via `json_to_lua`.
+/// The inverse of [`lua_table_to_json_map`]; keeps the forward/inverse pair in
+/// one place so map→table conversion can't drift between call sites.
+pub(crate) fn map_to_lua_table<'a, I>(lua: &Lua, entries: I) -> LuaResult<Table>
+where
+    I: IntoIterator<Item = (&'a String, &'a JsonValue)>,
+{
+    let tbl = lua.create_table()?;
+    set_json_entries(lua, &tbl, entries)?;
+
+    Ok(tbl)
+}
+
 /// Convert a Document to a Lua table.
 pub(crate) fn document_to_lua_table(lua: &Lua, doc: &Document) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     tbl.set("id", &*doc.id)?;
-
-    for (k, v) in &doc.fields {
-        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
-    }
+    set_json_entries(lua, &tbl, &doc.fields)?;
 
     if let Some(ref ts) = doc.created_at {
         tbl.set("created_at", ts.as_str())?;

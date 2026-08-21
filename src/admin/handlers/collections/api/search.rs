@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::{
     admin::{
@@ -85,8 +86,15 @@ pub async fn search_collection(
     let requested = params.limit.map(|l| i64::try_from(l).unwrap_or(i64::MAX));
     let limit = state.config.pagination.resolve_limit(requested);
 
-    let Ok(conn) = state.pool.get() else {
-        return Json(json!([]));
+    // Autocomplete endpoint: always answers with a JSON array. A missing
+    // collection is silent (client/config issue), but a real DB failure is
+    // logged so it isn't invisibly masked as "no results".
+    let conn = match state.pool.get() {
+        Ok(conn) => conn,
+        Err(e) => {
+            warn!("Relationship search: DB pool unavailable for '{slug}': {e}");
+            return Json(json!([]));
+        }
     };
 
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
@@ -122,8 +130,12 @@ pub async fn search_collection(
         include_drafts: true,
     };
 
-    let Ok(result) = service::search_documents(&ctx, &search_input) else {
-        return Json(json!([]));
+    let result = match service::search_documents(&ctx, &search_input) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Relationship search failed for '{slug}': {e}");
+            return Json(json!([]));
+        }
     };
 
     let title_field = def.title_field().map(std::string::ToString::to_string);

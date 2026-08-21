@@ -12,7 +12,7 @@ use crate::db::{
     },
 };
 
-use crate::db::query::helpers::append_sql_condition;
+use crate::db::query::helpers::{append_soft_delete_filter, append_sql_condition};
 
 /// Count documents in a collection.
 ///
@@ -77,10 +77,7 @@ pub fn count_with_search(
         params.push(DbValue::Text(sanitized));
     }
 
-    // Exclude soft-deleted documents unless include_deleted is set
-    if def.soft_delete && !include_deleted {
-        append_sql_condition(&mut sql, &mut has_where, "_deleted_at IS NULL");
-    }
+    append_soft_delete_filter(def, include_deleted, &mut sql, &mut has_where);
 
     let row = conn
         .query_one(&sql, &params)
@@ -143,9 +140,7 @@ pub fn max_updated_at(
         sql.push_str(&where_clause);
     }
 
-    if def.soft_delete && !include_deleted {
-        append_sql_condition(&mut sql, &mut has_where, "_deleted_at IS NULL");
-    }
+    append_soft_delete_filter(def, include_deleted, &mut sql, &mut has_where);
 
     let row = conn
         .query_one(&sql, &params)
