@@ -7,14 +7,6 @@ use crate::{api::content, db::query};
 // so gRPC callers keep the `proto::floor_optional_limit` path.
 pub use crate::db::query::floor_optional_limit;
 
-/// Clamp a client-supplied `limit` (with its default already applied) into
-/// `[0, max]`. Without the floor a negative value binds as `LIMIT -1`, which
-/// `SQLite` treats as *no limit* — a fail-open unbounded read that bypasses the
-/// intended cap. The floor at 0 is fail-closed (`LIMIT 0` returns no rows).
-pub fn clamp_limit(limit: i64, max: i64) -> i64 {
-    limit.clamp(0, max)
-}
-
 /// Convert a [`query::PaginationResult`] to a gRPC `PaginationInfo` message.
 pub fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::PaginationInfo {
     content::PaginationInfo {
@@ -35,16 +27,6 @@ pub fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::Pagi
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A negative limit must not survive as `LIMIT -1` (unbounded on `SQLite`).
-    #[test]
-    fn clamp_limit_floors_negatives_and_caps_max() {
-        assert_eq!(clamp_limit(-1, 1000), 0); // the fail-open case
-        assert_eq!(clamp_limit(-9999, 1000), 0);
-        assert_eq!(clamp_limit(0, 1000), 0);
-        assert_eq!(clamp_limit(50, 1000), 50);
-        assert_eq!(clamp_limit(5000, 1000), 1000); // capped
-    }
 
     /// `None` (no explicit limit) is preserved; a negative `Some` is floored.
     #[test]

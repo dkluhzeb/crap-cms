@@ -202,13 +202,20 @@ changing a representation is a breaking change to every consumer.
 - **Pagination limit and populate depth are clamped at every read surface**
   (Lua / gRPC / MCP / admin) via `apply_pagination_limits` (cap `max_limit`) and
   `min(max_depth)`. Any new read surface **must** apply the same clamps — an
-  untrusted limit/depth must never reach the query layer unclamped. This
-  includes the gRPC `ListJobRuns` / `ListVersions` limits, which are floored at
-  0 (a negative `limit` must never bind as an unbounded `LIMIT -1`). **Version
-  listing** floors its limit *and* offset inside the shared
+  untrusted limit/depth must never reach the query layer unclamped. The main
+  find path and the offset-only gRPC `ListJobRuns` both floor the limit at **1**
+  (never `LIMIT 0`, never an unbounded `LIMIT -1`): the find path via
+  `PaginationCtx::validate`, `ListJobRuns` via `PaginationCtx::resolve_limit`.
+  **Version listing** floors its limit *and* offset inside the shared
   `service::versions::list_versions` (via `floor_optional_limit`, which lives in
   `db::query` so every surface and the service share one helper), so the Lua,
   gRPC, and MCP version listings all inherit the floor at one point.
+- **Live-mutation streams resolve access through one shared path.** The gRPC
+  `Subscribe` and admin SSE streams build their per-subscriber view/mode maps via
+  `EventAccessMap::resolve` and enforce them per event via `EventGate::evaluate`
+  — one construction point and one enforcement point. Both are fail-closed (an
+  access hook that errors or a global returning a row-filter drops the view) and
+  a new stream surface must reuse both, never re-derive the access mapping.
 
 ## Server-config posture (frozen defaults)
 

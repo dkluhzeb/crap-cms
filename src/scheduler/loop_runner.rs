@@ -515,7 +515,7 @@ fn claim_pending_jobs(
     queue_concurrency: &HashMap<String, u32>,
     decay_secs: u64,
 ) -> Result<Vec<JobRun>> {
-    if conn.kind() == "sqlite" {
+    if conn.is_sqlite() {
         let tx = conn
             .transaction_immediate()
             .context("Failed to start claim transaction")?;

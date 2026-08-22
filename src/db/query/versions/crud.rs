@@ -6,12 +6,16 @@ use serde_json::Value;
 
 use crate::{
     core::document::VersionSnapshot,
-    db::{DbConnection, DbRow, DbValue},
+    db::{
+        DbConnection, DbRow, DbValue,
+        query::helpers::{quote_ident, versions_table},
+    },
 };
 
-/// Build the quoted version table name for a collection slug.
+/// Build the quoted version table name for a collection slug. The name scheme
+/// lives in the shared [`versions_table`]; this just quotes it for interpolation.
 fn version_table(slug: &str) -> String {
-    format!("\"_versions_{slug}\"")
+    quote_ident(&versions_table(slug))
 }
 
 /// Map a database row to a `VersionSnapshot`.

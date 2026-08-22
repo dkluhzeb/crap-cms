@@ -198,7 +198,7 @@ fn checkpoint_and_list_sidecars(
     let pool = pool::create_pool(config_dir, cfg).context("Failed to create database pool")?;
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    if conn.kind() != "sqlite" {
+    if !conn.is_sqlite() {
         bail!("restore supports the SQLite backend only");
     }
 

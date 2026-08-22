@@ -6,6 +6,9 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use super::system_columns::{
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, VERIFY_EMAIL_COLUMNS,
+};
 use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
@@ -131,42 +134,28 @@ fn collect_system_columns(
     def: &CollectionDefinition,
 ) {
     if def.has_drafts() {
-        columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
+        columns.push(DRAFT_STATUS_COLUMN.to_string());
     }
 
     if def.soft_delete {
         columns.push(format!("_deleted_at {}", conn.timestamp_column_type()));
     }
 
-    columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
+    columns.push(REF_COUNT_COLUMN.to_string());
 
     if def.is_auth_collection() {
-        columns.extend([
-            "_password_hash TEXT".to_string(),
-            "_reset_token TEXT".to_string(),
-            "_reset_token_exp INTEGER".to_string(),
-            "_locked INTEGER DEFAULT 0".to_string(),
-            "_settings TEXT".to_string(),
-            "_session_version INTEGER DEFAULT 0".to_string(),
-        ]);
+        columns.extend(AUTH_COLUMNS.iter().map(|c| (*c).to_string()));
 
         if def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
-            columns.extend([
-                "_verified INTEGER DEFAULT 0".to_string(),
-                "_verification_token TEXT".to_string(),
-                "_verification_token_exp INTEGER".to_string(),
-            ]);
+            columns.extend(VERIFY_EMAIL_COLUMNS.iter().map(|c| (*c).to_string()));
         }
 
-        // MFA columns (parallel to alter::alter_collection_table). Without
-        // these, `set_mfa_code` fails silently on a freshly-created auth
-        // collection with `mfa = Email`, which means the MFA challenge
-        // email never gets queued.
+        // MFA columns (parallel to alter::add_auth_columns via the shared
+        // `system_columns` consts). Without these, `set_mfa_code` fails silently
+        // on a freshly-created auth collection with `mfa = Email`, so the MFA
+        // challenge email never gets queued.
         if def.auth.as_ref().is_some_and(|a| a.mfa() != MfaMode::Off) {
-            columns.extend([
-                "_mfa_code TEXT".to_string(),
-                "_mfa_code_exp INTEGER".to_string(),
-            ]);
+            columns.extend(MFA_COLUMNS.iter().map(|c| (*c).to_string()));
         }
     }
 

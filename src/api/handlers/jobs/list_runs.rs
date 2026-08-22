@@ -7,7 +7,7 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::handlers::proto::{clamp_limit, pagination_result_to_proto},
+    api::handlers::proto::pagination_result_to_proto,
     api::{
         content,
         handlers::{ContentService, enum_mapping},
@@ -101,13 +101,10 @@ impl ContentService {
             slug: req.slug.clone(),
             // The proto status filter is an enum; `Unspecified` = no filter.
             status: enum_mapping::job_status_filter(req.status()).map(|s| s.as_str().to_string()),
-            // Use the configured `[pagination]` limits, not hardcoded literals,
-            // so the jobs surface honors `default_limit` / `max_limit` like every
-            // other read surface.
-            limit: clamp_limit(
-                req.limit.unwrap_or(self.pagination_ctx.default_limit),
-                self.pagination_ctx.max_limit,
-            ),
+            // Resolve through the shared `PaginationCtx` so the jobs surface
+            // honors `default_limit` / `max_limit` AND floors to 1 (never
+            // `LIMIT 0`) exactly like the main find path.
+            limit: self.pagination_ctx.resolve_limit(req.limit),
             offset: req.offset.unwrap_or(0).max(0),
         };
 

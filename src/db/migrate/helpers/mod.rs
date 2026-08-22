@@ -1,10 +1,12 @@
 //! Shared helpers for migration: table introspection, column specs, join tables, versions.
 
+mod alter;
 mod column_specs;
 mod introspection;
 mod join_tables;
 mod versions;
 
+pub(in crate::db::migrate) use alter::add_column_if_missing;
 pub(super) use column_specs::{ColumnSpec, collect_column_specs};
 pub use introspection::sanitize_locale;
 pub(crate) use introspection::{get_table_column_types, get_table_columns, table_exists};

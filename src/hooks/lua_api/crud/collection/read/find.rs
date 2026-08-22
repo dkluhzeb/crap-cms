@@ -289,7 +289,7 @@ fn find_inner(
 
     // Default sort for trash listings is a presentation concern — keep here.
     if is_trash && find_query.order_by.is_none() {
-        find_query.order_by = Some("-_deleted_at".to_string());
+        find_query.order_by = Some(query::TRASH_DEFAULT_ORDER.to_string());
     }
 
     // Depth guard: a before_read/after_read hook that finds in the same

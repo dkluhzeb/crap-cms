@@ -40,7 +40,7 @@ const MIGRATION_VERSION: &str = "1";
 /// Returns a backend error if introspection, an ALTER, or the meta upsert
 /// fails.
 pub(super) fn migrate_if_needed(conn: &dyn DbConnection, registry: &Registry) -> Result<()> {
-    if conn.kind() != "postgres" {
+    if !conn.is_postgres() {
         return Ok(());
     }
 

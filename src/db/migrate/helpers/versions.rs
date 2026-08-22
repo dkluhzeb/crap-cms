@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 use tracing::info;
 
 use crate::db::DbConnection;
+use crate::db::query::helpers::versions_table;
 
 use super::introspection::table_exists;
 
@@ -12,7 +13,7 @@ pub(in crate::db::migrate) fn sync_versions_table(
     conn: &dyn DbConnection,
     slug: &str,
 ) -> Result<()> {
-    let table_name = format!("_versions_{slug}");
+    let table_name = versions_table(slug);
 
     if table_exists(conn, &table_name)? {
         return Ok(());

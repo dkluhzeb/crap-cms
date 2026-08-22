@@ -242,11 +242,7 @@ fn parse_list_inputs(
     let cursor_enabled = state.config.pagination.is_cursor();
     let search = params.search.filter(|s| !s.trim().is_empty());
 
-    let pg_ctx = query::PaginationCtx::new(
-        state.config.pagination.default_limit,
-        state.config.pagination.max_limit,
-        cursor_enabled,
-    );
+    let pg_ctx = query::PaginationCtx::from_config(&state.config.pagination);
     let pagination = pg_ctx
         .validate(
             params.per_page,
@@ -303,7 +299,7 @@ fn parse_list_inputs(
     };
 
     let order_by = if is_trash {
-        Some("-_deleted_at".to_string())
+        Some(query::TRASH_DEFAULT_ORDER.to_string())
     } else {
         sort.clone().or_else(|| def.admin.default_sort.clone())
     };

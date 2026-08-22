@@ -16,8 +16,8 @@ use crate::{
 use crate::db::migrate::{
     collection::append_default_value_for,
     helpers::{
-        collect_column_specs, get_table_columns, sync_join_tables, sync_versions_table,
-        table_exists,
+        add_column_if_missing, collect_column_specs, get_table_columns, sync_join_tables,
+        sync_versions_table, table_exists,
     },
 };
 
@@ -77,11 +77,10 @@ fn create_global_table(
     let mut columns = vec!["id TEXT PRIMARY KEY".to_string()];
 
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        let col_type = if spec.companion_text {
-            "TEXT"
-        } else {
-            conn.column_type_for(&spec.field.field_type)
-        };
+        // Route through the shared `ddl_type` so a scalar `has_many` field (stored
+        // as a JSON array in TEXT) isn't given a numeric column — the same rule
+        // collection tables use. Skipping it here mistyped globals on Postgres.
+        let col_type = spec.ddl_type(conn);
 
         if spec.is_localized {
             for locale in &locale_config.locales {
@@ -167,16 +166,15 @@ fn add_field_columns(
     existing: &HashSet<String>,
 ) -> Result<()> {
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        let col_type = if spec.companion_text {
-            "TEXT"
-        } else {
-            conn.column_type_for(&spec.field.field_type)
-        };
+        // Route through the shared `ddl_type` so a scalar `has_many` field (stored
+        // as a JSON array in TEXT) isn't given a numeric column — the same rule
+        // collection tables use. Skipping it here mistyped globals on Postgres.
+        let col_type = spec.ddl_type(conn);
 
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = locale_column(&spec.col_name, locale)?;
-                add_column_if_missing(
+                add_field_column_if_missing(
                     conn,
                     table_name,
                     &col_name,
@@ -187,7 +185,7 @@ fn add_field_columns(
                 )?;
             }
         } else {
-            add_column_if_missing(
+            add_field_column_if_missing(
                 conn,
                 table_name,
                 &spec.col_name,
@@ -202,8 +200,8 @@ fn add_field_columns(
     Ok(())
 }
 
-/// Add a single column if it doesn't already exist.
-fn add_column_if_missing(
+/// Build a field column definition and add it if it doesn't already exist.
+fn add_field_column_if_missing(
     conn: &dyn DbConnection,
     table_name: &str,
     col_name: &str,
@@ -212,19 +210,8 @@ fn add_column_if_missing(
     field: &crate::core::FieldDefinition,
     existing: &HashSet<String>,
 ) -> Result<()> {
-    if existing.contains(col_name) {
-        return Ok(());
-    }
-
     let col_def = build_col_def(col_name, col_type, companion_text, field, conn.kind());
-    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_def}");
-
-    info!("Adding column to {}: {}", table_name, col_name);
-
-    conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add column {col_name} to {table_name}"))?;
-
-    Ok(())
+    add_column_if_missing(conn, table_name, col_name, &col_def, existing)
 }
 
 /// Add a system column if condition is true and column doesn't exist.
@@ -236,21 +223,12 @@ fn add_system_column(
     condition: bool,
     existing: &HashSet<String>,
 ) -> Result<()> {
-    if !condition || existing.contains(col_name) {
+    if !condition {
         return Ok(());
     }
 
-    let sql = format!(
-        "ALTER TABLE \"{table_name}\" ADD COLUMN {} {col_def}",
-        quote_ident(col_name)
-    );
-
-    info!("Adding {} column to {}", col_name, table_name);
-
-    conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add {col_name} to {table_name}"))?;
-
-    Ok(())
+    let full_def = format!("{} {col_def}", quote_ident(col_name));
+    add_column_if_missing(conn, table_name, col_name, &full_def, existing)
 }
 
 #[cfg(test)]
@@ -302,6 +280,30 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.get_i64("cnt").unwrap(), 1);
+    }
+
+    /// Regression: a top-level scalar `has_many` field stores a JSON array and
+    /// must be a TEXT column (a numeric column rejects the array on Postgres).
+    /// Globals previously bypassed `ColumnSpec::ddl_type` and gave it the numeric
+    /// type. Declared type differs on `SQLite` too (TEXT vs REAL), so this catches
+    /// it on either backend.
+    #[test]
+    fn global_has_many_scalar_column_is_text_not_numeric() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let field = FieldDefinition::builder("scores", FieldType::Number)
+            .has_many(true)
+            .build();
+        let def = simple_global("settings", vec![field]);
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        let types = conn.get_table_column_types("_global_settings").unwrap();
+        assert_eq!(
+            types.get("scores").map(String::as_str),
+            Some("TEXT"),
+            "has_many scalar global column must be TEXT, got {:?}",
+            types.get("scores")
+        );
     }
 
     // ── alter ───────────────────────────────────────────────────────────

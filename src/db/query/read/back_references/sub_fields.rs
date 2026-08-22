@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use tracing::{debug, warn};
 
-use crate::core::{FieldDefinition, FieldType, NestStep, any_field};
+use crate::core::{FieldDefinition, NestStep, any_field};
 use crate::db::query::join::find_all_array_rows_with_parent;
 use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
 
@@ -68,7 +68,7 @@ impl PathAccumulator {
 /// `target` — used to skip loading join tables that can't contribute.
 fn fields_may_target(fields: &[FieldDefinition], target: &str) -> bool {
     any_field(fields, &|f| {
-        matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
+        f.field_type.is_reference()
             && f.relationship
                 .as_ref()
                 .is_some_and(|rc| rc.all_collections().contains(&target))

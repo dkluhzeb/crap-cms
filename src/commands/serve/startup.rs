@@ -396,7 +396,7 @@ fn shutdown_cleanup(config_dir: &Path, pool: &DbPool) -> Vec<anyhow::Error> {
 
     // Checkpoint WAL before exit — process::exit() skips destructors.
     match pool.get() {
-        Ok(conn) if conn.kind() == "sqlite" => {
+        Ok(conn) if conn.is_sqlite() => {
             if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
                 warn!("WAL checkpoint failed: {}", e);
                 errors.push(anyhow!("WAL checkpoint failed: {e}"));

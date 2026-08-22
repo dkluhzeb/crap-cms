@@ -240,11 +240,7 @@ impl ContentService {
     pub fn new(deps: ContentServiceDeps) -> Self {
         let default_depth = deps.config.depth.default_depth;
         let max_depth = deps.config.depth.max_depth;
-        let pagination_ctx = query::PaginationCtx::new(
-            deps.config.pagination.default_limit,
-            deps.config.pagination.max_limit,
-            deps.config.pagination.is_cursor(),
-        );
+        let pagination_ctx = query::PaginationCtx::from_config(&deps.config.pagination);
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
         let db_kind = deps.pool.kind().to_string();
         let max_subscribe_connections = deps.config.live.max_subscribe_connections;

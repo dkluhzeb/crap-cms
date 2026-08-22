@@ -10,13 +10,17 @@ use crate::{
     db::{
         DbConnection,
         migrate::helpers::{
-            ColumnSpec, collect_column_specs, get_table_column_types, get_table_columns,
+            ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
+            get_table_columns,
         },
         query::helpers::{locale_column, quote_ident},
     },
 };
 
 use super::create::{append_default_value_for, create_collection_table};
+use super::system_columns::{
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, VERIFY_EMAIL_COLUMNS,
+};
 use crate::core::collection::Auth;
 
 /// Shared context for ALTER TABLE operations. All fields are required and
@@ -60,7 +64,7 @@ fn reconcile_scalar_list_column(ctx: &AlterCtx, col_name: &str) -> Result<()> {
         .get(col_name)
         .is_none_or(|t| t.eq_ignore_ascii_case("TEXT"));
 
-    if already_text || ctx.conn.kind() != "postgres" {
+    if already_text || !ctx.conn.is_postgres() {
         return Ok(());
     }
 
@@ -108,19 +112,8 @@ fn add_field_column(
         );
     }
 
-    let sql = format!(
-        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-        ctx.slug,
-        quote_ident(col_name),
-        col_def
-    );
-    info!("Adding column to {}: {}", ctx.slug, col_name);
-
-    ctx.conn
-        .execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add column {} to {}", col_name, ctx.slug))?;
-
-    Ok(())
+    let full_def = format!("{} {col_def}", quote_ident(col_name));
+    add_column_if_missing(ctx.conn, ctx.slug, col_name, &full_def, ctx.existing)
 }
 
 /// Add missing user-defined field columns (including localized variants).
@@ -148,18 +141,7 @@ fn ensure_column(ctx: &AlterCtx, col_def: &str) -> Result<()> {
         .next()
         .expect("static column definition");
 
-    if ctx.existing.contains(col_name) {
-        return Ok(());
-    }
-
-    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col_def);
-    info!("Adding {} column to {}", col_name, ctx.slug);
-
-    ctx.conn
-        .execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
-
-    Ok(())
+    add_column_if_missing(ctx.conn, ctx.slug, col_name, col_def, ctx.existing)
 }
 
 /// Add system columns (_status, auth, timestamps) as needed.
@@ -176,7 +158,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
 /// Add _status column for versioned collections with drafts.
 fn add_draft_columns(ctx: &AlterCtx) -> Result<()> {
     if ctx.def.has_drafts() {
-        ensure_column(ctx, "_status TEXT NOT NULL DEFAULT 'published'")?;
+        ensure_column(ctx, DRAFT_STATUS_COLUMN)?;
     }
 
     Ok(())
@@ -188,14 +170,7 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         return Ok(());
     }
 
-    for col in [
-        "_password_hash TEXT",
-        "_reset_token TEXT",
-        "_reset_token_exp INTEGER",
-        "_locked INTEGER DEFAULT 0",
-        "_settings TEXT",
-        "_session_version INTEGER DEFAULT 0",
-    ] {
+    for col in AUTH_COLUMNS {
         ensure_column(ctx, col)?;
     }
 
@@ -205,11 +180,7 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         .as_ref()
         .is_some_and(Auth::requires_verify_email)
     {
-        for col in [
-            "_verified INTEGER DEFAULT 0",
-            "_verification_token TEXT",
-            "_verification_token_exp INTEGER",
-        ] {
+        for col in VERIFY_EMAIL_COLUMNS {
             ensure_column(ctx, col)?;
         }
     }
@@ -220,7 +191,7 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         .as_ref()
         .is_some_and(|a| a.mfa() != MfaMode::Off)
     {
-        for col in ["_mfa_code TEXT", "_mfa_code_exp INTEGER"] {
+        for col in MFA_COLUMNS {
             ensure_column(ctx, col)?;
         }
     }
@@ -240,7 +211,7 @@ fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
 
 /// Add _`ref_count` column for delete protection.
 fn add_ref_count_column(ctx: &AlterCtx) -> Result<()> {
-    ensure_column(ctx, "_ref_count INTEGER NOT NULL DEFAULT 0")
+    ensure_column(ctx, REF_COUNT_COLUMN)
 }
 
 /// Add `created_at/updated_at` timestamp columns.

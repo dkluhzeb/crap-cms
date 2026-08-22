@@ -132,7 +132,7 @@ fn run_explain(
     find_query: &FindQuery,
     def: &crate::core::CollectionDefinition,
 ) -> Result<Vec<String>> {
-    if conn.kind() != "sqlite" {
+    if !conn.is_sqlite() {
         return Ok(vec!["(EXPLAIN only available for SQLite)".to_string()]);
     }
 

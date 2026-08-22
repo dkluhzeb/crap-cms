@@ -188,8 +188,7 @@ fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
             | FieldType::Collapsible
             | FieldType::Tabs
             | FieldType::Json
-    ) || (matches!(sf.field_type, FieldType::Relationship | FieldType::Upload)
-        && sf.relationship.as_ref().is_some_and(|rc| rc.has_many))
+    ) || (sf.field_type.is_reference() && sf.relationship.as_ref().is_some_and(|rc| rc.has_many))
 }
 
 /// Reconstruct an array-row object from a DB row's sub-field columns, starting

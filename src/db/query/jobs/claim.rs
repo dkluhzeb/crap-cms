@@ -56,7 +56,7 @@ pub fn claim_pending_jobs(
     // transaction on Postgres so concurrent worker scans skip them.
     // SQLite doesn't have this syntax and doesn't need it — the
     // caller's `IMMEDIATE` transaction already serializes writes.
-    let lock_clause = if conn.kind() == "postgres" {
+    let lock_clause = if conn.is_postgres() {
         " FOR UPDATE SKIP LOCKED"
     } else {
         ""

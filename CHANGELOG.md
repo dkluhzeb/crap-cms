@@ -1264,6 +1264,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`has_many` scalar fields on Globals now get a `TEXT` column on Postgres.**
+  A top-level `has_many` Text/Number/Select/Radio field stores its list as a
+  JSON array and must live in a `TEXT` column (Postgres rejects a JSON array in
+  a numeric column). Collection tables routed this through the shared
+  `ColumnSpec::ddl_type`, but the Globals create/alter paths bypassed it and
+  used the raw per-type mapping — so such a field on a Global got a numeric
+  column and failed on Postgres. Both Globals paths now use `ddl_type`.
+  (SQLite is dynamically typed, so it was unaffected.)
+
+- **Job-run listing with `limit=0` no longer returns an empty page.** The gRPC
+  `ListJobRuns` limit went through a `clamp_limit` that floored to `0`
+  (`LIMIT 0` → no rows), unlike every other read surface, whose limit floors to
+  `1`. It now resolves through the shared `PaginationCtx::resolve_limit`, so a
+  `0`/negative request clamps to `1` exactly like the main find path.
+
 - **`updated_at` no longer sorts inconsistently on SQLite after a publish /
   unpublish.** Ordinary writes stamp `updated_at` with an ISO-8601
   (`…THH:MM:SS.mmmZ`) timestamp, but a status change wrote the same column via
@@ -2707,6 +2722,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Scattered duplicate logic pulled behind shared chokepoints (no behavior
   change).** These are refactors that give each concern a single source of
   truth so sibling call sites can't drift apart:
+  - Live-stream access construction is shared: the gRPC `Subscribe` stream and
+    the admin SSE stream now build their per-view access maps through one
+    `EventAccessMap::resolve` (the construction companion to the already-shared
+    `EventGate` enforcement), so the fail-closed hook mapping and the
+    globals-are-allow/deny-only rule can't drift between the two surfaces.
+  - The `Relationship | Upload` "references another collection" test is one
+    `FieldType::is_reference()` predicate instead of a `matches!` re-spelled
+    across ~20 files; `Array | Blocks` is `FieldType::has_rows()`; the ref-count
+    subtree scan reuses the shared `any_field` walk.
+  - Backend gating uses typed `DbConnection::is_postgres()` / `is_sqlite()`
+    predicates instead of hand-comparing `kind() == "postgres"`.
+  - Internal system/auth column definitions live in one `system_columns` module
+    consumed by both collection CREATE and ALTER (they were hand-synced before);
+    `ALTER TABLE … ADD COLUMN` goes through one `add_column_if_missing`; the
+    `_versions_{slug}` table name has one `versions_table` helper.
+  - The trash-listing default sort (`-_deleted_at`) is one `TRASH_DEFAULT_ORDER`
+    constant across the gRPC/MCP/Lua/Admin read surfaces; `PaginationCtx` gains
+    `from_config` (used by all read surfaces) and `resolve_limit`; the Postgres
+    `to_tsvector('simple', …)` expression is one `pg_tsvector` helper.
   - Positional SQL placeholder lists (`?1, ?2, … ?N`) are built by one
     `placeholder_list` helper instead of eight hand-rolled `(1..=n)` loops.
   - Batched junction-table reads share a `select_junction_rows_batch` helper

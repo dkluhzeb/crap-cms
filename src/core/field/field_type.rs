@@ -95,6 +95,24 @@ impl FieldType {
         )
     }
 
+    /// True for the field types that reference documents in another collection —
+    /// `Relationship` and `Upload`. Both carry a `RelationshipConfig`, so this is
+    /// the one classifier every ref-count / back-reference / populate / validation
+    /// walk uses instead of re-spelling `matches!(ft, Relationship | Upload)`.
+    #[must_use]
+    pub fn is_reference(&self) -> bool {
+        matches!(self, FieldType::Relationship | FieldType::Upload)
+    }
+
+    /// True for the repeatable multi-row composites — `Array` and `Blocks`. Their
+    /// value is a JSON array of rows and the `min_rows`/`max_rows` bounds apply.
+    /// (Distinct from `has_parent_column` / `is_has_many_scalar`, which describe
+    /// storage shape, not row cardinality.)
+    #[must_use]
+    pub fn has_rows(&self) -> bool {
+        matches!(self, FieldType::Array | FieldType::Blocks)
+    }
+
     /// The complete set of valid field-type strings — the frozen public
     /// contract. Used for strict parsing and for did-you-mean error messages.
     pub const ALL: &'static [&'static str] = &[
@@ -215,6 +233,37 @@ impl FieldType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_reference_only_relationship_and_upload() {
+        assert!(FieldType::Relationship.is_reference());
+        assert!(FieldType::Upload.is_reference());
+        for ft in [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Group,
+            FieldType::Array,
+            FieldType::Blocks,
+            FieldType::Join,
+        ] {
+            assert!(!ft.is_reference(), "{ft:?} must not be a reference");
+        }
+    }
+
+    #[test]
+    fn has_rows_only_array_and_blocks() {
+        assert!(FieldType::Array.has_rows());
+        assert!(FieldType::Blocks.has_rows());
+        for ft in [
+            FieldType::Text,
+            FieldType::Group,
+            FieldType::Relationship,
+            FieldType::Upload,
+            FieldType::Row,
+        ] {
+            assert!(!ft.has_rows(), "{ft:?} must not have rows");
+        }
+    }
 
     #[test]
     fn from_str_known_types() {

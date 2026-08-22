@@ -15,7 +15,7 @@ pub(super) fn parse_field_relationship(
     field_tbl: &Table,
     field_type: &FieldType,
 ) -> LuaResult<Option<RelationshipConfig>> {
-    if !matches!(field_type, FieldType::Relationship | FieldType::Upload) {
+    if !field_type.is_reference() {
         return Ok(None);
     }
 

@@ -210,7 +210,7 @@ pub(crate) fn create_jobs_table(
 fn drain_legacy_image_queue(conn: &dyn DbConnection) -> Result<()> {
     // SQLite-only check; on Postgres this code path never fires
     // because alpha.9 schemas there were never deployed.
-    if conn.kind() != "sqlite" {
+    if !conn.is_sqlite() {
         return Ok(());
     }
 

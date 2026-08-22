@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use crate::core::walk_nested;
-use crate::core::{BlockDefinition, FieldDefinition, FieldType, NestStep, RelationshipConfig};
+use crate::core::{BlockDefinition, FieldDefinition, NestStep, RelationshipConfig};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
@@ -46,10 +46,7 @@ pub(crate) fn walk_nested_with<'a, V>(
     V: FnMut(&'a FieldDefinition, &[NestStep<'a>], &str, &str, bool),
 {
     walk_nested(obj, fields, stack, &mut |field, value, path| {
-        if !matches!(
-            field.field_type,
-            FieldType::Relationship | FieldType::Upload
-        ) {
+        if !field.field_type.is_reference() {
             return;
         }
 

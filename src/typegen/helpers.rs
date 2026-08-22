@@ -78,10 +78,7 @@ pub(super) fn rel_has_many(field: &FieldDefinition) -> bool {
 /// Shared by the client type generator and the proto-conversion generator so
 /// their optionality can't drift.
 pub(super) fn is_single_ref(field: &FieldDefinition) -> bool {
-    matches!(
-        field.field_type,
-        FieldType::Relationship | FieldType::Upload
-    ) && !rel_has_many(field)
+    field.field_type.is_reference() && !rel_has_many(field)
 }
 
 /// Get sorted collection slugs from the registry.

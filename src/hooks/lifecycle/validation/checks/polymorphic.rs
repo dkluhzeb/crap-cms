@@ -22,7 +22,7 @@
 
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::core::{FieldDefinition, validate::FieldError};
 
 /// Reject polymorphic relationship values whose target collection is not
 /// in the field's `polymorphic` allowlist.
@@ -32,10 +32,7 @@ pub(crate) fn check_polymorphic_allowlist(
     value: Option<&Value>,
     errors: &mut Vec<FieldError>,
 ) {
-    if !matches!(
-        field.field_type,
-        FieldType::Relationship | FieldType::Upload
-    ) {
+    if !field.field_type.is_reference() {
         return;
     }
 

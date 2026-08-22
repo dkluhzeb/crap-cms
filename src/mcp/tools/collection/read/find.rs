@@ -38,11 +38,7 @@ pub(in crate::mcp::tools) fn exec_find(
     let after_cursor = args.get("after_cursor").and_then(|v| v.as_str());
     let before_cursor = args.get("before_cursor").and_then(|v| v.as_str());
 
-    let pg_ctx = query::PaginationCtx::new(
-        ctx.config.pagination.default_limit,
-        ctx.config.pagination.max_limit,
-        ctx.config.pagination.is_cursor(),
-    );
+    let pg_ctx = query::PaginationCtx::from_config(&ctx.config.pagination);
     let pagination = pg_ctx
         .validate(limit, page, after_cursor, before_cursor)
         .map_err(|e| anyhow!(e))?;
@@ -83,7 +79,7 @@ pub(in crate::mcp::tools) fn exec_find(
     // Default sort for trash listings is a presentation concern.
     let order_by = order_by
         .clone()
-        .or_else(|| is_trash.then(|| "-_deleted_at".to_string()));
+        .or_else(|| is_trash.then(|| query::TRASH_DEFAULT_ORDER.to_string()));
 
     let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 

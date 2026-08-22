@@ -442,6 +442,13 @@ pub(crate) fn global_table(slug: &str) -> String {
     format!("_global_{slug}")
 }
 
+/// Build the version table name for a collection: `"_versions_{slug}"`.
+/// Unquoted, like [`join_table`] / [`global_table`] — callers quote at the
+/// interpolation site (e.g. via [`quote_ident`]).
+pub(crate) fn versions_table(slug: &str) -> String {
+    format!("_versions_{slug}")
+}
+
 /// Quote a SQL identifier (column/table name) for interpolation into DDL/DML.
 ///
 /// Both `SQLite` and Postgres delimit identifiers with double quotes; an embedded

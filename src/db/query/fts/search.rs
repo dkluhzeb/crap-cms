@@ -32,7 +32,7 @@ pub(crate) fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String
         return String::new();
     }
 
-    if conn.kind() == "postgres" {
+    if conn.is_postgres() {
         let tokens: Vec<String> = raw_tokens
             .into_iter()
             .map(|t| {

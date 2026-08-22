@@ -6,6 +6,7 @@ use tracing::info;
 use crate::config::LocaleConfig;
 use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
 use crate::db::DbConnection;
+use crate::db::migrate::helpers::add_column_if_missing;
 use crate::db::migrate::helpers::column_specs::ensure_locale_column;
 use crate::db::migrate::helpers::introspection::{
     get_table_columns, sanitize_locale, table_exists,
@@ -99,28 +100,17 @@ fn alter_array_table(
     let existing = get_table_columns(conn, table_name)?;
 
     for sub_field in flat_subs {
-        if !existing.contains(&sub_field.name) {
-            let sql = format!(
-                "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}",
-                table_name,
-                sub_field.name,
-                conn.column_type_for(&sub_field.field_type)
-            );
-            info!("Adding column to {}: {}", table_name, sub_field.name);
-            conn.execute_ddl(&sql, &[]).with_context(|| {
-                format!("Failed to add column {} to {}", sub_field.name, table_name)
-            })?;
-        }
+        let col_def = format!(
+            "{} {}",
+            quote_ident(&sub_field.name),
+            conn.column_type_for(&sub_field.field_type)
+        );
+        add_column_if_missing(conn, table_name, &sub_field.name, &col_def, &existing)?;
 
         if sub_field.field_type == FieldType::Date && sub_field.timezone {
             let tz_col = tz_column(&sub_field.name);
-
-            if !existing.contains(&tz_col) {
-                let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN \"{tz_col}\" TEXT");
-                info!("Adding column to {}: {}", table_name, tz_col);
-                conn.execute_ddl(&sql, &[])
-                    .with_context(|| format!("Failed to add column {tz_col} to {table_name}"))?;
-            }
+            let tz_def = format!("{} TEXT", quote_ident(&tz_col));
+            add_column_if_missing(conn, table_name, &tz_col, &tz_def, &existing)?;
         }
     }
 

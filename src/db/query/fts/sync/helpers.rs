@@ -3,6 +3,17 @@
 use crate::db::query::fts::search::table_exists;
 use crate::db::{DbConnection, DbValue};
 
+/// The Postgres full-text-search configuration used for every `to_tsvector`
+/// call. One source so the config can't drift between the backfill and the
+/// runtime upsert.
+pub(super) const PG_FTS_CONFIG: &str = "simple";
+
+/// Build a Postgres `to_tsvector('simple', <text>)` expression over `text_expr`
+/// (a bound placeholder or a SQL text expression).
+pub(super) fn pg_tsvector(text_expr: &str) -> String {
+    format!("to_tsvector('{PG_FTS_CONFIG}', {text_expr})")
+}
+
 /// Get column names from the FTS table (excludes `id`).
 ///
 /// Returns `None` if the FTS table doesn't exist or has no columns.
@@ -16,7 +27,7 @@ pub(super) fn get_fts_table_columns(
         return None;
     }
 
-    if conn.kind() == "postgres" {
+    if conn.is_postgres() {
         let p1 = conn.placeholder(1);
         let sql = format!(
             "SELECT column_name FROM information_schema.columns \

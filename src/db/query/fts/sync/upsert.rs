@@ -13,7 +13,7 @@ use crate::db::query::fts::search::fts_table_name;
 use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::get_fts_table_columns;
+use super::helpers::{get_fts_table_columns, pg_tsvector};
 
 /// Insert or update a document in the FTS index.
 ///
@@ -52,7 +52,7 @@ pub(crate) fn fts_upsert_with_registry(
 
     let json_rt_cols = def.map(json_richtext_columns).unwrap_or_default();
     let node_searchable = build_node_searchable_map(def, registry);
-    let is_postgres = conn.kind() == "postgres";
+    let is_postgres = conn.is_postgres();
 
     let logical_cols = resolve_logical_columns(doc, &fts_cols, is_postgres);
     let field_texts = extract_field_texts(doc, &logical_cols, &json_rt_cols, &node_searchable);
@@ -116,8 +116,9 @@ fn upsert_postgres(
     let combined = field_texts.join(" ");
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, to_tsvector('simple', {p2})) \
-         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv"
+        "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {}) \
+         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
+        pg_tsvector(&p2)
     );
 
     conn.execute(

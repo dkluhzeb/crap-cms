@@ -119,7 +119,7 @@ fn build_find_query(
     let order_by = req
         .order_by
         .clone()
-        .or_else(|| is_trash.then(|| "-_deleted_at".to_string()));
+        .or_else(|| is_trash.then(|| query::TRASH_DEFAULT_ORDER.to_string()));
 
     let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 

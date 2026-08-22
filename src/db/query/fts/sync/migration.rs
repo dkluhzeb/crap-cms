@@ -12,6 +12,7 @@ use crate::db::query::fts::fields::{
     get_fts_columns, is_json_richtext_column, json_richtext_columns,
 };
 use crate::db::query::fts::search::fts_table_name;
+use crate::db::query::fts::sync::helpers::pg_tsvector;
 use crate::db::query::helpers::{placeholder_list, quote_ident};
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
@@ -55,7 +56,7 @@ pub fn sync_fts_table(
         .collect::<Vec<_>>()
         .join(", ");
 
-    if conn.kind() == "postgres" {
+    if conn.is_postgres() {
         // Create regular table with a single tsvector column
         let create_sql = format!("CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, tsv TSVECTOR)");
         conn.execute_batch_ddl(&create_sql)
@@ -104,21 +105,17 @@ fn bulk_populate_fast(
         .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
         .collect();
 
-    let insert_sql = match conn.kind() {
-        "postgres" => {
-            let tsvector_expr = format!(
-                "to_tsvector('simple', {})",
-                coalesce_fields.join(" || ' ' || ")
-            );
-            format!("INSERT INTO {fts_table}(id, tsv) SELECT id, {tsvector_expr} FROM \"{slug}\"")
-        }
-        _ => format!(
+    let insert_sql = if conn.is_postgres() {
+        let tsvector_expr = pg_tsvector(&coalesce_fields.join(" || ' ' || "));
+        format!("INSERT INTO {fts_table}(id, tsv) SELECT id, {tsvector_expr} FROM \"{slug}\"")
+    } else {
+        format!(
             "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
             fts_table,
             field_list,
             coalesce_fields.join(", "),
             slug
-        ),
+        )
     };
 
     conn.execute_batch(&insert_sql)
@@ -146,11 +143,14 @@ fn bulk_populate_slow(
         .query_all(&select_sql, &[])
         .with_context(|| format!("Failed to query {slug} for FTS population"))?;
 
-    let is_postgres = conn.kind() == "postgres";
+    let is_postgres = conn.is_postgres();
 
     let insert_sql = if is_postgres {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        format!("INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, to_tsvector('simple', {p2}))")
+        format!(
+            "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, {})",
+            pg_tsvector(&p2)
+        )
     } else {
         // id + one placeholder per FTS field.
         let placeholders = placeholder_list(conn, fts_fields.len() + 1);

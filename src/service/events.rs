@@ -25,11 +25,14 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, DocumentFields, LiveMode, MutationEvent, Registry,
+        Document, DocumentFields, HookRef, LiveMode, MutationEvent, Registry,
         event::{EventOperation, EventTarget},
     },
-    db::{EventViewGate, query::filter::memory::matches_constraints_typed},
-    hooks::{EventAfterReadInput, HookRunner},
+    db::{
+        AccessResult, DbConnection, EventViewGate, FilterClause,
+        query::filter::memory::matches_constraints_typed,
+    },
+    hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
     service::helpers::collect_api_hidden_field_names,
 };
 
@@ -197,6 +200,154 @@ impl EventGate<'_> {
     }
 }
 
+/// Inputs for [`EventAccessMap::resolve`]: the requested slugs plus everything a
+/// per-view access hook needs. Both stream surfaces populate this identically.
+pub struct EventAccessInput<'a> {
+    pub registry: &'a Registry,
+    pub collection_slugs: &'a [String],
+    pub global_slugs: &'a [String],
+    pub user_doc: Option<&'a Document>,
+    pub hook_runner: &'a HookRunner,
+    pub conn: &'a dyn DbConnection,
+}
+
+/// A subscriber's owned per-view access maps, built once at connection time.
+///
+/// The construction companion to [`EventGate`] (which shares the per-event
+/// enforcement): both the admin SSE stream and the gRPC `Subscribe` stream build
+/// this via [`resolve`](Self::resolve) so the security-critical access
+/// resolution — the fail-closed hook mapping, the per-axis view gating, the
+/// globals-are-allow/deny-only rule — can't drift between the two surfaces.
+#[derive(Default)]
+pub struct EventAccessMap {
+    /// Per-collection content-view access (published/draft/trash).
+    pub collection_views: HashMap<String, EventViewGate>,
+    /// Per-global content-view access (globals carry only the published view).
+    pub global_views: HashMap<String, EventViewGate>,
+    /// Delivery mode per collection slug (split from globals — a collection and a
+    /// global may share a slug, tables being namespaced).
+    pub collection_modes: HashMap<String, LiveMode>,
+    /// Delivery mode per global slug.
+    pub global_modes: HashMap<String, LiveMode>,
+}
+
+impl EventAccessMap {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Resolve per-view access for the requested collections and globals under
+    /// the caller's connection. Collections carry all three view axes (draft only
+    /// with a status axis, trash only with soft-delete) and honor row filters;
+    /// globals carry only the published view and are allow/deny only — a returned
+    /// filter table drops the view (fail-closed). A slug with no visible view is
+    /// omitted.
+    #[must_use]
+    pub fn resolve(input: &EventAccessInput) -> Self {
+        let mut map = Self::empty();
+
+        for slug in input.collection_slugs {
+            let Some(def) = input.registry.get_collection(slug) else {
+                continue;
+            };
+
+            let gate = EventViewGate {
+                published: resolve_view(input, def.access.read.as_ref(), slug, false),
+                draft: def
+                    .has_drafts()
+                    .then(|| resolve_view(input, def.access.resolve_draft(), slug, false))
+                    .flatten(),
+                trash: def
+                    .soft_delete
+                    .then(|| resolve_view(input, def.access.resolve_trash(), slug, false))
+                    .flatten(),
+            };
+
+            if !gate.any_visible() {
+                continue;
+            }
+
+            map.collection_modes.insert(slug.clone(), def.live_mode);
+            map.collection_views.insert(slug.clone(), gate);
+        }
+
+        for slug in input.global_slugs {
+            let Some(def) = input.registry.get_global(slug) else {
+                continue;
+            };
+
+            // Globals: single published row, allow/deny only (reject_constrained).
+            let gate = EventViewGate {
+                published: resolve_view(input, def.access.read.as_ref(), slug, true),
+                draft: None,
+                trash: None,
+            };
+
+            if !gate.any_visible() {
+                continue;
+            }
+
+            map.global_modes.insert(slug.clone(), def.live_mode);
+            map.global_views.insert(slug.clone(), gate);
+        }
+
+        map
+    }
+}
+
+/// Run one view's access hook and map the outcome to visibility: `Some(filters)`
+/// when allowed (empty for unconstrained), `None` when denied or the hook errors
+/// (fail-closed).
+fn resolve_view(
+    input: &EventAccessInput,
+    access_ref: Option<&HookRef>,
+    slug: &str,
+    reject_constrained: bool,
+) -> Option<Vec<FilterClause>> {
+    match input.hook_runner.check_access(
+        &AccessCheckInput::builder("subscribe", slug)
+            .access(access_ref)
+            .user(input.user_doc)
+            .build(),
+        input.conn,
+    ) {
+        Ok(result) => view_from_access(result, reject_constrained, slug),
+        // Fail-closed: an access hook that errors — including a row constraint
+        // rejected by the operator allowlist — hides the view rather than
+        // streaming events past an unvalidated constraint.
+        Err(e) => {
+            tracing::warn!("Subscribe access for '{slug}' denied: {e}");
+            None
+        }
+    }
+}
+
+/// Map an access-check outcome to view visibility. Globals (`reject_constrained`)
+/// drop a filter-table result (fail-closed) because they are allow/deny only and
+/// every synchronous global path rejects a constraint as a config error; the live
+/// stream can't hard-error, so it hides the view instead of applying a row filter
+/// globals don't honor. Collections honor the filter as a row constraint.
+#[must_use]
+fn view_from_access(
+    result: AccessResult,
+    reject_constrained: bool,
+    slug: &str,
+) -> Option<Vec<FilterClause>> {
+    match result {
+        AccessResult::Allowed => Some(Vec::new()),
+        AccessResult::Constrained(_) if reject_constrained => {
+            tracing::warn!(
+                "Subscribe access for global '{slug}' returned a filter table; \
+                 globals are allow/deny only — hiding the view"
+            );
+            None
+        }
+        AccessResult::Constrained(filters) => Some(filters),
+        AccessResult::Denied => None,
+    }
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::collections::HashMap;
@@ -292,5 +443,39 @@ mod tests {
             summary, "seen:nil",
             "the hook ran on the already-stripped data"
         );
+    }
+
+    /// Regression: a global access hook that returns a filter table is a config
+    /// error every synchronous global path rejects. On the live streams it must
+    /// fail closed (drop the view), never apply a row filter globals don't honor.
+    /// Collections, by contrast, keep the constraint as a row filter.
+    #[test]
+    fn global_constrained_view_is_dropped_collection_is_kept() {
+        use crate::db::{AccessResult, FilterClause};
+
+        let filters = vec![FilterClause::and(Vec::new())];
+
+        // Global (reject_constrained = true): filter table → hidden.
+        assert!(
+            view_from_access(AccessResult::Constrained(filters.clone()), true, "settings")
+                .is_none(),
+            "a global returning a filter table must drop the view (fail-closed)"
+        );
+
+        // Collection (reject_constrained = false): filter table → honored.
+        let kept = view_from_access(AccessResult::Constrained(filters), false, "posts");
+        assert_eq!(
+            kept.as_ref().map(Vec::len),
+            Some(1),
+            "a collection returning a filter table keeps it as a row constraint"
+        );
+
+        // Allow/deny map the same way regardless of the flag.
+        assert_eq!(
+            view_from_access(AccessResult::Allowed, true, "settings").map(|f| f.len()),
+            Some(0),
+            "Allowed yields an unconstrained (empty-filter) view"
+        );
+        assert!(view_from_access(AccessResult::Denied, false, "posts").is_none());
     }
 }

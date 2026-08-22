@@ -13,7 +13,7 @@
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
-use crate::core::{DocumentFields, FieldDefinition, FieldType, flatten_group_fields};
+use crate::core::{DocumentFields, FieldDefinition, FieldType, any_field, flatten_group_fields};
 use crate::db::query::helpers::prefixed_name;
 use crate::db::{DbConnection, DbValue};
 
@@ -57,7 +57,7 @@ fn get_ref_count_inner(
     lock: bool,
 ) -> Result<Option<i64>> {
     let p1 = conn.placeholder(1);
-    let for_update = if lock && conn.kind() == "postgres" {
+    let for_update = if lock && conn.is_postgres() {
         " FOR UPDATE"
     } else {
         ""
@@ -171,24 +171,11 @@ fn data_touches_refs_inner(
     false
 }
 
-/// Recursively report whether any field in the subtree is a relationship —
-/// descending into every container (Group/Array/Blocks/Row/Collapsible/Tabs).
+/// Recursively report whether any field in the subtree references another
+/// collection — via the shared `any_field` container walk (descends
+/// Group/Array/Blocks/Row/Collapsible/Tabs) and the `is_reference` classifier.
 fn fields_contain_relationship(fields: &[FieldDefinition]) -> bool {
-    fields.iter().any(|f| match f.field_type {
-        FieldType::Relationship | FieldType::Upload => true,
-        FieldType::Group | FieldType::Array | FieldType::Row | FieldType::Collapsible => {
-            fields_contain_relationship(&f.fields)
-        }
-        FieldType::Blocks => f
-            .blocks
-            .iter()
-            .any(|b| fields_contain_relationship(&b.fields)),
-        FieldType::Tabs => f
-            .tabs
-            .iter()
-            .any(|t| fields_contain_relationship(&t.fields)),
-        _ => false,
-    })
+    any_field(fields, &|f| f.field_type.is_reference())
 }
 
 /// Historically this function pre-locked every outgoing ref target with

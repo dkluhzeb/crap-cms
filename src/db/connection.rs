@@ -71,10 +71,12 @@ pub trait DbConnection {
     /// `PostgreSQL`: `"$1"`, `"$2"`, ...
     fn placeholder(&self, n: usize) -> String;
 
-    /// Return the SQL expression for the current timestamp.
+    /// Return the SQL expression for the current timestamp, in the ISO-8601
+    /// `…Z` format shared with `utc_now()` on both backends (see the
+    /// timestamp-format frozen contract).
     ///
-    /// `SQLite`: `"datetime('now')"`
-    /// `PostgreSQL`: `"NOW()"`
+    /// `SQLite`: `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
+    /// `PostgreSQL`: `to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
     fn now_expr(&self) -> &'static str;
 
     /// Return a SQL expression for `max(a, b)` as a scalar (not aggregate).
@@ -86,8 +88,21 @@ pub trait DbConnection {
     /// Return the backend identifier.
     ///
     /// Used to gate backend-specific features (FTS5, `sqlite_master`,
-    /// `json_extract`, etc.) that have no cross-backend abstraction.
+    /// `json_extract`, etc.) that have no cross-backend abstraction. Prefer the
+    /// [`is_postgres`](Self::is_postgres) / [`is_sqlite`](Self::is_sqlite)
+    /// predicates over comparing this string at call sites.
     fn kind(&self) -> &'static str;
+
+    /// Whether this connection targets `PostgreSQL`. One typo-proof classifier so
+    /// backend gates don't hand-compare `kind() == "postgres"`.
+    fn is_postgres(&self) -> bool {
+        self.kind() == "postgres"
+    }
+
+    /// Whether this connection targets `SQLite`. Companion to [`is_postgres`](Self::is_postgres).
+    fn is_sqlite(&self) -> bool {
+        self.kind() == "sqlite"
+    }
 
     // ── Schema introspection ─────────────────────────────────────────
 

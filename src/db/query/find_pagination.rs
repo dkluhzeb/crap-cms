@@ -3,7 +3,14 @@
 //! Shared across all entry points (gRPC, MCP, Admin, Lua) for consistent
 //! limit clamping, page/cursor conflict detection, and cursor decoding.
 
+use crate::config::PaginationConfig;
+
 use super::cursor::CursorData;
+
+/// The default presentation sort for a trash listing — most-recently-deleted
+/// first. Every read surface (gRPC, MCP, Lua, Admin) applies this when a trash
+/// listing has no explicit `order_by`, so the sort key can't drift between them.
+pub const TRASH_DEFAULT_ORDER: &str = "-_deleted_at";
 
 /// Static pagination configuration — construct once, reuse across requests.
 ///
@@ -23,6 +30,25 @@ impl PaginationCtx {
             max_limit,
             cursor_enabled,
         }
+    }
+
+    /// Build from `[pagination]` config — the one mapping every read surface
+    /// (gRPC, MCP, Admin) uses so a new pagination knob is threaded in one place.
+    #[must_use]
+    pub fn from_config(config: &PaginationConfig) -> Self {
+        Self::new(config.default_limit, config.max_limit, config.is_cursor())
+    }
+
+    /// Resolve a requested limit against this context: the request value (or
+    /// `default_limit` when unset) floored to `1` and capped at `max_limit`.
+    /// Matches the `>= 1` contract of [`validate`](Self::validate)'s
+    /// [`FindPagination::limit`], so simple offset-only surfaces (e.g. job runs)
+    /// clamp identically to the full find path — a `0`/negative request never
+    /// binds `LIMIT 0`/`LIMIT -1`.
+    #[must_use]
+    pub fn resolve_limit(&self, requested: Option<i64>) -> i64 {
+        let max = self.max_limit.max(1);
+        requested.unwrap_or(self.default_limit).clamp(1, max)
     }
 
     /// Validate per-request pagination parameters against this context.
@@ -146,6 +172,23 @@ fn validate_find_pagination(
 mod tests {
     use super::*;
     use crate::db::query::cursor::{SortDirection, SortValue};
+
+    /// Regression: `resolve_limit` floors to 1 (never `LIMIT 0`) and caps at
+    /// `max_limit`, matching the `>= 1` contract of the full find path. A jobs
+    /// listing requesting `0` must not come back empty.
+    #[test]
+    fn resolve_limit_floors_to_one_and_caps() {
+        let ctx = PaginationCtx::new(20, 100, false);
+        assert_eq!(ctx.resolve_limit(None), 20, "unset → default");
+        assert_eq!(
+            ctx.resolve_limit(Some(0)),
+            1,
+            "0 floors to 1, never LIMIT 0"
+        );
+        assert_eq!(ctx.resolve_limit(Some(-5)), 1, "negative floors to 1");
+        assert_eq!(ctx.resolve_limit(Some(50)), 50, "in-range preserved");
+        assert_eq!(ctx.resolve_limit(Some(5000)), 100, "capped at max");
+    }
 
     #[test]
     fn basic_page_limit_defaults() {

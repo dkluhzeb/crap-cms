@@ -4,6 +4,7 @@ mod alter;
 mod create;
 mod indexes;
 mod sync;
+mod system_columns;
 
 pub(super) use create::append_default_value_for;
 pub(super) use sync::sync_collection_table;
