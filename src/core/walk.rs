@@ -26,6 +26,15 @@
 //!   schema checks (name collisions, hook-ref validation) and the
 //!   nesting-depth warning.
 //!
+//! Every walker above dispatches on one shared classifier, [`field_children`],
+//! which maps a [`FieldType`] to its structural sub-tree ([`FieldChildren`]) —
+//! so the "which field types have which children" knowledge lives in exactly one
+//! place and each walker's match is **exhaustive**: adding a new composite field
+//! type is a compile error in every walker rather than a silently-skipped
+//! subtree. What differs per walker is only what it *does* with each kind (the
+//! column walker treats Array/Blocks as leaves; the lookup walker treats
+//! Group/Array/Blocks as opaque; the data walkers pull the matching JSON value).
+//!
 //! Two consumers deliberately keep bespoke recursion — validation and field
 //! hooks — because they need *container-level* context a leaf visitor can't hand
 //! back: validation builds qualified error paths with array indices and a
@@ -75,6 +84,47 @@ pub enum VisitAction {
     Replace(Value),
 }
 
+/// The structural children of a field — the one classification of "what kind of
+/// sub-tree does this field own", derived from its [`FieldType`].
+///
+/// Every walker below matches on this instead of re-spelling
+/// `match field.field_type { Group | Array | Blocks | Row | Collapsible | Tabs }`,
+/// so the "which field types have which children" mapping lives in exactly one
+/// place ([`field_children`]) and — because the matches are **exhaustive** — a
+/// new composite `FieldType` becomes a compile error in every walker rather than
+/// a silently-skipped subtree. The variants distinguish everything any walker
+/// needs: `Group` (own key, prefixes columns), `Wrapper` (Row/Collapsible —
+/// transparent), `Tabs` (transparent, per-tab), `Array`/`Blocks` (repeatable
+/// rows — a relational-spine leaf to the column walker, descended by the others).
+enum FieldChildren<'a> {
+    /// A scalar field — no sub-tree.
+    Leaf,
+    /// A `Group`: its sub-fields nest under the group's key (`group__child`).
+    Group(&'a [FieldDefinition]),
+    /// A `Row`/`Collapsible` layout wrapper: transparent — its sub-fields live in
+    /// the same object / column namespace as the wrapper itself.
+    Wrapper(&'a [FieldDefinition]),
+    /// A `Tabs` wrapper: transparent, with the sub-fields split across tabs.
+    Tabs(&'a [FieldTab]),
+    /// An `Array`: repeatable rows over a shared sub-field set.
+    Array(&'a [FieldDefinition]),
+    /// A `Blocks` field: repeatable rows, each matched to a block definition.
+    Blocks(&'a [BlockDefinition]),
+}
+
+/// Classify a field's structural children — the single source of the
+/// `FieldType` → sub-tree mapping shared by every walker in this module.
+fn field_children(field: &FieldDefinition) -> FieldChildren<'_> {
+    match field.field_type {
+        FieldType::Group => FieldChildren::Group(&field.fields),
+        FieldType::Row | FieldType::Collapsible => FieldChildren::Wrapper(&field.fields),
+        FieldType::Tabs => FieldChildren::Tabs(&field.tabs),
+        FieldType::Array => FieldChildren::Array(&field.fields),
+        FieldType::Blocks => FieldChildren::Blocks(&field.blocks),
+        _ => FieldChildren::Leaf,
+    }
+}
+
 /// Read-walk a nested-composite JSON object against its field defs.
 ///
 /// Calls `visit(field, value, path)` for EVERY field — leaf and container — with
@@ -100,30 +150,31 @@ pub fn walk_nested<'a, R, V>(
     for field in fields {
         visit(field, obj.root_get(&field.name), path);
 
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Leaf => {}
+            FieldChildren::Group(subs) => {
                 if let Some(Value::Object(inner)) = obj.root_get(&field.name) {
                     path.push(NestStep::Field(field));
-                    walk_nested(inner, &field.fields, path, visit);
+                    walk_nested(inner, subs, path, visit);
                     path.pop();
                 }
             }
-            FieldType::Array => {
+            FieldChildren::Array(subs) => {
                 if let Some(Value::Array(rows)) = obj.root_get(&field.name) {
                     path.push(NestStep::Field(field));
                     for row in rows {
                         if let Value::Object(row_obj) = row {
-                            walk_nested(row_obj, &field.fields, path, visit);
+                            walk_nested(row_obj, subs, path, visit);
                         }
                     }
                     path.pop();
                 }
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(defs) => {
                 if let Some(Value::Array(blocks)) = obj.root_get(&field.name) {
                     path.push(NestStep::Field(field));
                     for block in blocks {
-                        if let Some((def, block_obj)) = match_block(block, &field.blocks) {
+                        if let Some((def, block_obj)) = match_block(block, defs) {
                             path.push(NestStep::Block(def));
                             walk_nested(block_obj, &def.fields, path, visit);
                             path.pop();
@@ -132,15 +183,14 @@ pub fn walk_nested<'a, R, V>(
                     path.pop();
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                walk_nested(obj, &field.fields, path, visit);
+            FieldChildren::Wrapper(subs) => {
+                walk_nested(obj, subs, path, visit);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     walk_nested(obj, &tab.fields, path, visit);
                 }
             }
-            _ => {}
         }
     }
 }
@@ -173,41 +223,41 @@ pub fn walk_nested_mut<'a, R, V>(
             }
         }
 
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Leaf => {}
+            FieldChildren::Group(subs) => {
                 if let Some(Value::Object(inner)) = obj.root_get_mut(&field.name) {
                     path.push(NestStep::Field(field));
-                    walk_nested_mut(inner, &field.fields, path, visit);
+                    walk_nested_mut(inner, subs, path, visit);
                     path.pop();
                 }
             }
-            FieldType::Array => {
+            FieldChildren::Array(subs) => {
                 if let Some(Value::Array(rows)) = obj.root_get_mut(&field.name) {
                     path.push(NestStep::Field(field));
                     for row in rows.iter_mut() {
                         if let Value::Object(row_obj) = row {
-                            walk_nested_mut(row_obj, &field.fields, path, visit);
+                            walk_nested_mut(row_obj, subs, path, visit);
                         }
                     }
                     path.pop();
                 }
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(defs) => {
                 if let Some(Value::Array(blocks)) = obj.root_get_mut(&field.name) {
                     path.push(NestStep::Field(field));
-                    walk_block_instances_mut(blocks, &field.blocks, path, visit);
+                    walk_block_instances_mut(blocks, defs, path, visit);
                     path.pop();
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                walk_nested_mut(obj, &field.fields, path, visit);
+            FieldChildren::Wrapper(subs) => {
+                walk_nested_mut(obj, subs, path, visit);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     walk_nested_mut(obj, &tab.fields, path, visit);
                 }
             }
-            _ => {}
         }
     }
 }
@@ -269,13 +319,13 @@ fn walk_block_instances_mut<'a, V>(
 pub fn any_field<F: Fn(&FieldDefinition) -> bool>(fields: &[FieldDefinition], pred: &F) -> bool {
     fields.iter().any(|field| {
         pred(field)
-            || match field.field_type {
-                FieldType::Group | FieldType::Array | FieldType::Row | FieldType::Collapsible => {
-                    any_field(&field.fields, pred)
-                }
-                FieldType::Tabs => field.tabs.iter().any(|tab| any_field(&tab.fields, pred)),
-                FieldType::Blocks => field.blocks.iter().any(|b| any_field(&b.fields, pred)),
-                _ => false,
+            || match field_children(field) {
+                FieldChildren::Leaf => false,
+                FieldChildren::Group(subs)
+                | FieldChildren::Wrapper(subs)
+                | FieldChildren::Array(subs) => any_field(subs, pred),
+                FieldChildren::Tabs(tabs) => tabs.iter().any(|tab| any_field(&tab.fields, pred)),
+                FieldChildren::Blocks(defs) => defs.iter().any(|b| any_field(&b.fields, pred)),
             }
     })
 }
@@ -289,16 +339,20 @@ pub fn any_field<F: Fn(&FieldDefinition) -> bool>(fields: &[FieldDefinition], pr
 pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
     let mut result = Vec::new();
     for f in fields {
-        match f.field_type {
-            FieldType::Row | FieldType::Collapsible => {
-                result.extend(flatten_array_sub_fields(&f.fields));
+        match field_children(f) {
+            FieldChildren::Wrapper(subs) => {
+                result.extend(flatten_array_sub_fields(subs));
             }
-            FieldType::Tabs => {
-                for tab in &f.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     result.extend(flatten_array_sub_fields(&tab.fields));
                 }
             }
-            _ => result.push(f),
+            // Group/Array/Blocks are opaque to the array flatten — pushed whole.
+            FieldChildren::Leaf
+            | FieldChildren::Group(_)
+            | FieldChildren::Array(_)
+            | FieldChildren::Blocks(_) => result.push(f),
         }
     }
     result
@@ -338,26 +392,30 @@ where
     F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
 {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(subs) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
 
                 walk_leaf_fields(
-                    &field.fields,
+                    subs,
                     &new_prefix,
                     inherited_localized || field.localized,
                     visit,
                 )?;
             }
-            FieldType::Row | FieldType::Collapsible => {
-                walk_leaf_fields(&field.fields, prefix, inherited_localized, visit)?;
+            FieldChildren::Wrapper(subs) => {
+                walk_leaf_fields(subs, prefix, inherited_localized, visit)?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     walk_leaf_fields(&tab.fields, prefix, inherited_localized, visit)?;
                 }
             }
-            _ => visit(field, prefix, inherited_localized)?,
+            // Array/Blocks are leaf columns here (their sub-fields live in join
+            // tables, not on the parent row), so they are visited, not descended.
+            FieldChildren::Leaf | FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
+                visit(field, prefix, inherited_localized)?;
+            }
         }
     }
 
@@ -402,26 +460,35 @@ pub(crate) fn walk_all_fields<'a, V>(
     for field in fields {
         visit(field, path);
 
-        if !field.fields.is_empty() {
-            path.push(SchemaStep::Field(field));
-            walk_all_fields(&field.fields, path, visit);
-            path.pop();
-        }
-
-        for block in &field.blocks {
-            path.push(SchemaStep::Field(field));
-            path.push(SchemaStep::Block(block));
-            walk_all_fields(&block.fields, path, visit);
-            path.pop();
-            path.pop();
-        }
-
-        for (index, tab) in field.tabs.iter().enumerate() {
-            path.push(SchemaStep::Field(field));
-            path.push(SchemaStep::Tab { index, tab });
-            walk_all_fields(&tab.fields, path, visit);
-            path.pop();
-            path.pop();
+        match field_children(field) {
+            FieldChildren::Leaf => {}
+            // Every field with a flat sub-field list (Group, wrapper, Array) is
+            // descended under a single container step.
+            FieldChildren::Group(subs)
+            | FieldChildren::Wrapper(subs)
+            | FieldChildren::Array(subs) => {
+                path.push(SchemaStep::Field(field));
+                walk_all_fields(subs, path, visit);
+                path.pop();
+            }
+            FieldChildren::Blocks(defs) => {
+                for block in defs {
+                    path.push(SchemaStep::Field(field));
+                    path.push(SchemaStep::Block(block));
+                    walk_all_fields(&block.fields, path, visit);
+                    path.pop();
+                    path.pop();
+                }
+            }
+            FieldChildren::Tabs(tabs) => {
+                for (index, tab) in tabs.iter().enumerate() {
+                    path.push(SchemaStep::Field(field));
+                    path.push(SchemaStep::Tab { index, tab });
+                    walk_all_fields(&tab.fields, path, visit);
+                    path.pop();
+                    path.pop();
+                }
+            }
         }
     }
 }
@@ -439,13 +506,15 @@ pub(crate) fn find_field<'a>(
             return Some(field);
         }
 
-        let found = match field.field_type {
-            FieldType::Row | FieldType::Collapsible => find_field(name, &field.fields),
-            FieldType::Tabs => field
-                .tabs
-                .iter()
-                .find_map(|tab| find_field(name, &tab.fields)),
-            _ => None,
+        // Only transparent wrappers are descended; a Group/Array/Blocks sub-field
+        // is addressed through its container, never by bare name at this level.
+        let found = match field_children(field) {
+            FieldChildren::Wrapper(subs) => find_field(name, subs),
+            FieldChildren::Tabs(tabs) => tabs.iter().find_map(|tab| find_field(name, &tab.fields)),
+            FieldChildren::Leaf
+            | FieldChildren::Group(_)
+            | FieldChildren::Array(_)
+            | FieldChildren::Blocks(_) => None,
         };
 
         if found.is_some() {
@@ -829,5 +898,42 @@ mod tests {
         );
         assert!(find_field("in_group", &fields).is_none());
         assert!(find_field("missing", &fields).is_none());
+    }
+
+    /// The shared classifier maps each `FieldType` to the structural kind every
+    /// walker dispatches on. If this drifts, every walker changes at once —
+    /// which is the point (one source, exhaustive matches).
+    #[test]
+    fn field_children_classifies_each_field_type() {
+        let group = FieldDefinition::builder("g", FieldType::Group)
+            .fields(vec![text_field("x")])
+            .build();
+        let row = FieldDefinition::builder("r", FieldType::Row)
+            .fields(vec![text_field("x")])
+            .build();
+        let collapsible = FieldDefinition::builder("c", FieldType::Collapsible)
+            .fields(vec![text_field("x")])
+            .build();
+        let tabs = FieldDefinition::builder("t", FieldType::Tabs)
+            .tabs(vec![FieldTab::new("T", vec![text_field("x")])])
+            .build();
+        let array = FieldDefinition::builder("a", FieldType::Array)
+            .fields(vec![text_field("x")])
+            .build();
+        let blocks = FieldDefinition::builder("b", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new("hero", vec![text_field("x")])])
+            .build();
+        let leaf = text_field("title");
+
+        assert!(matches!(field_children(&group), FieldChildren::Group(_)));
+        assert!(matches!(field_children(&row), FieldChildren::Wrapper(_)));
+        assert!(matches!(
+            field_children(&collapsible),
+            FieldChildren::Wrapper(_)
+        ));
+        assert!(matches!(field_children(&tabs), FieldChildren::Tabs(_)));
+        assert!(matches!(field_children(&array), FieldChildren::Array(_)));
+        assert!(matches!(field_children(&blocks), FieldChildren::Blocks(_)));
+        assert!(matches!(field_children(&leaf), FieldChildren::Leaf));
     }
 }

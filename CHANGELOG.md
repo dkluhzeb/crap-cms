@@ -2839,6 +2839,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     across four subsystems) instead of a bare literal each — the one storage-side
     literal that has to remain, the serde `rename` on the admin `BlockRow`, is
     pinned to the const by a regression test.
+  - The field-tree walkers (`core::walk`) dispatch on one shared `field_children`
+    classifier — the single `FieldType` → structural-children (Group / wrapper /
+    Tabs / Array / Blocks / leaf) mapping — instead of each of the six walkers
+    (`walk_nested`/`_mut`, `any_field`, `walk_leaf_fields`, `walk_all_fields`,
+    `find_field`, `flatten_array_sub_fields`) re-spelling the same
+    `match field.field_type { Group | Array | Blocks | Row | Collapsible | Tabs }`.
+    Each walker's match is now **exhaustive**, so adding a new composite field
+    type is a compile error in every walker rather than a silently-skipped
+    subtree; what a walker *does* with each kind (descend, treat as a leaf column,
+    treat as opaque) still lives in that walker.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 
