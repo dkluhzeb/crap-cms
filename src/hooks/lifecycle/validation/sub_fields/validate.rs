@@ -5,7 +5,7 @@ use serde_json::{Map as JsonMap, Value};
 use tracing::warn;
 
 use crate::{
-    core::{FieldDefinition, FieldType, Registry, validate::FieldError},
+    core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, Registry, validate::FieldError},
     hooks::lifecycle::validation::{
         checks,
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
@@ -217,7 +217,7 @@ fn validate_nested_rows(
 
         let sub_fields: &[FieldDefinition] = if call.sf.field_type == FieldType::Blocks {
             let bt = nested_obj
-                .get("_block_type")
+                .get(BLOCK_TYPE_KEY)
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let Some(bd) = call.sf.blocks.iter().find(|b| b.block_type == bt) else {

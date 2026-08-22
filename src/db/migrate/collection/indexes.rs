@@ -14,6 +14,23 @@ use crate::{
     },
 };
 
+/// The naming prefix for every index this module manages: `idx_{slug}_`.
+///
+/// Load-bearing — `sync_indexes` only ever drops indexes whose name starts with
+/// this prefix, so an index built with a different prefix can never be
+/// recognized as stale (permanent orphan). One source shared by [`index_name`]
+/// and the stale-drop scan so the two can't disagree.
+fn index_prefix(slug: &str) -> String {
+    format!("idx_{slug}_")
+}
+
+/// Build a managed index name — `idx_{slug}_{parts joined by _}` — so every
+/// generator (field, soft-delete-unique, compound, auth-token) shares the exact
+/// prefix the stale-drop scan matches on.
+fn index_name(slug: &str, parts: &[&str]) -> String {
+    format!("{}{}", index_prefix(slug), parts.join("_"))
+}
+
 /// Add an index entry to the desired set and create statement list.
 fn add_index(
     desired: &mut HashSet<String>,
@@ -41,13 +58,13 @@ fn collect_field_indexes(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
-                let idx_name = format!("idx_{slug}_{col}");
+                let idx_name = index_name(slug, &[&col]);
                 let sql = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})");
 
                 add_index(desired, stmts, idx_name, sql);
             }
         } else {
-            let idx_name = format!("idx_{}_{}", slug, spec.col_name);
+            let idx_name = index_name(slug, &[&spec.col_name]);
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                 idx_name, slug, spec.col_name
@@ -80,7 +97,7 @@ fn collect_soft_delete_unique_indexes(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
-                let idx_name = format!("idx_{slug}_{col}_active_unique");
+                let idx_name = index_name(slug, &[&col, "active_unique"]);
                 let sql = format!(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col}) WHERE _deleted_at IS NULL"
                 );
@@ -88,7 +105,7 @@ fn collect_soft_delete_unique_indexes(
                 add_index(desired, stmts, idx_name, sql);
             }
         } else {
-            let idx_name = format!("idx_{}_{}_active_unique", slug, spec.col_name);
+            let idx_name = index_name(slug, &[&spec.col_name, "active_unique"]);
             let sql = format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
                 idx_name, slug, spec.col_name
@@ -136,7 +153,8 @@ fn collect_compound_indexes(
             .collect::<Result<Vec<String>>>()?;
 
         let col_list = expanded_cols.join(", ");
-        let idx_name = format!("idx_{}_{}", slug, index_def.fields.join("_"));
+        let field_parts: Vec<&str> = index_def.fields.iter().map(String::as_str).collect();
+        let idx_name = index_name(slug, &field_parts);
         let unique = if index_def.unique { "UNIQUE " } else { "" };
         let sql = format!("CREATE {unique}INDEX IF NOT EXISTS {idx_name} ON {slug} ({col_list})");
 
@@ -163,7 +181,7 @@ fn collect_auth_token_indexes(
     }
 
     let mut add = |col: &str| {
-        let idx_name = format!("idx_{slug}_{col}");
+        let idx_name = index_name(slug, &[col]);
         desired.insert(idx_name.clone());
         stmts.push(format!(
             "CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})"
@@ -192,7 +210,7 @@ pub(super) fn sync_indexes(
     collect_auth_token_indexes(slug, def, &mut desired, &mut stmts);
 
     // Drop stale indexes (in existing but not in desired)
-    let prefix = format!("idx_{slug}_");
+    let prefix = index_prefix(slug);
     let existing: HashSet<String> = conn.index_names(slug, &prefix)?.into_iter().collect();
 
     for name in existing.difference(&desired) {
@@ -229,6 +247,27 @@ mod tests {
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
         .collect()
+    }
+
+    /// Regression: every managed index name must start with `index_prefix`.
+    /// The stale-drop scan only drops names matching that prefix, so a builder
+    /// that produced a differently-prefixed name would leave a permanent orphan.
+    /// Pinning the invariant at the naming source keeps the four generators and
+    /// the drop scan from drifting apart.
+    #[test]
+    fn index_name_always_carries_the_drop_prefix() {
+        let prefix = index_prefix("posts");
+        assert_eq!(prefix, "idx_posts_");
+
+        for parts in [
+            vec!["title"],
+            vec!["slug", "active_unique"],
+            vec!["a", "b", "c"],
+            vec!["_reset_token"],
+        ] {
+            let name = index_name("posts", &parts);
+            assert!(name.starts_with(&prefix), "{name} must start with {prefix}");
+        }
     }
 
     #[test]

@@ -502,7 +502,9 @@ fn all_canonical_ops_exist_on_every_programmatic_surface() {
 //
 // Every access decision must flow through the one shared evaluator
 // (`HookRunner::check_access` → `service::auth`). CRUD ops check access *inside*
-// the service layer; a handful of non-CRUD surface ops (streams, file serving)
+// the service layer; the event streams (gRPC Subscribe, admin SSE) resolve their
+// per-view access through the shared `service::events::EventAccessMap` (also in
+// the service layer); only a couple of non-CRUD surface ops (file upload/serve)
 // have no service op and call the evaluator directly. This guard freezes that
 // small set of surface-level `check_access` touchpoints: a new one fails CI,
 // forcing review of whether it should instead go through a service op — and
@@ -513,11 +515,6 @@ fn all_canonical_ops_exist_on_every_programmatic_surface() {
 const ACCESS_TOUCHPOINTS: &[&str] = &[
     // gRPC adapter's access-check wrapper — delegates to `hook_runner.check_access`.
     "api/handlers/content_service.rs",
-    // Subscribe stream: no service CRUD op exists, so it checks read access directly.
-    "api/handlers/subscribe.rs",
-    // SSE event stream: same — no service CRUD op. The `check_access` call lives
-    // in the access/payload submodule split out of `sse.rs`.
-    "admin/handlers/events/sse_payload.rs",
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
     // REST upload helpers: file upload/serve is not a document-CRUD service op,

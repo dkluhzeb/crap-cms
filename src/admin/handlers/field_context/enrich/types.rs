@@ -26,8 +26,8 @@ use crate::{
         },
     },
     core::{
-        BlockDefinition, CollectionDefinition, Document, DocumentFields, FieldDefinition,
-        FieldType, Registry, upload,
+        BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, DocumentFields,
+        FieldDefinition, FieldType, Registry, upload,
     },
     db::{Filter, FilterClause, FilterOp},
 };
@@ -480,7 +480,7 @@ fn build_blocks_row(
 ) -> BlockRow {
     let row_obj = row.as_object();
     let block_type = row_obj
-        .and_then(|m| m.get("_block_type"))
+        .and_then(|m| m.get(BLOCK_TYPE_KEY))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 

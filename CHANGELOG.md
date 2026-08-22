@@ -2814,6 +2814,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `append_sql_condition` instead of re-deriving the `WHERE` / `AND` prefix
     inline; the admin search handler reads `def.is_upload_collection()` instead
     of re-testing `upload.enabled`.
+  - The gated system-column set (`_status`, `_deleted_at`, `created_at`,
+    `updated_at`) is emitted by one `push_system_columns`, driving all three
+    column collectors (row `Vec`, expected-set, filter-set). The three had
+    already drifted — the filter list ordered `created_at` before `_deleted_at`
+    — so a new gated column would have had to be added in three places in
+    lockstep.
+  - Collection index names are built by one `index_name(slug, parts)` sharing
+    its prefix with `index_prefix(slug)` — the exact prefix the stale-index drop
+    scan matches on — so a generator that used a different prefix (leaving a
+    permanent orphan index) is no longer possible.
+  - The soft-delete "live rows only" predicate is one `SOFT_DELETE_ACTIVE`
+    (`_deleted_at IS NULL`) constant; the by-id read and the auth/email lookup
+    (login, password reset) join the find/count readers in sharing it, so a
+    change to what "trashed" means can't resurrect rows on just one read path.
+  - Collection create/update form errors map through one
+    `handle_collection_write_error`; the two write handlers no longer each spell
+    the `AccessDenied` / `Validation` / `NotFound` / toast arms (with the
+    create/edit branch — including whether a vanished target redirects — decided
+    once in `classify_write_error`).
+  - The block discriminator JSON key (`_block_type`) is one `BLOCK_TYPE_KEY`
+    constant, read through it by the walker, join reader/writer, ref-count,
+    filter resolver, field access/validation, and admin form parser (~18 sites
+    across four subsystems) instead of a bare literal each — the one storage-side
+    literal that has to remain, the serde `rename` on the admin `BlockRow`, is
+    pinned to the const by a regression test.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

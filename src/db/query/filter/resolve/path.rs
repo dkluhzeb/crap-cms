@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{FieldDefinition, FieldType, find_field};
+use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, find_field};
 use crate::db::query::helpers::join_table;
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
@@ -166,7 +166,7 @@ fn resolve_array_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
 }
 
 fn resolve_blocks_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
-    if ctx.rest == "_block_type" {
+    if ctx.rest == BLOCK_TYPE_KEY {
         return Ok(ResolvedFilter::Subquery {
             join_table: ctx.join_table,
             parent_table: ctx.slug.to_string(),
@@ -177,7 +177,7 @@ fn resolve_blocks_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
 
     let rest_parts: Vec<&str> = ctx.rest.split('.').collect();
     for seg in &rest_parts {
-        if !is_valid_identifier(seg) && *seg != "_block_type" {
+        if !is_valid_identifier(seg) && *seg != BLOCK_TYPE_KEY {
             bail!("Invalid segment '{}' in filter path '{}'", seg, ctx.field);
         }
     }

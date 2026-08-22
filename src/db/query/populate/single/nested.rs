@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 use crate::core::{
-    BlockDefinition, CollectionDefinition, Document, FieldDefinition, FieldType,
+    BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, FieldDefinition, FieldType,
     field::flatten_array_sub_fields,
 };
 use crate::db::query::populate::{PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref};
@@ -108,7 +108,7 @@ fn populate_block_items(
     for item in items.iter_mut() {
         if let Value::Object(map) = item {
             let block_type = map
-                .get("_block_type")
+                .get(BLOCK_TYPE_KEY)
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if let Some(block_def) = blocks.iter().find(|b| b.block_type == block_type) {

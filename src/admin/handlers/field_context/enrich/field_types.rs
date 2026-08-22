@@ -25,7 +25,10 @@ use crate::{
             inject_lang_values_from_row, inject_timezone_values_from_row, safe_template_id,
         },
     },
-    core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, timezone::TIMEZONE_OPTIONS},
+    core::{
+        BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldTab, FieldType,
+        timezone::TIMEZONE_OPTIONS,
+    },
     db::query::helpers::{tz_column, utc_to_local},
 };
 
@@ -299,7 +302,7 @@ fn build_nested_blocks_row(
     let nested_row_obj = nested_row.as_object();
 
     let block_type = nested_row_obj
-        .and_then(|m| m.get("_block_type"))
+        .and_then(|m| m.get(BLOCK_TYPE_KEY))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 

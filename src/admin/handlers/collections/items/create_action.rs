@@ -13,12 +13,12 @@ use crate::{
         AdminState,
         handlers::{
             collections::shared::{
-                UploadParams, UploadResult, process_collection_upload,
-                render_form_validation_errors, write_error_toast,
+                UploadParams, UploadResult, WriteErrorParams, handle_collection_write_error,
+                process_collection_upload,
             },
             forms::{FormData, parse_form},
             shared::{
-                forbidden, get_user_doc, htmx_inline_created, htmx_redirect_with_created, paths,
+                get_user_doc, htmx_inline_created, htmx_redirect_with_created, paths,
                 redirect_response, toast_only_error,
             },
         },
@@ -267,21 +267,14 @@ pub async fn create_action(
                 htmx_redirect_with_created(&paths::collection(&slug), &doc.id, label)
             }
         }
-        Ok(Err(e)) => match e {
-            ServiceError::AccessDenied(_) => forbidden(
-                &state,
-                "You don't have permission to create items in this collection",
-            ),
-            ServiceError::Validation(ref ve) => render_form_validation_errors(
-                &state,
-                &def,
-                None,
-                &form_for_error,
-                ve,
-                auth_user.as_ref(),
-            ),
-            other => toast_only_error(&write_error_toast("Create", other, state.pool.kind())),
-        },
+        Ok(Err(e)) => handle_collection_write_error(WriteErrorParams {
+            state: &state,
+            def: &def,
+            form: &form_for_error,
+            err: e,
+            doc_id: None,
+            auth_user: auth_user.as_ref(),
+        }),
         Err(e) => {
             error!("Create task error: {}", e);
             redirect_response(&paths::collection_create(&slug))

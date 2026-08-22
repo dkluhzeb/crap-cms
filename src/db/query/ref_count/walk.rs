@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use crate::core::walk_nested;
-use crate::core::{BlockDefinition, FieldDefinition, NestStep, RelationshipConfig};
+use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, NestStep, RelationshipConfig};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
@@ -74,7 +74,7 @@ pub(crate) fn walk_blocks_with<'a, V>(
         let Value::Object(obj) = block else {
             continue;
         };
-        let Some(block_type) = obj.get("_block_type").and_then(Value::as_str) else {
+        let Some(block_type) = obj.get(BLOCK_TYPE_KEY).and_then(Value::as_str) else {
             continue;
         };
         let Some(def) = defs.iter().find(|b| b.block_type == block_type) else {

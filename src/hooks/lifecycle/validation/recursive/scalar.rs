@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, FieldType, validate::FieldError},
+    core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, validate::FieldError},
     db::{LocaleContext, query::helpers::prefixed_name, query::locale_write_column},
     hooks::lifecycle::validation::{
         checks,
@@ -157,7 +157,7 @@ impl ValidationWalker<'_> {
         errors: &mut Vec<FieldError>,
     ) {
         let has_sub_structure = !field.fields.is_empty() || !field.blocks.is_empty();
-        if !matches!(field.field_type, FieldType::Array | FieldType::Blocks) || !has_sub_structure {
+        if !field.field_type.has_rows() || !has_sub_structure {
             return;
         }
         let Some(Value::Array(rows)) = value else {
@@ -292,7 +292,7 @@ fn resolve_row_sub_fields<'def>(
         return Some(&field.fields);
     }
     let block_type = row_obj
-        .get("_block_type")
+        .get(BLOCK_TYPE_KEY)
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if let Some(bd) = field.blocks.iter().find(|b| b.block_type == block_type) {

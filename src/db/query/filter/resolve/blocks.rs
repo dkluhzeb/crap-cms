@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{BlockDefinition, FieldDefinition, FieldType};
+use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldType};
 use crate::db::DbConnection;
 
 use super::types::BlockWalkResult;
@@ -41,9 +41,9 @@ pub(super) fn walk_block_fields(
         remaining = &remaining[1..];
 
         // Handle _block_type at nested level — always Text.
-        if seg == "_block_type" {
+        if seg == BLOCK_TYPE_KEY {
             if !remaining.is_empty() {
-                bail!("_block_type must be the last segment in a filter path");
+                bail!("{BLOCK_TYPE_KEY} must be the last segment in a filter path");
             }
             let expr = build_block_type_expr(conn, &each_joins, &mut json_path_parts, join_table);
 
@@ -115,16 +115,16 @@ fn build_block_type_expr(
     _join_table: &str,
 ) -> String {
     if each_joins.is_empty() {
-        json_path_parts.push("_block_type".to_string());
+        json_path_parts.push(BLOCK_TYPE_KEY.to_string());
         conn.json_extract_expr("data", &json_path_parts.join("."))
     } else {
         let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
         let source = format!("{last_alias}.value");
 
         if json_path_parts.is_empty() {
-            conn.json_extract_expr(&source, "_block_type")
+            conn.json_extract_expr(&source, BLOCK_TYPE_KEY)
         } else {
-            json_path_parts.push("_block_type".to_string());
+            json_path_parts.push(BLOCK_TYPE_KEY.to_string());
             conn.json_extract_expr(&source, &json_path_parts.join("."))
         }
     }

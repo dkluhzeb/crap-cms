@@ -75,10 +75,10 @@ pub use document::Document;
 pub use document_fields::DocumentFields;
 pub use document_id::DocumentId;
 pub use field::{
-    BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldDefinition,
-    FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType, FieldWidth, JoinConfig,
-    LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, RequiredLocales,
-    SelectOption, ValidateFunction, to_title_case, validate_template_name,
+    BLOCK_TYPE_KEY, BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels,
+    FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType,
+    FieldWidth, JoinConfig, LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig,
+    RequiredLocales, SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
 pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use tracing::{debug, warn};
 
-use crate::core::{FieldDefinition, NestStep, any_field};
+use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, NestStep, any_field};
 use crate::db::query::join::find_all_array_rows_with_parent;
 use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
 
@@ -201,7 +201,7 @@ pub(super) fn scan_blocks(
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         obj.insert(
-            "_block_type".to_string(),
+            BLOCK_TYPE_KEY.to_string(),
             serde_json::Value::String(block_type),
         );
 

@@ -6,7 +6,7 @@ use super::{
     operators::{build_filter_condition, build_op_condition},
     resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
 };
-use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
+use crate::core::{BLOCK_TYPE_KEY, CollectionDefinition, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext,
     query::{helpers::locale_column, is_valid_identifier},
@@ -80,7 +80,7 @@ fn build_subquery_sql(
         }
         SubqueryCondition::BlockType => {
             let op_sql =
-                build_op_condition(conn, "_block_type", op, Some(&FieldType::Text), params);
+                build_op_condition(conn, BLOCK_TYPE_KEY, op, Some(&FieldType::Text), params);
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"

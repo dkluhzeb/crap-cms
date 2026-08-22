@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::{BlockDefinition, FieldDefinition, FieldType};
+use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldType};
 
 use crate::core::field::flatten_array_sub_fields;
 
@@ -177,7 +177,7 @@ pub(crate) fn parse_blocks_form_data(
             // The row's `_block_type` leaf selects which block's fields apply.
             let block_fields = entries
                 .iter()
-                .find(|(k, _)| k == "_block_type")
+                .find(|(k, _)| k == BLOCK_TYPE_KEY)
                 .and_then(|(_, bt)| blocks.iter().find(|b| &b.block_type == bt))
                 .map_or(&[][..], |b| b.fields.as_slice());
             let flat_defs = flatten_array_sub_fields(block_fields);

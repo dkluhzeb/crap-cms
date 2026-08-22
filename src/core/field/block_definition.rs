@@ -4,6 +4,18 @@ use crate::core::{FieldDefinition, LocalizedString, field::to_title_case};
 use crate::typegen::lua::LuaAnnotation;
 use serde::{Deserialize, Serialize};
 
+/// The JSON key that carries a block instance's discriminator — the `block_type`
+/// slug stored alongside the block's data in every Blocks row.
+///
+/// This is a cross-subsystem *data* contract, not just a column name: the walker
+/// (`core::walk::match_block`), the join reader/writer, ref-counting, filtering,
+/// field access/validation, and the admin form parser all read this key out of
+/// stored/submitted JSON. One source so a mistyped literal in any one reader
+/// can't silently fail to match a block to its definition. (The serde `rename`
+/// on the admin `BlockInstance` mirror must repeat the literal — attributes need
+/// a literal — but points here for the canonical value.)
+pub const BLOCK_TYPE_KEY: &str = "_block_type";
+
 /// A single tab within a Tabs layout field.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
 #[lua(class = "crap.FieldTab")]

@@ -17,7 +17,10 @@ use serde_json::Value as JsonValue;
 use tracing::debug;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, HookRef, any_field, field::FieldHooks},
+    core::{
+        BLOCK_TYPE_KEY, DocumentFields, FieldDefinition, FieldType, HookRef, any_field,
+        field::FieldHooks,
+    },
     hooks::{
         lifecycle::{
             FieldHookContext, FieldHookEvent, UiLocaleContext, UserContext, runner::FieldHooksCall,
@@ -206,7 +209,7 @@ impl FieldHookWalker<'_> {
                 continue;
             };
             let block_type = obj
-                .get("_block_type")
+                .get(BLOCK_TYPE_KEY)
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let Some(block) = field.blocks.iter().find(|b| b.block_type == block_type) else {

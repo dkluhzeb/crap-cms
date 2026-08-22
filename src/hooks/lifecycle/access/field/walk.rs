@@ -6,7 +6,8 @@
 use serde_json::{Map, Value};
 
 use crate::core::{
-    DenialSeg, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef, any_field,
+    BLOCK_TYPE_KEY, DenialSeg, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef,
+    any_field,
 };
 use crate::db::query::helpers::prefixed_name;
 
@@ -298,7 +299,7 @@ fn strip_level_with_snapshot<E, F>(
                     for row in rows.iter_mut() {
                         let Value::Object(r) = row else { continue };
                         let block_type = r
-                            .get("_block_type")
+                            .get(BLOCK_TYPE_KEY)
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string();

@@ -4,7 +4,11 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     core::{CollectionDefinition, Document, HashedPassword, auth::hash_password},
-    db::{DbConnection, DbValue, document::row_to_document, query::get_column_names},
+    db::{
+        DbConnection, DbValue,
+        document::row_to_document,
+        query::{get_column_names, helpers::SOFT_DELETE_ACTIVE},
+    },
 };
 
 /// Find a document by email in an auth collection.
@@ -43,7 +47,8 @@ pub fn find_by_email(
     );
 
     if def.soft_delete && !include_deleted {
-        sql.push_str(" AND _deleted_at IS NULL");
+        sql.push_str(" AND ");
+        sql.push_str(SOFT_DELETE_ACTIVE);
     }
 
     let Some(row) = conn.query_one(&sql, &[DbValue::Text(email.to_lowercase())])? else {

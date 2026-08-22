@@ -12,7 +12,9 @@ use crate::db::{
     },
 };
 
-use crate::db::query::helpers::{append_soft_delete_filter, append_sql_condition};
+use crate::db::query::helpers::{
+    SOFT_DELETE_ACTIVE, append_soft_delete_filter, append_sql_condition,
+};
 
 /// Count documents in a collection.
 ///
@@ -251,9 +253,9 @@ pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) 
     }
 
     let soft_filter = if soft_delete {
-        " AND _deleted_at IS NULL"
+        format!(" AND {SOFT_DELETE_ACTIVE}")
     } else {
-        ""
+        String::new()
     };
 
     let p1 = conn.placeholder(1);

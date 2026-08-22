@@ -13,24 +13,36 @@ use crate::{
     },
 };
 
+/// Emit the collection's gated system columns — `_status` (drafts),
+/// `_deleted_at` (soft delete), `created_at`/`updated_at` (timestamps) — in a
+/// canonical order, driving `sink` with each name.
+///
+/// The single source of "which system columns exist, gated by which flag",
+/// shared by every column collector below (`Vec` for `get_column_names`,
+/// `HashSet` for the expected/filter sets) so the gated set and its ordering
+/// can't drift between the row surface and the filter surface.
+fn push_system_columns(def: &CollectionDefinition, mut sink: impl FnMut(&str)) {
+    if def.has_drafts() {
+        sink("_status");
+    }
+
+    if def.soft_delete {
+        sink("_deleted_at");
+    }
+
+    if def.timestamps {
+        sink("created_at");
+        sink("updated_at");
+    }
+}
+
 /// Get column names for a collection (id + field columns + timestamps).
 #[must_use]
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     collect_column_names(&def.fields, &mut names);
 
-    if def.has_drafts() {
-        names.push("_status".to_string());
-    }
-
-    if def.soft_delete {
-        names.push("_deleted_at".to_string());
-    }
-
-    if def.timestamps {
-        names.push("created_at".to_string());
-        names.push("updated_at".to_string());
-    }
+    push_system_columns(def, |col| names.push(col.to_string()));
 
     names
 }
@@ -71,18 +83,9 @@ pub fn get_expected_column_names(
 
     collect_expected_locale_inner(&def.fields, &mut expected, locale_config)?;
 
-    if def.has_drafts() {
-        expected.insert("_status".to_string());
-    }
-
-    if def.soft_delete {
-        expected.insert("_deleted_at".to_string());
-    }
-
-    if def.timestamps {
-        expected.insert("created_at".to_string());
-        expected.insert("updated_at".to_string());
-    }
+    push_system_columns(def, |col| {
+        expected.insert(col.to_string());
+    });
 
     Ok(expected)
 }
@@ -135,18 +138,9 @@ pub(crate) fn get_valid_filter_columns(
 
     collect_valid_filter_names(&def.fields, &mut valid);
 
-    if def.has_drafts() {
-        valid.insert("_status".to_string());
-    }
-
-    if def.timestamps {
-        valid.insert("created_at".to_string());
-        valid.insert("updated_at".to_string());
-    }
-
-    if def.soft_delete {
-        valid.insert("_deleted_at".to_string());
-    }
+    push_system_columns(def, |col| {
+        valid.insert(col.to_string());
+    });
 
     let _ = locale_ctx; // filter validation uses undecorated field names
 
@@ -166,7 +160,7 @@ fn collect_valid_filter_names(fields: &[FieldDefinition], valid: &mut HashSet<St
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::{FieldTab, FieldType};
+    use crate::core::{FieldTab, FieldType, VersionsConfig};
     use crate::db::query::test_helpers::*;
 
     #[test]
@@ -472,6 +466,32 @@ mod tests {
             names.contains(&"a__b__leaf".to_string()),
             "Group→Row→Group→Collapsible: a__b__leaf"
         );
+    }
+
+    /// Regression: the three column collectors must agree on the gated
+    /// system-column set. Before `push_system_columns`, each spelled the
+    /// `_status`/`_deleted_at`/`created_at`/`updated_at` gating by hand and the
+    /// filter list had already drifted (it ordered `created_at` before
+    /// `_deleted_at`). A def with every flag on must expose the same system
+    /// columns on the row, expected, and filter surfaces.
+    #[test]
+    fn system_columns_agree_across_collectors() {
+        let mut def =
+            make_collection_def("posts", vec![make_field("title", FieldType::Text)], true);
+        def.soft_delete = true;
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let system = ["_status", "_deleted_at", "created_at", "updated_at"];
+
+        let row: HashSet<String> = get_column_names(&def).into_iter().collect();
+        let expected = get_expected_column_names(&def, &no_locale()).unwrap();
+        let filter = get_valid_filter_columns(&def, None);
+
+        for col in system {
+            assert!(row.contains(col), "row surface missing {col}");
+            assert!(expected.contains(col), "expected surface missing {col}");
+            assert!(filter.contains(col), "filter surface missing {col}");
+        }
     }
 
     #[test]

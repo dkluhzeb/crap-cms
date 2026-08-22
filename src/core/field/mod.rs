@@ -11,7 +11,7 @@ mod select_option;
 pub use admin::{
     FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldWidth, validate_template_name,
 };
-pub use block_definition::{BlockDefinition, FieldTab};
+pub use block_definition::{BLOCK_TYPE_KEY, BlockDefinition, FieldTab};
 pub use definition::{
     FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, McpFieldConfig,
     PickerAppearance, RequiredLocales, ValidateFunction, to_title_case,

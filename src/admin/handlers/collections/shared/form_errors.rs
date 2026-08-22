@@ -16,7 +16,8 @@ use crate::{
             forms::FormData,
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                enrich_field_contexts, get_user_doc, page_with_toast, split_sidebar_fields,
+                enrich_field_contexts, forbidden, get_user_doc, page_with_toast, paths,
+                redirect_response, split_sidebar_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
@@ -240,6 +241,105 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
     })
 }
 
+/// Parameters for mapping a collection write `ServiceError` to a form response.
+pub(in crate::admin::handlers::collections) struct WriteErrorParams<'a> {
+    pub state: &'a AdminState,
+    pub def: &'a CollectionDefinition,
+    pub form: &'a FormData,
+    pub err: ServiceError,
+    pub doc_id: Option<&'a str>,
+    pub auth_user: Option<&'a Extension<AuthUser>>,
+}
+
+/// Which form response a collection write error maps to. Split out from the
+/// rendering so the create-vs-edit branch decisions are unit-testable without
+/// constructing an `AdminState`.
+#[derive(Debug, PartialEq, Eq)]
+enum WriteErrorResponse {
+    /// 403 — the user lacks permission for this write.
+    Forbidden,
+    /// Re-render the form with inline field errors.
+    Validation,
+    /// The edited document vanished (deleted in another tab) — navigate back.
+    RedirectToItem,
+    /// Generic error toast over the re-rendered form.
+    Toast,
+}
+
+/// Decide how a collection write error maps to a response. `editing` is true for
+/// update (a target document exists), false for create.
+///
+/// A `NotFound` is a navigation case only when editing; on create there is no
+/// target document, so an unexpected `NotFound` is a real error and toasts like
+/// any other. This is the one place the create/edit branch is decided, so the
+/// two write handlers can't drift.
+fn classify_write_error(editing: bool, err: &ServiceError) -> WriteErrorResponse {
+    match err {
+        ServiceError::AccessDenied(_) => WriteErrorResponse::Forbidden,
+        ServiceError::Validation(_) => WriteErrorResponse::Validation,
+        ServiceError::NotFound(_) if editing => WriteErrorResponse::RedirectToItem,
+        _ => WriteErrorResponse::Toast,
+    }
+}
+
+/// The access-denied message for the write surface — create vs edit wording.
+fn access_denied_msg(editing: bool) -> &'static str {
+    if editing {
+        "You don't have permission to update this item"
+    } else {
+        "You don't have permission to create items in this collection"
+    }
+}
+
+/// The operation label used in the fallback error toast / log line.
+fn op_label(editing: bool) -> &'static str {
+    if editing { "Update" } else { "Create" }
+}
+
+/// Map a collection create/update `ServiceError` to the correct form response,
+/// so both write handlers classify errors identically instead of each spelling
+/// the `AccessDenied` / `Validation` / `NotFound` / fallback arms by hand.
+///
+/// `doc_id` distinguishes edit (`Some`) from create (`None`) — see
+/// [`classify_write_error`] for the branch decisions.
+pub(in crate::admin::handlers::collections) fn handle_collection_write_error(
+    p: WriteErrorParams,
+) -> Response {
+    let editing = p.doc_id.is_some();
+
+    match classify_write_error(editing, &p.err) {
+        WriteErrorResponse::Forbidden => forbidden(p.state, access_denied_msg(editing)),
+        WriteErrorResponse::RedirectToItem => {
+            let id = p.doc_id.unwrap_or_default();
+
+            redirect_response(&paths::collection_item(&p.def.slug, id))
+        }
+        WriteErrorResponse::Validation => {
+            if let ServiceError::Validation(ref ve) = p.err {
+                return render_form_validation_errors(
+                    p.state,
+                    p.def,
+                    p.doc_id,
+                    p.form,
+                    ve,
+                    p.auth_user,
+                );
+            }
+
+            toast_only_error(&write_error_toast(
+                op_label(editing),
+                p.err,
+                p.state.pool.kind(),
+            ))
+        }
+        WriteErrorResponse::Toast => toast_only_error(&write_error_toast(
+            op_label(editing),
+            p.err,
+            p.state.pool.kind(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
@@ -280,6 +380,57 @@ mod tests {
             !msg.contains("disk I/O") && !msg.contains("db.sqlite"),
             "must not leak internal error text, got: {msg}"
         );
+    }
+
+    /// Regression: a `NotFound` maps to a back-navigation redirect ONLY when
+    /// editing. On create there is no target document, so an unexpected
+    /// `NotFound` must fall through to a toast — not silently redirect. Before
+    /// the shared mapper, only the update handler had a `NotFound` arm and the
+    /// create/edit branch was spelled by hand in each handler.
+    #[test]
+    fn not_found_redirects_only_when_editing() {
+        assert_eq!(
+            classify_write_error(true, &ServiceError::NotFound("gone".into())),
+            WriteErrorResponse::RedirectToItem,
+            "editing: vanished target is a navigation case"
+        );
+        assert_eq!(
+            classify_write_error(false, &ServiceError::NotFound("gone".into())),
+            WriteErrorResponse::Toast,
+            "create: no target, NotFound is a real error → toast, never redirect"
+        );
+    }
+
+    /// The shared arms are identical across create and edit: access-denied →
+    /// forbidden, validation → inline errors, everything else → toast.
+    #[test]
+    fn shared_arms_agree_across_create_and_edit() {
+        for editing in [false, true] {
+            assert_eq!(
+                classify_write_error(editing, &ServiceError::AccessDenied("no".into())),
+                WriteErrorResponse::Forbidden
+            );
+            assert_eq!(
+                classify_write_error(
+                    editing,
+                    &ServiceError::Validation(ValidationError::new(vec![]))
+                ),
+                WriteErrorResponse::Validation
+            );
+            assert_eq!(
+                classify_write_error(editing, &ServiceError::HookError("boom".into())),
+                WriteErrorResponse::Toast
+            );
+        }
+    }
+
+    /// The operation label and access-denied wording differ by surface so the
+    /// toast log line and the 403 message stay create/edit-specific.
+    #[test]
+    fn labels_differ_by_surface() {
+        assert_eq!(op_label(false), "Create");
+        assert_eq!(op_label(true), "Update");
+        assert_ne!(access_denied_msg(false), access_denied_msg(true));
     }
 
     fn hidden_field(name: &str) -> FieldDefinition {

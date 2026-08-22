@@ -23,7 +23,10 @@ stored data, or clients.
   and `{collection}_{group}__{field}`; global tables `_global_{slug}`; version
   tables `_versions_{slug}`. Identifiers are capped at **63 bytes** (Postgres).
 - **JSON storage shapes.** The blocks `data`-column split (`id` + `_block_type`
-  hoisted out, everything else in `data`), the "relational spine vs nested JSON"
+  hoisted out, everything else in `data`) — the `_block_type` discriminator key
+  has one canonical source, `core::BLOCK_TYPE_KEY`, read through it by every
+  block-aware surface (the one unavoidable literal, the admin `BlockRow` serde
+  `rename`, is pinned to it by a test) — the "relational spine vs nested JSON"
   boundary (top-level array/blocks/relationship get join tables; anything nested
   inside a row is JSON), and the version-snapshot JSON shape (restore must read
   every snapshot ever written). A **group** nested in a row (array or block) is

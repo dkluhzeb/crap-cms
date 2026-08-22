@@ -572,10 +572,9 @@ fn walk_fields_for_required_locales(
     out: &mut Vec<String>,
 ) {
     walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
-        let inside_join_subtree = path.iter().any(|s| {
-            matches!(s, SchemaStep::Field(p)
-                if matches!(p.field_type, FieldType::Array | FieldType::Blocks))
-        });
+        let inside_join_subtree = path
+            .iter()
+            .any(|s| matches!(s, SchemaStep::Field(p) if p.field_type.has_rows()));
         if inside_join_subtree {
             return;
         }
@@ -684,26 +683,23 @@ fn collect_field_tables(
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         let full_name = prefixed_name(prefix, &field.name);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload
-                if field.relationship.as_ref().is_some_and(|rc| rc.has_many) =>
-            {
-                claim_table(
-                    owners,
-                    conflicts,
-                    join_table(slug, &full_name),
-                    format!("has-many field '{full_name}' of collection '{slug}'"),
-                );
-            }
-            FieldType::Array | FieldType::Blocks => {
-                claim_table(
-                    owners,
-                    conflicts,
-                    join_table(slug, &full_name),
-                    format!("field '{full_name}' of collection '{slug}'"),
-                );
-            }
-            _ => {}
+        let is_has_many_ref = field.field_type.is_reference()
+            && field.relationship.as_ref().is_some_and(|rc| rc.has_many);
+
+        if is_has_many_ref {
+            claim_table(
+                owners,
+                conflicts,
+                join_table(slug, &full_name),
+                format!("has-many field '{full_name}' of collection '{slug}'"),
+            );
+        } else if field.field_type.has_rows() {
+            claim_table(
+                owners,
+                conflicts,
+                join_table(slug, &full_name),
+                format!("field '{full_name}' of collection '{slug}'"),
+            );
         }
 
         Ok(())

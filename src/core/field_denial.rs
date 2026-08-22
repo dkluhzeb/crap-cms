@@ -11,6 +11,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
+use crate::core::BLOCK_TYPE_KEY;
+
 /// A JSON object that a denial can be applied to at the root level. Implemented
 /// for both `HashMap<String, Value>` (a [`crate::core::DocumentFields`] map) and
 /// `serde_json::Map<String, Value>` (a live-event payload), so the same strip
@@ -160,7 +162,7 @@ impl FieldDenial {
 fn block_matches(obj: &Map<String, Value>, block_type: Option<&str>) -> bool {
     match block_type {
         None => true,
-        Some(bt) => obj.get("_block_type").and_then(Value::as_str) == Some(bt),
+        Some(bt) => obj.get(BLOCK_TYPE_KEY).and_then(Value::as_str) == Some(bt),
     }
 }
 

@@ -282,6 +282,8 @@ pub struct BlockRow {
     pub index: usize,
 
     /// JSON key is `_block_type` to match the existing template contract.
+    // The rename literal mirrors `crate::core::BLOCK_TYPE_KEY` — a serde
+    // attribute needs a literal, so keep the two in sync (pinned by a test).
     #[serde(rename = "_block_type")]
     pub block_type: String,
 
@@ -304,6 +306,26 @@ mod tests {
 
     use super::*;
     use crate::admin::context::field::{TextField, test_helpers::make_base};
+    use crate::core::BLOCK_TYPE_KEY;
+
+    /// Regression: the `BlockRow` serde `rename` must stay in sync with the
+    /// canonical [`BLOCK_TYPE_KEY`] const — the discriminator is a frozen wire
+    /// contract, and the serde attribute can't reference the const directly.
+    #[test]
+    fn block_row_discriminator_key_matches_const() {
+        let row = BlockRow {
+            index: 0,
+            block_type: "hero".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&row).unwrap();
+
+        assert!(
+            json.get(BLOCK_TYPE_KEY).is_some(),
+            "BlockRow must serialize its discriminator under {BLOCK_TYPE_KEY}, got: {json}"
+        );
+        assert_eq!(BLOCK_TYPE_KEY, "_block_type", "frozen wire key");
+    }
 
     // ── Group / Collapsible ────────────────────────────────────────────
 

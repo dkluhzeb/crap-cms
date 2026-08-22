@@ -15,9 +15,7 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{
-                forbidden, get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error,
-            },
+            shared::{get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error},
         },
     },
     config::{LocaleConfig, PasswordPolicy},
@@ -35,7 +33,7 @@ use crate::{
 };
 
 use super::upload::{UploadParams, UploadResult, process_collection_upload};
-use super::{render_form_validation_errors, write_error_toast};
+use super::{WriteErrorParams, handle_collection_write_error};
 
 /// Handle post-update success: commit upload, clean old files, enqueue conversions.
 fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Option<UploadResult>) {
@@ -297,23 +295,14 @@ pub(in crate::admin::handlers::collections) async fn do_update(
 
             htmx_redirect(&paths::collection_item(slug, id))
         }
-        Ok(Err(e)) => match e {
-            ServiceError::AccessDenied(_) => {
-                forbidden(state, "You don't have permission to update this item").into_response()
-            }
-            ServiceError::Validation(ref ve) => {
-                render_form_validation_errors(state, &def, Some(id), &form_for_error, ve, auth_user)
-                    .into_response()
-            }
-            // The target document is gone (e.g. deleted in another tab) — a
-            // navigation case, not a save error. Redirect back rather than
-            // toast a generic "save failed".
-            ServiceError::NotFound(_) => {
-                redirect_response(&paths::collection_item(slug, id)).into_response()
-            }
-            other => toast_only_error(&write_error_toast("Update", other, state.pool.kind()))
-                .into_response(),
-        },
+        Ok(Err(e)) => handle_collection_write_error(WriteErrorParams {
+            state,
+            def: &def,
+            form: &form_for_error,
+            err: e,
+            doc_id: Some(id),
+            auth_user,
+        }),
         Err(e) => {
             error!("Update task error: {}", e);
             redirect_response(&paths::collection_item(slug, id))

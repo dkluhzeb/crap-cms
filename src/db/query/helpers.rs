@@ -471,7 +471,16 @@ pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condi
     *has_where = true;
 }
 
-/// Append the soft-delete exclusion `_deleted_at IS NULL` when the collection
+/// The predicate that selects live (non-trashed) rows: `_deleted_at IS NULL`.
+///
+/// One source for the soft-delete exclusion so every read path — the find
+/// runner, the count / `max_updated_at` readers, the by-id read, and the auth
+/// lookup — hides trash identically. If this ever changes (e.g. to a
+/// scheduled-purge window), the by-id and login paths can't keep the old
+/// semantics and resurrect trashed rows on one surface.
+pub(crate) const SOFT_DELETE_ACTIVE: &str = "_deleted_at IS NULL";
+
+/// Append the soft-delete exclusion [`SOFT_DELETE_ACTIVE`] when the collection
 /// soft-deletes and the caller hasn't asked to include trashed rows. The single
 /// decision point shared by the find runner and the count / `max_updated_at`
 /// readers, so "when is trash hidden" can't drift between listing and counting.
@@ -482,7 +491,7 @@ pub(crate) fn append_soft_delete_filter(
     has_where: &mut bool,
 ) {
     if def.soft_delete && !include_deleted {
-        append_sql_condition(sql, has_where, "_deleted_at IS NULL");
+        append_sql_condition(sql, has_where, SOFT_DELETE_ACTIVE);
     }
 }
 

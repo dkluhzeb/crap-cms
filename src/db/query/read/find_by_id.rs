@@ -9,7 +9,7 @@ use crate::{
         document::row_to_document,
         query::{
             get_column_names, get_locale_select_columns_full, group_locale_fields,
-            helpers::{placeholder_list, quote_ident},
+            helpers::{SOFT_DELETE_ACTIVE, placeholder_list, quote_ident},
             hydrate_document, hydrate_documents,
         },
     },
@@ -109,7 +109,8 @@ pub fn find_by_ids(
     );
 
     if def.soft_delete {
-        sql.push_str(" AND _deleted_at IS NULL");
+        sql.push_str(" AND ");
+        sql.push_str(SOFT_DELETE_ACTIVE);
     }
 
     let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.clone())).collect();
@@ -188,7 +189,8 @@ pub(crate) fn find_by_id_raw(
     );
 
     if def.soft_delete && !include_deleted {
-        sql.push_str(" AND _deleted_at IS NULL");
+        sql.push_str(" AND ");
+        sql.push_str(SOFT_DELETE_ACTIVE);
     }
 
     let row = conn

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
+use crate::core::BLOCK_TYPE_KEY;
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
@@ -15,13 +16,13 @@ use super::helpers::{delete_junction_rows, select_junction_rows};
 /// JSON. Errors when `_block_type` is missing or non-string.
 fn split_block_row(row: &Value, order: usize) -> Result<(String, String)> {
     let block_type = row
-        .get("_block_type")
+        .get(BLOCK_TYPE_KEY)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '_block_type'"))?
+        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
         .to_string();
 
     let mut data_map = row.as_object().cloned().unwrap_or_default();
-    data_map.remove("_block_type");
+    data_map.remove(BLOCK_TYPE_KEY);
     data_map.remove("id");
 
     let data_json = Value::Object(data_map).to_string();
@@ -157,7 +158,7 @@ pub fn find_block_rows(
                 _ => Map::new(),
             };
             map.insert("id".to_string(), Value::String(id_str));
-            map.insert("_block_type".to_string(), Value::String(bt_str));
+            map.insert(BLOCK_TYPE_KEY.to_string(), Value::String(bt_str));
             Some(Value::Object(map))
         })
         .collect();

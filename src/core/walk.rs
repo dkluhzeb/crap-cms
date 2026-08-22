@@ -49,7 +49,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use super::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType};
+use super::field::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldTab, FieldType};
 use super::field_denial::JsonRoot;
 
 /// One segment of the path from a walk's root to the field being visited.
@@ -220,7 +220,7 @@ fn match_block<'a, 'v>(
     defs: &'a [BlockDefinition],
 ) -> Option<(&'a BlockDefinition, &'v Map<String, Value>)> {
     let block_obj = block.as_object()?;
-    let block_type = block_obj.get("_block_type").and_then(Value::as_str)?;
+    let block_type = block_obj.get(BLOCK_TYPE_KEY).and_then(Value::as_str)?;
     let def = defs.iter().find(|d| d.block_type == block_type)?;
 
     Some((def, block_obj))
@@ -242,7 +242,7 @@ fn walk_block_instances_mut<'a, V>(
             continue;
         };
 
-        let Some(block_type) = block_obj.get("_block_type").and_then(Value::as_str) else {
+        let Some(block_type) = block_obj.get(BLOCK_TYPE_KEY).and_then(Value::as_str) else {
             continue;
         };
         // Resolve the def first so `block_obj` is free to borrow mutably below.
