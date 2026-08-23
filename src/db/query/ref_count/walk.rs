@@ -26,6 +26,7 @@ use serde_json::{Map, Value};
 use crate::core::walk_nested;
 use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, NestStep, RelationshipConfig};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
+use crate::db::query::poly_ref;
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
 
@@ -179,7 +180,7 @@ pub(super) fn walk_block_values(
 /// `OutgoingRef` construction stays in one place.
 fn push_resolved(refs: &mut Vec<OutgoingRef>, collection: &str, id: &str, is_polymorphic: bool) {
     if is_polymorphic {
-        push_ref(refs, &format!("{collection}/{id}"), true, "");
+        push_ref(refs, &poly_ref::format(collection, id), true, "");
     } else {
         push_ref(refs, id, false, collection);
     }

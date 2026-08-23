@@ -3,6 +3,7 @@
 //! Extracts duplicated patterns from the registration closures (opts parsing,
 //! user/locale extraction, registry lookup, hook depth checking, data extraction).
 
+use crate::hooks::lua_api::utils::lua_err;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use serde_json::Value;
 use tracing::warn;
@@ -168,7 +169,7 @@ pub(crate) fn enforce_access(
         AccessResult::Denied => Err(RuntimeError(params.deny_msg.to_string())),
         AccessResult::Constrained(extra) => {
             validate_access_constraints(&extra, false, params.injecting_status, params.slug)
-                .map_err(|e| RuntimeError(e.to_string()))?;
+                .map_err(lua_err)?;
 
             // Reject locale-scoped-field constraints here too (Lua bulk
             // update_many/delete_many): consume them as SQL only, so no leak,
@@ -182,7 +183,7 @@ pub(crate) fn enforce_access(
 
                 if let Some(fields) = fields {
                     validate_access_constraint_locales(&extra, fields, params.slug)
-                        .map_err(|e| RuntimeError(e.to_string()))?;
+                        .map_err(lua_err)?;
                 }
             }
 

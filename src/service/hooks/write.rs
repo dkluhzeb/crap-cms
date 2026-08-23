@@ -167,14 +167,12 @@ pub trait WriteHooks {
         locale: Option<&str>,
         operation: &str,
     ) {
-        // Skip the clone + map round-trip when no field configures the relevant
-        // write-access function (or the operation isn't create/update).
-        let has_access = match operation {
-            "create" => has_any_field_access(fields, |f| f.access.create.as_ref()),
-            "update" => has_any_field_access(fields, |f| f.access.update.as_ref()),
-            _ => return,
+        // Skip the clone + map round-trip when the operation isn't create/update,
+        // or no field configures the relevant write-access function.
+        let Some(extract) = FieldDefinition::write_access_extractor(operation) else {
+            return;
         };
-        if !has_access {
+        if !has_any_field_access(fields, extract) {
             return;
         }
 

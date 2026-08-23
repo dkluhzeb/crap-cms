@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Serialize;
@@ -427,7 +428,7 @@ fn schema_get_collection_init(
 ) -> LuaResult<Value> {
     state
         .with(|r| get_collection(lua, r, &slug))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 #[lua_fn(
@@ -437,7 +438,7 @@ fn schema_get_collection_init(
 fn schema_get_collection_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> LuaResult<Value> {
     state
         .with(|r| get_collection(lua, r, &slug))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 /// Get a global's schema definition.
@@ -447,16 +448,12 @@ fn schema_get_global_init(
     lua: &Lua,
     #[lua(doc = "Global slug.")] slug: String,
 ) -> LuaResult<Value> {
-    state
-        .with(|r| get_global(lua, r, &slug))
-        .map_err(|e| RuntimeError(e.to_string()))?
+    state.with(|r| get_global(lua, r, &slug)).map_err(lua_err)?
 }
 
 #[lua_fn(path = "crap.schema.get_global", returns = "crap.SchemaCollection?")]
 fn schema_get_global_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> LuaResult<Value> {
-    state
-        .with(|r| get_global(lua, r, &slug))
-        .map_err(|e| RuntimeError(e.to_string()))?
+    state.with(|r| get_global(lua, r, &slug)).map_err(lua_err)?
 }
 
 /// List all collection slugs and labels.
@@ -467,7 +464,7 @@ fn schema_get_global_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> Lua
 fn schema_list_collections_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
     state
         .with(|r| list_collections_fn(lua, r))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 #[lua_fn(
@@ -477,7 +474,7 @@ fn schema_list_collections_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<
 fn schema_list_collections_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<Table> {
     state
         .with(|r| list_collections_fn(lua, r))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 /// List all global slugs and labels.
@@ -486,9 +483,7 @@ fn schema_list_collections_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<T
     returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
 )]
 fn schema_list_globals_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
-    state
-        .with(|r| list_globals_fn(lua, r))
-        .map_err(|e| RuntimeError(e.to_string()))?
+    state.with(|r| list_globals_fn(lua, r)).map_err(lua_err)?
 }
 
 #[lua_fn(
@@ -496,9 +491,7 @@ fn schema_list_globals_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Tabl
     returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
 )]
 fn schema_list_globals_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<Table> {
-    state
-        .with(|r| list_globals_fn(lua, r))
-        .map_err(|e| RuntimeError(e.to_string()))?
+    state.with(|r| list_globals_fn(lua, r)).map_err(lua_err)?
 }
 
 lua_table! {

@@ -3,11 +3,9 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
+use super::utils::{registry_lock_poisoned, require_init_phase};
 use crate::core::{Registry, SharedRegistry};
-use crate::hooks::{
-    lifecycle::InitPhase,
-    lua_api::parse::{self, JobDefinitionConfig},
-};
+use crate::hooks::lua_api::parse::{self, JobDefinitionConfig};
 use crate::typegen::lua::{LuaFnSpec, LuaParam, lua_fn, lua_table};
 use std::sync::Arc;
 
@@ -24,16 +22,14 @@ fn jobs_define_init(
     #[lua(doc = "Unique job identifier.")] slug: String,
     #[lua(ty = "crap.JobDefinitionConfig", doc = "Job configuration.")] config: JobDefinitionConfig,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, DEFINE_INIT_ONLY_ERROR)?;
 
     let def = parse::parse_job_definition(&slug, config)
         .map_err(|e| RuntimeError(format!("Failed to parse job '{slug}': {e}")))?;
 
     state
         .write()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+        .map_err(registry_lock_poisoned)?
         .register_job(def);
 
     Ok(())
@@ -50,9 +46,7 @@ fn jobs_define_pool(
     _slug: String,
     #[lua(ty = "crap.JobDefinitionConfig")] _config: JobDefinitionConfig,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, DEFINE_INIT_ONLY_ERROR)?;
     Ok(())
 }
 
@@ -97,6 +91,7 @@ pub(super) fn register_jobs_pool_init(lua: &Lua, _registry: Arc<Registry>) -> Re
 mod tests {
     use super::*;
     use crate::core::Registry;
+    use crate::hooks::lifecycle::InitPhase;
     use std::sync::{Arc, RwLock};
 
     /// Set up a Lua VM with `crap.jobs` registered against a fresh

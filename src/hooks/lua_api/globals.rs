@@ -6,9 +6,9 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use super::serializers::global_config_to_lua;
+use super::utils::{registry_lock_poisoned, require_init_phase};
 
 use crate::core::{Registry, SharedRegistry};
-use crate::hooks::lifecycle::InitPhase;
 use crate::hooks::lua_api::parse::parse_global_definition;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -25,14 +25,12 @@ fn globals_define_init(
     #[lua(doc = "Unique global identifier.")] slug: String,
     #[lua(ty = "crap.GlobalConfig", doc = "Global configuration.")] config: Table,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, DEFINE_INIT_ONLY_ERROR)?;
     let def = parse_global_definition(lua, &slug, &config)
         .map_err(|e| RuntimeError(format!("Failed to parse global '{slug}': {e}")))?;
     state
         .write()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+        .map_err(registry_lock_poisoned)?
         .register_global(def);
     Ok(())
 }
@@ -47,9 +45,7 @@ fn globals_define_pool(
     _slug: String,
     #[lua(ty = "crap.GlobalConfig")] _config: Table,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, DEFINE_INIT_ONLY_ERROR)?;
     Ok(())
 }
 
@@ -67,9 +63,7 @@ fn globals_config_get_init(
     lua: &Lua,
     #[lua(doc = "Global slug.")] slug: String,
 ) -> LuaResult<Value> {
-    let r = state
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
+    let r = state.read().map_err(registry_lock_poisoned)?;
     config_get_impl(lua, &r, &slug)
 }
 
@@ -87,9 +81,7 @@ fn globals_config_get_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> Lu
     returns_doc = "Slug -> global config map."
 )]
 fn globals_config_list_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
-    let r = state
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
+    let r = state.read().map_err(registry_lock_poisoned)?;
     config_list_impl(lua, &r)
 }
 
@@ -178,6 +170,7 @@ mod tests {
     use super::*;
     use crate::core::GlobalDefinition;
     use crate::core::Registry;
+    use crate::hooks::lifecycle::InitPhase;
     use std::sync::{Arc, RwLock};
 
     fn lua_with_globals() -> (Lua, SharedRegistry) {

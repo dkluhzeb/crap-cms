@@ -12,6 +12,7 @@ use crate::config::LocaleConfig;
 use crate::core::{BlockDefinition, DocumentFields, FieldDefinition, FieldType};
 use crate::db::query::helpers::{locale_column, prefixed_name};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
+use crate::db::query::poly_ref;
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
 use super::walk::{walk_block_values, walk_nested_refs};
@@ -79,7 +80,7 @@ pub(super) fn compute_refs_from_data(
 
                             for (coll, id) in parse_polymorphic_values(val) {
                                 if seen.insert((coll.clone(), id.clone())) {
-                                    push_ref(refs, &format!("{coll}/{id}"), true, "");
+                                    push_ref(refs, &poly_ref::format(&coll, &id), true, "");
                                 }
                             }
                         } else {

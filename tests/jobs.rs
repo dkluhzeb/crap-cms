@@ -206,7 +206,8 @@ fn list_job_runs_filters() {
     assert_eq!(echo_runs[0].slug, "test_echo_job");
 
     // Filter by status
-    let pending_runs = job_query::list_job_runs(&conn, None, Some("pending"), 50, 0).unwrap();
+    let pending_runs =
+        job_query::list_job_runs(&conn, None, Some(JobStatus::Pending), 50, 0).unwrap();
     assert_eq!(pending_runs.len(), 2);
 
     // No filter

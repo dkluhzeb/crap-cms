@@ -389,6 +389,25 @@ impl FieldDefinition {
         self.has_many && self.has_parent_column()
     }
 
+    /// The field-access-hook extractor for a write `operation` — a function that
+    /// selects the `create` or `update` hook off a field — or `None` when
+    /// `operation` is not a write op (`create` / `update`).
+    ///
+    /// The single source mapping a write operation to its field-access hook,
+    /// shared by the field-access check / strip / has-any-access paths so they
+    /// can't disagree on which hook a `create` vs an `update` reads. Callers use
+    /// the `None` case for their own "not a write op → skip" early return.
+    #[must_use]
+    pub fn write_access_extractor(
+        operation: &str,
+    ) -> Option<fn(&FieldDefinition) -> Option<&HookRef>> {
+        match operation {
+            "create" => Some(|f| f.access.create.as_ref()),
+            "update" => Some(|f| f.access.update.as_ref()),
+            _ => None,
+        }
+    }
+
     /// The field's display label: the explicit `admin.label` when set and
     /// non-empty, else the field name title-cased. One source so the admin editor
     /// and the DB-read walkers (back-references) render the same label — including

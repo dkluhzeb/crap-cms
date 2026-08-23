@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -92,8 +93,8 @@ fn collections_validate(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
     let def = resolve_collection(reg, &collection)?;
 
     let ExtractedData { data, password } = extract_data(&data, &def)?;

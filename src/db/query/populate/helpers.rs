@@ -227,17 +227,6 @@ where
     shared.map_err(|arc| anyhow::anyhow!("{arc:#}"))
 }
 
-/// Parse a polymorphic reference "collection/id" into `(collection, id)`.
-pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
-    let (col, id) = s.split_once('/')?;
-
-    if col.is_empty() || id.is_empty() {
-        return None;
-    }
-
-    Some((col.to_string(), id.to_string()))
-}
-
 /// Convert a `Document` to the canonical JSON envelope. Pass `Some(collection)`
 /// to tag it (embedded populated relationships, for polymorphic disambiguation)
 /// or `None` to omit the tag (a top-level document read). One converter for every
@@ -512,50 +501,5 @@ mod tests {
             .expect("keywords should be array");
         assert_eq!(keywords.len(), 2);
         assert_eq!(keywords[0].as_str(), Some("rust"));
-    }
-
-    // ── parse_poly_ref tests ──────────────────────────────────────────────────
-
-    #[test]
-    fn parse_poly_ref_valid() {
-        assert_eq!(
-            parse_poly_ref("articles/a1"),
-            Some(("articles".to_string(), "a1".to_string()))
-        );
-        assert_eq!(
-            parse_poly_ref("a/b"),
-            Some(("a".to_string(), "b".to_string()))
-        );
-    }
-
-    #[test]
-    fn parse_poly_ref_no_slash_returns_none() {
-        assert_eq!(parse_poly_ref("noslash"), None);
-        assert_eq!(parse_poly_ref(""), None);
-    }
-
-    #[test]
-    fn parse_poly_ref_empty_col_returns_none() {
-        // "/id" — collection portion is empty
-        assert_eq!(parse_poly_ref("/someid"), None);
-    }
-
-    #[test]
-    fn parse_poly_ref_empty_id_returns_none() {
-        // "col/" — id portion is empty
-        assert_eq!(parse_poly_ref("col/"), None);
-    }
-
-    /// Regression: multi-byte UTF-8 in collection or id must not panic from string slicing.
-    #[test]
-    fn parse_poly_ref_multibyte_utf8() {
-        assert_eq!(
-            parse_poly_ref("記事/id1"),
-            Some(("記事".to_string(), "id1".to_string()))
-        );
-        assert_eq!(
-            parse_poly_ref("posts/日本語id"),
-            Some(("posts".to_string(), "日本語id".to_string()))
-        );
     }
 }

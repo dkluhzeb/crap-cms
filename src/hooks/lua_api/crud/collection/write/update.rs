@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
@@ -109,8 +110,8 @@ fn collections_update(
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
-    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
     let def = resolve_collection(reg, &collection)?;
 
     // The unpublish option routes through the same service path as the

@@ -22,9 +22,9 @@
 //! request thanks to the per-request VM acquisition.
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
+use mlua::{Function, Lua, Result as LuaResult, Table, Value};
 
-use crate::hooks::lifecycle::InitPhase;
+use super::utils::require_init_phase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Named registry value that holds the `name → Function` map.
@@ -42,14 +42,12 @@ fn template_data_register(
     )]
     func: Function,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.template_data.register must be called from init.lua or a definition \
-             file — runtime registration only lands in one VM of the pool and is \
-             intermittent across requests"
-                .into(),
-        ));
-    }
+    require_init_phase(
+        lua,
+        "crap.template_data.register must be called from init.lua or a definition \
+         file — runtime registration only lands in one VM of the pool and is \
+         intermittent across requests",
+    )?;
 
     let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY)?;
     table.set(name, func)
@@ -87,6 +85,7 @@ pub(super) fn register_template_data(lua: &Lua) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::lifecycle::InitPhase;
     use mlua::Function;
 
     /// Build a Lua VM with `crap.template_data` registered AND the

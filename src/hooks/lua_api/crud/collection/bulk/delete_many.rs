@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -173,8 +174,7 @@ fn collections_delete_many(
     // Validate the requested locale up front. delete_many matches documents
     // across locales, so the locale isn't used for filtering — but an invalid
     // code should still surface as an error rather than be ignored.
-    LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
 
     let mut filters = build_delete_filters(
         lua,
@@ -232,8 +232,7 @@ fn collections_delete_many(
         include_deleted: opts.trash,
     };
 
-    let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts)
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+    let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts).map_err(lua_err)?;
 
     if !service_def.soft_delete
         && let Some(lua_storage) = lua.app_data_ref::<LuaStorage>()
@@ -304,7 +303,7 @@ fn build_delete_filters(
 ) -> LuaResult<Vec<FilterClause>> {
     let mut find_query = query.into_find_query()?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
-    validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
+    validate_user_filters(&find_query.filters).map_err(lua_err)?;
 
     let access_ref = resolve_delete_access(def, soft_delete);
 

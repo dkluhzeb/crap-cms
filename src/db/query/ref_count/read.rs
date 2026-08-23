@@ -8,6 +8,7 @@ use crate::config::LocaleConfig;
 use crate::core::{BlockDefinition, FieldDefinition, FieldType};
 use crate::db::query::helpers::{join_table, locale_column, prefixed_name};
 use crate::db::query::join::{find_array_rows, find_block_rows};
+use crate::db::query::poly_ref;
 use crate::db::{DbConnection, DbValue};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
@@ -204,7 +205,7 @@ fn collect_has_many_refs(
 
         for row in rows {
             if let (Some(id), Some(col)) = (row.text_at(0), row.text_at(1)) {
-                push_ref(refs, &format!("{col}/{id}"), true, "");
+                push_ref(refs, &poly_ref::format(col, id), true, "");
             }
         }
     } else {

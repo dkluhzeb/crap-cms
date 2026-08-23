@@ -8,10 +8,50 @@ use nanoid::nanoid;
 use serde_json::Value;
 
 use super::{json_to_lua, lua_to_json};
+use crate::hooks::lifecycle::InitPhase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Pure Lua table and string helpers, compiled in from `util_helpers.lua`.
 const LUA_UTIL_HELPERS: &str = include_str!("util_helpers.lua");
+
+/// Message prefix for a poisoned registry lock — one string so every Lua
+/// registration site reports it identically (and greppably).
+pub(crate) const REGISTRY_LOCK_POISONED: &str = "Registry lock poisoned";
+
+/// Guard a `crap.*.define` / `.register` entry point to init-phase only.
+///
+/// Returns `Err(msg)` when the VM has no [`InitPhase`] app-data (a runtime hook
+/// VM), so a post-boot registry mutation — which has no effect on the running
+/// server — is rejected instead of silently ignored. The single source of the
+/// init-only boundary check, shared by every registration surface; each caller
+/// passes its own tailored message.
+pub(crate) fn require_init_phase(lua: &Lua, msg: &str) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(msg.to_string()));
+    }
+
+    Ok(())
+}
+
+/// Map a poisoned-lock error to an mlua `RuntimeError` carrying the shared
+/// [`REGISTRY_LOCK_POISONED`] message and the cause chain — so the registry
+/// write sites don't each hand-roll `format!("Registry lock poisoned: {e:#}")`.
+pub(crate) fn registry_lock_poisoned<E: std::fmt::Display>(e: E) -> mlua::Error {
+    RuntimeError(format!("{REGISTRY_LOCK_POISONED}: {e:#}"))
+}
+
+/// Convert any displayable error into an mlua `RuntimeError`, rendering the full
+/// cause chain (`{:#}`).
+///
+/// The single conversion for the ~50 `crap.*` sites that hand-rolled
+/// `RuntimeError(e.to_string())` / `format!("{e}")` / `format!("{e:#}")` with
+/// inconsistent verbosity. Standardizing on `{:#}` is a superset — it never
+/// drops a message, only appends the anyhow cause chain where one exists — so a
+/// bare error → runtime error now reads the same across the whole Lua surface.
+/// Use as `.map_err(lua_err)`.
+pub(crate) fn lua_err<E: std::fmt::Display>(e: E) -> mlua::Error {
+    RuntimeError(format!("{e:#}"))
+}
 
 // ── crap.util ────────────────────────────────────────────────────────
 
@@ -206,6 +246,37 @@ fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::lifecycle::InitPhase;
+
+    /// The shared error converter renders the FULL anyhow cause chain (`{:#}`),
+    /// so a bare error → `RuntimeError` keeps its causes uniformly across the
+    /// Lua surface (some sites previously dropped them via `to_string()`).
+    #[test]
+    fn lua_err_renders_the_cause_chain() {
+        let err = anyhow::anyhow!("root cause").context("outer context");
+        let lua_error = lua_err(err);
+        let msg = lua_error.to_string();
+
+        assert!(msg.contains("outer context"), "outer: {msg}");
+        assert!(msg.contains("root cause"), "cause chain dropped: {msg}");
+    }
+
+    /// The shared init-phase guard: rejected on a runtime VM (no `InitPhase`
+    /// app-data), allowed once the marker is set. The one check behind every
+    /// `crap.*.define` / `.register` init-only entry point.
+    #[test]
+    fn require_init_phase_gates_on_the_marker() {
+        let lua = Lua::new();
+
+        let err = require_init_phase(&lua, "must be init").expect_err("runtime VM rejected");
+        assert!(err.to_string().contains("must be init"));
+
+        lua.set_app_data(InitPhase);
+        assert!(
+            require_init_phase(&lua, "must be init").is_ok(),
+            "init VM allowed"
+        );
+    }
 
     /// Regression: an invalid chrono format string reached
     /// `DelayedFormat::to_string()`, which panics — a Lua caller could crash

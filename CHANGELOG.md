@@ -2849,6 +2849,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     type is a compile error in every walker rather than a silently-skipped
     subtree; what a walker *does* with each kind (descend, treat as a leaf column,
     treat as opaque) still lives in that walker.
+  - Job failures are recorded through one `record_job_failure` (retryable) /
+    `record_permanent_job_failure` helper: the user-Lua-handler, system-email,
+    and image-convert paths no longer each spell the get-conn + `fail_job` +
+    retry/permanent log split. The user-job path used to render the error with
+    `to_string()` (dropping the anyhow cause chain the system-job paths kept via
+    `{:#}`); all paths now render `{:#}`, so a failed job's stored error carries
+    its full cause chain regardless of kind.
+  - The two `AccountAction` flags on the gRPC account handler
+    (session-invalidation, verify-email requirement) are derived from the action
+    (`invalidates_sessions()` / `is_verification_action()`) instead of two opaque
+    bools threaded per call — removing eight `true`/`false` literals and the
+    drift class that once left live streams running on a revoked session.
+  - The write operation → field-access-hook mapping is one
+    `FieldDefinition::write_access_extractor(op)`; the field-access check / strip
+    / has-any-access paths (5 sites) select the `create`/`update` extractor
+    through it instead of each spelling `match op { "create" => …, "update" => … }`.
+  - The polymorphic-reference `"collection/id"` grammar has one parser and one
+    formatter (`db::query::poly_ref::{parse, format}`); the three hand-rolled
+    parsers (which had diverged — the back-reference reader accepted a malformed
+    `"col/"` / `"/id"` the others rejected) and the eight `format!("{col}/{id}")`
+    sites route through it, so a malformed ref is rejected identically everywhere.
+  - The block-discriminator MCP tool-name grammar is single-sourced: collection
+    tool names build from `CrudOp::name()` and globals from one `GLOBAL_TOOL_OPS`
+    table, and `parse_tool_name` derives its prefixes from the same sources
+    (longest-first), so a tool can no longer be listed but unroutable. A
+    round-trip test asserts every emitted tool parses back to its op.
+  - Job-run status filters take a typed `Option<JobStatus>` through the query
+    layer instead of `Option<&str>`; the request/CLI string is resolved to the
+    enum at one service/command boundary (an unknown status still yields an empty
+    page, as before), so an internal caller can't pass a typo'd status.
+  - The Lua init-phase guard is one `require_init_phase(lua, msg)` (the load-
+    bearing "no registry mutation after boot" check, 10 sites), the registry-lock
+    error is one `registry_lock_poisoned` / `REGISTRY_LOCK_POISONED` (9 sites,
+    one of which had diverged in wording), and the MCP auth-collection password
+    extraction is one `extract_auth_password(def, obj, empty_as_none)` (the
+    create/update empty-string asymmetry is preserved via the flag, not
+    re-derived per surface).
+  - The `~50` `crap.*` Lua sites that hand-rolled `RuntimeError(e.to_string())` /
+    `format!("{e}")` / `format!("{e:#}")` (with inconsistent verbosity) convert
+    through one `lua_err`, standardizing on `{:#}` — a superset that never drops a
+    message, only appends the anyhow cause chain where one exists.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

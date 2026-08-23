@@ -131,7 +131,7 @@ impl SlugPred<'_> {
 }
 
 /// Count job runs under the given slug predicate + optional status.
-fn count_runs(conn: &dyn DbConnection, slug: SlugPred, status: Option<&str>) -> Result<i64> {
+fn count_runs(conn: &dyn DbConnection, slug: SlugPred, status: Option<JobStatus>) -> Result<i64> {
     let mut sql = String::from("SELECT COUNT(*) FROM _crap_jobs WHERE 1=1");
     let mut params: Vec<DbValue> = Vec::new();
 
@@ -140,7 +140,7 @@ fn count_runs(conn: &dyn DbConnection, slug: SlugPred, status: Option<&str>) -> 
     }
 
     if let Some(st) = status {
-        params.push(DbValue::Text(st.to_string()));
+        params.push(DbValue::Text(st.as_str().to_string()));
         let _ = write!(sql, " AND status = {}", conn.placeholder(params.len()));
     }
 
@@ -153,7 +153,7 @@ fn count_runs(conn: &dyn DbConnection, slug: SlugPred, status: Option<&str>) -> 
 fn query_runs(
     conn: &dyn DbConnection,
     slug: SlugPred,
-    status: Option<&str>,
+    status: Option<JobStatus>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JobRun>> {
@@ -165,7 +165,7 @@ fn query_runs(
     }
 
     if let Some(st) = status {
-        params.push(DbValue::Text(st.to_string()));
+        params.push(DbValue::Text(st.as_str().to_string()));
         let _ = write!(sql, " AND status = {}", conn.placeholder(params.len()));
     }
 
@@ -192,7 +192,7 @@ fn query_runs(
 pub fn count_job_runs(
     conn: &dyn DbConnection,
     slug: Option<&str>,
-    status: Option<&str>,
+    status: Option<JobStatus>,
 ) -> Result<i64> {
     count_runs(conn, slug.map_or(SlugPred::Any, SlugPred::One), status)
 }
@@ -206,7 +206,7 @@ pub fn count_job_runs(
 pub fn count_job_runs_in(
     conn: &dyn DbConnection,
     slugs: &[String],
-    status: Option<&str>,
+    status: Option<JobStatus>,
 ) -> Result<i64> {
     count_runs(conn, SlugPred::In(slugs), status)
 }
@@ -219,7 +219,7 @@ pub fn count_job_runs_in(
 pub fn list_job_runs(
     conn: &dyn DbConnection,
     slug: Option<&str>,
-    status: Option<&str>,
+    status: Option<JobStatus>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JobRun>> {
@@ -241,7 +241,7 @@ pub fn list_job_runs(
 pub fn list_job_runs_in(
     conn: &dyn DbConnection,
     slugs: &[String],
-    status: Option<&str>,
+    status: Option<JobStatus>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JobRun>> {
@@ -536,13 +536,18 @@ mod tests {
         )
         .unwrap();
 
-        let running = list_job_runs(&conn, None, Some("running"), 100, 0).unwrap();
+        let running = list_job_runs(&conn, None, Some(JobStatus::Running), 100, 0).unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].slug, "job_a");
 
-        let pending = list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
+        let pending = list_job_runs(&conn, None, Some(JobStatus::Pending), 100, 0).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].slug, "job_b");
+
+        // A valid status with no rows returns empty — the mechanism the service
+        // layer relies on to map an unknown status string to an empty page.
+        let failed = list_job_runs(&conn, None, Some(JobStatus::Failed), 100, 0).unwrap();
+        assert!(failed.is_empty());
     }
 
     #[test]

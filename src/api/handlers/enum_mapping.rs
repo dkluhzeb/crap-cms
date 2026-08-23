@@ -22,7 +22,7 @@ pub(in crate::api::handlers) fn mutation_target(target: &EventTarget) -> content
     }
 }
 
-pub(in crate::api::handlers) fn job_run_status(status: &JobStatus) -> content::JobRunStatus {
+pub(in crate::api::handlers) fn job_run_status(status: JobStatus) -> content::JobRunStatus {
     match status {
         JobStatus::Pending => content::JobRunStatus::Pending,
         JobStatus::Running => content::JobRunStatus::Running,
@@ -109,7 +109,7 @@ mod tests {
             (JobStatus::Stale, content::JobRunStatus::Stale),
         ];
         for (internal, proto) in cases {
-            assert_eq!(job_run_status(&internal), proto);
+            assert_eq!(job_run_status(internal), proto);
         }
     }
 
@@ -165,7 +165,7 @@ mod tests {
             JobStatus::Failed,
             JobStatus::Stale,
         ] {
-            assert_eq!(job_status_filter(job_run_status(&status)), Some(status));
+            assert_eq!(job_status_filter(job_run_status(status)), Some(status));
         }
     }
 }

@@ -8,7 +8,7 @@ use tracing::info;
 use crate::{
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, extract_data_from_args},
+        collection::helpers::{doc_to_json, extract_auth_password, extract_data_from_args},
     },
     service::{self, CreateManyItem, CreateManyOptions, ServiceContext},
 };
@@ -50,14 +50,7 @@ pub(in crate::mcp::tools) fn exec_create_many(
 
     let mut items: Vec<CreateManyItem> = Vec::with_capacity(documents_arr.len());
     for doc_val in documents_arr {
-        let password = if is_auth {
-            doc_val
-                .get("password")
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string)
-        } else {
-            None
-        };
+        let password = extract_auth_password(def, doc_val, false);
 
         let data = extract_data_from_args(doc_val, skip_keys, &def.fields)?;
         items.push(CreateManyItem { data, password });

@@ -13,6 +13,7 @@ use crate::{
         DbConnection, DbValue,
         query::{
             helpers::{placeholder_list, prefixed_name},
+            poly_ref,
             ref_count::{walk_blocks_with, walk_nested_with},
         },
     },
@@ -171,14 +172,16 @@ fn extract_ref_ids(val: Option<&Value>, is_polymorphic: bool) -> Vec<(String, St
     ids
 }
 
-/// Parse a single reference ID string, returning (collection, id).
+/// Parse a single reference ID string, returning (collection, id). A
+/// non-polymorphic ref is the bare id (empty collection); a polymorphic ref
+/// goes through the shared `poly_ref` grammar so it rejects a malformed
+/// `"col/"` / `"/id"` the same way every other reader does.
 fn parse_ref_id(s: &str, is_polymorphic: bool) -> Option<(String, String)> {
     if !is_polymorphic {
         return Some((String::new(), s.to_string()));
     }
 
-    let (col, id) = s.split_once('/')?;
-    Some((col.to_string(), id.to_string()))
+    poly_ref::parse(s)
 }
 
 /// Check which IDs are missing from the database.
@@ -201,7 +204,7 @@ fn check_ids_exist(
 
     let display_id = |collection: &str, id: &str| -> String {
         if rc.is_polymorphic() {
-            format!("{collection}/{id}")
+            poly_ref::format(collection, id)
         } else {
             id.to_string()
         }

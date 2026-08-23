@@ -25,10 +25,11 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, LuaSerdeExt as _, Result as LuaResult, Table, Value};
 
+use super::utils::{lua_err, require_init_phase};
 use crate::{
     admin::custom_routes::{ALLOWED_METHODS, is_mutating_method, normalize_method, validate_path},
     core::HookRef,
-    hooks::{lifecycle::InitPhase, lua_api::parse::deny_unknown_keys},
+    hooks::lua_api::parse::deny_unknown_keys,
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -155,13 +156,11 @@ fn route_register(
     lua: &Lua,
     #[lua(ty = "table", doc = "Route definition (path, method, handler, …).")] def: Table,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.routes.register must be called from init.lua or a definition file \
-             — runtime registration has no effect on the mounted routes"
-                .into(),
-        ));
-    }
+    require_init_phase(
+        lua,
+        "crap.routes.register must be called from init.lua or a definition file \
+         — runtime registration has no effect on the mounted routes",
+    )?;
 
     deny_unknown_keys(
         &def,
@@ -177,7 +176,7 @@ fn route_register(
             "options",
         ],
     )
-    .map_err(|e| RuntimeError(e.to_string()))?;
+    .map_err(lua_err)?;
 
     let path: String = def.get("path").map_err(|_| {
         RuntimeError("crap.routes.register: `path` is required (a string)".to_string())
@@ -202,7 +201,7 @@ fn route_register(
 
     if let Value::Table(rl) = def.get::<Value>("rate_limit")? {
         deny_unknown_keys(&rl, "crap.routes.register rate_limit", &["max", "window"])
-            .map_err(|e| RuntimeError(e.to_string()))?;
+            .map_err(lua_err)?;
         let max: u32 = rl.get("max").map_err(|_| {
             RuntimeError("crap.routes.register: rate_limit.max must be a positive integer".into())
         })?;
@@ -304,6 +303,7 @@ pub(super) fn register_routes(lua: &Lua) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::lifecycle::InitPhase;
 
     fn lua_in_init_phase() -> Lua {
         let lua = Lua::new();

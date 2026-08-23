@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
@@ -47,7 +48,7 @@ fn access_check_init(
 ) -> LuaResult<Value> {
     state
         .with(|r| check_impl(lua, r, &collection, &operation))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 #[lua_fn(
@@ -62,7 +63,7 @@ fn access_check_pool(
 ) -> LuaResult<Value> {
     state
         .with(|r| check_impl(lua, r, &collection, &operation))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 /// Return the names of fields the current user cannot read for this
@@ -87,7 +88,7 @@ fn access_field_read_denied_init(
     let document = parse_optional_document(document)?;
     state
         .with(|r| field_read_denied_impl(lua, r, &collection, document.as_ref()))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 #[lua_fn(path = "crap.access.field_read_denied", returns = "string[]")]
@@ -100,7 +101,7 @@ fn access_field_read_denied_pool(
     let document = parse_optional_document(document)?;
     state
         .with(|r| field_read_denied_impl(lua, r, &collection, document.as_ref()))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 /// Return the names of fields the current user cannot write for this
@@ -127,7 +128,7 @@ fn access_field_write_denied_init(
     let document = parse_optional_document(document)?;
     state
         .with(|r| field_write_denied_impl(lua, r, &collection, &operation, document.as_ref()))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 #[lua_fn(path = "crap.access.field_write_denied", returns = "string[]")]
@@ -141,7 +142,7 @@ fn access_field_write_denied_pool(
     let document = parse_optional_document(document)?;
     state
         .with(|r| field_write_denied_impl(lua, r, &collection, &operation, document.as_ref()))
-        .map_err(|e| RuntimeError(e.to_string()))?
+        .map_err(lua_err)?
 }
 
 // ── lua_table! groupings ─────────────────────────────────────────────

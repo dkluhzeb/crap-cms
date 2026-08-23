@@ -12,6 +12,7 @@ use super::{
     },
     locale::resolve_join_locale,
 };
+use crate::db::query::poly_ref;
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, flatten_group_fields},
     db::{
@@ -49,15 +50,7 @@ pub(crate) fn parse_id_list(val: &Value) -> Vec<String> {
 pub(crate) fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
     parse_id_list(val)
         .into_iter()
-        .filter_map(|item| {
-            let (col, id) = item.split_once('/')?;
-
-            if !col.is_empty() && !id.is_empty() {
-                Some((col.to_string(), id.to_string()))
-            } else {
-                None
-            }
-        })
+        .filter_map(|item| poly_ref::parse(&item))
         .collect()
 }
 

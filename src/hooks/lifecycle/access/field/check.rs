@@ -6,9 +6,7 @@ use mlua::Lua;
 
 use tracing::warn;
 
-use super::walk::{
-    collect_denials_flat, extract_create_access, extract_read_access, extract_update_access,
-};
+use super::walk::{collect_denials_flat, extract_read_access};
 use crate::core::{Document, DocumentFields, FieldDefinition, FieldDenial, HookRef};
 use crate::db::AccessResult;
 use crate::hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua};
@@ -42,10 +40,8 @@ pub(crate) fn check_field_write_access_with_lua(
     locale: Option<&str>,
     operation: &str,
 ) -> Vec<FieldDenial> {
-    let extractor: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
-        "create" => extract_create_access,
-        "update" => extract_update_access,
-        _ => return Vec::new(),
+    let Some(extractor) = FieldDefinition::write_access_extractor(operation) else {
+        return Vec::new();
     };
 
     collect_field_access_denied(lua, fields, collection, user, locale, extractor, operation)
@@ -171,10 +167,8 @@ pub(crate) fn collect_write_denied_with_lua(
     locale: Option<&str>,
     operation: &str,
 ) -> Vec<FieldDenial> {
-    let extract: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
-        "create" => extract_create_access,
-        "update" => extract_update_access,
-        _ => return Vec::new(),
+    let Some(extract) = FieldDefinition::write_access_extractor(operation) else {
+        return Vec::new();
     };
 
     let is_denied = |field: &FieldDefinition| {

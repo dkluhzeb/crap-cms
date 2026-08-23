@@ -20,7 +20,7 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::hooks::lifecycle::InitPhase;
+use super::utils::require_init_phase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, lua_fn, lua_table};
 
 /// Allowed keys on a `crap.storage.register` handler table.
@@ -38,13 +38,11 @@ fn storage_register(
     )]
     handler: Table,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.storage.register must be called from init.lua \
-             (the custom backend is wired once at startup)"
-                .into(),
-        ));
-    }
+    require_init_phase(
+        lua,
+        "crap.storage.register must be called from init.lua \
+         (the custom backend is wired once at startup)",
+    )?;
 
     for name in ["put", "get", "delete"] {
         if !matches!(handler.get::<Value>(name)?, Value::Function(_)) {
@@ -100,6 +98,7 @@ pub(super) fn register_storage(lua: &Lua) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::lifecycle::InitPhase;
 
     fn lua_in_init_phase() -> Lua {
         let lua = Lua::new();

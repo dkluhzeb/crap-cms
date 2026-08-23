@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
@@ -136,8 +137,7 @@ fn collections_create_many(
         max_documents: state.bulk_max_documents,
     };
 
-    let svc_result = service::create_many(&ctx, &parsed_items, &create_opts)
-        .map_err(|e| RuntimeError(format!("{e:#}")))?;
+    let svc_result = service::create_many(&ctx, &parsed_items, &create_opts).map_err(lua_err)?;
 
     let result = lua.create_table()?;
     result.set("created", svc_result.created)?;

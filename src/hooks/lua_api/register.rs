@@ -31,7 +31,7 @@ use super::{
     storage::register_storage,
     template_data::register_template_data,
     transaction::register_transaction,
-    utils::{load_lua_helpers, register_util},
+    utils::{REGISTRY_LOCK_POISONED, load_lua_helpers, register_util},
 };
 
 /// Register the `crap` global table for the **`init_lua`** VM — the single
@@ -208,7 +208,7 @@ pub(crate) fn register_per_slug_typing_helpers(
     let snapshot: Vec<(String, bool)> = {
         let reg = registry
             .read()
-            .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("{REGISTRY_LOCK_POISONED}"))?;
         let mut v: Vec<(String, bool)> =
             Vec::with_capacity(reg.collections.len() + reg.globals.len());
         for k in reg.collections.keys() {

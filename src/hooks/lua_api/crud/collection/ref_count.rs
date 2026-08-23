@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
@@ -69,7 +70,7 @@ fn ref_count_inner(lua: &Lua, reg: &Registry, collection: &str, id: &str) -> Lua
         .build();
 
     let visible = find_document_by_id(&read_ctx, &FindByIdInput::builder(id).depth(0).build())
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+        .map_err(lua_err)?;
 
     if visible.is_none() {
         return Err(RuntimeError(format!(
@@ -80,5 +81,5 @@ fn ref_count_inner(lua: &Lua, reg: &Registry, collection: &str, id: &str) -> Lua
     let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .build();
-    document_info::get_ref_count(&ctx, id).map_err(|e| RuntimeError(format!("{e}")))
+    document_info::get_ref_count(&ctx, id).map_err(lua_err)
 }

@@ -1,5 +1,6 @@
 //! Parsing functions for field relationship configuration.
 
+use crate::hooks::lua_api::utils::lua_err;
 use mlua::{Error::RuntimeError, Result as LuaResult, Table};
 use tracing::warn;
 
@@ -50,7 +51,7 @@ fn parse_relationship_table(
         "relationship",
         &["collection", "has_many", "max_depth"],
     )
-    .map_err(|e| RuntimeError(e.to_string()))?;
+    .map_err(lua_err)?;
 
     let name = get_string(field_tbl, "name").unwrap_or_default();
 

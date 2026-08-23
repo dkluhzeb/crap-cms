@@ -19,6 +19,30 @@ pub(in crate::mcp::tools) fn events_flag(args: &Value) -> bool {
     args.get("events").and_then(Value::as_bool).unwrap_or(true)
 }
 
+/// Pull the reserved top-level `password` from a write-tool object on an auth
+/// collection (`None` for a non-auth collection, where `password` is ordinary
+/// field data). One source so `create` / `update` / `create_many` extract it
+/// identically instead of each re-deriving the `is_auth_collection()` guard.
+///
+/// `empty_as_none` selects the per-op treatment of an empty string: `update`
+/// passes `true` (empty means "leave the password unchanged"); `create` and
+/// `create_many` pass `false` (there is nothing to preserve, so an empty
+/// password flows through to the policy validator and is rejected).
+pub(in crate::mcp::tools) fn extract_auth_password(
+    def: &CollectionDefinition,
+    obj: &Value,
+    empty_as_none: bool,
+) -> Option<String> {
+    if !def.is_auth_collection() {
+        return None;
+    }
+
+    obj.get("password")
+        .and_then(Value::as_str)
+        .filter(|s| !(empty_as_none && s.is_empty()))
+        .map(ToString::to_string)
+}
+
 /// Reserved top-level meta-keys for a single-document write tool — the keys
 /// [`extract_data_from_args`] must skip so they are not treated as unknown field
 /// data. One source so `create` / `update` / `validate` can't drift (validate
@@ -270,9 +294,45 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{DocumentFields, DocumentId, document::Document},
+        core::{DocumentFields, DocumentId, collection::Auth, document::Document},
         db::query,
     };
+
+    /// Regression (C5): the shared password extractor preserves the intended
+    /// create-vs-update asymmetry. `create`/`create_many` (`empty_as_none=false`)
+    /// pass an empty string through so the policy validator rejects it; `update`
+    /// (`empty_as_none=true`) treats empty as "no change"; a non-auth collection
+    /// never extracts `password` (it is ordinary field data).
+    #[test]
+    fn extract_auth_password_asymmetry() {
+        let mut auth_def = CollectionDefinition::new("users");
+        auth_def.auth = Some(Auth::new(true));
+
+        let empty = json!({ "password": "" });
+        assert_eq!(
+            extract_auth_password(&auth_def, &empty, false),
+            Some(String::new()),
+            "create: empty flows through to the policy validator"
+        );
+        assert_eq!(
+            extract_auth_password(&auth_def, &empty, true),
+            None,
+            "update: empty means no change"
+        );
+
+        let real = json!({ "password": "secret" });
+        assert_eq!(
+            extract_auth_password(&auth_def, &real, true),
+            Some("secret".to_string())
+        );
+
+        let plain_def = CollectionDefinition::new("posts");
+        assert_eq!(
+            extract_auth_password(&plain_def, &real, false),
+            None,
+            "non-auth collection: password is ordinary field data"
+        );
+    }
 
     // ── parse_where_filters: array operators ──────────────────────────────
 

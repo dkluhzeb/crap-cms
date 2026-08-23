@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -115,7 +116,7 @@ fn collections_list_versions(
         .offset(opts.offset)
         .build();
 
-    let paginated = list_versions(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
+    let paginated = list_versions(&ctx, &input).map_err(lua_err)?;
 
     let result = ListVersionsResult {
         documents: paginated

@@ -63,7 +63,7 @@ pub(in crate::mcp) struct ParsedTool {
 }
 
 /// Tool operation type.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::mcp) enum ToolOp {
     Find,
     FindById,
@@ -220,93 +220,58 @@ fn collection_tool_desc(op: CrudOp, def: &CollectionDefinition, label: &str) -> 
     append_collection_desc(body, def.mcp.description.as_deref())
 }
 
+/// Build a collection tool name — `{verb}_{slug}` — from the op's canonical
+/// verb ([`CrudOp::name`]), so construction and [`parse_tool_name`] share one
+/// verb vocabulary and can't drift into an emitted-but-unroutable tool.
+fn collection_tool_name(op: CrudOp, slug: &str) -> String {
+    format!("{}_{slug}", op.name())
+}
+
 /// All MCP tools for a single collection: CRUD + soft-delete/version variants.
 fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinition> {
     let label = def.display_name();
-    let desc = |op| collection_tool_desc(op, def, label);
-    let schema = |op| collection_input_schema(def, op);
+    let tool = |op: CrudOp| {
+        ToolDefinition::new(
+            collection_tool_name(op, slug),
+            collection_tool_desc(op, def, label),
+            collection_input_schema(def, op),
+        )
+    };
 
     let mut tools = vec![
-        ToolDefinition::new(
-            format!("find_{slug}"),
-            desc(CrudOp::Find),
-            schema(CrudOp::Find),
-        ),
-        ToolDefinition::new(
-            format!("find_by_id_{slug}"),
-            desc(CrudOp::FindById),
-            schema(CrudOp::FindById),
-        ),
-        ToolDefinition::new(
-            format!("create_{slug}"),
-            desc(CrudOp::Create),
-            schema(CrudOp::Create),
-        ),
-        ToolDefinition::new(
-            format!("create_many_{slug}"),
-            desc(CrudOp::CreateMany),
-            schema(CrudOp::CreateMany),
-        ),
-        ToolDefinition::new(
-            format!("update_many_{slug}"),
-            desc(CrudOp::UpdateMany),
-            schema(CrudOp::UpdateMany),
-        ),
-        ToolDefinition::new(
-            format!("delete_many_{slug}"),
-            desc(CrudOp::DeleteMany),
-            schema(CrudOp::DeleteMany),
-        ),
-        ToolDefinition::new(
-            format!("update_{slug}"),
-            desc(CrudOp::Update),
-            schema(CrudOp::Update),
-        ),
-        ToolDefinition::new(
-            format!("validate_{slug}"),
-            desc(CrudOp::Validate),
-            schema(CrudOp::Validate),
-        ),
-        ToolDefinition::new(
-            format!("delete_{slug}"),
-            desc(CrudOp::Delete),
-            schema(CrudOp::Delete),
-        ),
-        ToolDefinition::new(
-            format!("count_{slug}"),
-            desc(CrudOp::Count),
-            schema(CrudOp::Count),
-        ),
+        tool(CrudOp::Find),
+        tool(CrudOp::FindById),
+        tool(CrudOp::Create),
+        tool(CrudOp::CreateMany),
+        tool(CrudOp::UpdateMany),
+        tool(CrudOp::DeleteMany),
+        tool(CrudOp::Update),
+        tool(CrudOp::Validate),
+        tool(CrudOp::Delete),
+        tool(CrudOp::Count),
     ];
 
     if def.has_soft_delete() {
-        tools.push(ToolDefinition::new(
-            format!("undelete_{slug}"),
-            desc(CrudOp::Undelete),
-            schema(CrudOp::Undelete),
-        ));
+        tools.push(tool(CrudOp::Undelete));
     }
 
     if def.versions.is_some() {
-        tools.push(ToolDefinition::new(
-            format!("unpublish_{slug}"),
-            desc(CrudOp::Unpublish),
-            schema(CrudOp::Unpublish),
-        ));
-        tools.push(ToolDefinition::new(
-            format!("list_versions_{slug}"),
-            desc(CrudOp::ListVersions),
-            schema(CrudOp::ListVersions),
-        ));
-        tools.push(ToolDefinition::new(
-            format!("restore_version_{slug}"),
-            desc(CrudOp::RestoreVersion),
-            schema(CrudOp::RestoreVersion),
-        ));
+        tools.push(tool(CrudOp::Unpublish));
+        tools.push(tool(CrudOp::ListVersions));
+        tools.push(tool(CrudOp::RestoreVersion));
     }
 
     tools
 }
+
+/// The three global tool verbs, each paired with the [`ToolOp`] it routes to.
+/// One table so `global_tools` (construction) and [`parse_tool_name`] share the
+/// `global_*` verb vocabulary and can't drift.
+const GLOBAL_TOOL_OPS: &[(&str, ToolOp)] = &[
+    ("global_read", ToolOp::ReadGlobal),
+    ("global_update", ToolOp::UpdateGlobal),
+    ("global_validate", ToolOp::ValidateGlobal),
+];
 
 /// MCP tools for a single global: read + update (prefixed `global_` to
 /// avoid name collisions with collection tools).
@@ -321,19 +286,29 @@ fn global_tools(slug: &str, def: &GlobalDefinition) -> Vec<ToolDefinition> {
         append_collection_desc(body, collection_desc)
     };
 
+    // Names use the shared `global_*` verbs (paired with their routing `ToolOp`
+    // in `GLOBAL_TOOL_OPS`); the `read`/`update`/`validate` keys drive the
+    // per-op description override and the schema shape.
+    let verb = |op: ToolOp| {
+        GLOBAL_TOOL_OPS
+            .iter()
+            .find(|(_, o)| *o == op)
+            .map_or("", |(v, _)| *v)
+    };
+
     vec![
         ToolDefinition::new(
-            format!("global_read_{slug}"),
+            format!("{}_{slug}", verb(ToolOp::ReadGlobal)),
             desc("read", format!("Read the {label} global document")),
             global_input_schema(def, CrudOp::Find),
         ),
         ToolDefinition::new(
-            format!("global_update_{slug}"),
+            format!("{}_{slug}", verb(ToolOp::UpdateGlobal)),
             desc("update", format!("Update the {label} global document")),
             global_input_schema(def, CrudOp::Update),
         ),
         ToolDefinition::new(
-            format!("global_validate_{slug}"),
+            format!("{}_{slug}", verb(ToolOp::ValidateGlobal)),
             desc(
                 "validate",
                 format!(
@@ -424,67 +399,56 @@ fn config_generation_tools() -> Vec<ToolDefinition> {
     ]
 }
 
+/// Map a parsed collection [`CrudOp`] to its routing [`ToolOp`]. The two enums
+/// share the 14 collection variants (they carry different concerns — schema
+/// shape vs dispatch); this is the one place they are bridged.
+fn crud_to_tool_op(op: CrudOp) -> ToolOp {
+    match op {
+        CrudOp::Find => ToolOp::Find,
+        CrudOp::FindById => ToolOp::FindById,
+        CrudOp::Count => ToolOp::Count,
+        CrudOp::Create => ToolOp::Create,
+        CrudOp::CreateMany => ToolOp::CreateMany,
+        CrudOp::Update => ToolOp::Update,
+        CrudOp::UpdateMany => ToolOp::UpdateMany,
+        CrudOp::Validate => ToolOp::Validate,
+        CrudOp::Delete => ToolOp::Delete,
+        CrudOp::DeleteMany => ToolOp::DeleteMany,
+        CrudOp::Undelete => ToolOp::Undelete,
+        CrudOp::Unpublish => ToolOp::Unpublish,
+        CrudOp::ListVersions => ToolOp::ListVersions,
+        CrudOp::RestoreVersion => ToolOp::RestoreVersion,
+    }
+}
+
 /// Parse a tool name like "`find_posts`" into (op, slug).
+///
+/// Verbs come from the same sources the tool builder emits — `CrudOp::name()`
+/// for collections and `GLOBAL_TOOL_OPS` for globals — so a tool can never be
+/// listed but unroutable. Collection verbs are tried longest-first so
+/// `create_many_x` is not read as `create_` of slug `many_x`.
 pub(in crate::mcp) fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
-    // Try collection CRUD patterns (longer prefixes first to avoid ambiguity)
-    for prefix in &[
-        "find_by_id_",
-        "find_",
-        "count_",
-        "create_many_",
-        "create_",
-        "update_many_",
-        "update_",
-        "validate_",
-        "delete_many_",
-        "delete_",
-        "undelete_",
-        "unpublish_",
-        "list_versions_",
-        "restore_version_",
-    ] {
-        if let Some(slug) = name.strip_prefix(prefix)
+    let mut ops = CrudOp::ALL.to_vec();
+    ops.sort_by_key(|op| std::cmp::Reverse(op.name().len()));
+
+    for op in ops {
+        if let Some(slug) = name.strip_prefix(&format!("{}_", op.name()))
             && registry.collections.contains_key(slug)
         {
-            let op = match *prefix {
-                "find_" => ToolOp::Find,
-                "find_by_id_" => ToolOp::FindById,
-                "count_" => ToolOp::Count,
-                "create_many_" => ToolOp::CreateMany,
-                "create_" => ToolOp::Create,
-                "update_many_" => ToolOp::UpdateMany,
-                "update_" => ToolOp::Update,
-                "validate_" => ToolOp::Validate,
-                "delete_many_" => ToolOp::DeleteMany,
-                "delete_" => ToolOp::Delete,
-                "undelete_" => ToolOp::Undelete,
-                "unpublish_" => ToolOp::Unpublish,
-                "list_versions_" => ToolOp::ListVersions,
-                "restore_version_" => ToolOp::RestoreVersion,
-                _ => unreachable!(),
-            };
-
             return Some(ParsedTool {
-                op,
+                op: crud_to_tool_op(op),
                 slug: slug.to_string(),
             });
         }
     }
 
-    // Try global patterns (global_read_<slug>, global_update_<slug>)
-    for prefix in &["global_read_", "global_update_", "global_validate_"] {
-        if let Some(slug) = name.strip_prefix(prefix)
+    // Globals (`global_read_<slug>`, `global_update_<slug>`, …).
+    for (verb, tool_op) in GLOBAL_TOOL_OPS {
+        if let Some(slug) = name.strip_prefix(&format!("{verb}_"))
             && registry.globals.contains_key(slug)
         {
-            let op = match *prefix {
-                "global_read_" => ToolOp::ReadGlobal,
-                "global_update_" => ToolOp::UpdateGlobal,
-                "global_validate_" => ToolOp::ValidateGlobal,
-                _ => unreachable!(),
-            };
-
             return Some(ParsedTool {
-                op,
+                op: *tool_op,
                 slug: slug.to_string(),
             });
         }
@@ -610,7 +574,7 @@ mod tests {
     use crate::{
         config::{CrapConfig, McpConfig},
         core::{
-            CollectionDefinition, Registry,
+            CollectionDefinition, Registry, VersionsConfig,
             collection::GlobalDefinition,
             field::{FieldDefinition, FieldType},
         },
@@ -629,6 +593,58 @@ mod tests {
         // Collections and globals each expose a non-persisting validate tool.
         assert!(tools.iter().any(|t| t.name == "validate_posts"));
         assert!(tools.iter().any(|t| t.name == "global_validate_settings"));
+    }
+
+    /// Regression (C1): every tool the builder emits for a collection/global
+    /// parses back to a routable op. Construction and `parse_tool_name` share
+    /// one verb vocabulary (`CrudOp::name()` / `GLOBAL_TOOL_OPS`), so a tool can
+    /// never be listed but unroutable (a 404 when the client calls it). A
+    /// soft-delete + versions collection exercises all 14 collection verbs.
+    #[test]
+    fn every_generated_tool_round_trips_through_parse() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.soft_delete = true;
+        posts.versions = Some(VersionsConfig::new(true, 10));
+
+        let mut reg = Registry::new();
+        reg.register_collection(posts);
+        reg.register_global(GlobalDefinition::new("settings"));
+
+        let tools = generate_tools(&reg, &McpConfig::default(), &McpExposure::default());
+
+        let slugs: Vec<String> = reg
+            .collections
+            .keys()
+            .map(ToString::to_string)
+            .chain(reg.globals.keys().map(ToString::to_string))
+            .collect();
+
+        let mut crud_tools = 0;
+        for tool in &tools {
+            if slugs.iter().any(|s| tool.name.ends_with(&format!("_{s}"))) {
+                assert!(
+                    parse_tool_name(&tool.name, &reg).is_some(),
+                    "emitted tool '{}' is unroutable — construction/parse drifted",
+                    tool.name
+                );
+                crud_tools += 1;
+            }
+        }
+        assert!(
+            crud_tools >= 17,
+            "expected 14 collection + 3 global CRUD tools, checked {crud_tools}"
+        );
+
+        // Longest-verb-first: `create_many` is not read as `create` of a slug
+        // `many_…`, and a global verb routes to its global op.
+        assert_eq!(
+            parse_tool_name("create_many_posts", &reg).map(|p| p.op),
+            Some(ToolOp::CreateMany)
+        );
+        assert_eq!(
+            parse_tool_name("global_read_settings", &reg).map(|p| p.op),
+            Some(ToolOp::ReadGlobal)
+        );
     }
 
     #[test]

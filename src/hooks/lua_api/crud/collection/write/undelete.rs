@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
 use crate::{
@@ -76,7 +77,7 @@ fn collections_undelete(
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
-    undelete_document(&ctx, &id).map_err(|e| RuntimeError(format!("{e}")))?;
+    undelete_document(&ctx, &id).map_err(lua_err)?;
 
     Ok(true)
 }

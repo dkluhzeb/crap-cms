@@ -132,16 +132,16 @@ fn account_action_blocking(
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
-    /// Build the spawn-blocking input bundle from the request, with optional
-    /// invalidation transport (requested by the revoking flows — lock and
-    /// un-verify — so the service layer can tear down the user's live streams).
+    /// Build the spawn-blocking input bundle from the request. The invalidation
+    /// transport (attached for the revoking flows) and the verify-email
+    /// requirement are both derived from the `action` itself, so a call site
+    /// can't pass a flag that contradicts the action.
     fn account_action_input(
         &self,
         token: Option<String>,
         headers: HashMap<String, String>,
         req: &content::AccountActionRequest,
-        with_invalidation: bool,
-        verify_email_required: bool,
+        action: AccountAction,
     ) -> AccountActionBlockingInput {
         AccountActionBlockingInput {
             pool: self.pool.clone(),
@@ -153,8 +153,10 @@ impl ContentService {
             id: req.id.clone(),
             token,
             headers,
-            invalidation_transport: with_invalidation.then(|| self.invalidation_transport.clone()),
-            verify_email_required,
+            invalidation_transport: action
+                .invalidates_sessions()
+                .then(|| self.invalidation_transport.clone()),
+            verify_email_required: action.is_verification_action(),
         }
     }
 
@@ -171,9 +173,10 @@ impl ContentService {
         // Service-layer lock_user publishes the invalidation signal
         // when a transport is attached to the context. Collection-shape
         // validation happens after auth inside the blocking body.
-        let input = self.account_action_input(token, headers, &req, true, false);
+        let action = AccountAction::Lock;
+        let input = self.account_action_input(token, headers, &req, action);
 
-        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Lock))
+        task::spawn_blocking(move || account_action_blocking(input, action))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -191,9 +194,10 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
-        let input = self.account_action_input(token, headers, &req, false, false);
+        let action = AccountAction::Unlock;
+        let input = self.account_action_input(token, headers, &req, action);
 
-        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Unlock))
+        task::spawn_blocking(move || account_action_blocking(input, action))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -211,9 +215,10 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
-        let input = self.account_action_input(token, headers, &req, false, true);
+        let action = AccountAction::Verify;
+        let input = self.account_action_input(token, headers, &req, action);
 
-        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Verify))
+        task::spawn_blocking(move || account_action_blocking(input, action))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -234,11 +239,13 @@ impl ContentService {
         // Un-verifying revokes login (when verify-email is required), so it must
         // tear down the user's open live streams like lock/password-reset —
         // `mark_unverified` publishes the invalidation only when a transport is
-        // attached, so request it here (the missing flag left streams running on
-        // a revoked session).
-        let input = self.account_action_input(token, headers, &req, true, true);
+        // attached, which `AccountAction::Unverify::invalidates_sessions()` now
+        // guarantees (a missing flag once left streams running on a revoked
+        // session).
+        let action = AccountAction::Unverify;
+        let input = self.account_action_input(token, headers, &req, action);
 
-        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Unverify))
+        task::spawn_blocking(move || account_action_blocking(input, action))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

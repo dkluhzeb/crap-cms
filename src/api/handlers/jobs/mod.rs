@@ -16,7 +16,7 @@ pub(super) fn job_run_to_proto(run: &JobRun) -> content::JobRunInfo {
     content::JobRunInfo {
         id: run.id.clone(),
         slug: run.slug.clone(),
-        status: enum_mapping::job_run_status(&run.status).into(),
+        status: enum_mapping::job_run_status(run.status).into(),
         data_json: run.data.clone(),
         result_json: run.result.clone(),
         error: run.error.clone(),

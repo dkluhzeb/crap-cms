@@ -19,6 +19,7 @@ pub mod write;
 mod columns;
 pub(crate) mod helpers;
 mod locale;
+mod poly_ref;
 mod types;
 mod validation;
 mod view_scope;

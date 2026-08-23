@@ -26,6 +26,7 @@
 //! plus the `{{data "name"}}` helper — same pattern as slot widgets, no
 //! separate "page data" concept.
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
@@ -65,7 +66,7 @@ impl FromLua for PageOptions {
                     "crap.pages.register",
                     &["section", "label", "icon", "access"],
                 )
-                .map_err(|e| RuntimeError(e.to_string()))?;
+                .map_err(lua_err)?;
 
                 lua.from_value(value)
             }

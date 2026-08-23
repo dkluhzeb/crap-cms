@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
 use crate::{
@@ -90,8 +91,7 @@ fn collections_restore_version(
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
-    let doc = restore_collection_version(&ctx, &id, &version_id, lc)
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+    let doc = restore_collection_version(&ctx, &id, &version_id, lc).map_err(lua_err)?;
 
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))
 }

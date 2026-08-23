@@ -276,7 +276,7 @@ fn recover_stale_jobs_on_full_setup() {
     // Recover stale jobs
     scheduler::recover_stale_jobs(&conn, &registry, 30).unwrap();
 
-    let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+    let stale = job_query::list_job_runs(&conn, None, Some(JobStatus::Stale), 100, 0).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].slug, "test_echo_job");
 }
@@ -330,14 +330,25 @@ fn check_cron_schedules_skip_if_running_integration() {
 
     // test_cron_job has skip_if_running=true, so no new pending job
     let conn = pool.get().unwrap();
-    let pending =
-        job_query::list_job_runs(&conn, Some("test_cron_job"), Some("pending"), 100, 0).unwrap();
+    let pending = job_query::list_job_runs(
+        &conn,
+        Some("test_cron_job"),
+        Some(JobStatus::Pending),
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(pending.len(), 0);
 
     // But test_cron_nonskip has skip_if_running=false, so it should have a pending job
-    let nonskip =
-        job_query::list_job_runs(&conn, Some("test_cron_nonskip"), Some("pending"), 100, 0)
-            .unwrap();
+    let nonskip = job_query::list_job_runs(
+        &conn,
+        Some("test_cron_nonskip"),
+        Some(JobStatus::Pending),
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(nonskip.len(), 1);
 }
 

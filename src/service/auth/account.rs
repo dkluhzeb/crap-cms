@@ -34,6 +34,23 @@ impl AccountAction {
             Self::Unverify => "unverify",
         }
     }
+
+    /// True for actions that revoke the user's ability to log in — `Lock` and
+    /// `Unverify` (when verify-email is required) — so the surface attaches an
+    /// invalidation transport and the service tears down the user's open live
+    /// streams. Derived from the action so a caller can't forget the flag (a
+    /// missing one once left streams running on a revoked session).
+    #[must_use]
+    pub fn invalidates_sessions(self) -> bool {
+        matches!(self, Self::Lock | Self::Unverify)
+    }
+
+    /// True for the verification actions (`Verify` / `Unverify`), which require
+    /// the target collection to have `verify_email` enabled.
+    #[must_use]
+    pub fn is_verification_action(self) -> bool {
+        matches!(self, Self::Verify | Self::Unverify)
+    }
 }
 
 /// Authorize and perform an administrative account-state action on the user
@@ -229,6 +246,42 @@ mod tests {
     use crate::core::event::{InProcessInvalidationBus, SharedInvalidationTransport};
     use crate::service::auth::test_support::setup;
     use std::sync::Arc;
+
+    /// Regression: the two account-action flags are derived from the action, so
+    /// they can't contradict it. Pins the full truth table — especially
+    /// `Unverify`, which must BOTH invalidate sessions AND be a verification
+    /// action (the missing-invalidation flag once left streams on a revoked
+    /// session).
+    #[test]
+    fn account_action_flags_match_the_action() {
+        use AccountAction::{Lock, Unlock, Unverify, Verify};
+
+        assert_eq!(
+            (Lock.invalidates_sessions(), Lock.is_verification_action()),
+            (true, false)
+        );
+        assert_eq!(
+            (
+                Unlock.invalidates_sessions(),
+                Unlock.is_verification_action()
+            ),
+            (false, false)
+        );
+        assert_eq!(
+            (
+                Verify.invalidates_sessions(),
+                Verify.is_verification_action()
+            ),
+            (false, true)
+        );
+        assert_eq!(
+            (
+                Unverify.invalidates_sessions(),
+                Unverify.is_verification_action()
+            ),
+            (true, true)
+        );
+    }
 
     #[tokio::test]
     async fn lock_user_publishes_invalidation_when_transport_set() {

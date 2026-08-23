@@ -22,7 +22,10 @@ use crate::{
     core::{Document, FieldDefinition, FieldType, field::RelationshipConfig},
     db::{
         DbConnection, LocaleContext,
-        query::helpers::{parse_has_many_scalar, prefixed_name, walk_leaf_fields},
+        query::{
+            helpers::{parse_has_many_scalar, prefixed_name, walk_leaf_fields},
+            poly_ref,
+        },
     },
 };
 
@@ -82,7 +85,7 @@ fn hydrate_relationship(
 
         let json_items: Vec<Value> = items
             .into_iter()
-            .map(|(col, id)| Value::String(format!("{col}/{id}")))
+            .map(|(col, id)| Value::String(poly_ref::format(&col, &id)))
             .collect();
 
         Ok(Value::Array(json_items))
@@ -289,7 +292,7 @@ fn hydrate_relationship_batch(
             let items = grouped.remove(doc.id.as_ref()).unwrap_or_default();
             let json_items: Vec<Value> = items
                 .into_iter()
-                .map(|(col, id)| Value::String(format!("{col}/{id}")))
+                .map(|(col, id)| Value::String(poly_ref::format(&col, &id)))
                 .collect();
             doc.fields
                 .insert(field_name.to_string(), Value::Array(json_items));

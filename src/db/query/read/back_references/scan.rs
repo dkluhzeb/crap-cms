@@ -8,6 +8,7 @@ use crate::core::{FieldDefinition, FieldType, Registry};
 use crate::db::query::helpers::{
     global_table, join_table, locale_column, prefixed_name as prefixed,
 };
+use crate::db::query::poly_ref;
 use crate::db::{DbConnection, DbValue};
 
 use super::helpers::query_ids;
@@ -195,7 +196,7 @@ fn query_has_one(
         }
 
         let match_value = if is_polymorphic {
-            format!("{}/{}", scan.target_collection, scan.target_id)
+            poly_ref::format(scan.target_collection, scan.target_id)
         } else {
             scan.target_id.to_string()
         };
@@ -220,7 +221,7 @@ fn query_has_one(
             scan.is_global,
         ))
     } else if is_polymorphic {
-        let match_value = format!("{}/{}", scan.target_collection, scan.target_id);
+        let match_value = poly_ref::format(scan.target_collection, scan.target_id);
         let p1 = scan.conn.placeholder(1);
         let sql = format!("SELECT id FROM \"{table}\" WHERE \"{col}\" = {p1}");
         Ok(query_ids(

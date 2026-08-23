@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::{Deserialize, Serialize};
@@ -275,8 +276,8 @@ fn find_inner(
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let depth = query::clamp_depth(query.depth, params.default_depth, params.max_depth);
-    let locale_ctx = LocaleContext::from_locale_string(query.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(query.locale.as_deref(), lc).map_err(lua_err)?;
     let override_access = query.override_access.unwrap_or(false);
     let draft = query.draft.unwrap_or(false);
     let trash = query.trash.unwrap_or(false);
@@ -321,7 +322,7 @@ fn find_inner(
         .singleflight(hook_populate_singleflight(lua))
         .build();
 
-    let result = find_documents(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
+    let result = find_documents(&ctx, &input).map_err(lua_err)?;
 
     let find_result = FindResult {
         documents: &result.docs,

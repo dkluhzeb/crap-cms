@@ -13,7 +13,7 @@ use crate::{
     cli::{self, Table},
     commands::helpers::init_stack,
     config::parse_duration_string,
-    core::upload::SYSTEM_IMAGE_CONVERT_JOB,
+    core::{JobStatus, upload::SYSTEM_IMAGE_CONVERT_JOB},
     db::{BoxedConnection, DbConnection, DbValue, query::jobs as job_query},
 };
 
@@ -48,6 +48,16 @@ pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
 
 /// List image-convert job runs with optional status filter.
 fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Result<()> {
+    // An unknown status filter matches nothing — mirror the empty result the
+    // raw-string filter produced before the query layer took a typed status.
+    let status = match status.map(JobStatus::from_name) {
+        Some(None) => {
+            cli::info("No image-convert jobs found.");
+            return Ok(());
+        }
+        other => other.flatten(),
+    };
+
     let entries = job_query::list_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), status, limit, 0)?;
 
     if entries.is_empty() {
@@ -115,11 +125,26 @@ fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Res
 
 /// Show queue statistics by status.
 fn show_stats(conn: &BoxedConnection) -> Result<()> {
-    let pending = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("pending"))?;
-    let running = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("running"))?;
-    let completed =
-        job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("completed"))?;
-    let failed = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("failed"))?;
+    let pending = job_query::count_job_runs(
+        conn,
+        Some(SYSTEM_IMAGE_CONVERT_JOB),
+        Some(JobStatus::Pending),
+    )?;
+    let running = job_query::count_job_runs(
+        conn,
+        Some(SYSTEM_IMAGE_CONVERT_JOB),
+        Some(JobStatus::Running),
+    )?;
+    let completed = job_query::count_job_runs(
+        conn,
+        Some(SYSTEM_IMAGE_CONVERT_JOB),
+        Some(JobStatus::Completed),
+    )?;
+    let failed = job_query::count_job_runs(
+        conn,
+        Some(SYSTEM_IMAGE_CONVERT_JOB),
+        Some(JobStatus::Failed),
+    )?;
 
     cli::header("Image processing queue");
     cli::kv("Pending", &pending.to_string());

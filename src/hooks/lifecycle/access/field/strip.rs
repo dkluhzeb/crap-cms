@@ -106,10 +106,8 @@ pub(crate) fn strip_write_access_with_lua(
     level: &mut Map<String, Value>,
     input: &WriteStripInput<'_>,
 ) {
-    let extract: fn(&FieldDefinition) -> Option<&HookRef> = match input.operation {
-        "create" => |f| f.access.create.as_ref(),
-        "update" => |f| f.access.update.as_ref(),
-        _ => return,
+    let Some(extract) = FieldDefinition::write_access_extractor(input.operation) else {
+        return;
     };
 
     if !has_any_field_access(fields, extract) {

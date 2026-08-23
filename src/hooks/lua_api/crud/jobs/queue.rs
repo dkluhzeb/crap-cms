@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
@@ -88,7 +89,7 @@ fn queue_job_inner(
     // silently ignored.
     if let Some(opts) = opts {
         deny_unknown_keys(opts, "jobs.queue options", &["priority", "delay", "unique"])
-            .map_err(|e| RuntimeError(format!("{e}")))?;
+            .map_err(lua_err)?;
     }
 
     let job_def = reg

@@ -5,11 +5,11 @@ use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use super::parse::{deny_unknown_keys, fields::parse_fields, get_bool, get_string_strict};
+use super::utils::{lua_err, registry_lock_poisoned, require_init_phase};
 use crate::core::{
     FieldDefinition, RichtextNodeDef, SharedRegistry,
     richtext::{render_html_custom_nodes, render_prosemirror_to_html},
 };
-use crate::hooks::lifecycle::InitPhase;
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Spec for registering a custom richtext node. Parsed from the Lua
@@ -58,7 +58,7 @@ impl FromLua for RichtextNodeSpec {
             "crap.richtext.register_node spec",
             &["label", "inline", "attrs", "searchable_attrs", "render"],
         )
-        .map_err(|e| RuntimeError(e.to_string()))?;
+        .map_err(lua_err)?;
 
         let attrs = match tbl.get::<Option<Table>>("attrs")? {
             Some(attrs_tbl) => parse_fields(lua, &attrs_tbl)
@@ -219,9 +219,7 @@ fn register_node(
     // pool share the same node set and the per-collection field-context
     // builder sees them consistently. A runtime call from a hook would
     // only land in the current VM and fragment across the pool.
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(REGISTER_NODE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, REGISTER_NODE_INIT_ONLY_ERROR)?;
 
     validate_node_name(name)?;
     validate_node_attrs(name, &spec.attrs)?;
@@ -239,9 +237,7 @@ fn register_node(
         .has_render(has_render)
         .build();
 
-    let mut reg = registry
-        .write()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
+    let mut reg = registry.write().map_err(registry_lock_poisoned)?;
     reg.register_richtext_node(def);
 
     Ok(())
@@ -378,9 +374,7 @@ pub fn register_richtext_pool_init(
 /// shared-registry write. The shared registry was already populated
 /// by the `init_lua` VM.
 fn register_node_pool(lua: &Lua, name: &str, spec: RichtextNodeSpec) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(REGISTER_NODE_INIT_ONLY_ERROR.into()));
-    }
+    require_init_phase(lua, REGISTER_NODE_INIT_ONLY_ERROR)?;
 
     validate_node_name(name)?;
     // Validate attrs here too — errors surface to the user even though
@@ -465,6 +459,7 @@ mod tests {
 
     use super::*;
     use crate::core::Registry;
+    use crate::hooks::lifecycle::InitPhase;
     use crate::hooks::lua_api::fields::register_fields;
 
     fn setup_lua() -> (Lua, SharedRegistry) {

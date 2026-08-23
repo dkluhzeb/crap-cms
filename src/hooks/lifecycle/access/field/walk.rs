@@ -15,14 +15,6 @@ pub(super) fn extract_read_access(f: &FieldDefinition) -> Option<&HookRef> {
     f.access.read.as_ref()
 }
 
-pub(super) fn extract_create_access(f: &FieldDefinition) -> Option<&HookRef> {
-    f.access.create.as_ref()
-}
-
-pub(super) fn extract_update_access(f: &FieldDefinition) -> Option<&HookRef> {
-    f.access.update.as_ref()
-}
-
 /// Check whether any field — at any depth, including inside array/blocks rows —
 /// has an access function for the given extractor.
 pub(crate) fn has_any_field_access(

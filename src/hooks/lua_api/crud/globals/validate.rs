@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
@@ -85,8 +86,8 @@ fn globals_validate(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
     let def = resolve_global(reg, &slug)?;
 
     let mut data = values_from_strings(lua_table_to_hashmap(&data_table)?);

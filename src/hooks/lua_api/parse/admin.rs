@@ -1,5 +1,6 @@
 //! Parsing functions for field admin configuration.
 
+use crate::hooks::lua_api::utils::lua_err;
 use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 
@@ -50,8 +51,7 @@ const FIELD_ADMIN_KEYS: &[&str] = &[
 /// template-ref string, the freeform `extra` map) are applied in turn by
 /// per-section helpers.
 pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
-    deny_unknown_keys(admin_tbl, "field admin", FIELD_ADMIN_KEYS)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    deny_unknown_keys(admin_tbl, "field admin", FIELD_ADMIN_KEYS).map_err(lua_err)?;
 
     let mut builder = parse_admin_booleans(admin_tbl)?;
     builder = apply_localized_strings(builder, admin_tbl)?;
@@ -114,8 +114,8 @@ fn apply_identifier_strings(
         check_admin_enum("position", &v, &["main", "sidebar"])?;
         builder = builder.position(v);
     }
-    if let Some(v) = get_optional_hook_ref(admin_tbl, "condition", "admin condition")
-        .map_err(|e| RuntimeError(e.to_string()))?
+    if let Some(v) =
+        get_optional_hook_ref(admin_tbl, "condition", "admin condition").map_err(lua_err)?
     {
         builder = builder.condition(v);
     }
@@ -161,7 +161,7 @@ fn apply_label_overrides(
     };
 
     deny_unknown_keys(&labels_tbl, "field admin labels", &["singular", "plural"])
-        .map_err(|e| RuntimeError(e.to_string()))?;
+        .map_err(lua_err)?;
 
     if let Some(v) = get_localized_string_strict(&labels_tbl, "singular", "field admin labels")? {
         builder = builder.labels_singular(v);

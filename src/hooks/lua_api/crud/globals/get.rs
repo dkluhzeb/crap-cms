@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
 use crate::config::LocaleConfig;
@@ -68,7 +69,7 @@ fn globals_get(
 
     let locale_ctx =
         LocaleContext::from_locale_string(opts.locale.as_deref(), &state.locale_config)
-            .map_err(|e| RuntimeError(e.to_string()))?;
+            .map_err(lua_err)?;
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(&state.registry, &slug)?;
@@ -94,7 +95,7 @@ fn globals_get(
     let input =
         GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref()).include_drafts(opts.draft);
 
-    let doc = get_global_document(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
+    let doc = get_global_document(&ctx, &input).map_err(lua_err)?;
 
     document_to_lua_table(lua, &doc)
 }

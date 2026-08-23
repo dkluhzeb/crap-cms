@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
@@ -141,8 +142,8 @@ fn collections_update_many(
 
     let conn = get_tx_conn(lua)?;
 
-    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
@@ -204,8 +205,8 @@ fn collections_update_many(
         max_documents: state.bulk_max_documents,
     };
 
-    let svc_result = service::update_many(&ctx, &filters, &data_map, lc, &update_opts)
-        .map_err(|e| RuntimeError(format!("{e:#}")))?;
+    let svc_result =
+        service::update_many(&ctx, &filters, &data_map, lc, &update_opts).map_err(lua_err)?;
 
     let result = lua.create_table()?;
     result.set("modified", svc_result.modified)?;
@@ -253,7 +254,7 @@ fn build_update_filters(
 ) -> LuaResult<Vec<FilterClause>> {
     let mut find_query = query.into_find_query()?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
-    validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
+    validate_user_filters(&find_query.filters).map_err(lua_err)?;
 
     enforce_access(
         lua,

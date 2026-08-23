@@ -229,49 +229,60 @@ fn write_surfaces_attach_invalidation_transport() {
     );
 }
 
-/// Structural guard for the auth state-change handlers that the textual
-/// `INVALIDATION_WRITE_OPS` scan can't see: they build their `ServiceContext`
-/// inside the blocking body and pass the action as an `AccountAction` variant
-/// (`account_action_blocking(input, AccountAction::Lock)`), so neither the
-/// `ServiceContext::collection` nor the `op(` heuristic matches.
-///
-/// A *revoking* action (`Lock`, `Unverify`) cuts off login, so its handler must
-/// request the invalidation transport (`account_action_input(.., /* with_invalidation */
-/// true, ..)`) to tear down the user's open live streams. Regression: `unverify`
-/// shipped with the flag `false`, so an already-connected SSE/subscribe stream
-/// kept running on a revoked session.
+/// Structural guard for the auth state-change handlers: the session-invalidation
+/// flag is now **derived from the `AccountAction`** itself
+/// (`AccountAction::invalidates_sessions()`), not passed as a hand-written bool
+/// per handler — so a *revoking* action (`Lock`, `Unverify`) can no longer ship
+/// paired with the wrong flag (the `unverify` regression that once left an
+/// already-connected SSE/subscribe stream running on a revoked session). The
+/// derivation truth table is unit-tested in `account.rs`
+/// (`account_action_flags_match_the_action`); here we guard that the handlers
+/// keep routing their action through `account_action_input` (where the
+/// derivation lives) and don't reintroduce a per-handler bool.
 #[test]
-fn auth_revoking_handlers_request_invalidation() {
+fn auth_invalidation_is_derived_from_the_action() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = root.join("src/api/handlers/auth/account.rs");
     let contents = fs::read_to_string(&path).expect("account.rs must exist");
 
-    let revoking_actions = ["AccountAction::Lock", "AccountAction::Unverify"];
+    // One source: the input builder attaches the invalidation transport iff the
+    // action says so, instead of each handler passing a literal bool.
+    assert!(
+        contents.contains("invalidates_sessions()"),
+        "account_action_input must derive the invalidation transport from the \
+         action (AccountAction::invalidates_sessions()), not a per-handler bool"
+    );
+
+    // Every handler that dispatches an account action must build its input via
+    // `account_action_input(.., action)`, so the derivation applies to it.
+    let actions = [
+        "AccountAction::Lock",
+        "AccountAction::Unlock",
+        "AccountAction::Verify",
+        "AccountAction::Unverify",
+    ];
     let mut offenders: Vec<String> = Vec::new();
 
-    // Split into per-handler chunks so each revoking action is checked against
-    // the input built in the SAME handler.
     for chunk in contents.split("async fn ").skip(1) {
         let handler = chunk.split('(').next().unwrap_or("").trim();
 
-        for action in revoking_actions {
-            let used = chunk.contains(action);
-            // The input bundle is built one-liner: `account_action_input(token,
-            // headers, &req, <with_invalidation>, ..)`. The 4th arg must be `true`.
-            let requests_invalidation = chunk.contains("&req, true,");
-
-            if used && !requests_invalidation {
-                offenders.push(format!("  {handler} (performs {action})"));
+        for action in actions {
+            // A handler references the action only in its dispatch body once it
+            // has bound `let action = AccountAction::X;`; that same `action` must
+            // reach `account_action_input`.
+            if chunk.contains(&format!("let action = {action};"))
+                && !chunk.contains("account_action_input(token, headers, &req, action)")
+            {
+                offenders.push(format!("  {handler} (dispatches {action})"));
             }
         }
     }
 
     assert!(
         offenders.is_empty(),
-        "Auth handler(s) perform a session-revoking action but build their input \
-         with `with_invalidation = false`, so `publish_user_invalidation` is a \
-         silent no-op and the user's open live streams are NOT torn down. Pass \
-         `true` to `account_action_input` like the lock handler does.\n\n{}",
+        "Auth handler(s) dispatch an account action without routing that action \
+         through `account_action_input`, bypassing the derived invalidation \
+         flag.\n\n{}",
         offenders.join("\n")
     );
 }

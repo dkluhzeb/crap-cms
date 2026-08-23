@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Status of a job run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Pending,

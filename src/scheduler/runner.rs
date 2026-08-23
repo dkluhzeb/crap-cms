@@ -19,6 +19,62 @@ use crate::{
     hooks::HookRunner,
 };
 
+/// Write a job-failure outcome to the queue row and log it at the right level.
+///
+/// `label` is the human job identifier for log lines (e.g. `"Job abc (slug)"`);
+/// `error_msg` is the already-rendered failure text stored on the row. The
+/// single place the failure write + retry/permanent log-level split lives, so
+/// every job kind records failures identically.
+fn write_job_failure(
+    pool: &DbPool,
+    job_run: &JobRun,
+    label: &str,
+    error_msg: &str,
+    should_retry: bool,
+) -> Result<()> {
+    let c = pool
+        .get()
+        .context("Failed to get DB connection to record job failure")?;
+
+    job_query::fail_job(&c, &job_run.id, error_msg, should_retry, job_run.attempt)?;
+
+    if should_retry {
+        warn!(
+            "{label} failed (attempt {}/{}), will retry: {error_msg}",
+            job_run.attempt, job_run.max_attempts
+        );
+    } else {
+        error!("{label} failed permanently: {error_msg}");
+    }
+
+    Ok(())
+}
+
+/// Record a retryable job failure: render the error with its full anyhow cause
+/// chain (`{:#}` — in ONE place, so no job kind silently drops diagnostic detail
+/// the way the user-job path used to with `to_string()`) and honor the attempt
+/// budget. Shared by the Lua-handler, system-email, and image-convert paths.
+fn record_job_failure(
+    pool: &DbPool,
+    job_run: &JobRun,
+    label: &str,
+    err: &anyhow::Error,
+) -> Result<()> {
+    let should_retry = job_run.attempt < job_run.max_attempts;
+    write_job_failure(pool, job_run, label, &format!("{err:#}"), should_retry)
+}
+
+/// Record a permanent (never-retried) job failure — e.g. a malformed system-job
+/// payload that no retry can fix.
+fn record_permanent_job_failure(
+    pool: &DbPool,
+    job_run: &JobRun,
+    label: &str,
+    error_msg: &str,
+) -> Result<()> {
+    write_job_failure(pool, job_run, label, error_msg, false)
+}
+
 /// Execute a single job: call the Lua handler with CRUD access,
 /// or handle system jobs (`_system_email`, `_system_image_convert`)
 /// directly in Rust.
@@ -80,25 +136,12 @@ pub fn execute_job(
             );
         }
         Err(e) => {
-            let error_msg = e.to_string();
-            let should_retry = job_run.attempt < job_run.max_attempts;
-            let c = pool
-                .get()
-                .context("Failed to get DB connection for failure")?;
-
-            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
-
-            if should_retry {
-                warn!(
-                    "Job {} ({}) failed (attempt {}/{}), will retry: {}",
-                    job_run.id, job_run.slug, job_run.attempt, job_run.max_attempts, error_msg
-                );
-            } else {
-                error!(
-                    "Job {} ({}) failed permanently: {}",
-                    job_run.id, job_run.slug, error_msg
-                );
-            }
+            record_job_failure(
+                pool,
+                job_run,
+                &format!("Job {} ({})", job_run.id, job_run.slug),
+                &e,
+            )?;
         }
     }
 
@@ -135,22 +178,7 @@ fn execute_system_email(
             );
         }
         Err(e) => {
-            let error_msg = format!("{e:#}");
-            let should_retry = job_run.attempt < job_run.max_attempts;
-            let c = pool
-                .get()
-                .context("Failed to get DB connection for email job failure")?;
-
-            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
-
-            if should_retry {
-                warn!(
-                    "Email job {} failed (attempt {}/{}), will retry: {}",
-                    job_run.id, job_run.attempt, job_run.max_attempts, error_msg
-                );
-            } else {
-                error!("Email job {} failed permanently: {}", job_run.id, error_msg);
-            }
+            record_job_failure(pool, job_run, &format!("Email job {}", job_run.id), &e)?;
         }
     }
 
@@ -173,28 +201,16 @@ fn execute_system_image_convert(
     let data: ImageConvertJobData =
         from_str(&job_run.data).context("Invalid image-convert job data")?;
 
+    let label = format!("Image-convert job {}", job_run.id);
+
     if !query::is_valid_identifier(&data.collection) {
         let error_msg = format!("invalid collection slug: {}", data.collection);
-        let c = pool
-            .get()
-            .context("Failed to get DB connection for image-convert failure")?;
-        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
-        error!(
-            "Image-convert job {} failed permanently: {}",
-            job_run.id, error_msg
-        );
+        record_permanent_job_failure(pool, job_run, &label, &error_msg)?;
         return Ok(());
     }
     if !query::is_valid_identifier(&data.url_column) {
         let error_msg = format!("invalid url_column: {}", data.url_column);
-        let c = pool
-            .get()
-            .context("Failed to get DB connection for image-convert failure")?;
-        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
-        error!(
-            "Image-convert job {} failed permanently: {}",
-            job_run.id, error_msg
-        );
+        record_permanent_job_failure(pool, job_run, &label, &error_msg)?;
         return Ok(());
     }
 
@@ -249,24 +265,7 @@ fn execute_system_image_convert(
             );
         }
         Err(e) => {
-            let error_msg = format!("{e:#}");
-            let should_retry = job_run.attempt < job_run.max_attempts;
-            let c = pool
-                .get()
-                .context("Failed to get DB connection for image-convert failure")?;
-            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
-
-            if should_retry {
-                warn!(
-                    "Image-convert job {} failed (attempt {}/{}), will retry: {}",
-                    job_run.id, job_run.attempt, job_run.max_attempts, error_msg
-                );
-            } else {
-                error!(
-                    "Image-convert job {} failed permanently: {}",
-                    job_run.id, error_msg
-                );
-            }
+            record_job_failure(pool, job_run, &label, &e)?;
         }
     }
 
@@ -826,10 +825,11 @@ mod tests {
 
         recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let pending = job_query::list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
+        let pending =
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Pending), 100, 0).unwrap();
         assert_eq!(pending.len(), 1, "retryable stale job must be requeued");
         assert_eq!(
-            job_query::list_job_runs(&conn, None, Some("stale"), 100, 0)
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Stale), 100, 0)
                 .unwrap()
                 .len(),
             0
@@ -855,7 +855,7 @@ mod tests {
 
         recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        let stale = job_query::list_job_runs(&conn, None, Some(JobStatus::Stale), 100, 0).unwrap();
         assert_eq!(stale.len(), 1);
         assert!(
             stale[0]
@@ -886,7 +886,7 @@ mod tests {
 
         // Untouched: still running, not requeued, not stale.
         assert_eq!(
-            job_query::list_job_runs(&conn, None, Some("running"), 100, 0)
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Running), 100, 0)
                 .unwrap()
                 .len(),
             1,
@@ -905,13 +905,13 @@ mod tests {
         recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
         assert_eq!(
-            job_query::list_job_runs(&conn, None, Some("stale"), 100, 0)
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Stale), 100, 0)
                 .unwrap()
                 .len(),
             0
         );
         assert_eq!(
-            job_query::list_job_runs(&conn, None, Some("pending"), 100, 0)
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Pending), 100, 0)
                 .unwrap()
                 .len(),
             1
@@ -936,7 +936,7 @@ mod tests {
         recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
         assert_eq!(
-            job_query::list_job_runs(&conn, None, Some("pending"), 100, 0)
+            job_query::list_job_runs(&conn, None, Some(JobStatus::Pending), 100, 0)
                 .unwrap()
                 .len(),
             2
@@ -980,6 +980,44 @@ mod tests {
         drop(conn);
 
         pool
+    }
+
+    /// Regression: a failed job records the FULL anyhow cause chain (`{:#}`),
+    /// not just the top-level message. The user-job path used to `to_string()`
+    /// and silently drop the causes that the system-job paths kept; all job
+    /// kinds now share `record_job_failure`, so the stored error is uniform.
+    #[test]
+    fn record_job_failure_stores_full_cause_chain() {
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
+        conn.execute_batch("UPDATE _crap_jobs SET status = 'running', attempt = 1")
+            .unwrap();
+
+        let job_run = job_query::list_job_runs(&conn, Some("my_job"), None, 1, 0)
+            .unwrap()
+            .pop()
+            .expect("inserted job");
+        drop(conn);
+
+        let err = anyhow!("disk write failed").context("could not persist result");
+        record_job_failure(&pool, &job_run, "Job (my_job)", &err).unwrap();
+
+        let conn = pool.get().unwrap();
+        let stored = job_query::list_job_runs(&conn, Some("my_job"), None, 1, 0)
+            .unwrap()
+            .pop()
+            .and_then(|r| r.error)
+            .expect("failure recorded an error");
+
+        assert!(
+            stored.contains("could not persist result"),
+            "outer message missing: {stored}"
+        );
+        assert!(
+            stored.contains("disk write failed"),
+            "root cause dropped (not rendered with {{:#}}): {stored}"
+        );
     }
 
     #[test]
@@ -1079,7 +1117,8 @@ mod tests {
         // Should NOT insert a new pending job because skip_if_running=true and one is running
         let conn = pool.get().unwrap();
         let pending =
-            job_query::list_job_runs(&conn, Some("skip_job"), Some("pending"), 100, 0).unwrap();
+            job_query::list_job_runs(&conn, Some("skip_job"), Some(JobStatus::Pending), 100, 0)
+                .unwrap();
         assert_eq!(pending.len(), 0);
     }
 
@@ -1109,7 +1148,8 @@ mod tests {
         // Should insert a new pending job even though one is running
         let conn = pool.get().unwrap();
         let pending =
-            job_query::list_job_runs(&conn, Some("noskip_job"), Some("pending"), 100, 0).unwrap();
+            job_query::list_job_runs(&conn, Some("noskip_job"), Some(JobStatus::Pending), 100, 0)
+                .unwrap();
         assert_eq!(pending.len(), 1);
     }
 

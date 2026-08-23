@@ -24,6 +24,26 @@ pub(in crate::mcp) enum CrudOp {
 }
 
 impl CrudOp {
+    /// Every collection CRUD operation, in a stable order. The single list the
+    /// tool builder and the tool-name parser both iterate, so a new op can't be
+    /// emitted-but-unroutable (or parsed-but-never-emitted).
+    pub(in crate::mcp) const ALL: &'static [CrudOp] = &[
+        CrudOp::Create,
+        CrudOp::CreateMany,
+        CrudOp::Update,
+        CrudOp::UpdateMany,
+        CrudOp::Validate,
+        CrudOp::Find,
+        CrudOp::FindById,
+        CrudOp::Delete,
+        CrudOp::DeleteMany,
+        CrudOp::Undelete,
+        CrudOp::Unpublish,
+        CrudOp::Count,
+        CrudOp::ListVersions,
+        CrudOp::RestoreVersion,
+    ];
+
     /// Canonical operation key — matches the tool-name verb and the key used
     /// for per-operation MCP description overrides (`mcp.operations`).
     pub(in crate::mcp) fn name(self) -> &'static str {

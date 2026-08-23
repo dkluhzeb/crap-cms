@@ -9,13 +9,13 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
+use super::utils::{lua_err, require_init_phase};
 use crate::config::{CrapConfig, EmailProvider};
 use crate::core::email::{
     CustomEmailProvider, EmailJobData, SharedEmailProvider, create_email_provider, queue_email,
     validate_no_crlf,
 };
 use crate::core::lua_lease::LocalLease;
-use crate::hooks::lifecycle::InitPhase;
 use crate::hooks::lua_api::crud::get_tx_conn;
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -57,8 +57,8 @@ pub(super) struct EmailState {
 /// Lua that end up in SMTP headers. Body fields (`html`, `text`) are
 /// not validated: they are MIME-encoded / JSON-escaped downstream.
 fn validate_email_fields(to: &str, subject: &str) -> LuaResult<()> {
-    validate_no_crlf("to", to).map_err(|e| RuntimeError(format!("{e:#}")))?;
-    validate_no_crlf("subject", subject).map_err(|e| RuntimeError(format!("{e:#}")))?;
+    validate_no_crlf("to", to).map_err(lua_err)?;
+    validate_no_crlf("subject", subject).map_err(lua_err)?;
     Ok(())
 }
 
@@ -142,13 +142,11 @@ fn email_register(
     )]
     handler: Table,
 ) -> LuaResult<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.email.register must be called from init.lua \
-             (the custom provider is wired once at startup)"
-                .into(),
-        ));
-    }
+    require_init_phase(
+        lua,
+        "crap.email.register must be called from init.lua \
+         (the custom provider is wired once at startup)",
+    )?;
 
     let send: Value = handler.get("send")?;
     if !matches!(send, Value::Function(_)) {
@@ -209,6 +207,7 @@ pub(super) fn register_email(lua: &Lua, config: &CrapConfig) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::CrapConfig;
+    use crate::hooks::lifecycle::InitPhase;
 
     /// A VM with `crap.email` registered and the `InitPhase` marker set,
     /// mimicking the state while `init.lua` runs.

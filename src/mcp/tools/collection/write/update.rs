@@ -9,7 +9,8 @@ use crate::{
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{
-            doc_to_json, events_flag, extract_data_from_args, reserved_data_keys,
+            doc_to_json, events_flag, extract_auth_password, extract_data_from_args,
+            reserved_data_keys,
         },
     },
     service::{ServiceContext, WriteInput, update_document},
@@ -31,14 +32,7 @@ pub(in crate::mcp::tools) fn exec_update(
         .get(slug)
         .context("Collection not found")?;
 
-    let password = if def.is_auth_collection() {
-        args.get("password")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(std::string::ToString::to_string)
-    } else {
-        None
-    };
+    let password = extract_auth_password(def, args, true);
 
     if let Some(ref pw) = password {
         ctx.config.auth.password_policy.validate(pw)?;

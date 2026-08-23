@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::hooks::lua_api::utils::lua_err;
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
 use crate::{
@@ -103,8 +104,8 @@ fn collections_find_by_id(
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let depth = query::clamp_depth(opts.depth, state.default_depth, state.max_depth);
-    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
     let def = resolve_collection(reg, &collection)?;
 
     // Depth guard: a before_read/after_read hook that reads the same
@@ -135,7 +136,7 @@ fn collections_find_by_id(
         .singleflight(hook_populate_singleflight(lua))
         .build();
 
-    let doc = find_document_by_id(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
+    let doc = find_document_by_id(&ctx, &input).map_err(lua_err)?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),
