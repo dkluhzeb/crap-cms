@@ -11,7 +11,7 @@ use crate::{
         },
         custom_pages::CustomPage,
     },
-    core::{CollectionDefinition, Registry, Slug, collection::GlobalDefinition},
+    core::{CollectionDefinition, FieldType, Registry, Slug, collection::GlobalDefinition},
     db::query::get_column_names,
     typegen::{
         helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w, wraw},
@@ -20,6 +20,15 @@ use crate::{
 };
 
 use super::field::{field_to_lua_type, write_field, write_field_partial};
+
+/// Field types that get a per-field `field_hook` overload in the generated Lua:
+/// the leaf/scalar fields — everything that isn't a repeatable composite
+/// (`Array`/`Blocks`), a layout wrapper (`Row`/`Collapsible`/`Tabs`), a `Group`,
+/// or the virtual `Join`. Shared by the collection and global hook renderers so
+/// the two can't drift on which fields are hookable.
+fn takes_field_hook(ft: &FieldType) -> bool {
+    !ft.has_rows() && !ft.is_layout_wrapper() && !matches!(ft, FieldType::Group | FieldType::Join)
+}
 
 /// Render all Lua type definitions.
 pub(in crate::typegen) fn render(registry: &Registry) -> String {
@@ -293,29 +302,8 @@ function crap.collections.{slug}.hook(fn) end
     );
 
     // field_hook(field, fn) — per-field overloads + any-field + dynamic-slug fallback.
-    let scalar = |ft: &crate::core::FieldType| {
-        use crate::core::FieldType::{
-            Checkbox, Code, Date, Email, Json, Number, Radio, Relationship, Richtext, Select, Text,
-            Textarea, Upload,
-        };
-        matches!(
-            ft,
-            Text | Textarea
-                | Email
-                | Date
-                | Richtext
-                | Code
-                | Number
-                | Checkbox
-                | Json
-                | Select
-                | Radio
-                | Relationship
-                | Upload
-        )
-    };
     for f in &col.fields {
-        if !scalar(&f.field_type) {
+        if !takes_field_hook(&f.field_type) {
             continue;
         }
         let value_type = field_to_lua_type(f, pascal);
@@ -639,29 +627,8 @@ function crap.globals.{slug}.hook(fn) end
     );
 
     // field_hook(field, fn) — per-field overloads + any-field form.
-    let scalar = |ft: &crate::core::FieldType| {
-        use crate::core::FieldType::{
-            Checkbox, Code, Date, Email, Json, Number, Radio, Relationship, Richtext, Select, Text,
-            Textarea, Upload,
-        };
-        matches!(
-            ft,
-            Text | Textarea
-                | Email
-                | Date
-                | Richtext
-                | Code
-                | Number
-                | Checkbox
-                | Json
-                | Select
-                | Radio
-                | Relationship
-                | Upload
-        )
-    };
     for f in &global.fields {
-        if !scalar(&f.field_type) {
+        if !takes_field_hook(&f.field_type) {
             continue;
         }
         let value_type = field_to_lua_type(f, pascal);

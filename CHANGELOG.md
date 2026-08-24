@@ -2936,6 +2936,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     one `from_derive_input_or_return!` macro instead of each repeating the same
     `match Container::from_derive_input(&input) { Ok(c) => c, Err(e) => return
     e.write_errors().into() }` block.
+  - The versioned one-time-migration `_crap_meta` accessors are one
+    `db::migrate::meta::{get, upsert}` pair — the SELECT-by-key read plus the
+    backend-agnostic DELETE-then-INSERT upsert that replaces a stale version value
+    cleanly. The ref-count backfill and the checkbox-column retype gates each held
+    a byte-identical copy of that SQL, which every future one-time migration would
+    have re-copied.
+  - The generated-Lua "which field types get a per-field `field_hook` overload"
+    test is one `takes_field_hook` predicate (leaf fields — anything that isn't a
+    repeatable composite, a layout wrapper, a `Group`, or the virtual `Join`),
+    composed from the existing `has_rows()` / `is_layout_wrapper()` classifiers;
+    the collection and global hook renderers each carried an identical 13-variant
+    `matches!` list.
+  - The admin version-list prev/next page numbers come from
+    `Pagination::prev_page()` / `next_page()` (clamp-to-`1` and a saturating
+    increment) instead of the `page.saturating_sub(1).max(1)` / `page + 1`
+    arithmetic copy-pasted into the collection and global version-list handlers —
+    the `next` computation gains overflow-saturation in the bargain.
+  - The `import` command builds group sub-field column names through the shared
+    `prefixed_name` helper instead of a bare `format!("{}__{}")`, matching every
+    other group-column site.
+- The verification-email `spawn_blocking` body is extracted into a named
+  `send_verification_email_blocking` function so the closure is a single call, per
+  the "no business logic inside a `spawn_blocking` closure" rule. Platform-specific
+  extension-trait imports (`PermissionsExt` / `MetadataExt` in the `$PATH`-lookup
+  and log-rotation paths) move to top-of-file `#[cfg(unix)] use` declarations
+  rather than living inside `#[cfg(unix)]` blocks, and the gRPC create/update
+  handlers derive `ui_locale` directly from the optional auth user instead of an
+  equivalent-but-obfuscated `user_doc.and_then(…)` re-gate.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

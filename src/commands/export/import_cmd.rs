@@ -10,7 +10,10 @@ use crate::{
     commands::{export::file::ExportFile, load_config_and_sync},
     config::{CrapConfig, LocaleConfig},
     core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
-    db::{DbConnection, DbValue, query},
+    db::{
+        DbConnection, DbValue,
+        query::{self, helpers::prefixed_name},
+    },
 };
 
 /// Collected columns for a single document import row.
@@ -100,7 +103,7 @@ fn collect_group_columns(
     parent_vals: &mut Vec<DbValue>,
 ) {
     for sub in &field.fields {
-        let col_name = format!("{}__{}", field.name, sub.name);
+        let col_name = prefixed_name(&field.name, &sub.name);
 
         let val = doc_obj
             .get(&field.name)

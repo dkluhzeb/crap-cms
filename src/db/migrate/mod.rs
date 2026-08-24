@@ -9,6 +9,7 @@ pub(crate) mod collection;
 mod global;
 pub mod helpers;
 mod identifier_check;
+mod meta;
 mod sync;
 mod tracking;
 

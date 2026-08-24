@@ -2,6 +2,8 @@
 //! user's shell will actually pick up the version that was just
 //! activated.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -27,7 +29,6 @@ fn resolve_on_path(name: &str) -> Option<PathBuf> {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             if let Ok(meta) = fs::metadata(&candidate)
                 && meta.permissions().mode() & 0o111 != 0
             {

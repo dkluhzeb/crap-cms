@@ -68,8 +68,7 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
     // via WriteHooks::field_write_denied (using the transaction connection).
 
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
     let write_input = WriteInput::builder(input.data)
         .password(input.password.as_deref())
         .locale_ctx(input.locale_ctx.as_ref())

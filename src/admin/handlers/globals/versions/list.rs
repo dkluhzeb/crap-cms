@@ -81,9 +81,8 @@ pub async fn list_versions_page(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let prev_url =
-        paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1).cast_unsigned());
-    let next_url = paths::global_versions_page(&slug, (pg.page + 1).cast_unsigned());
+    let prev_url = paths::global_versions_page(&slug, pg.prev_page());
+    let next_url = paths::global_versions_page(&slug, pg.next_page());
 
     let mut breadcrumbs = global_base(&def, &slug);
     breadcrumbs.push(Breadcrumb::current("version_history"));

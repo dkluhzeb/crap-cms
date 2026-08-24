@@ -64,8 +64,7 @@ fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Stat
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
         .pool(&input.pool)

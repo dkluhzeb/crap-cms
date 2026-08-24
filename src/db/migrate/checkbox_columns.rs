@@ -19,8 +19,11 @@ use tracing::info;
 use crate::{
     core::{FieldDefinition, FieldType, Registry, flatten_array_sub_fields},
     db::{
-        DbConnection, DbValue,
-        migrate::helpers::{get_table_column_types, table_exists},
+        DbConnection,
+        migrate::{
+            helpers::{get_table_column_types, table_exists},
+            meta,
+        },
         query::helpers::{global_table, join_table, prefixed_name, walk_leaf_fields},
     },
 };
@@ -44,7 +47,7 @@ pub(super) fn migrate_if_needed(conn: &dyn DbConnection, registry: &Registry) ->
         return Ok(());
     }
 
-    if meta_value(conn)?.as_deref() == Some(MIGRATION_VERSION) {
+    if meta::get(conn, META_KEY)?.as_deref() == Some(MIGRATION_VERSION) {
         return Ok(());
     }
 
@@ -56,7 +59,7 @@ pub(super) fn migrate_if_needed(conn: &dyn DbConnection, registry: &Registry) ->
         migrate_field_tree(conn, &global_table(slug), &def.fields)?;
     }
 
-    upsert_meta(conn)?;
+    meta::upsert(conn, META_KEY, MIGRATION_VERSION)?;
     Ok(())
 }
 
@@ -133,34 +136,5 @@ fn retype_columns(conn: &dyn DbConnection, table: &str, bases: &[String]) -> Res
         ))?;
     }
 
-    Ok(())
-}
-
-/// Read the migration meta value.
-fn meta_value(conn: &dyn DbConnection) -> Result<Option<String>> {
-    let p1 = conn.placeholder(1);
-    let row = conn.query_one(
-        &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(META_KEY.to_string())],
-    )?;
-    Ok(row.and_then(|r| r.text_at(0).map(str::to_string)))
-}
-
-/// Upsert the migration meta value (DELETE + INSERT — backend-agnostic).
-fn upsert_meta(conn: &dyn DbConnection) -> Result<()> {
-    let p1 = conn.placeholder(1);
-    conn.execute(
-        &format!("DELETE FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(META_KEY.to_string())],
-    )?;
-
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-    conn.execute(
-        &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
-        &[
-            DbValue::Text(META_KEY.to_string()),
-            DbValue::Text(MIGRATION_VERSION.to_string()),
-        ],
-    )?;
     Ok(())
 }

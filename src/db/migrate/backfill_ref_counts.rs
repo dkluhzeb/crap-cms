@@ -7,7 +7,8 @@ use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, Registry},
     db::{
-        DbConnection, DbValue,
+        DbConnection,
+        migrate::meta,
         query::{helpers::global_table, ref_count},
     },
 };
@@ -27,45 +28,15 @@ fn collection_meta_key(slug: &str) -> String {
     format!("ref_count_backfilled:{slug}")
 }
 
-/// Read a `_crap_meta` value by key.
-fn meta_value(conn: &dyn DbConnection, key: &str) -> Result<Option<String>> {
-    let p1 = conn.placeholder(1);
-    let row = conn.query_one(
-        &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(key.to_string())],
-    )?;
-    Ok(row.and_then(|r| r.text_at(0).map(str::to_string)))
-}
-
-/// Upsert a `_crap_meta` key (DELETE + INSERT — backend-agnostic), so a
-/// stale version value from an earlier backfill is replaced cleanly.
-fn upsert_meta(conn: &dyn DbConnection, key: &str, value: &str) -> Result<()> {
-    let p1 = conn.placeholder(1);
-    conn.execute(
-        &format!("DELETE FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(key.to_string())],
-    )?;
-
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-    conn.execute(
-        &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
-        &[
-            DbValue::Text(key.to_string()),
-            DbValue::Text(value.to_string()),
-        ],
-    )?;
-    Ok(())
-}
-
 /// A collection/global is up to date only when its stored value matches the
 /// current backfill version — a missing or stale value triggers a recompute.
 fn is_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<bool> {
-    Ok(meta_value(conn, &collection_meta_key(slug))?.as_deref() == Some(BACKFILL_VERSION))
+    Ok(meta::get(conn, &collection_meta_key(slug))?.as_deref() == Some(BACKFILL_VERSION))
 }
 
 /// Mark a collection/global as backfilled at the current version.
 fn mark_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<()> {
-    upsert_meta(conn, &collection_meta_key(slug), BACKFILL_VERSION)
+    meta::upsert(conn, &collection_meta_key(slug), BACKFILL_VERSION)
 }
 
 /// Run the ref count backfill for any collections/globals not yet backfilled.
@@ -78,7 +49,7 @@ pub(crate) fn backfill_if_needed(
 ) -> Result<()> {
     // Legacy "all backfilled" flag — only honored when it carries the current
     // version. An older value (or absence) means everything must recompute.
-    let has_legacy_flag = meta_value(conn, META_KEY)?.as_deref() == Some(BACKFILL_VERSION);
+    let has_legacy_flag = meta::get(conn, META_KEY)?.as_deref() == Some(BACKFILL_VERSION);
 
     // Collect which collections/globals need backfilling. A DB error from
     // `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
@@ -146,7 +117,7 @@ pub(crate) fn backfill_if_needed(
     // Stamp the legacy flag at the current version so a fully up-to-date
     // database short-circuits on the next startup.
     if !has_legacy_flag {
-        upsert_meta(conn, META_KEY, BACKFILL_VERSION)?;
+        meta::upsert(conn, META_KEY, BACKFILL_VERSION)?;
     }
 
     info!("Ref count backfill complete");

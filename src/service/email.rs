@@ -32,6 +32,15 @@ pub(crate) struct VerificationEmailInput {
 // DB pool, and email renderer — cannot be unit tested without external services.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn send_verification_email(input: VerificationEmailInput) {
+    tokio::task::spawn_blocking(move || send_verification_email_blocking(input));
+}
+
+/// The blocking body of [`send_verification_email`]: generate a token, persist
+/// it, render the template, and queue the email. Fire-and-forget — every failure
+/// is logged and swallowed here (the caller has already returned), never
+/// surfaced.
+#[cfg(not(tarpaulin_include))]
+fn send_verification_email_blocking(input: VerificationEmailInput) {
     let VerificationEmailInput {
         pool,
         email_config,
@@ -43,62 +52,60 @@ pub(crate) fn send_verification_email(input: VerificationEmailInput) {
         user_email,
     } = input;
 
-    tokio::task::spawn_blocking(move || {
-        if !is_configured(&email_config) {
-            warn!(
-                "Email not configured — skipping verification email for {}",
-                user_email
-            );
+    if !is_configured(&email_config) {
+        warn!(
+            "Email not configured — skipping verification email for {}",
+            user_email
+        );
+
+        return;
+    }
+
+    let token = generate_security_token();
+    let exp = Utc::now().timestamp() + 86400; // 24 hours
+
+    let conn = match pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("DB connection for verification token: {}", e);
 
             return;
         }
+    };
 
-        let token = generate_security_token();
-        let exp = Utc::now().timestamp() + 86400; // 24 hours
+    if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
+        error!("Failed to set verification token: {}", e);
 
-        let conn = match pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("DB connection for verification token: {}", e);
+        return;
+    }
 
-                return;
-            }
-        };
-
-        if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
-            error!("Failed to set verification token: {}", e);
+    let base_url = server_config.base_url();
+    let verify_url = format!("{base_url}/admin/verify-email?token={token}");
+    let html = match email_renderer.render(
+        "verify_email",
+        &VerifyEmailContext {
+            verify_url: &verify_url,
+            from_name: &email_config.from_name,
+        },
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            error!("Failed to render verify email template: {}", e);
 
             return;
         }
+    };
 
-        let base_url = server_config.base_url();
-        let verify_url = format!("{base_url}/admin/verify-email?token={token}");
-        let html = match email_renderer.render(
-            "verify_email",
-            &VerifyEmailContext {
-                verify_url: &verify_url,
-                from_name: &email_config.from_name,
-            },
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                error!("Failed to render verify email template: {}", e);
-
-                return;
-            }
-        };
-
-        if let Err(e) = queue_email(
-            &conn,
-            &EmailJobData {
-                to: user_email.clone(),
-                subject: "Verify your email".to_string(),
-                html,
-                text: None,
-            },
-            email_max_attempts,
-        ) {
-            error!("Failed to queue verification email: {}", e);
-        }
-    });
+    if let Err(e) = queue_email(
+        &conn,
+        &EmailJobData {
+            to: user_email.clone(),
+            subject: "Verify your email".to_string(),
+            html,
+            text: None,
+        },
+        email_max_attempts,
+    ) {
+        error!("Failed to queue verification email: {}", e);
+    }
 }

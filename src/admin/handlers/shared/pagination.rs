@@ -50,6 +50,22 @@ impl PaginationParams {
     }
 }
 
+impl Pagination {
+    /// Previous page number (1-indexed), clamped to `>= 1` — for a "prev" link.
+    /// Page 1's previous is page 1.
+    #[must_use]
+    pub fn prev_page(&self) -> u64 {
+        self.page.saturating_sub(1).max(1).cast_unsigned()
+    }
+
+    /// Next page number (1-indexed) — for a "next" link. Saturates rather than
+    /// overflowing on an absurd current page (mirrors `resolve`'s offset math).
+    #[must_use]
+    pub fn next_page(&self) -> u64 {
+        self.page.saturating_add(1).cast_unsigned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +91,33 @@ mod tests {
             before_cursor: None,
             trash: None,
         }
+    }
+
+    fn pagination(page: i64) -> Pagination {
+        Pagination {
+            page,
+            per_page: 20,
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn prev_page_clamps_to_one() {
+        assert_eq!(pagination(1).prev_page(), 1, "page 1's prev is page 1");
+        assert_eq!(pagination(5).prev_page(), 4);
+    }
+
+    #[test]
+    fn next_page_increments() {
+        assert_eq!(pagination(1).next_page(), 2);
+        assert_eq!(pagination(5).next_page(), 6);
+    }
+
+    #[test]
+    fn next_page_saturates_on_overflow() {
+        // A colossal current page must not overflow `page + 1` (a debug-mode
+        // panic / release-mode wrap). It saturates to `i64::MAX`.
+        assert_eq!(pagination(i64::MAX).next_page(), i64::MAX.cast_unsigned());
     }
 
     #[test]

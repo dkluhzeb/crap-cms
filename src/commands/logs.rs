@@ -1,5 +1,7 @@
 //! `crap-cms logs` command — view and manage log files.
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
@@ -197,8 +199,6 @@ fn follow_file(path: &Path, file: fs::File) -> Result<()> {
                 {
                     #[cfg(unix)]
                     {
-                        use std::os::unix::fs::MetadataExt;
-
                         if new_meta.ino() != cur_meta.ino() {
                             // File was rotated — reopen.
                             let new_file = fs::File::open(path)?;
