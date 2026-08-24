@@ -1,15 +1,14 @@
 use axum::{
     Extension,
     extract::{Path, State},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use tokio::task;
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths, redirect_response},
+        handlers::shared::{finish_version_restore, get_user_doc, paths, redirect_response},
     },
     config::LocaleConfig,
     core::{AuthUser, Document, GlobalDefinition, SharedCache, SharedEventTransport},
@@ -75,18 +74,5 @@ pub async fn restore_version(
 
     let result = task::spawn_blocking(move || restore_global_version_blocking(input)).await;
 
-    match result {
-        Ok(Ok(_)) => htmx_redirect(&redirect),
-        Ok(Err(ServiceError::AccessDenied(_))) => {
-            forbidden(&state, "You don't have permission to restore this version").into_response()
-        }
-        Ok(Err(e)) => {
-            error!("Restore global version error: {}", e);
-            htmx_redirect(&redirect)
-        }
-        Err(e) => {
-            error!("Restore global version task error: {}", e);
-            htmx_redirect(&redirect)
-        }
-    }
+    finish_version_restore(&state, result, &redirect, "global version")
 }

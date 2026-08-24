@@ -346,22 +346,23 @@ enum OpValue {
     None,
 }
 
-/// Extract operator name and value for Lua table representation.
+/// Extract operator name and value for Lua table representation. The name is the
+/// canonical [`FilterOp::op_name`] shared with every other surface.
 fn filter_op_name_value(op: &FilterOp) -> (&'static str, OpValue) {
-    match op {
-        FilterOp::Equals(v) => ("equals", OpValue::Single(v.clone())),
-        FilterOp::NotEquals(v) => ("not_equals", OpValue::Single(v.clone())),
-        FilterOp::Like(v) => ("like", OpValue::Single(v.clone())),
-        FilterOp::Contains(v) => ("contains", OpValue::Single(v.clone())),
-        FilterOp::GreaterThan(v) => ("greater_than", OpValue::Single(v.clone())),
-        FilterOp::LessThan(v) => ("less_than", OpValue::Single(v.clone())),
-        FilterOp::GreaterThanOrEqual(v) => ("greater_than_equal", OpValue::Single(v.clone())),
-        FilterOp::LessThanOrEqual(v) => ("less_than_equal", OpValue::Single(v.clone())),
-        FilterOp::In(v) => ("in", OpValue::List(v.clone())),
-        FilterOp::NotIn(v) => ("not_in", OpValue::List(v.clone())),
-        FilterOp::Exists => ("exists", OpValue::None),
-        FilterOp::NotExists => ("not_exists", OpValue::None),
-    }
+    let value = match op {
+        FilterOp::Equals(v)
+        | FilterOp::NotEquals(v)
+        | FilterOp::Like(v)
+        | FilterOp::Contains(v)
+        | FilterOp::GreaterThan(v)
+        | FilterOp::LessThan(v)
+        | FilterOp::GreaterThanOrEqual(v)
+        | FilterOp::LessThanOrEqual(v) => OpValue::Single(v.clone()),
+        FilterOp::In(v) | FilterOp::NotIn(v) => OpValue::List(v.clone()),
+        FilterOp::Exists | FilterOp::NotExists => OpValue::None,
+    };
+
+    (op.op_name(), value)
 }
 
 /// `crap.access.field_read_denied(collection [, document])` -> `{string}`

@@ -106,7 +106,6 @@ full operation set per surface:
 | Event publishing | Yes | Yes | No | Lua runs inside the caller's transaction; event publishing is fire-and-forget after commit. The caller (admin/gRPC) publishes the event. |
 | Upload file cleanup on delete | Yes | Yes | Yes | Lua CRUD reads ConfigDir from Lua app_data; admin/gRPC clean up after commit. |
 | Verification email on create | Yes | Yes | Queued | Email sending is async, post-commit. Lua runs inside the caller's transaction, so it pushes the email onto a verification queue that the caller flushes after commit. |
-| Filter operator names | Short | Long | Long | The admin list URL grammar uses `gt` / `lt` / `gte` / `lte` (and synthesizes `in` / `not_in` from repeated `equals`) for URL ergonomics; gRPC, Lua, and MCP `where` clauses use `greater_than` / `less_than` / `greater_than_or_equal` / `less_than_or_equal` plus explicit `in` / `not_in`. Semantics are identical. |
 | Invalid filter / sort input | 400 page | INVALID_ARGUMENT | Lua error | All surfaces hard-error on unknown operators, unknown fields, and malformed clauses — nothing is silently dropped. |
 | Locale from request | Yes | Yes | Explicit opt | Admin/gRPC infer from request; Lua passes explicitly via opts.locale. |
 | Default depth | Varies | Config | 0 | Lua defaults to 0 to avoid N+1 in hooks. Callers pass depth explicitly. |

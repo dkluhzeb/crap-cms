@@ -25,11 +25,12 @@ use crate::{
         },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
-            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, get_user_doc, is_non_default_locale, lookup_ref_count,
-            not_found, paths, render_page, require_collection, service_error_to_admin_response,
-            split_sidebar_fields, task_join_error_response,
+            build_locale_template_data, collection_base, compute_denied_read_fields,
+            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, get_user_doc,
+            is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
+            require_collection, service_error_to_admin_response, split_sidebar_fields,
+            task_join_error_response,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
@@ -467,11 +468,8 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
 
     let claims_ref = input.claims.map(|Extension(c)| c);
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(input.def.display_name(), paths::collection(input.slug)),
-        Breadcrumb::current(doc_title.clone()),
-    ];
+    let mut breadcrumbs = collection_base(input.def, input.slug);
+    breadcrumbs.push(Breadcrumb::current(doc_title.clone()));
 
     let base = BasePageContext::for_handler(
         input.state,

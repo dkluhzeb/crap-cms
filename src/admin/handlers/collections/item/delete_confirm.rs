@@ -14,8 +14,8 @@ use crate::{
             page::collections::CollectionDeleteConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, lookup_ref_count, not_found,
-            paths, render_page, require_collection,
+            check_access_or_forbid, collection_base, extract_editor_locale, forbidden,
+            lookup_ref_count, not_found, render_page, require_collection,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition},
@@ -121,11 +121,8 @@ pub async fn delete_confirm(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-        Breadcrumb::current("delete_name").with_name(def.singular_name()),
-    ];
+    let mut breadcrumbs = collection_base(&def, &slug);
+    breadcrumbs.push(Breadcrumb::current("delete_name").with_name(def.singular_name()));
 
     let base = BasePageContext::for_handler(
         &state,

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -195,23 +195,13 @@ fn parse_operator_filters(
 /// hallucinated operator fails loudly instead of silently dropping the
 /// filter condition.
 fn parse_scalar_op(op_name: &str, val: String) -> Result<query::FilterOp> {
-    let op = match op_name {
-        "equals" => query::FilterOp::Equals(val),
-        "not_equals" => query::FilterOp::NotEquals(val),
-        "contains" => query::FilterOp::Contains(val),
-        "greater_than" => query::FilterOp::GreaterThan(val),
-        "greater_than_equal" | "greater_than_or_equal" => query::FilterOp::GreaterThanOrEqual(val),
-        "less_than" => query::FilterOp::LessThan(val),
-        "less_than_equal" | "less_than_or_equal" => query::FilterOp::LessThanOrEqual(val),
-        "like" => query::FilterOp::Like(val),
-        unknown => bail!(
-            "MCP where: unknown filter operator '{unknown}'. Valid operators: equals, \
-             not_equals, greater_than, greater_than_equal, less_than, less_than_equal, like, \
-             contains, in, not_in, exists, not_exists"
-        ),
-    };
-
-    Ok(op)
+    query::FilterOp::scalar_from_name(op_name, val).ok_or_else(|| {
+        anyhow!(
+            "MCP where: unknown filter operator '{op_name}'. Valid operators: equals, \
+             not_equals, greater_than, greater_than_or_equal, less_than, less_than_or_equal, \
+             like, contains, in, not_in, exists, not_exists"
+        )
+    })
 }
 
 /// Convert a bool to a SQLite-compatible `"1"` or `"0"` string.
@@ -473,9 +463,9 @@ mod tests {
             ("not_equals", "not_equals"),
             ("contains", "contains"),
             ("greater_than", "greater_than"),
-            ("greater_than_equal", "greater_than_equal"),
+            ("greater_than_or_equal", "greater_than_or_equal"),
             ("less_than", "less_than"),
-            ("less_than_equal", "less_than_equal"),
+            ("less_than_or_equal", "less_than_or_equal"),
             ("like", "like"),
         ] {
             let args = {
@@ -500,9 +490,12 @@ mod tests {
                         (query::FilterOp::NotEquals(_), "not_equals")
                             | (query::FilterOp::Contains(_), "contains")
                             | (query::FilterOp::GreaterThan(_), "greater_than")
-                            | (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal")
+                            | (
+                                query::FilterOp::GreaterThanOrEqual(_),
+                                "greater_than_or_equal"
+                            )
                             | (query::FilterOp::LessThan(_), "less_than")
-                            | (query::FilterOp::LessThanOrEqual(_), "less_than_equal")
+                            | (query::FilterOp::LessThanOrEqual(_), "less_than_or_equal")
                             | (query::FilterOp::Like(_), "like")
                     );
                     assert!(

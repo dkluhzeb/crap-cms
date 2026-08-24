@@ -8,6 +8,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Filter operator names use one grammar on every surface.** The comparison
+  operators previously had per-surface spellings: the admin list-view URL used
+  the terse `gt` / `gte` / `lt` / `lte`, MCP additionally accepted
+  `greater_than_equal` / `less_than_equal` aliases, and the Lua / gRPC / service
+  surfaces already used the verbose forms. All surfaces now share one verbose
+  grammar — `equals`, `not_equals`, `greater_than`, `greater_than_or_equal`,
+  `less_than`, `less_than_or_equal`, `like`, `contains`, `in`, `not_in`,
+  `exists`, `not_exists` — sourced from a single `FilterOp::op_name` /
+  `FilterOp::scalar_from_name` mapping so no surface can drift. **Migration:** an
+  admin filter URL or saved list-view using `?where[field][gt]=…` must use
+  `[greater_than]` (likewise `gte` → `greater_than_or_equal`, `lt` →
+  `less_than`, `lte` → `less_than_or_equal`); MCP callers passing
+  `greater_than_equal` / `less_than_equal` must use `greater_than_or_equal` /
+  `less_than_or_equal`. gRPC, Lua, and service filters are unchanged.
+
 - **Scalar `has_many` lists (`Text` / `Number` / `Select` / `Radio` with
   `has_many = true`) now read back as typed JSON arrays on every surface.**
   Previously these were stored as a JSON array in their column but the read path
@@ -1263,6 +1278,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Admin list filters accept nested group sub-fields.** The admin `?where[…]`
+  filter parser rejected a group sub-field column (e.g. `seo__title`) as an
+  unknown field even though list sorting and the service-layer filter validator
+  both accept it, so a filter on any grouped field silently fell closed to zero
+  results. The parser now validates filter fields against the same
+  `get_valid_filter_columns` set the service layer uses, so the admin filter,
+  the sort whitelist, and the service validator agree on one column set.
 
 - **`has_many` scalar fields on Globals now get a `TEXT` column on Postgres.**
   A top-level `has_many` Text/Number/Select/Radio field stores its list as a
@@ -2890,6 +2913,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `format!("{e}")` / `format!("{e:#}")` (with inconsistent verbosity) convert
     through one `lua_err`, standardizing on `{:#}` — a superset that never drops a
     message, only appends the anyhow cause chain where one exists.
+  - The collection and global version-restore actions finish through one
+    `finish_version_restore` helper: the four-arm outcome mapping (success and
+    every error redirect back to the item; only `AccessDenied` becomes a 403)
+    was byte-identical across the two handlers save the log label, so the
+    access-denied response and redirect-on-error policy could drift between the
+    two surfaces.
+  - Admin breadcrumb trails are built from three base helpers
+    (`collection_base` / `collection_item_base` / `global_base`); the seven
+    version/create/delete/edit handlers that each re-spelled the
+    collections-root → collection → item spine now share it, so a change to the
+    trail shape lands everywhere at once.
+  - The byte-identical collection/global version-list and restore-confirm
+    templates collapse into `partials/versions-page` and
+    `partials/restore-confirm`; the four page templates now include the shared
+    partial instead of keeping two copies that had to be edited in lockstep.
+  - The JS `X-CSRF-Token` header dance (`if (csrf) headers[…] = csrf`, copy-pasted
+    across the components that POST) is one `csrfHeaders(base)` helper, and the
+    `X-CSRF-Token` header name and `_csrf` field name live once in a `util/csrf`
+    module rather than as scattered string literals.
+  - The five `#[derive(Lua*)]` proc-macros parse their darling container through
+    one `from_derive_input_or_return!` macro instead of each repeating the same
+    `match Container::from_derive_input(&input) { Ok(c) => c, Err(e) => return
+    e.write_errors().into() }` block.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

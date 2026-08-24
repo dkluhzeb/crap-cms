@@ -194,12 +194,12 @@ fn check_access_filter(
 /// toward leaking).
 fn check_access_operator(filter: &Filter, slug: &str) -> Result<(), ServiceError> {
     let disallowed = match &filter.op {
-        FilterOp::Like(_) => "like",
-        FilterOp::Contains(_) => "contains",
-        FilterOp::GreaterThan(_) => "greater_than",
-        FilterOp::LessThan(_) => "less_than",
-        FilterOp::GreaterThanOrEqual(_) => "greater_than_or_equal",
-        FilterOp::LessThanOrEqual(_) => "less_than_or_equal",
+        FilterOp::Like(_)
+        | FilterOp::Contains(_)
+        | FilterOp::GreaterThan(_)
+        | FilterOp::LessThan(_)
+        | FilterOp::GreaterThanOrEqual(_)
+        | FilterOp::LessThanOrEqual(_) => filter.op.op_name(),
         FilterOp::Equals(_)
         | FilterOp::NotEquals(_)
         | FilterOp::In(_)

@@ -24,6 +24,7 @@ mod types;
 mod validation;
 mod view_scope;
 
+pub(crate) use columns::get_valid_filter_columns;
 pub use columns::{get_column_names, get_expected_column_names};
 pub use cursor::{SortDirection, SortValue};
 pub use find_pagination::{FindPagination, PaginationCtx, TRASH_DEFAULT_ORDER};

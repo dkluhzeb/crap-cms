@@ -19,9 +19,9 @@ use crate::{
         },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, paths,
-            render_page, require_collection, split_sidebar_fields,
+            build_locale_template_data, check_access_or_forbid, collection_base,
+            enrich_field_contexts, extract_editor_locale, forbidden, get_user_doc,
+            is_non_default_locale, render_page, require_collection, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
@@ -150,11 +150,8 @@ pub async fn create_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-        Breadcrumb::current("create_name").with_name(def.singular_name()),
-    ];
+    let mut breadcrumbs = collection_base(&def, &slug);
+    breadcrumbs.push(Breadcrumb::current("create_name").with_name(def.singular_name()));
 
     let base = BasePageContext::for_handler(
         &state,

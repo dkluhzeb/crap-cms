@@ -1,13 +1,19 @@
 //! Version helpers — JSON mapping, sidebar data, missing relations, doc status.
 
+use axum::response::Response;
 use serde_json::{Value, json};
+use tokio::task::JoinError;
 use tracing::error;
 
 use crate::{
+    admin::{
+        AdminState,
+        handlers::shared::{forbidden, htmx_redirect},
+    },
     core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
     db::DbConnection,
     service::{
-        ListVersionsInput, ServiceContext, document_info::find_missing_relations,
+        ListVersionsInput, ServiceContext, ServiceError, document_info::find_missing_relations,
         find_version_by_id, list_versions,
     },
 };
@@ -64,6 +70,36 @@ pub fn load_version_with_missing_relations(
     let missing = find_missing_relations(conn, registry, &version.snapshot, fields);
 
     Ok((version, missing))
+}
+
+/// Map a spawn-blocking restore outcome to the admin HTTP response.
+///
+/// Both the collection and global restore-action handlers finish with the
+/// exact same four arms — success and every error path redirect back to the
+/// item, and only `AccessDenied` becomes a 403 — differing solely in the
+/// log label. Centralising it keeps the access-denied response and the
+/// redirect-on-error policy from drifting between the two surfaces. `what`
+/// names the entity for the error log (e.g. `"version"`, `"global version"`).
+pub fn finish_version_restore(
+    state: &AdminState,
+    result: Result<Result<Document, ServiceError>, JoinError>,
+    redirect: &str,
+    what: &str,
+) -> Response {
+    match result {
+        Ok(Ok(_)) => htmx_redirect(redirect),
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            forbidden(state, "You don't have permission to restore this version")
+        }
+        Ok(Err(e)) => {
+            error!("Restore {what} error: {e}");
+            htmx_redirect(redirect)
+        }
+        Err(e) => {
+            error!("Restore {what} task error: {e}");
+            htmx_redirect(redirect)
+        }
+    }
 }
 
 /// Extract the document's `_status` field for draft-enabled collections/globals.

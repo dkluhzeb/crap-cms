@@ -15,8 +15,9 @@ use crate::{
             PaginationContext, page::collections::CollectionVersionsListPage,
         },
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
-            redirect_response, render_page, require_collection, server_error, version_to_json,
+            Pagination, PaginationParams, collection_item_base, extract_editor_locale,
+            get_user_doc, not_found, paths, redirect_response, render_page, require_collection,
+            server_error, version_to_json,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document},
@@ -125,12 +126,8 @@ pub async fn list_versions_page(
     );
     let next_url = paths::collection_item_versions_page(&slug, &id, (pg.page + 1).cast_unsigned());
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-        Breadcrumb::link(doc_title.clone(), paths::collection_item(&slug, &id)),
-        Breadcrumb::current("version_history"),
-    ];
+    let mut breadcrumbs = collection_item_base(&def, &slug, &id, doc_title.clone());
+    breadcrumbs.push(Breadcrumb::current("version_history"));
 
     let base = BasePageContext::for_handler(
         &state,

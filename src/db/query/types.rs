@@ -31,6 +31,52 @@ pub enum FilterOp {
     NotExists,
 }
 
+impl FilterOp {
+    /// The canonical operator name — the ONE grammar every surface (the gRPC/JSON
+    /// `where` API, the admin `where[]` URL, MCP, and the Lua filter
+    /// representation) uses to spell this operator. One source so the surfaces
+    /// can't drift into different spellings (they historically had five:
+    /// admin `gt`/`gte`, MCP `greater_than_equal`, service `greater_than_or_equal`, …).
+    #[must_use]
+    pub fn op_name(&self) -> &'static str {
+        match self {
+            FilterOp::Equals(_) => "equals",
+            FilterOp::NotEquals(_) => "not_equals",
+            FilterOp::Like(_) => "like",
+            FilterOp::Contains(_) => "contains",
+            FilterOp::GreaterThan(_) => "greater_than",
+            FilterOp::LessThan(_) => "less_than",
+            FilterOp::GreaterThanOrEqual(_) => "greater_than_or_equal",
+            FilterOp::LessThanOrEqual(_) => "less_than_or_equal",
+            FilterOp::In(_) => "in",
+            FilterOp::NotIn(_) => "not_in",
+            FilterOp::Exists => "exists",
+            FilterOp::NotExists => "not_exists",
+        }
+    }
+
+    /// Construct a value-taking scalar operator from its canonical
+    /// [`op_name`](Self::op_name) and a single string operand, or `None` when
+    /// `name` is not a scalar operator (`in`/`not_in` take arrays, `exists`/
+    /// `not_exists` take no value — each surface handles those with its own value
+    /// semantics) or is unknown. The inverse of `op_name` for the scalar ops, so
+    /// the ordered-comparison spellings are single-sourced across every parser.
+    #[must_use]
+    pub fn scalar_from_name(name: &str, value: String) -> Option<FilterOp> {
+        Some(match name {
+            "equals" => FilterOp::Equals(value),
+            "not_equals" => FilterOp::NotEquals(value),
+            "like" => FilterOp::Like(value),
+            "contains" => FilterOp::Contains(value),
+            "greater_than" => FilterOp::GreaterThan(value),
+            "less_than" => FilterOp::LessThan(value),
+            "greater_than_or_equal" => FilterOp::GreaterThanOrEqual(value),
+            "less_than_or_equal" => FilterOp::LessThanOrEqual(value),
+            _ => return None,
+        })
+    }
+}
+
 /// A single field + operator filter condition.
 #[derive(Debug, Clone)]
 pub struct Filter {
@@ -263,6 +309,42 @@ impl FindQueryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The canonical grammar round-trips: every scalar operator's `op_name`
+    /// parses back to the same variant via `scalar_from_name`, and the
+    /// non-scalar names are the ones the surfaces spell.
+    #[test]
+    fn filter_op_name_grammar_round_trips() {
+        let scalars = [
+            FilterOp::Equals("v".into()),
+            FilterOp::NotEquals("v".into()),
+            FilterOp::Like("v".into()),
+            FilterOp::Contains("v".into()),
+            FilterOp::GreaterThan("v".into()),
+            FilterOp::LessThan("v".into()),
+            FilterOp::GreaterThanOrEqual("v".into()),
+            FilterOp::LessThanOrEqual("v".into()),
+        ];
+        for op in scalars {
+            let name = op.op_name();
+            let round = FilterOp::scalar_from_name(name, "v".into())
+                .unwrap_or_else(|| panic!("{name} must parse back"));
+            assert_eq!(round.op_name(), name, "{name} did not round-trip");
+        }
+
+        // Non-scalar ops are not scalar-parseable (they take arrays / no value).
+        assert!(FilterOp::scalar_from_name("in", "v".into()).is_none());
+        assert!(FilterOp::scalar_from_name("exists", "v".into()).is_none());
+        assert!(FilterOp::scalar_from_name("bogus", "v".into()).is_none());
+
+        // Canonical spellings are the verbose forms (matching the gRPC/JSON API).
+        assert_eq!(
+            FilterOp::GreaterThanOrEqual(String::new()).op_name(),
+            "greater_than_or_equal"
+        );
+        assert_eq!(FilterOp::In(vec![]).op_name(), "in");
+        assert_eq!(FilterOp::NotExists.op_name(), "not_exists");
+    }
 
     fn name_filter(field: &str) -> FilterClause {
         FilterClause::Single(Filter {

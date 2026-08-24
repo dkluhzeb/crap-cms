@@ -9,6 +9,32 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Expr, Type, parse_str};
 
+// ── Container parsing ────────────────────────────────────────────────
+
+/// Parse a `DeriveInput` into a darling container, returning the
+/// compiler-error `TokenStream` early on failure.
+///
+/// Every `#[derive(Lua*)]` entry point opened with the same four-line
+/// `match Container::from_derive_input(&input) { Ok(c) => c, Err(e) =>
+/// return e.write_errors().into() }`. This centralises that so each
+/// derive body starts with the parsed container. The trait method is
+/// called fully-qualified so callers need no extra import beyond the
+/// `#[derive(FromDeriveInput)]` they already carry.
+///
+/// ```ignore
+/// let container = from_derive_input_or_return!(LuaContainer, &input);
+/// ```
+macro_rules! from_derive_input_or_return {
+    ($ty:ty, $input:expr) => {
+        match <$ty as ::darling::FromDeriveInput>::from_derive_input($input) {
+            Ok(c) => c,
+            Err(e) => return e.write_errors().into(),
+        }
+    };
+}
+
+pub(crate) use from_derive_input_or_return;
+
 // ── Field input ──────────────────────────────────────────────────────
 
 /// One named field of a struct that derives `LuaAnnotation` or

@@ -26,6 +26,7 @@ import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
 import { readCsrfCookie } from './_internal/util/cookies.js';
+import { CSRF_FIELD } from './_internal/util/csrf.js';
 import { toast } from './_internal/util/toast.js';
 import { EV_DELETE_DIALOG_REQUEST } from './events.js';
 
@@ -340,7 +341,7 @@ class CrapDeleteDialog extends HTMLElement {
 
   /** @param {'soft_delete' | 'hard_delete'} action @param {boolean} isEmptyTrash */
   _buildBody(action, isEmptyTrash) {
-    const params = new URLSearchParams({ _csrf: readCsrfCookie() });
+    const params = new URLSearchParams({ [CSRF_FIELD]: readCsrfCookie() });
     if (!isEmptyTrash) {
       params.set('_method', 'DELETE');
       params.set('_action', action);

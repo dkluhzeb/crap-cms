@@ -15,7 +15,7 @@ use crate::{
             page::globals::GlobalVersionsListPage,
         },
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, paths,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, global_base, paths,
             redirect_response, render_page, require_global, server_error, version_to_json,
         },
     },
@@ -85,11 +85,8 @@ pub async fn list_versions_page(
         paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1).cast_unsigned());
     let next_url = paths::global_versions_page(&slug, (pg.page + 1).cast_unsigned());
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", paths::DASHBOARD),
-        Breadcrumb::link(def.display_name(), paths::global(&slug)),
-        Breadcrumb::current("version_history"),
-    ];
+    let mut breadcrumbs = global_base(&def, &slug);
+    breadcrumbs.push(Breadcrumb::current("version_history"));
 
     let base = BasePageContext::for_handler(
         &state,

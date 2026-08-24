@@ -21,7 +21,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, DeriveInput, parse_macro_input};
 
-use crate::shared::{apply_rename_all, extract_docs, push_doc_line};
+use crate::shared::{apply_rename_all, extract_docs, from_derive_input_or_return, push_doc_line};
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(lua), supports(enum_any), forward_attrs(doc))]
@@ -61,10 +61,7 @@ struct LuaAliasField {
 pub(crate) fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let container = match LuaAliasContainer::from_derive_input(&input) {
-        Ok(c) => c,
-        Err(e) => return e.write_errors().into(),
-    };
+    let container = from_derive_input_or_return!(LuaAliasContainer, &input);
 
     let ident = &container.ident;
     let alias = &container.alias;

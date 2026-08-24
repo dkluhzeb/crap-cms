@@ -371,19 +371,14 @@ pub(super) fn build_filter_pills(
         .collect()
 }
 
-/// Map a `FilterOp` to its URL parameter name.
+/// Map a `FilterOp` to its URL parameter name — the canonical
+/// [`FilterOp::op_name`] for every op except `In`/`NotIn`, which the admin URL
+/// grammar reconstructs as repeated `equals`/`not_equals` entries.
 pub(super) fn op_to_param_name(op: &FilterOp) -> &'static str {
     match op {
-        FilterOp::Equals(_) | FilterOp::In(_) => "equals",
-        FilterOp::NotEquals(_) | FilterOp::NotIn(_) => "not_equals",
-        FilterOp::Contains(_) => "contains",
-        FilterOp::Like(_) => "like",
-        FilterOp::GreaterThan(_) => "gt",
-        FilterOp::LessThan(_) => "lt",
-        FilterOp::GreaterThanOrEqual(_) => "gte",
-        FilterOp::LessThanOrEqual(_) => "lte",
-        FilterOp::Exists => "exists",
-        FilterOp::NotExists => "not_exists",
+        FilterOp::In(_) => "equals",
+        FilterOp::NotIn(_) => "not_equals",
+        other => other.op_name(),
     }
 }
 
@@ -639,15 +634,21 @@ mod tests {
             op_to_param_name(&FilterOp::Contains("x".into())),
             "contains"
         );
-        assert_eq!(op_to_param_name(&FilterOp::GreaterThan("x".into())), "gt");
-        assert_eq!(op_to_param_name(&FilterOp::LessThan("x".into())), "lt");
+        assert_eq!(
+            op_to_param_name(&FilterOp::GreaterThan("x".into())),
+            "greater_than"
+        );
+        assert_eq!(
+            op_to_param_name(&FilterOp::LessThan("x".into())),
+            "less_than"
+        );
         assert_eq!(
             op_to_param_name(&FilterOp::GreaterThanOrEqual("x".into())),
-            "gte"
+            "greater_than_or_equal"
         );
         assert_eq!(
             op_to_param_name(&FilterOp::LessThanOrEqual("x".into())),
-            "lte"
+            "less_than_or_equal"
         );
         assert_eq!(op_to_param_name(&FilterOp::Exists), "exists");
         assert_eq!(op_to_param_name(&FilterOp::NotExists), "not_exists");

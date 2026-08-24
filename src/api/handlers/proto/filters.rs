@@ -98,22 +98,15 @@ pub(in crate::api::handlers) fn parse_filter_op(
     op_name: &str,
     value: &JsonValue,
 ) -> Result<FilterOp, String> {
+    // Array / no-value operators — surface-specific value handling.
     match op_name {
-        "equals" => Ok(FilterOp::Equals(value_to_string(value)?)),
-        "not_equals" => Ok(FilterOp::NotEquals(value_to_string(value)?)),
-        "like" => Ok(FilterOp::Like(value_to_string(value)?)),
-        "contains" => Ok(FilterOp::Contains(value_to_string(value)?)),
-        "greater_than" => Ok(FilterOp::GreaterThan(value_to_string(value)?)),
-        "less_than" => Ok(FilterOp::LessThan(value_to_string(value)?)),
-        "greater_than_or_equal" => Ok(FilterOp::GreaterThanOrEqual(value_to_string(value)?)),
-        "less_than_or_equal" => Ok(FilterOp::LessThanOrEqual(value_to_string(value)?)),
         "in" => {
             let arr = value
                 .as_array()
                 .ok_or_else(|| "'in' operator requires an array".to_string())?;
             let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
 
-            Ok(FilterOp::In(vals?))
+            return Ok(FilterOp::In(vals?));
         }
         "not_in" => {
             let arr = value
@@ -121,12 +114,16 @@ pub(in crate::api::handlers) fn parse_filter_op(
                 .ok_or_else(|| "'not_in' operator requires an array".to_string())?;
             let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
 
-            Ok(FilterOp::NotIn(vals?))
+            return Ok(FilterOp::NotIn(vals?));
         }
-        "exists" => Ok(FilterOp::Exists),
-        "not_exists" => Ok(FilterOp::NotExists),
-        _ => Err(format!("unknown operator '{op_name}'")),
+        "exists" => return Ok(FilterOp::Exists),
+        "not_exists" => return Ok(FilterOp::NotExists),
+        _ => {}
     }
+
+    // Scalar operators — the shared canonical grammar.
+    FilterOp::scalar_from_name(op_name, value_to_string(value)?)
+        .ok_or_else(|| format!("unknown operator '{op_name}'"))
 }
 
 /// Convert a JSON value to its string representation. Only supports string, number, and boolean.

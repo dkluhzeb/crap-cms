@@ -15,32 +15,28 @@
 //! single `FilterOp::In(values)`, same `(field, NotEquals)` collapse to `NotIn`. Other
 //! ops stay distinct (they're additive, not redundant).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
     core::collection::CollectionDefinition,
-    db::query::{Filter, FilterClause, FilterOp},
+    db::query::{Filter, FilterClause, FilterOp, get_valid_filter_columns},
 };
 
 use super::url::url_decode;
 
-/// Valid operator names, listed in error messages on an unknown operator.
-const VALID_OPS: &str = "equals, not_equals, contains, like, gt, lt, gte, lte, exists, not_exists";
+/// Valid operator names, listed in error messages on an unknown operator. One
+/// grammar with every surface — see [`FilterOp::op_name`].
+const VALID_OPS: &str = "equals, not_equals, contains, like, greater_than, less_than, \
+     greater_than_or_equal, less_than_or_equal, exists, not_exists";
 
-/// Parse an operator string and value into a `FilterOp`.
+/// Parse an operator string and value into a `FilterOp` — the canonical grammar
+/// shared with the gRPC/MCP surfaces (`in`/`not_in` are synthesized post-hoc
+/// from repeated `equals`/`not_equals`, so they aren't parsed here).
 fn parse_filter_op(op_str: &str, value: String) -> Option<FilterOp> {
     match op_str {
-        "equals" => Some(FilterOp::Equals(value)),
-        "not_equals" => Some(FilterOp::NotEquals(value)),
-        "contains" => Some(FilterOp::Contains(value)),
-        "like" => Some(FilterOp::Like(value)),
-        "gt" => Some(FilterOp::GreaterThan(value)),
-        "lt" => Some(FilterOp::LessThan(value)),
-        "gte" => Some(FilterOp::GreaterThanOrEqual(value)),
-        "lte" => Some(FilterOp::LessThanOrEqual(value)),
         "exists" => Some(FilterOp::Exists),
         "not_exists" => Some(FilterOp::NotExists),
-        _ => None,
+        _ => FilterOp::scalar_from_name(op_str, value),
     }
 }
 
@@ -81,7 +77,7 @@ fn parse_or_key(key: &str) -> Option<(usize, usize, String, String)> {
 /// path); a present-but-invalid `where[...]` entry — malformed key, unknown
 /// field, system column, unknown operator — is a hard error so the list page
 /// can return 400 instead of silently rendering wrong/unfiltered results.
-fn parse_one_entry(part: &str, def: &CollectionDefinition) -> Result<Option<ParsedRow>, String> {
+fn parse_one_entry(part: &str, valid_cols: &HashSet<String>) -> Result<Option<ParsedRow>, String> {
     let known_cols = ["id", "created_at", "updated_at"];
 
     let Some((key, value)) = part.split_once('=') else {
@@ -121,8 +117,12 @@ fn parse_one_entry(part: &str, def: &CollectionDefinition) -> Result<Option<Pars
         return Err(format!("Cannot filter on system column '{field}'"));
     }
 
-    let field_valid =
-        known_cols.contains(&field.as_str()) || def.fields.iter().any(|f| f.name == field);
+    // Validate against the same filterable-column set the read pipeline uses
+    // (`get_valid_filter_columns`), so the admin `where[]` grammar accepts a
+    // group sub-field column (`seo__title`) exactly like the sort path and the
+    // service layer do — instead of a flat top-level-only scan that rejected
+    // nested fields (and accepted array/blocks columns the service then rejected).
+    let field_valid = known_cols.contains(&field.as_str()) || valid_cols.contains(&field);
     if !field_valid {
         return Err(format!("Unknown filter field '{field}'"));
     }
@@ -217,10 +217,14 @@ pub(crate) fn parse_where_params(
     raw_query: &str,
     def: &CollectionDefinition,
 ) -> Result<Vec<FilterClause>, String> {
+    // The filterable-column set (id + leaf columns incl. `group__sub`, minus
+    // array/blocks), computed once and shared across every `where[]` entry.
+    let valid_cols = get_valid_filter_columns(def, None);
+
     let parsed: Vec<ParsedRow> = raw_query
         .split('&')
         .filter(|p| !p.is_empty())
-        .map(|part| parse_one_entry(part, def))
+        .map(|part| parse_one_entry(part, &valid_cols))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .flatten()
@@ -378,8 +382,11 @@ mod tests {
     #[test]
     fn parse_where_multiple_filters() {
         let def = test_def();
-        let result =
-            parse_where_params("where[title][contains]=foo&where[count][gt]=5", &def).unwrap();
+        let result = parse_where_params(
+            "where[title][contains]=foo&where[count][greater_than]=5",
+            &def,
+        )
+        .unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -391,6 +398,35 @@ mod tests {
             err.contains("Unknown filter field 'nonexistent'"),
             "unexpected: {err}"
         );
+    }
+
+    /// Regression: a group sub-field column (`seo__title`) is a valid filter
+    /// field — the admin `where[]` grammar must accept it like the sort path and
+    /// the service layer do (it used to reject nested fields via a flat scan).
+    #[test]
+    fn parse_where_accepts_group_subfield() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let result = parse_where_params("where[seo__title][equals]=hi", &def).unwrap();
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            FilterClause::Single(f) => {
+                assert_eq!(f.field, "seo__title");
+                assert!(matches!(f.op, FilterOp::Equals(_)));
+            }
+            other => panic!("expected single clause, got {other:?}"),
+        }
+
+        // A genuinely unknown nested column is still rejected.
+        let err = parse_where_params("where[seo__missing][equals]=x", &def).unwrap_err();
+        assert!(err.contains("Unknown filter field"), "unexpected: {err}");
     }
 
     #[test]
@@ -457,7 +493,8 @@ mod tests {
     fn parse_where_system_column() {
         let def = test_def();
         // `created_at` is a known timestamp column (not underscore-prefixed) and is still filterable
-        let result = parse_where_params("where[created_at][gt]=2024-01-01", &def).unwrap();
+        let result =
+            parse_where_params("where[created_at][greater_than]=2024-01-01", &def).unwrap();
         assert_eq!(result.len(), 1);
     }
 

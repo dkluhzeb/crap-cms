@@ -10,6 +10,7 @@
  */
 
 export { readCookie, readCsrfCookie } from './cookies.js';
+export { CSRF_FIELD, CSRF_HEADER, csrfHeaders } from './csrf.js';
 export { discoverSingleton } from './discover.js';
 export { getHttpVerb } from './htmx.js';
 export { parseJsonAttribute, readDataIsland } from './json.js';

@@ -1,12 +1,16 @@
 //! Shared helper functions for admin handlers (collections + globals).
 
 mod access;
+mod breadcrumbs;
 mod document;
 mod locale;
 mod pagination;
 pub(crate) mod paths;
 pub(crate) mod response;
 mod versions;
+
+// breadcrumb base-chains
+pub(crate) use breadcrumbs::{collection_base, collection_item_base, global_base};
 
 // Re-export field context functions from the dedicated module.
 pub(super) use crate::admin::handlers::field_context::{
@@ -50,6 +54,6 @@ pub(crate) use response::{
 
 // versions
 pub(crate) use versions::{
-    extract_doc_status, fetch_version_sidebar_data, load_version_with_missing_relations,
-    version_to_json,
+    extract_doc_status, fetch_version_sidebar_data, finish_version_restore,
+    load_version_with_missing_relations, version_to_json,
 };

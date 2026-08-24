@@ -19,7 +19,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, DeriveInput, parse_macro_input};
 
-use crate::shared::extract_docs;
+use crate::shared::{extract_docs, from_derive_input_or_return};
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(lua), supports(struct_unit), forward_attrs(doc))]
@@ -33,10 +33,7 @@ struct LuaTypeAliasContainer {
 pub(crate) fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let container = match LuaTypeAliasContainer::from_derive_input(&input) {
-        Ok(c) => c,
-        Err(e) => return e.write_errors().into(),
-    };
+    let container = from_derive_input_or_return!(LuaTypeAliasContainer, &input);
 
     let ident = &container.ident;
     let alias = &container.alias;

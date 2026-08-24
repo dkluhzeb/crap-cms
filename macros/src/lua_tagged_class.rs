@@ -44,7 +44,8 @@ use quote::quote;
 use syn::{Attribute, DeriveInput, parse_macro_input};
 
 use crate::shared::{
-    LuaField, apply_rename_all, build_class_header, build_field_emit, extract_docs, push_doc_line,
+    LuaField, apply_rename_all, build_class_header, build_field_emit, extract_docs,
+    from_derive_input_or_return, push_doc_line,
 };
 
 #[derive(FromDeriveInput)]
@@ -90,10 +91,7 @@ struct LuaTaggedClassVariant {
 pub(crate) fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let container = match LuaTaggedClassContainer::from_derive_input(&input) {
-        Ok(c) => c,
-        Err(e) => return e.write_errors().into(),
-    };
+    let container = from_derive_input_or_return!(LuaTaggedClassContainer, &input);
 
     let ident = &container.ident;
     let class_alias = &container.class;

@@ -368,8 +368,8 @@ In cursor mode, `page`/`totalPages`/`pageStart`/`nextPage`/`prevPage` are replac
 }
 ```
 
-Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
-`less_than`, `less_than_equal`, `like`, `contains`, `in` (array), `not_in` (array),
+Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_or_equal`,
+`less_than`, `less_than_or_equal`, `like`, `contains`, `in` (array), `not_in` (array),
 `exists`, `not_exists`.
 
 A malformed clause is **rejected loudly**, never silently dropped: an unknown
@@ -378,6 +378,8 @@ whole condition all return an error. This matters most for `delete_many` /
 `update_many` — a filter that fails to parse must never fall through to "match
 everything".
 
-> **Note:** The shortened names `greater_than_equal` / `less_than_equal` are MCP's
-> canonical spelling; the gRPC/Lua API uses `greater_than_or_equal` /
-> `less_than_or_equal`. For convenience MCP also accepts the long `_or_equal` forms.
+> **Note:** Operator names are the **one grammar** shared by every surface (the
+> gRPC/JSON `where` API, the admin list URL, MCP, and the Lua filter
+> representation) — see [`FilterOp::op_name`]. (Earlier alphas spelled the ordered
+> operators differently per surface, e.g. the admin URL's `gte` and MCP's
+> `greater_than_equal`; those short forms are gone.)

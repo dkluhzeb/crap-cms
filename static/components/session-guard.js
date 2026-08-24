@@ -18,7 +18,8 @@
 import { css } from './_internal/css.js';
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
-import { readCookie, readCsrfCookie } from './_internal/util/cookies.js';
+import { readCookie } from './_internal/util/cookies.js';
+import { csrfHeaders } from './_internal/util/csrf.js';
 
 /** Show the warning this many seconds before expiry. */
 const WARNING_SECONDS = 5 * 60;
@@ -329,11 +330,10 @@ class CrapSessionDialog extends HTMLElement {
 
   /** POST the refresh endpoint, then re-schedule. */
   async _handleStay() {
-    const csrf = readCsrfCookie();
     try {
       const res = await fetch(REFRESH_URL, {
         method: 'POST',
-        headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+        headers: csrfHeaders(),
       });
       if (res.ok) {
         this._scheduleWarning();

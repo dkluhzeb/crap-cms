@@ -81,8 +81,14 @@ stored data, or clients.
 - **Polymorphic relationship read format** `"collection/id"`.
 - **Filter DSL.** The operator set (`equals`, `not_equals`, `like`, `contains`,
   `greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`,
-  `in`, `not_in`, `exists`, `not_exists`), empty-`in` → no match / empty-`not_in`
-  → all match, and the dot-notation nested-path grammar. The lenient filter-value
+  `in`, `not_in`, `exists`, `not_exists`) is the **one grammar every surface**
+  speaks — the gRPC/JSON `where` API, the admin list URL, MCP, and the Lua filter
+  representation, all single-sourced through `FilterOp::op_name` /
+  `FilterOp::scalar_from_name`. (Alpha ≤10 spelled the ordered operators
+  differently per surface — the admin URL's terse `gt`/`gte`/`lt`/`lte` and MCP's
+  `greater_than_equal`/`less_than_equal` — those short forms were removed in
+  favor of the single verbose grammar.) Empty-`in` → no match / empty-`not_in` →
+  all match, plus the dot-notation nested-path grammar. The lenient filter-value
   coercions (checkbox accepts `1/true/yes/on`; a non-numeric number filter falls
   back to text) are a **deliberate, permanent** leniency.
 - **Cursor token format** (base64url JSON) — kept decodable for in-flight URLs.

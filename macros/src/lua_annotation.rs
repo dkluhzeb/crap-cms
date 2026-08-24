@@ -11,7 +11,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, DeriveInput, Generics, parse_macro_input};
 
-use crate::shared::{LuaField, build_class_header, build_field_emit, extract_docs};
+use crate::shared::{
+    LuaField, build_class_header, build_field_emit, extract_docs, from_derive_input_or_return,
+};
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(lua), supports(struct_named), forward_attrs(doc))]
@@ -52,10 +54,7 @@ struct LuaContainer {
 pub(crate) fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let container = match LuaContainer::from_derive_input(&input) {
-        Ok(c) => c,
-        Err(e) => return e.write_errors().into(),
-    };
+    let container = from_derive_input_or_return!(LuaContainer, &input);
 
     let ident = &container.ident;
     let (impl_generics, ty_generics, where_clause) = container.generics.split_for_impl();

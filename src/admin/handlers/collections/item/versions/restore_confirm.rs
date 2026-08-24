@@ -14,7 +14,7 @@ use crate::{
             page::collections::CollectionRestoreConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden,
+            check_access_or_forbid, collection_item_base, extract_editor_locale, forbidden,
             load_version_with_missing_relations, paths, redirect_response, render_page,
             require_collection, server_error,
         },
@@ -90,12 +90,8 @@ pub async fn restore_confirm(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-        Breadcrumb::link(&id, paths::collection_item(&slug, &id)),
-        Breadcrumb::current("restore_version"),
-    ];
+    let mut breadcrumbs = collection_item_base(&def, &slug, &id, id.clone());
+    breadcrumbs.push(Breadcrumb::current("restore_version"));
 
     let base = BasePageContext::for_handler(
         &state,

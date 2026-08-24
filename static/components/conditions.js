@@ -17,7 +17,7 @@
  * @stability stable
  */
 
-import { readCsrfCookie } from './_internal/util/cookies.js';
+import { csrfHeaders } from './_internal/util/csrf.js';
 
 /**
  * @typedef {{ field?: string, equals?: any, not_equals?: any,
@@ -240,10 +240,7 @@ class CrapConditions extends HTMLElement {
       if (this._serverAbort) this._serverAbort.abort();
       this._serverAbort = new AbortController();
 
-      const csrf = readCsrfCookie();
-      /** @type {Record<string, string>} */
-      const headers = { 'Content-Type': 'application/json' };
-      if (csrf) headers['X-CSRF-Token'] = csrf;
+      const headers = csrfHeaders({ 'Content-Type': 'application/json' });
 
       try {
         const res = await fetch(url, {

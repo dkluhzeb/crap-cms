@@ -27,7 +27,7 @@
 
 import { h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
-import { readCsrfCookie } from './_internal/util/cookies.js';
+import { csrfHeaders } from './_internal/util/csrf.js';
 import { toast } from './_internal/util/toast.js';
 
 /**
@@ -184,10 +184,7 @@ class CrapValidateForm extends HTMLElement {
     const form = this.querySelector('#edit-form');
     if (!form) return {};
 
-    const csrf = readCsrfCookie();
-    /** @type {Record<string, string>} */
-    const headers = { 'Content-Type': 'application/json' };
-    if (csrf) headers['X-CSRF-Token'] = csrf;
+    const headers = csrfHeaders({ 'Content-Type': 'application/json' });
 
     try {
       const res = await fetch(this._validateUrl, {

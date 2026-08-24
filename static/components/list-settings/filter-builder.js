@@ -57,10 +57,10 @@ export const OPS_BY_TYPE = {
   ],
   number: [
     ['equals', 'op_equals'],
-    ['gt', 'op_gt'],
-    ['lt', 'op_lt'],
-    ['gte', 'op_gte'],
-    ['lte', 'op_lte'],
+    ['greater_than', 'op_gt'],
+    ['less_than', 'op_lt'],
+    ['greater_than_or_equal', 'op_gte'],
+    ['less_than_or_equal', 'op_lte'],
   ],
   select: [
     ['equals', 'op_is'],
@@ -73,10 +73,10 @@ export const OPS_BY_TYPE = {
   checkbox: [['equals', 'op_is']],
   date: [
     ['equals', 'op_is'],
-    ['gt', 'op_after'],
-    ['lt', 'op_before'],
-    ['gte', 'op_on_or_after'],
-    ['lte', 'op_on_or_before'],
+    ['greater_than', 'op_after'],
+    ['less_than', 'op_before'],
+    ['greater_than_or_equal', 'op_on_or_after'],
+    ['less_than_or_equal', 'op_on_or_before'],
   ],
   relationship: [
     ['equals', 'op_is'],

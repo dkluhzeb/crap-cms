@@ -15,6 +15,7 @@
 
 import { CrapPickerBase } from './_internal/picker-base.js';
 import { readCsrfCookie } from './_internal/util/cookies.js';
+import { CSRF_FIELD, csrfHeaders } from './_internal/util/csrf.js';
 
 const LOCALE_ENDPOINT = '/admin/api/locale';
 
@@ -29,15 +30,12 @@ class CrapUiLocalePicker extends CrapPickerBase {
   async _onValue(locale) {
     const csrf = readCsrfCookie();
     const body = new URLSearchParams({ locale });
-    if (csrf) body.append('_csrf', csrf);
+    if (csrf) body.append(CSRF_FIELD, csrf);
 
     try {
       const resp = await fetch(LOCALE_ENDPOINT, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
-        },
+        headers: csrfHeaders({ 'Content-Type': 'application/x-www-form-urlencoded' }),
         body,
       });
       if (resp.ok) location.reload();

@@ -14,7 +14,7 @@ use crate::{
             page::globals::GlobalRestoreConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden,
+            check_access_or_forbid, extract_editor_locale, forbidden, global_base,
             load_version_with_missing_relations, paths, redirect_response, render_page,
             require_global, server_error,
         },
@@ -88,11 +88,8 @@ pub async fn restore_confirm(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", paths::DASHBOARD),
-        Breadcrumb::link(def.display_name(), paths::global(&slug)),
-        Breadcrumb::current("restore_version"),
-    ];
+    let mut breadcrumbs = global_base(&def, &slug);
+    breadcrumbs.push(Breadcrumb::current("restore_version"));
 
     let base = BasePageContext::for_handler(
         &state,
