@@ -27,8 +27,26 @@ pub struct DatabaseConfig {
     pub url: Option<String>,
     /// Path to the `SQLite` database file (only used when `backend = "sqlite"`).
     pub path: String,
-    /// Maximum number of connections in the pool. Default: 64.
+    /// Maximum number of connections in the **read** pool. Default: 64.
+    ///
+    /// Reads and writes draw from separate pools (see `write_pool_max_size`).
+    /// Under `SQLite` WAL an unlimited number of readers run concurrently, so
+    /// this is the pool that governs read concurrency; size it to the peak
+    /// number of simultaneous read requests you want to serve without
+    /// queueing. (Historically this sized the single shared pool; it now
+    /// sizes the read pool, which is where read concurrency is decided.)
     pub pool_max_size: u32,
+    /// Maximum number of connections in the **write** pool. Default: 4.
+    ///
+    /// Writes take `BEGIN IMMEDIATE` (`SQLite` WAL serializes to a single
+    /// writer), so a small pool is correct: excess concurrent writers queue
+    /// on pool checkout rather than consuming read-pool connections and
+    /// starving readers. Raising this does not increase `SQLite` write
+    /// throughput (the engine still serializes writers); it only widens how
+    /// many writers wait on a connection vs. on the write lock. On Postgres,
+    /// where writers run concurrently, raise it to your write concurrency.
+    #[serde(default = "default_write_pool_max_size")]
+    pub write_pool_max_size: u32,
     /// `SQLite` busy timeout in milliseconds. Default: 30000 (30s).
     /// Accepts integer milliseconds or human-readable string ("30s", "1m").
     #[serde(with = "serde_duration_ms")]
@@ -71,6 +89,10 @@ pub struct DatabaseConfig {
     pub stmt_cache_capacity: usize,
 }
 
+fn default_write_pool_max_size() -> u32 {
+    4
+}
+
 fn default_cache_size() -> i64 {
     -16384
 }
@@ -94,6 +116,7 @@ impl Default for DatabaseConfig {
             url: None,
             path: "data/crap.db".to_string(),
             pool_max_size: 64,
+            write_pool_max_size: default_write_pool_max_size(),
             busy_timeout: 30000,
             connection_timeout: 30,
             cache_size: default_cache_size(),
@@ -127,6 +150,24 @@ mod tests {
     fn stmt_cache_capacity_defaults_to_128() {
         let config = crate::config::CrapConfig::default();
         assert_eq!(config.database.stmt_cache_capacity, 128);
+    }
+
+    #[test]
+    fn write_pool_max_size_defaults_to_4() {
+        let config = crate::config::CrapConfig::default();
+        assert_eq!(config.database.write_pool_max_size, 4);
+    }
+
+    #[test]
+    fn write_pool_max_size_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[database]\nwrite_pool_max_size = 8\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.database.write_pool_max_size, 8);
     }
 
     #[test]

@@ -24,6 +24,10 @@ impl CrapConfig {
             bail!("database.pool_max_size must be > 0");
         }
 
+        if self.database.write_pool_max_size == 0 {
+            bail!("database.write_pool_max_size must be > 0");
+        }
+
         if self.database.connection_timeout == 0 {
             bail!("database.connection_timeout must be > 0");
         }
@@ -526,6 +530,14 @@ mod tests {
         config.database.pool_max_size = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("pool_max_size"));
+    }
+
+    #[test]
+    fn validate_write_pool_max_size_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.database.write_pool_max_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("write_pool_max_size"));
     }
 
     #[test]

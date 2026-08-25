@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: $0 [--duration SEC] [--concurrency N,N,...] [--scenarios NAME,...] [--email E] [--password P]"
             echo ""
-            echo "Scenarios: describe, count, find, find_where, find_by_id, find_deep, find_deep5, create, update"
+            echo "Scenarios: describe, count, find, find_where, find_by_id, find_deep, find_deep5, create, update, mixed"
             echo "Defaults:  duration=10, concurrency=1,10,50, all scenarios"
             exit 0
             ;;
@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Order: light reads first, heavy/write scenarios last (to avoid poisoning measurements)
-ALL_SCENARIOS="describe count find find_where find_by_id find_deep find_deep5 create update"
+ALL_SCENARIOS="describe count find find_where find_by_id find_deep find_deep5 create update mixed"
 if [[ -z "$SCENARIOS" ]]; then
     SCENARIOS="$ALL_SCENARIOS"
 fi
@@ -221,15 +221,14 @@ format_latency() {
     fi
 }
 
-# Run ghz and parse JSON output for results
-run_ghz() {
-    local label="$1"
-    local concurrency="$2"
-    local rpc="$3"
-    local data="$4"
-    local auth="${5:-}"
-
-    info "  ${label} @ c=${concurrency} for ${DURATION}s..."
+# Run ghz and print its raw JSON report to stdout. No parsing, no
+# side effects — so it can run in the background (the mixed scenario
+# runs two of these concurrently).
+ghz_json() {
+    local concurrency="$1"
+    local rpc="$2"
+    local data="$3"
+    local auth="${4:-}"
 
     local cmd=(
         ghz --insecure
@@ -247,8 +246,14 @@ run_ghz() {
     cmd+=(-d "$data")
     cmd+=("$GRPC_ADDR")
 
-    local output
-    output=$("${cmd[@]}" 2>/dev/null) || true
+    "${cmd[@]}" 2>/dev/null || true
+}
+
+# Parse a ghz JSON report into the result table under a label/conc.
+add_ghz_result() {
+    local label="$1"
+    local conc="$2"
+    local output="$3"
 
     local rps p50 p95 p99 total total_err errors
 
@@ -286,7 +291,22 @@ run_ghz() {
     p95=$(format_latency "$p95")
     p99=$(format_latency "$p99")
 
-    add_result "$label" "$concurrency" "$rps" "$p50" "$p95" "$p99" "$errors"
+    add_result "$label" "$conc" "$rps" "$p50" "$p95" "$p99" "$errors"
+}
+
+# Run one ghz scenario and record its result.
+run_ghz() {
+    local label="$1"
+    local concurrency="$2"
+    local rpc="$3"
+    local data="$4"
+    local auth="${5:-}"
+
+    info "  ${label} @ c=${concurrency} for ${DURATION}s..."
+
+    local output
+    output=$(ghz_json "$concurrency" "$rpc" "$data" "$auth")
+    add_ghz_result "$label" "$concurrency" "$output"
 
     # Brief cooldown between runs so the server can drain in-flight requests
     # and release connection/thread pool resources. Without this, heavy
@@ -429,6 +449,57 @@ scenario_describe() {
     done
 }
 
+# Mixed read+write — the read/write pool-contention scenario that none
+# of the single-RPC scenarios above capture. Two ghz instances run
+# CONCURRENTLY: readers stream Find while a smaller writer cohort issues
+# Update (each Update takes SQLite's `BEGIN IMMEDIATE` write lock).
+#
+# On a single shared connection pool, the writers consume connections and
+# starve readers — mixed_read errors climb and its p99 balloons versus the
+# standalone `find` scenario at the same read concurrency. A read/write
+# pool split should keep mixed_read's throughput, p99, and error rate at
+# the standalone-`find` baseline regardless of the write load. The two
+# halves are measured and reported separately (mixed_read / mixed_write)
+# with full ghz percentiles, so a regression in either is visible.
+#
+# The writer uses Update on a single fixed post (idempotent content), not
+# Create — so it exercises the write path without accumulating rows that
+# would bloat the DB and poison the read half mid-run.
+scenario_mixed() {
+    if [[ -z "${POST_ID:-}" || -z "${USER_ID:-}" ]]; then
+        warn "Skipping mixed — need both a post ID (readers/writers) and a user ID"
+        return
+    fi
+    header "Scenario: Mixed read+write (Find readers + Update writers, concurrent)"
+
+    local find_data='{"collection":"posts","limit":"10","depth":"0"}'
+    local update_data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"content\":\"Mixed loadtest update.\"}}"
+
+    for c in $CONCURRENCY_LEVELS; do
+        # Reads dominate; a small writer cohort holds the write lock. At
+        # least one writer even at the lowest concurrency level.
+        local writers=$((c / 10))
+        [[ $writers -lt 1 ]] && writers=1
+
+        info "  mixed @ ${c}r+${writers}w for ${DURATION}s..."
+
+        local tmpdir
+        tmpdir=$(mktemp -d)
+
+        ghz_json "$c" "Find" "$find_data" "$JWT_TOKEN" > "${tmpdir}/read.json" &
+        local read_pid=$!
+        ghz_json "$writers" "Update" "$update_data" "$JWT_TOKEN" > "${tmpdir}/write.json" &
+        local write_pid=$!
+        wait "$read_pid" "$write_pid"
+
+        add_ghz_result "mixed_read" "${c}+${writers}" "$(cat "${tmpdir}/read.json")"
+        add_ghz_result "mixed_write" "${c}+${writers}" "$(cat "${tmpdir}/write.json")"
+
+        rm -rf "$tmpdir"
+        sleep 2
+    done
+}
+
 # ── Run scenarios ────────────────────────────────────────────
 
 echo ""
@@ -446,6 +517,7 @@ for scenario in $SCENARIOS; do
         create)       scenario_create ;;
         update)       scenario_update ;;
         describe)     scenario_describe ;;
+        mixed)        scenario_mixed ;;
         *)            warn "Unknown scenario: $scenario" ;;
     esac
 done

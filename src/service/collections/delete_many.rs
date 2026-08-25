@@ -94,7 +94,7 @@ fn delete_many_pool(
     let runner = ctx.runner()?;
     let def = ctx.collection_def()?;
 
-    let mut conn = pool.get().context("DB connection")?;
+    let mut conn = pool.write().context("DB connection")?;
     let tx = conn
         .transaction_immediate()
         .context("Start bulk delete transaction")?;

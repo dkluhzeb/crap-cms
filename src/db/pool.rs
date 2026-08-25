@@ -44,45 +44,89 @@ impl PoolBackend for SqlitePoolBackend {
     }
 }
 
-/// Connection pool — backend-agnostic wrapper.
+/// Connection pool — backend-agnostic wrapper over a **read** and a
+/// **write** pool.
 ///
-/// Callers get a `BoxedConnection` from `pool.get()` and never see the
-/// underlying backend. The pool type is chosen at startup via `create_pool`.
+/// Callers get a `BoxedConnection` from [`DbPool::get`] (read) or
+/// [`DbPool::write`] (write) and never see the underlying backend. The
+/// backend is chosen at startup via [`create_pool`].
+///
+/// Under `SQLite` WAL, an unlimited number of readers run concurrently but
+/// there is a single writer. Serving reads and writes from one shared pool
+/// lets a burst of writers consume every connection and starve readers.
+/// Splitting them — a large read pool and a small separate write pool —
+/// keeps read concurrency independent of write load: excess writers queue
+/// on write-pool checkout rather than on read connections. On Postgres the
+/// two share one backend (MVCC already handles concurrent writers).
 #[derive(Clone)]
 pub struct DbPool {
-    inner: Arc<dyn PoolBackend>,
+    read: Arc<dyn PoolBackend>,
+    write: Arc<dyn PoolBackend>,
 }
 
 impl DbPool {
-    /// Get a connection from the pool.
+    /// Get a connection from the **read** pool.
+    ///
+    /// This is the default acquisition method. Any path that opens a write
+    /// transaction (`BEGIN IMMEDIATE` via
+    /// [`transaction_immediate`](crate::db::DbConnection::transaction_immediate))
+    /// must use [`DbPool::write`] instead, so it does not consume a read
+    /// connection and starve concurrent readers.
     ///
     /// # Errors
     ///
     /// Returns an error if the pool is exhausted or the backend fails to
     /// hand out a connection.
     pub fn get(&self) -> Result<BoxedConnection> {
-        self.inner.get()
+        self.read.get()
+    }
+
+    /// Get a connection from the **write** pool.
+    ///
+    /// Callers that open `BEGIN IMMEDIATE` acquire here. On `SQLite` the write
+    /// pool is small and separate from the read pool; on Postgres it is the
+    /// same backend as [`DbPool::get`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pool is exhausted or the backend fails to
+    /// hand out a connection.
+    pub fn write(&self) -> Result<BoxedConnection> {
+        self.write.get()
     }
 
     /// Return the backend identifier (e.g. `"sqlite"`, `"postgres"`).
     #[must_use]
     pub fn kind(&self) -> &str {
-        self.inner.kind()
+        self.read.kind()
     }
 
-    /// Wrap an existing r2d2 `SQLite` pool. Used in tests.
+    /// Wrap an existing r2d2 `SQLite` pool as an unsplit pool (reads and
+    /// writes share one backend). Used in tests.
     #[cfg(feature = "sqlite")]
     #[must_use]
     pub fn from_pool(pool: Pool<SqliteConnectionManager>) -> Self {
+        let backend: Arc<dyn PoolBackend> = Arc::new(SqlitePoolBackend { pool });
         Self {
-            inner: Arc::new(SqlitePoolBackend { pool }),
+            read: Arc::clone(&backend),
+            write: backend,
         }
     }
 
-    /// Create from an `Arc<dyn PoolBackend>` (used by backend-specific pool constructors).
+    /// Build a split pool from separate read and write backends.
+    #[cfg(feature = "sqlite")]
+    fn from_split(read: Arc<dyn PoolBackend>, write: Arc<dyn PoolBackend>) -> Self {
+        Self { read, write }
+    }
+
+    /// Create from a single `Arc<dyn PoolBackend>` shared by reads and
+    /// writes (used by the Postgres backend, which does not split).
     #[cfg(feature = "postgres")]
     pub(crate) fn from_backend(backend: Arc<dyn PoolBackend>) -> Self {
-        Self { inner: backend }
+        Self {
+            read: Arc::clone(&backend),
+            write: backend,
+        }
     }
 }
 
@@ -145,11 +189,42 @@ fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> 
 
     tracing::info!("Database path: {}", db_path.display());
 
-    let manager = SqliteConnectionManager::file(&db_path);
+    // Reads and writes get separate pools over the same WAL database (see
+    // `DbPool`). A large read pool keeps read concurrency independent of a
+    // small write pool that serializes on SQLite's single writer.
+    let read = build_sqlite_pool(&db_path, config.database.pool_max_size, Some(1), config)?;
+    // The write pool keeps no minimum-idle connection: a short-lived `DbPool`
+    // that never issues a write (common in tests) would otherwise drop a
+    // freshly built, never-checked-out r2d2 pool whose min-idle maintenance
+    // task is still settling, which can deadlock in the pool's `Drop`.
+    let write = build_sqlite_pool(&db_path, config.database.write_pool_max_size, None, config)?;
 
-    let pool = Pool::builder()
-        .max_size(config.database.pool_max_size)
-        .min_idle(Some(1))
+    tracing::info!(
+        "SQLite pools created (read={}, write={})",
+        config.database.pool_max_size,
+        config.database.write_pool_max_size
+    );
+
+    Ok(DbPool::from_split(
+        Arc::new(SqlitePoolBackend { pool: read }),
+        Arc::new(SqlitePoolBackend { pool: write }),
+    ))
+}
+
+/// Build one `SQLite` r2d2 pool of the given size, wired with the shared
+/// pragmas. Reads and writes each get their own pool via this helper.
+#[cfg(feature = "sqlite")]
+fn build_sqlite_pool(
+    db_path: &Path,
+    max_size: u32,
+    min_idle: Option<u32>,
+    config: &CrapConfig,
+) -> Result<Pool<SqliteConnectionManager>> {
+    let manager = SqliteConnectionManager::file(db_path);
+
+    Pool::builder()
+        .max_size(max_size)
+        .min_idle(min_idle)
         .connection_timeout(Duration::from_secs(config.database.connection_timeout))
         .connection_customizer(Box::new(SqlitePragmas {
             busy_timeout: config.database.busy_timeout,
@@ -160,9 +235,7 @@ fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> 
         }))
         .test_on_check_out(false)
         .build(manager)
-        .context("Failed to create connection pool")?;
-
-    Ok(DbPool::from_pool(pool))
+        .context("Failed to create connection pool")
 }
 
 #[cfg(feature = "sqlite")]
@@ -233,6 +306,67 @@ mod tests {
         // A connection should be obtainable from the pool.
         let conn = pool.get().expect("failed to get connection from pool");
         drop(conn);
+    }
+
+    #[test]
+    fn write_pool_hands_out_usable_connections() {
+        let (_dir, pool) = temp_pool();
+        let conn = pool.write().expect("failed to get write connection");
+        drop(conn);
+    }
+
+    #[test]
+    fn read_and_write_pools_share_the_same_database() {
+        let (_dir, pool) = temp_pool();
+
+        // Write through the write pool...
+        let wconn = pool.write().expect("write connection");
+        wconn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+                 INSERT INTO t (v) VALUES ('hello');",
+            )
+            .expect("write via write pool");
+        drop(wconn);
+
+        // ...and read it back through the read pool.
+        let rconn = pool.get().expect("read connection");
+        let v = rconn
+            .query_one("SELECT v FROM t WHERE id = 1", &[])
+            .expect("select")
+            .unwrap()
+            .get_string("v")
+            .unwrap();
+        assert_eq!(v, "hello", "read pool must see what the write pool wrote");
+    }
+
+    /// The read and write pools must be *independent*: exhausting the write
+    /// pool must not block reads. With a write pool of size 1, holding its
+    /// one connection makes a second `write()` time out, while `get()` (the
+    /// large read pool) still succeeds immediately. This is the property the
+    /// whole split exists to guarantee — writers cannot starve readers.
+    #[test]
+    fn exhausting_the_write_pool_does_not_block_reads() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let mut config = CrapConfig::default();
+        config.database.pool_max_size = 8;
+        config.database.write_pool_max_size = 1;
+        config.database.connection_timeout = 1; // keep the exhaustion wait short
+        let pool = create_pool(dir.path(), &config).expect("create_pool failed");
+
+        // Hold the write pool's only connection.
+        let _held = pool.write().expect("first write connection");
+
+        // A second write connection cannot be obtained (write pool exhausted).
+        assert!(
+            pool.write().is_err(),
+            "write pool of size 1 must be exhausted while its connection is held"
+        );
+
+        // But a read connection is still available — reads are not blocked
+        // by a saturated write pool.
+        let rconn = pool.get().expect("read connection must still be available");
+        drop(rconn);
     }
 
     #[test]

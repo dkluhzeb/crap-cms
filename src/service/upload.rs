@@ -100,7 +100,7 @@ pub fn create_upload(
 
     if !queued_conversions.is_empty()
         && let Some(pool) = ctx.pool
-        && let Ok(conn) = pool.get()
+        && let Ok(conn) = pool.write()
         && let Err(e) = enqueue_conversions(
             &conn,
             ctx.slug,
@@ -215,7 +215,7 @@ pub fn update_upload(
 
     if !queued_conversions.is_empty()
         && let Some(pool) = ctx.pool
-        && let Ok(conn) = pool.get()
+        && let Ok(conn) = pool.write()
         && let Err(e) = enqueue_conversions(
             &conn,
             ctx.slug,

@@ -105,16 +105,30 @@ field-hook, never the whole document.
 
 ## Part B — the read pipeline
 
-**B1 — Read/write connection-pool split. (near non-breaking; highest system ROI)**
+**B1 — Read/write connection-pool split. (near non-breaking; highest system ROI) — ✅ LANDED**
 SQLite WAL allows **unlimited readers + one writer**, but reads and writes
-currently contend for one pool, so a writer holding the lock starves readers of
-connections — the conc-50 collapse. Split into:
-- a **large read pool** (deferred / no-transaction simple reads), and
-- a **small write pool** (~4 connections, `transaction_immediate()`).
+previously contended for one pool, so a writer holding a connection starved
+readers — the conc-50 collapse. `DbPool` now holds two backends:
+- a **large read pool** (`pool_max_size`, default 64) behind `DbPool::get()`, and
+- a **small write pool** (`write_pool_max_size`, default 4) behind
+  `DbPool::write()`, used by every `transaction_immediate()` write path.
 
-Add a mixed-workload load scenario (concurrent find + update) — the current
-single-scenario test does not capture this. (Design note already tracked
-separately; this is its home.)
+Routing follows the risk asymmetry — a read misrouted to the tiny write pool
+would starve, but a write left on the large read pool is merely un-isolated — so
+`get()` stays the safe default (read pool) and only verified writes move to
+`write()`: the service create/update/delete/version ops (the chokepoint for
+gRPC/MCP/admin), Lua pool-mode CRUD + `crap.transaction`, login/verify/reset, and
+image-conversion enqueue. The scheduler control loop and standalone CLI commands
+stay on the read pool by design (bounded by their own concurrency budget; a
+size-4 write pool would throttle background job polling). Postgres keeps one
+shared pool
+(MVCC handles concurrent writers), so the split is SQLite-only.
+
+`tests/grpc_loadtest.sh` gained a `mixed` scenario (concurrent Find readers +
+Update writers via two parallel `ghz` runs, reported as `mixed_read` /
+`mixed_write` with full percentiles) — the before/after measurement this split is
+accountable to. Unit tests in `db::pool` assert the pools are independent
+(exhausting the write pool does not block reads) and share one database.
 
 **B2 — Depth-1 population via `LEFT JOIN` in the main SELECT. (internal)**
 Population is batched now but still **post-query** — one round-trip per
@@ -138,8 +152,10 @@ surface, defined once.
 Each stage is a normal PR with a **before/after load-test delta** as its
 acceptance evidence — never merge a perf change without the number it bought.
 
-1. **B1 (pool split)** — highest ROI, lowest blast radius. Ship first; it needs
-   no API change and fixes the concurrency cliff for *all* workloads.
+1. **B1 (pool split)** — ✅ **landed.** Highest ROI, lowest blast radius; no API
+   change, fixes the concurrency cliff for *all* workloads. Measure the
+   `mixed` scenario before/after to confirm the read half holds its
+   standalone-`find` baseline under write load.
 2. **A3 (thread-local VMs)** — internal; removes the hook-path acquire ceiling
    and unblocks the connection-injection hardening.
 3. **A1 (batch hook contract)** — the breaking change; do it while alpha allows.

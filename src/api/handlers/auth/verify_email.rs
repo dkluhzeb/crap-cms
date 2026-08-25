@@ -23,7 +23,7 @@ struct VerifyEmailBlockingInput {
 fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Status> {
     let mut conn = input
         .pool
-        .get()
+        .write()
         .inspect_err(|e| error!("Verify email DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
     // `transaction_immediate()` — `consume_verification_token` does

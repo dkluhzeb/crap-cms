@@ -42,7 +42,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
     let def = ctx.global_def()?;
-    let mut conn = pool.get().context("DB connection")?;
+    let mut conn = pool.write().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let queue = Rc::new(RefCell::new(Vec::new()));

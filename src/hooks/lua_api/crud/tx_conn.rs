@@ -102,9 +102,11 @@ pub(crate) fn with_lua_db<R>(
         .0
         .clone();
 
+    // Pool-mode always opens an IMMEDIATE tx (even for `find`/`count`), so
+    // it is write-capable and must draw from the write pool.
     let mut conn = pool
-        .get()
-        .map_err(|e| RuntimeError(format!("pool.get: {e}")))?;
+        .write()
+        .map_err(|e| RuntimeError(format!("pool.write: {e}")))?;
     let tx = conn
         .transaction_immediate()
         .map_err(|e| RuntimeError(format!("begin transaction: {e}")))?;

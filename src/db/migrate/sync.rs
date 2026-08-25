@@ -28,7 +28,7 @@ use super::{backfill_ref_counts, checkbox_columns, collection, global, identifie
 /// Returns an error if the connection, transaction, or any of the
 /// per-collection/global schema-sync steps fails.
 pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = pool.write().context("Failed to get DB connection")?;
     let tx = conn
         .transaction_immediate()
         .context("Failed to start migration transaction")?;

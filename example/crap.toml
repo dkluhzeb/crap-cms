@@ -7,7 +7,8 @@ grpc_reflection = true
 
 [database]
 path = "data/crap.db"
-pool_max_size = 64
+pool_max_size = 64          # read pool
+write_pool_max_size = 4     # write pool (SQLite only)
 stmt_cache_capacity = 128
 # backend = "postgres"
 # url = "host=localhost port=5432 user=crap password=crap dbname=crap_cms"

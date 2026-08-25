@@ -57,7 +57,7 @@ fn consume_reset_token(
     password: &str,
     invalidation_transport: &SharedInvalidationTransport,
 ) -> anyhow::Result<()> {
-    let mut conn = pool.get()?;
+    let mut conn = pool.write()?;
     // SELECT-then-UPDATE (find token row, then write the new hash): take a write
     // lock up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under
     // concurrent writers — same reasoning as the gRPC reset path.

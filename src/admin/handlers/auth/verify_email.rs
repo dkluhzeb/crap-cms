@@ -36,7 +36,7 @@ fn consume_verification_token(
     registry: &Registry,
     token: &str,
 ) -> Result<bool, Error> {
-    let mut conn = pool.get()?;
+    let mut conn = pool.write()?;
     // SELECT-then-UPDATE (find token row, then mark verified): take a write lock
     // up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under concurrent
     // writers — same reasoning as the gRPC verify-email path.

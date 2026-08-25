@@ -41,7 +41,7 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
 fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let mut conn = pool.get().context("DB connection")?;
+    let mut conn = pool.write().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let queue = Rc::new(RefCell::new(Vec::new()));

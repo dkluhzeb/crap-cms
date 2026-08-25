@@ -31,7 +31,7 @@ struct ResetPasswordBlockingInput {
 fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Status> {
     let mut conn = input
         .pool
-        .get()
+        .write()
         .inspect_err(|e| error!("Reset password DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
     // `transaction_immediate()` — same SELECT-then-UPDATE pattern as

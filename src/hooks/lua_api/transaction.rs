@@ -57,8 +57,8 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
         .clone();
 
     let mut conn = pool
-        .get()
-        .map_err(|e| RuntimeError(format!("crap.transaction: pool.get: {e}")))?;
+        .write()
+        .map_err(|e| RuntimeError(format!("crap.transaction: pool.write: {e}")))?;
     let tx = conn
         .transaction_immediate()
         .map_err(|e| RuntimeError(format!("crap.transaction: begin: {e}")))?;

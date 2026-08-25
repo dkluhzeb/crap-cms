@@ -927,6 +927,37 @@ always access-controlled.
 public_schema_introspection = false   # require auth to read the schema
 ```
 
+### Separate read/write connection pools (`[database] write_pool_max_size`)
+
+Reads and writes now draw from independent connection pools instead of one
+shared pool. Under SQLite WAL an unlimited number of readers run concurrently
+while a single writer serializes; with one pool, a burst of concurrent writers
+could consume every connection and starve readers (read latency and error rate
+spiked under mixed read/write load). Reads now use a large pool and writes a
+small separate pool, so read throughput stays independent of write load.
+
+`pool_max_size` (default `64`, unchanged) now sizes the **read** pool — the one
+that governs read concurrency — and a new `write_pool_max_size` (default `4`)
+sizes the write pool:
+
+```toml
+[database]
+pool_max_size = 64        # read pool (was: the single shared pool)
+write_pool_max_size = 4   # write pool (SQLite only)
+```
+
+Writes take `BEGIN IMMEDIATE` and serialize on SQLite's single writer, so a
+small write pool is correct — excess concurrent writers queue on checkout
+instead of starving readers. Raising `write_pool_max_size` does **not** increase
+SQLite write throughput (the engine still serializes writers). On **Postgres**,
+which handles concurrent writers via MVCC, reads and writes share one pool and
+`write_pool_max_size` is ignored.
+
+**Action:** none. Defaults preserve behavior; `pool_max_size` keeps sizing the
+pool that matters for read concurrency. Tune `write_pool_max_size` up only if a
+write-heavy deployment sees write-pool checkout timeouts under sustained
+concurrent writes.
+
 ### Hook refs accept per-config `options` (`ctx.options`)
 
 Any hook reference — collection/global lifecycle hooks, field hooks,

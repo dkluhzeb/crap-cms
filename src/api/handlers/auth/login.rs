@@ -42,9 +42,11 @@ struct LoginBlockingInput {
 /// recoverable failure (wrong password, locked, unverified). Errors propagate
 /// only for system failures.
 fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>, Status> {
+    // Local auth reads the user then writes lockout/attempt counters on this
+    // same connection, so it is write-capable and draws from the write pool.
     let conn = input
         .pool
-        .get()
+        .write()
         .inspect_err(|e| error!("Login DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 

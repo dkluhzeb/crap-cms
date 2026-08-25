@@ -109,7 +109,7 @@ fn update_many_pool(
     // DeleteMany — which re-queries because deleted rows leave the result
     // set — updated rows still match the filter, so the IDs must be
     // collected once; the per-document deep update then runs from the ID.
-    let mut conn = pool.get().context("DB connection")?;
+    let mut conn = pool.write().context("DB connection")?;
     let tx = conn
         .transaction_immediate()
         .context("Start bulk update transaction")?;

@@ -74,6 +74,7 @@ Fields that support this: `max_file_size` (global and per-collection), `max_memo
 
 **Fatal errors:**
 - `database.pool_max_size = 0`
+- `database.write_pool_max_size = 0`
 - `database.connection_timeout = 0`
 - `hooks.vm_pool_size = 0`
 - `server.admin_port` or `server.grpc_port` is `0`
@@ -109,7 +110,8 @@ host = "0.0.0.0"        # Bind address
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
-pool_max_size = 64       # Max connections in the pool
+pool_max_size = 64       # Max connections in the READ pool
+write_pool_max_size = 4  # Max connections in the WRITE pool (SQLite only)
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 30  # Pool checkout timeout (seconds or "30s")
 cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
@@ -290,7 +292,8 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `path` | string | `"data/crap.db"` | SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is. |
-| `pool_max_size` | integer | `64` | Maximum number of connections in the SQLite connection pool. |
+| `pool_max_size` | integer | `64` | Maximum number of connections in the **read** pool. Reads and writes use separate pools; under SQLite WAL (unlimited concurrent readers) this governs read concurrency. |
+| `write_pool_max_size` | integer | `4` | Maximum number of connections in the **write** pool (SQLite only). Writes take `BEGIN IMMEDIATE` and serialize on SQLite's single writer, so a small pool is correct — excess writers queue on checkout instead of starving readers of read-pool connections. Raising it does not increase SQLite write throughput; on Postgres (single shared pool) it is ignored. |
 | `cache_size` | integer | `-16384` | SQLite page cache size. Negative = KB, positive = pages. Default 16MB. |
 | `mmap_size` | integer | `268435456` | SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable. |
 | `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |

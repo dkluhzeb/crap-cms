@@ -2356,6 +2356,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Separate read and write connection pools (`[database] write_pool_max_size`).**
+  Reads and writes now draw from independent pools instead of one shared pool.
+  Under SQLite WAL an unlimited number of readers run concurrently while a single
+  writer serializes; with one pool, a burst of concurrent writers could consume
+  every connection and starve readers (read latency and error rate spiked under
+  mixed read/write load). Reads now use a large pool (`pool_max_size`, still
+  default 64) and writes a small separate pool (`write_pool_max_size`, default 4),
+  so concurrent writers queue on write-pool checkout rather than on read
+  connections and read throughput stays independent of write load. Request
+  hot-path writes (create/update/delete, login, email-verify, password-reset,
+  image-conversion enqueue) and Lua CRUD route to the write pool; the scheduler's
+  control loop and standalone CLI commands intentionally stay on the read pool
+  (their concurrency is bounded elsewhere and they are not request-path
+  contention sources). Postgres keeps a single shared pool — its MVCC engine
+  handles concurrent writers — so `write_pool_max_size` is SQLite-only. The
+  `tests/grpc_loadtest.sh` harness gains a `mixed` scenario (concurrent Find
+  readers + Update writers, reported separately) that measures exactly this
+  contention. No config change is required; `pool_max_size` keeps its meaning for
+  reads.
+
 - **`crap-cms fmt` supports Handlebars raw blocks and a `--follow-symlinks`
   flag.** `{{{{raw}}}} … {{{{/raw}}}}` blocks (for displaying literal handlebars
   syntax) now pass through verbatim instead of having their bodies reformatted,

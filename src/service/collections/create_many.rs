@@ -99,7 +99,7 @@ fn create_many_pooled(
 
     enforce_bulk_limit("create_many", items.len(), opts.max_documents)?;
 
-    let mut conn = pool.get().context("DB connection")?;
+    let mut conn = pool.write().context("DB connection")?;
     let tx = conn
         .transaction_immediate()
         .context("Start bulk create transaction")?;

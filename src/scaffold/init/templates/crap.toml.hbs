@@ -14,7 +14,8 @@ host = "0.0.0.0"
 
 [database]
 path = "data/crap.db"
-# pool_max_size = 64             # max connections in pool
+# pool_max_size = 64             # max connections in the READ pool
+# write_pool_max_size = 4        # max connections in the WRITE pool (SQLite only)
 # busy_timeout = "30s"          # SQLite busy timeout (ms or "30s", "1m")
 # connection_timeout = 30         # pool checkout timeout (seconds or "30s")
 # cache_size = -16384            # page cache in KB (negative = KB; default 16MB)
