@@ -570,6 +570,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The storage key contract is now enforced on every upload backend, not just
+  local.** `LocalStorage` rejected traversal (`..`), absolute, backslash, and
+  null-byte keys at the storage trust boundary, but `S3Storage` and
+  `CustomStorage` passed keys straight through. The check is now one shared
+  `validate_key` applied by all three backends' `put`/`get`/`delete` (and
+  `exists`, which classifies an invalid key as "not present" to match local).
+  This matters most for a user-provided `custom` Lua backend that maps keys onto
+  a filesystem: it can no longer be handed an escaping key, since validation runs
+  before the Lua handler is dispatched. Legitimate keys (CMS-generated
+  `media/{id}_{name}`) are unaffected.
+
 - **Password-reset tokens now carry the same entropy as email-verification
   tokens (32-character nanoid).** The reset flow minted a 21-character default
   nanoid while verification used 32; both now share one
@@ -2956,6 +2967,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - The `import` command builds group sub-field column names through the shared
     `prefixed_name` helper instead of a bare `format!("{}__{}")`, matching every
     other group-column site.
+  - Three more group-column builders route through `prefixed_name` rather than a
+    bare `format!("{prefix}__{sub}")`: the nested→flat group flattener
+    (`group_repr::flatten_group_obj`), the admin form-value flattener
+    (`flatten_group_value`), and the admin field-context full-name resolver
+    (`resolve_full_name`). With the join/group sites and the `import` command
+    already migrated, every `group__sub` column name in the tree now comes from
+    the one helper.
 - The verification-email `spawn_blocking` body is extracted into a named
   `send_verification_email_blocking` function so the closure is a single call, per
   the "no business logic inside a `spawn_blocking` closure" rule. Platform-specific

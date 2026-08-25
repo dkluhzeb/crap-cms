@@ -17,7 +17,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::core::{DocumentFields, FieldDefinition, FieldType, find_field};
+use crate::core::{DocumentFields, FieldDefinition, FieldType, find_field, prefixed_name};
 
 /// Flatten nested `Group` objects into `group__sub` column keys. The inverse of
 /// [`nest_group_fields`]; the write-side boundary used by the DB persist layer.
@@ -61,7 +61,7 @@ fn flatten_group_obj(
     map: &mut DocumentFields,
 ) {
     for (sub_key, sub_val) in obj {
-        let flat_key = format!("{prefix}__{sub_key}");
+        let flat_key = prefixed_name(prefix, sub_key);
 
         if let Some(f) = find_field(sub_key, fields)
             && f.field_type == FieldType::Group

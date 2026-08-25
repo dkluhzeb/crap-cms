@@ -11,6 +11,7 @@ use tokio::task::block_in_place;
 
 use crate::config::S3Config;
 
+use super::backend::validate_key;
 use super::{SharedStorage, StorageBackend, StorageNotFound};
 
 /// S3-compatible storage backend.
@@ -43,6 +44,7 @@ fn is_not_found_error(err_str: &str) -> bool {
 
 impl StorageBackend for S3Storage {
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()> {
+        validate_key(key)?;
         let full_key = self.full_key(key);
 
         block_in_place(|| {
@@ -58,6 +60,7 @@ impl StorageBackend for S3Storage {
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
+        validate_key(key)?;
         let full_key = self.full_key(key);
         let response = block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.bucket.get_object(&full_key))
@@ -76,6 +79,7 @@ impl StorageBackend for S3Storage {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
+        validate_key(key)?;
         let full_key = self.full_key(key);
 
         block_in_place(|| {
@@ -87,6 +91,12 @@ impl StorageBackend for S3Storage {
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
+        // An invalid key definitionally cannot map to a stored object — return
+        // false rather than erroring, matching `LocalStorage::exists`.
+        if validate_key(key).is_err() {
+            return Ok(false);
+        }
+
         let full_key = self.full_key(key);
         let result = block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.bucket.head_object(&full_key))
@@ -240,6 +250,25 @@ mod tests {
         // Empty / unrelated noise also passes through to error.
         assert!(!is_not_found_error(""));
         assert!(!is_not_found_error("OK"));
+    }
+
+    /// Regression: the storage key contract (`validate_key`) is enforced on
+    /// S3 exactly as on `LocalStorage` — a traversal / absolute / null-byte
+    /// key is rejected at the boundary, *before* any network request, so no
+    /// live bucket or runtime is needed to prove it. Prevents malformed keys
+    /// from reaching the bucket and keeps all three backends in parity.
+    #[test]
+    fn rejects_malformed_keys_before_any_network_call() {
+        let storage = create_s3_storage(&s3_config_with_region("eu-west-1")).unwrap();
+
+        assert!(storage.put("../escape.txt", b"x", "text/plain").is_err());
+        assert!(storage.get("../escape.txt").is_err());
+        assert!(storage.delete("../escape.txt").is_err());
+        assert!(storage.put("/etc/passwd", b"x", "text/plain").is_err());
+        assert!(storage.put("ok\0hidden", b"x", "text/plain").is_err());
+
+        // exists() maps an invalid key to "not present", matching LocalStorage.
+        assert!(!storage.exists("../escape.txt").unwrap());
     }
 
     fn s3_config_with_region(region: &str) -> S3Config {

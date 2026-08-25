@@ -8,6 +8,7 @@ use crate::{
     admin::Translations,
     core::{
         DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field, find_field,
+        prefixed_name,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -96,7 +97,7 @@ fn is_group_field(field_defs: &[FieldDefinition], name: &str) -> bool {
 /// Recursively flatten a group object into `prefix__key` pairs.
 fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(String, String)>) {
     for (sub_k, sub_v) in obj {
-        let col = format!("{prefix}__{sub_k}");
+        let col = prefixed_name(prefix, sub_k);
 
         if let Value::Object(nested) = sub_v {
             flatten_group_value(&col, nested, out);

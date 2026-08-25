@@ -3,10 +3,52 @@
 
 use std::{fmt, path::PathBuf, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 /// Thread-safe shared reference to a storage backend.
 pub type SharedStorage = Arc<dyn StorageBackend>;
+
+/// Strict validation for storage keys — the shared key contract every backend
+/// enforces at the storage trust boundary. Rejects any input that could, when
+/// mapped to a native address, escape its container or otherwise be malformed:
+/// path traversal via `..`, absolute paths, backslash separators, or null
+/// bytes.
+///
+/// The trait is the trust boundary: callers (admin handlers, Lua hooks, future
+/// migrations) sanitize filenames upstream, but each backend re-checks here so
+/// a future caller — or a user-provided [`custom`](super::custom) Lua backend
+/// that maps keys onto a filesystem — cannot accidentally escape.
+///
+/// # Errors
+///
+/// Returns an error describing the first violation found.
+pub(super) fn validate_key(key: &str) -> Result<()> {
+    if key.is_empty() {
+        bail!("Storage key is empty");
+    }
+
+    if key.contains('\0') {
+        bail!("Storage key contains a null byte");
+    }
+
+    // Absolute paths (Unix `/` or Windows drive-letter / UNC-style) must be
+    // rejected — joining an absolute RHS silently replaces the base. Checking
+    // the first byte handles both forms portably.
+    let first = key.as_bytes()[0];
+    if first == b'/' || first == b'\\' {
+        bail!("Storage key must be relative: {key:?}");
+    }
+
+    // Reject `..` as any component, using both separators so that a key like
+    // `foo\..\bar` is caught on filesystems that treat `\` specially.
+    for component in key.split(['/', '\\']) {
+        if component == ".." {
+            bail!("Storage key contains '..' traversal: {key:?}");
+        }
+    }
+
+    Ok(())
+}
 
 /// Error returned by [`StorageBackend::get`] when a key genuinely does not
 /// exist — as opposed to a transient/infrastructure failure (network
@@ -80,5 +122,27 @@ pub trait StorageBackend: Send + Sync {
     fn local_path(&self, key: &str) -> Option<PathBuf> {
         let _ = key;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_key;
+
+    #[test]
+    fn accepts_well_formed_keys() {
+        assert!(validate_key("media/abc123_photo.jpg").is_ok());
+        assert!(validate_key("posts/thumb/small.png").is_ok());
+    }
+
+    #[test]
+    fn rejects_traversal_absolute_null_and_backslash() {
+        assert!(validate_key("").is_err());
+        assert!(validate_key("../escape.txt").is_err());
+        assert!(validate_key("a/../../escape.txt").is_err());
+        assert!(validate_key("/etc/passwd").is_err());
+        assert!(validate_key("\\absolute\\win.txt").is_err());
+        assert!(validate_key("foo\\..\\escape.txt").is_err());
+        assert!(validate_key("ok\0hidden").is_err());
     }
 }

@@ -22,7 +22,7 @@ use crate::{
             count_errors_in_field_contexts, locale_locked_display, safe_template_id,
         },
     },
-    core::{FieldDefinition, FieldType, timezone::TIMEZONE_OPTIONS},
+    core::{FieldDefinition, FieldType, prefixed_name, timezone::TIMEZONE_OPTIONS},
     db::query::helpers::{lang_column, tz_column, utc_to_local},
 };
 
@@ -37,7 +37,7 @@ fn resolve_full_name(field: &FieldDefinition, name_prefix: &str) -> String {
         name_prefix.to_string() // transparent — layout wrappers don't add their name
     } else if !name_prefix.contains('[') {
         // Top-level group chain: continue using __ naming (matches DB columns)
-        format!("{}__{}", name_prefix, field.name)
+        prefixed_name(name_prefix, &field.name)
     } else {
         format!("{}[{}]", name_prefix, field.name)
     }

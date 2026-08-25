@@ -4,6 +4,7 @@ use std::{fs, io, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use super::backend::validate_key;
 use super::{StorageBackend, StorageNotFound};
 
 /// Local filesystem storage backend.
@@ -46,37 +47,6 @@ impl LocalStorage {
 
         Ok(path)
     }
-}
-
-/// Strict validation for storage keys. Rejects any input that could, when
-/// joined with a base directory, produce a filesystem path outside that
-/// base — i.e. path traversal via `..`, absolute paths, or null bytes.
-fn validate_key(key: &str) -> Result<()> {
-    if key.is_empty() {
-        bail!("Storage key is empty");
-    }
-
-    if key.contains('\0') {
-        bail!("Storage key contains a null byte");
-    }
-
-    // Absolute paths (Unix `/` or Windows drive-letter / UNC-style) must be
-    // rejected — `PathBuf::join` with an absolute RHS silently replaces the
-    // base. Checking the first byte handles both forms portably.
-    let first = key.as_bytes()[0];
-    if first == b'/' || first == b'\\' {
-        bail!("Storage key must be relative: {key:?}");
-    }
-
-    // Reject `..` as any component, using both separators so that a key
-    // like `foo\..\bar` is caught on filesystems that treat `\` specially.
-    for component in key.split(['/', '\\']) {
-        if component == ".." {
-            bail!("Storage key contains '..' traversal: {key:?}");
-        }
-    }
-
-    Ok(())
 }
 
 impl StorageBackend for LocalStorage {

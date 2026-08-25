@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use mlua::{Function, Lua, Table};
 
+use super::backend::validate_key;
 use super::{StorageBackend, StorageNotFound};
 use crate::core::lua_lease::LuaVmLease;
 
@@ -47,6 +48,7 @@ fn storage_fn(lua: &Lua, name: &str) -> Result<Function> {
 
 impl StorageBackend for CustomStorage {
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()> {
+        validate_key(key)?;
         self.lease.with_vm(&mut |lua| {
             let func = storage_fn(lua, "put")?;
             // Pass binary data as a Lua string (mlua maps Vec<u8> <-> Lua string).
@@ -66,6 +68,7 @@ impl StorageBackend for CustomStorage {
         // `nil` return maps to `StorageNotFound` (→ 404) while a raised
         // error or a lease failure (e.g. pool-acquire timeout) propagates
         // as a transient error (→ 503).
+        validate_key(key)?;
         let mut out: Option<Vec<u8>> = None;
         self.lease.with_vm(&mut |lua| {
             let func = storage_fn(lua, "get")?;
@@ -79,6 +82,7 @@ impl StorageBackend for CustomStorage {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
+        validate_key(key)?;
         self.lease.with_vm(&mut |lua| {
             let func = storage_fn(lua, "delete")?;
             func.call::<()>(key.to_string())
@@ -88,6 +92,12 @@ impl StorageBackend for CustomStorage {
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
+        // An invalid key definitionally cannot map to a stored object — return
+        // false rather than erroring, matching `LocalStorage::exists`.
+        if validate_key(key).is_err() {
+            return Ok(false);
+        }
+
         let mut out = false;
         self.lease.with_vm(&mut |lua| {
             // Prefer an explicit `exists`; otherwise fall back to probing `get`.
@@ -231,6 +241,26 @@ mod tests {
             err.downcast_ref::<StorageNotFound>().is_none(),
             "a raised handler error must be transient, not StorageNotFound"
         );
+    }
+
+    /// Regression: the storage key contract (`validate_key`) is enforced on
+    /// the custom backend BEFORE dispatching to user Lua — a traversal /
+    /// absolute / null-byte key is rejected at the boundary, so a user
+    /// `put`/`get` handler that maps keys onto a filesystem can never be
+    /// handed an escaping key. Keeps all three backends in parity.
+    #[test]
+    fn rejects_malformed_keys_before_dispatching_to_lua() {
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
+
+        assert!(storage.put("../escape.txt", b"x", "text/plain").is_err());
+        assert!(storage.get("../escape.txt").is_err());
+        assert!(storage.delete("../escape.txt").is_err());
+        assert!(storage.put("/etc/passwd", b"x", "text/plain").is_err());
+        assert!(storage.put("ok\0hidden", b"x", "text/plain").is_err());
+
+        // exists() maps an invalid key to "not present", matching LocalStorage.
+        assert!(!storage.exists("../escape.txt").unwrap());
     }
 
     #[test]
