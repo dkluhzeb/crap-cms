@@ -29,7 +29,7 @@ use crate::{
     },
     hooks::{AccessCheckInput, HookRunner},
     service::{
-        self, EmailContext,
+        self, AppInfra, EmailContext,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
     },
 };
@@ -104,6 +104,11 @@ pub struct ContentService {
     /// Process-wide singleflight for deduplicating concurrent populate
     /// cache-miss DB fetches across requests.
     pub(in crate::api::handlers) populate_singleflight: SharedPopulateSingleflight,
+    /// Process-stable infrastructure bundle. Built once here from the same
+    /// dependencies as the individual fields above; handlers thread it into a
+    /// `ServiceContext` via `.infra(&self.infra)` so no op can forget a field.
+    /// (Migration in progress — individual fields remain for un-ported paths.)
+    pub(in crate::api::handlers) infra: Arc<AppInfra>,
 }
 
 /// Pure helper methods — testable without I/O dependencies.
@@ -266,7 +271,31 @@ impl ContentService {
             .map(|(header, _)| header.clone())
             .collect();
 
+        // Assemble the process-stable infrastructure bundle once. Clones are
+        // cheap (pools/caches/transports are all `Arc`-backed); the individual
+        // fields below still exist for handlers not yet ported to `.infra()`.
+        let infra = Arc::new(AppInfra {
+            pool: deps.pool.clone(),
+            registry: Arc::clone(&deps.registry),
+            hook_runner: deps.hook_runner.clone(),
+            cache: deps.cache.clone(),
+            storage: deps.storage.clone(),
+            event_transport: deps.event_transport.clone(),
+            invalidation_transport: invalidation_transport.clone(),
+            token_provider: deps.token_provider.clone(),
+            email: EmailContext {
+                email_config: deps.config.email.clone(),
+                email_renderer: Arc::clone(&deps.email_renderer),
+                server_config: deps.config.server.clone(),
+                email_max_attempts: deps.config.jobs.system_email_max_attempts(),
+            },
+            locale_config: deps.config.locale.clone(),
+            password_policy: deps.config.auth.password_policy.clone(),
+            populate_singleflight: populate_singleflight.clone(),
+        });
+
         Self {
+            infra,
             has_strategies,
             has_always_strategy,
             wanted_strategy_headers,

@@ -192,11 +192,17 @@ fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> 
     // Reads and writes get separate pools over the same WAL database (see
     // `DbPool`). A large read pool keeps read concurrency independent of a
     // small write pool that serializes on SQLite's single writer.
-    let read = build_sqlite_pool(&db_path, config.database.pool_max_size, Some(1), config)?;
-    // The write pool keeps no minimum-idle connection: a short-lived `DbPool`
-    // that never issues a write (common in tests) would otherwise drop a
-    // freshly built, never-checked-out r2d2 pool whose min-idle maintenance
-    // task is still settling, which can deadlock in the pool's `Drop`.
+    //
+    // Neither pool keeps a minimum-idle connection (`min_idle = None`). A
+    // freshly built r2d2 pool that eagerly opens a min-idle connection can
+    // deadlock in `Drop` when the pool is short-lived: closing that idle
+    // connection triggers a WAL checkpoint that blocks on a lock still held by
+    // an outstanding connection from the sibling pool. Under the test suite —
+    // where every test builds and drops its own split pool concurrently — this
+    // manifests as an intermittent hang. `min_idle = None` (connections created
+    // on demand) removes the idle connection and the checkpoint-on-drop, for
+    // both pools symmetrically.
+    let read = build_sqlite_pool(&db_path, config.database.pool_max_size, None, config)?;
     let write = build_sqlite_pool(&db_path, config.database.write_pool_max_size, None, config)?;
 
     tracing::info!(

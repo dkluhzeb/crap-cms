@@ -17,7 +17,7 @@ use crate::{
     hooks::HookRunner,
     hooks::lifecycle::PublishEventInput,
     service::{
-        ServiceError,
+        AppInfra, ServiceError,
         hooks::{ReadHooks, WriteHooks},
         types::{EmailContext, EventQueue, PendingEvent, PendingVerification, VerificationQueue},
     },
@@ -543,6 +543,25 @@ impl<'a> ServiceContextBuilder<'a> {
             locale_config: None,
             password_policy: None,
         }
+    }
+
+    /// Attach all process-stable infrastructure from [`AppInfra`] in one call
+    /// — pool, hook runner, cache, event + invalidation transports, email
+    /// context, locale config, and password policy. A surface that builds its
+    /// context this way cannot silently omit an infra field (the recurring
+    /// "forgot to thread a dependency" bug class). Per-call state (user,
+    /// `override_access`, conn, hooks, queues) is still set separately.
+    #[must_use]
+    pub fn infra(mut self, infra: &'a AppInfra) -> Self {
+        self.pool = Some(&infra.pool);
+        self.runner = Some(&infra.hook_runner);
+        self.cache = Some(infra.cache.clone());
+        self.event_transport.clone_from(&infra.event_transport);
+        self.invalidation_transport = Some(infra.invalidation_transport.clone());
+        self.email_ctx = Some(infra.email.clone());
+        self.locale_config = Some(&infra.locale_config);
+        self.password_policy = Some(&infra.password_policy);
+        self
     }
 
     pub fn pool(mut self, pool: &'a DbPool) -> Self {

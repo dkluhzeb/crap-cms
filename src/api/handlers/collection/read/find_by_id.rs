@@ -12,24 +12,21 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
-    db::{DbPool, LocaleContext, query, query::SharedPopulateSingleflight},
-    hooks::HookRunner,
-    service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
+    core::CollectionDefinition,
+    db::{LocaleContext, query},
+    service::{
+        AppInfra, FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id,
+    },
 };
 
-/// Owned bundle for the `FindById` spawn-blocking body.
+/// Owned bundle for the `FindById` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct FindByIdBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     id: String,
-    pop_cache: SharedCache,
-    singleflight: SharedPopulateSingleflight,
     def: CollectionDefinition,
     token: Option<String>,
     depth: i32,
@@ -39,8 +36,10 @@ struct FindByIdBlockingInput {
     include_deleted: bool,
 }
 
-fn find_by_id_blocking(input: FindByIdBlockingInput) -> Result<Option<content::Document>, Status> {
-    let conn = input
+fn find_by_id_blocking(input: &FindByIdBlockingInput) -> Result<Option<content::Document>, Status> {
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -48,17 +47,17 @@ fn find_by_id_blocking(input: FindByIdBlockingInput) -> Result<Option<content::D
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
+    let read_hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
+        .infra(infra)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
@@ -68,11 +67,11 @@ fn find_by_id_blocking(input: FindByIdBlockingInput) -> Result<Option<content::D
         .depth(input.depth)
         .select(input.select.as_deref())
         .locale_ctx(input.locale_ctx.as_ref())
-        .registry(Some(&input.registry))
+        .registry(Some(&infra.registry))
         .use_draft(input.use_draft_version)
-        .cache(Some(&*input.pop_cache))
+        .cache(Some(&*infra.cache))
         .include_deleted(input.include_deleted)
-        .singleflight(Some(input.singleflight))
+        .singleflight(Some(infra.populate_singleflight.clone()))
         .build();
 
     let doc = find_document_by_id(&ctx, &find_input).map_err(Status::from)?;
@@ -117,15 +116,10 @@ impl ContentService {
         let include_deleted = req.trash.unwrap_or(false) && def.soft_delete;
 
         let input = FindByIdBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             id: req.id.clone(),
-            pop_cache: self.cache.clone(),
-            singleflight: self.populate_singleflight.clone(),
             def,
             token,
             headers,
@@ -136,7 +130,7 @@ impl ContentService {
             include_deleted,
         };
 
-        let result = task::spawn_blocking(move || find_by_id_blocking(input))
+        let result = task::spawn_blocking(move || find_by_id_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

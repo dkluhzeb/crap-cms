@@ -47,6 +47,7 @@
 //!   a parent's optional field without `if let Some(x) = ...`.
 
 pub(crate) mod access;
+mod app_infra;
 pub mod auth;
 mod collections;
 mod context;
@@ -70,6 +71,7 @@ pub(crate) use access::{
     ReadAccessCtx, requested_views, resolve_trash_scope, resolve_view_scope,
     resolve_visibility_filter,
 };
+pub use app_infra::AppInfra;
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
