@@ -297,6 +297,10 @@ impl CrapConfig {
             bail!("hooks.vm_pool_size must be > 0");
         }
 
+        if self.hooks.max_vm_pool_size == 0 {
+            bail!("hooks.max_vm_pool_size must be > 0");
+        }
+
         if self.jobs.max_concurrent == 0 {
             warn!("jobs.max_concurrent = 0 -- no jobs will be executed");
         }

@@ -2356,6 +2356,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Elastic Lua VM pool (`[hooks] max_vm_pool_size`).** The hook-runner VM pool
+  was fixed-size: once concurrent hook execution exceeded `vm_pool_size`, further
+  requests **blocked up to 5 seconds** waiting for a VM even when the machine had
+  spare capacity — a contributor to the read-concurrency collapse whenever hooks
+  are enabled. The pool is now elastic: it **pre-warms** `vm_pool_size` VMs and
+  **grows on demand** up to a new `max_vm_pool_size` cap (default `CPU cores × 8`,
+  minimum 32), reusing returned VMs across threads. It waits for a returned VM
+  only when every VM up to the cap is checked out. `vm_pool_size` therefore
+  changes meaning from a hard cap to the pre-warm count (raise it to avoid
+  first-request build latency under an immediate burst); `max_vm_pool_size` bounds
+  worst-case VM memory (each VM holds the full registry/Lua state) and is clamped
+  up to `vm_pool_size` if set lower. No config change is required.
+
 - **Separate read and write connection pools (`[database] write_pool_max_size`).**
   Reads and writes now draw from independent pools instead of one shared pool.
   Under SQLite WAL an unlimited number of readers run concurrently while a single

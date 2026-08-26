@@ -40,6 +40,7 @@ The config structure mirrors `crap.toml`:
 | `hooks.on_init` | string[] | [] |
 | `hooks.max_depth` | integer | 3 |
 | `hooks.vm_pool_size` | integer | (auto) |
+| `hooks.max_vm_pool_size` | integer | (auto) |
 | `hooks.max_instructions` | integer | 10000000 |
 | `hooks.max_memory` | integer | 52428800 |
 | `hooks.allow_private_networks` | boolean | false |

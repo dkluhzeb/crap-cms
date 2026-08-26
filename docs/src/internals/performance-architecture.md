@@ -53,9 +53,11 @@ What remains are **structural** ceilings, below.
 
 ### A cost model (per hook-bearing request)
 
-1. **VM-acquire ceiling.** `VmPool` is a `Mutex<Vec<Lua>> + Condvar`; concurrency
-   above `vm_pool_size` **blocks up to 5s** (`src/hooks/lifecycle/runner/vm_pool.rs`).
-   A direct contributor to the conc-50 collapse *whenever hooks are on*.
+1. **VM-acquire ceiling.** *(Addressed by A3 — see below.)* The old fixed-size
+   `Mutex<Vec<Lua>> + Condvar` pool blocked up to 5s once concurrency exceeded
+   `vm_pool_size` (`src/hooks/lifecycle/runner/vm_pool.rs`) — a direct
+   contributor to the conc-50 collapse whenever hooks were on. The pool is now
+   elastic (grows to `max_vm_pool_size`).
 2. **Eager full-document marshalling.** `after_read_one` runs **per document**
    (`for doc in docs.iter_mut()`, `src/service/read/post_process.rs`), and each
    call copies **every field** of the doc into a fresh Lua table
@@ -86,14 +88,24 @@ tracked, instead of copying all 40 fields and diffing a rebuilt table.
 - *Risk:* `pairs()` / `type()` / `next()` semantics — cover with `__pairs` and
   tests. Composes with A1 (the batch is an array of proxies).
 
-**A3 — Thread-local VM affinity. (internal, non-breaking)**
-Hook work already runs on `spawn_blocking` threads. Pin **one Lua VM per
-blocking thread** instead of a shared `Mutex<Vec<Lua>>`.
-- *Payoff:* removes the pool lock, the condvar wait, and the `vm_pool_size`
-  ceiling (it becomes = blocking-thread count, i.e. the real concurrency).
-- *Bonus:* makes the connection injection naturally thread-scoped — this is what
-  makes **Option A/B** of the
-  [connection-injection plan](lua-connection-injection.md) clean.
+**A3 — Elastic VM pool (remove the fixed ceiling). (internal, non-breaking) — ✅ LANDED**
+The old pool was a fixed-size `Mutex<Vec<Lua>> + Condvar`: concurrency above
+`vm_pool_size` blocked up to 5s even when the machine had spare capacity. The
+pool is now **elastic** — it pre-warms `vm_pool_size` VMs and grows on demand up
+to `max_vm_pool_size` (a new config; default `cores × 8`, min 32), reusing
+returned VMs across threads. It blocks *only* when every VM up to the cap is
+checked out.
+- *Payoff:* the condvar wait and the `vm_pool_size` ceiling are gone for the
+  common case; VM count tracks real concurrency up to a bounded cap.
+- *Design note:* strict per-thread affinity (the original framing) is
+  incompatible with a hard memory cap — once `cap` threads each own a VM a new
+  thread could never get one — so the cap-bounded elastic pool is the correct
+  realization. It still composes with the
+  [connection-injection plan](lua-connection-injection.md) Option A (a scoped
+  primitive, independent of pool shape).
+- *Bounding:* each VM holds the full registry/Lua state, so `max_vm_pool_size`
+  is the worst-case VM-memory bound; raise the pre-warm (`vm_pool_size`) to
+  avoid first-request build latency under an immediate burst.
 
 **A4 — Compile a per-collection hook plan at registration. (internal)**
 Precompute per `(collection × event)`: any hooks? which fields have field-hooks?
@@ -156,8 +168,9 @@ acceptance evidence — never merge a perf change without the number it bought.
    change, fixes the concurrency cliff for *all* workloads. Measure the
    `mixed` scenario before/after to confirm the read half holds its
    standalone-`find` baseline under write load.
-2. **A3 (thread-local VMs)** — internal; removes the hook-path acquire ceiling
-   and unblocks the connection-injection hardening.
+2. **A3 (elastic VM pool)** — ✅ **landed.** Internal; removes the hook-path
+   acquire ceiling (grows to `max_vm_pool_size` instead of blocking at
+   `vm_pool_size`) and unblocks the connection-injection hardening.
 3. **A1 (batch hook contract)** — the breaking change; do it while alpha allows.
    Bundle A4 (hook plan) so the batch path also skips untouched work.
 4. **B2 (JOIN population)** — targets the deep-read ceiling specifically.

@@ -135,8 +135,9 @@ For exotic storage providers, register custom functions in `init.lua`:
 
 > **The handlers must be stateless** — they have to delegate to an external
 > store (over `crap.http`), not keep files in Lua memory. The hook runner
-> uses a *pool* of independent Lua VMs (one per `[hooks] vm_pool_size`), each
-> running `init.lua` separately, and a different VM may serve each request.
+> uses a *pool* of independent Lua VMs (pre-warming `[hooks] vm_pool_size`,
+> growing up to `max_vm_pool_size`), each running `init.lua` separately, and
+> a different VM may serve each request.
 > A handler that stashed bytes in a Lua table would `put` into one VM and
 > `get` a miss from another. Use `crap.env` for credentials and
 > `crap.crypto` (HMAC/SHA-256) if the provider needs request signing.

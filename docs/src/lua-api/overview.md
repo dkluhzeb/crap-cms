@@ -112,6 +112,6 @@ with transaction context (before_change, before_delete, etc.)
 Crap CMS uses two stages of Lua execution:
 
 1. **Startup VM** — a single VM that loads collection/global definitions and runs `init.lua`. Used only during initialization, then discarded.
-2. **HookRunner pool** — a pool of Lua VMs for runtime hook execution (size configured via `hooks.vm_pool_size`). Each VM gets its own copy of the `crap.*` API with CRUD functions registered.
+2. **HookRunner pool** — an elastic pool of Lua VMs for runtime hook execution. It pre-warms `hooks.vm_pool_size` VMs and grows on demand up to `hooks.max_vm_pool_size` as concurrency rises. Each VM gets its own copy of the `crap.*` API with CRUD functions registered.
 
 All VMs have the config directory on their package path, so `require("hooks.posts")` works in both stages.

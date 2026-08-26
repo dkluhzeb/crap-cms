@@ -142,8 +142,10 @@ invocation, so there is a single set/clear point and no type-keyed clobber risk.
   caller's transaction (atomicity with the outer write); job handlers must open
   per-op `IMMEDIATE` transactions to avoid the `SQLITE_BUSY_SNAPSHOT` hazard.
   Whatever carries the connection, keep both modes.
-- **The pooled-VM model** (`VmPool`, `vm_pool_size`) and the init-VM/pool-VM
-  split are orthogonal to this seam; leave them unless separately motivated.
+- **The pooled-VM model** (`VmPool`, now elastic — pre-warm `vm_pool_size`,
+  grow to `max_vm_pool_size`; see [Performance Architecture](performance-architecture.md) A3)
+  and the init-VM/pool-VM split are orthogonal to this seam. Option A (a scoped
+  `&tx` primitive) works regardless of pool shape.
 - **`LocalLease` / `LuaVmLease`** (the core↔hooks seam for custom
   email/storage providers) is already a clean, safe abstraction (weak handle,
   no transmute). Untouched.

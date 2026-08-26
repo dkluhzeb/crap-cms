@@ -77,6 +77,7 @@ Fields that support this: `max_file_size` (global and per-collection), `max_memo
 - `database.write_pool_max_size = 0`
 - `database.connection_timeout = 0`
 - `hooks.vm_pool_size = 0`
+- `hooks.max_vm_pool_size = 0`
 - `server.admin_port` or `server.grpc_port` is `0`
 - `server.admin_port == server.grpc_port` (ports must be distinct)
 - `auth.password_policy.min_length > auth.password_policy.max_length`
@@ -198,8 +199,8 @@ from_name = "Crap CMS"  # Sender display name
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 # max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
-vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
-                         # Default: number of CPU cores (fallback: 4)
+vm_pool_size = 8         # Lua VMs pre-warmed at startup (default: CPU cores)
+# max_vm_pool_size = 64  # Hard cap; pool grows on demand up to this
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
@@ -451,7 +452,8 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `on_init` | string[] | `[]` | Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup. |
 | `max_depth` | integer | `3` | Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. `0` = never run hooks from Lua CRUD. |
-| `vm_pool_size` | integer | CPU cores | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores (fallback: 4 if detection fails). |
+| `vm_pool_size` | integer | CPU cores | Number of Lua VMs **pre-warmed** at startup for concurrent hook execution (default: available CPU cores, fallback 4). The pool is no longer capped at this size — it grows on demand up to `max_vm_pool_size`. |
+| `max_vm_pool_size` | integer | `CPU cores × 8` (min 32) | Hard ceiling on the number of Lua VMs the hook pool will create. The pool pre-warms `vm_pool_size` and grows toward this cap as concurrency rises; only when all VMs are checked out does a further hook briefly wait for one to return. Bounds worst-case VM memory. Clamped up to `vm_pool_size` if set lower. |
 | `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation. `0` = unlimited. |
 | `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes. Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
 | `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |

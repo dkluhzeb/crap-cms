@@ -92,4 +92,5 @@ file = true
 
 [hooks]
 on_init = ["hooks.on_init"]
-# vm_pool_size = 16  # default: number of CPU cores
+# vm_pool_size = 16       # Lua VMs pre-warmed at startup (default: number of CPU cores)
+# max_vm_pool_size = 64   # hard cap; pool grows on demand up to this (default: cores*8, min 32)

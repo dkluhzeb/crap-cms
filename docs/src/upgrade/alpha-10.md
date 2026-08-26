@@ -958,6 +958,31 @@ pool that matters for read concurrency. Tune `write_pool_max_size` up only if a
 write-heavy deployment sees write-pool checkout timeouts under sustained
 concurrent writes.
 
+### Elastic Lua VM pool (`[hooks] max_vm_pool_size`)
+
+The hook-runner VM pool is no longer fixed-size. Previously, once concurrent
+hook execution exceeded `vm_pool_size`, further requests blocked up to 5 seconds
+waiting for a VM. The pool now **pre-warms** `vm_pool_size` VMs and **grows on
+demand** up to a new `max_vm_pool_size` cap, reusing returned VMs across threads;
+it waits only when every VM up to the cap is busy.
+
+```toml
+[hooks]
+vm_pool_size = 8          # VMs pre-warmed at startup (was: the hard cap)
+# max_vm_pool_size = 64   # hard cap; grows up to this (default: cores × 8, min 32)
+```
+
+`vm_pool_size` changes meaning from a hard cap to the **pre-warm count**.
+`max_vm_pool_size` (default `cores × 8`, min 32) bounds how many VMs the pool can
+create — each holds the full registry/Lua state, so this bounds worst-case
+memory. It is clamped up to `vm_pool_size` if set lower.
+
+**Action:** none. Defaults raise the effective concurrency ceiling without config
+changes. If you had raised `vm_pool_size` purely to avoid the 5-second blocking
+under load, that ceiling is gone — you can lower it back toward the pre-warm you
+actually want and let the pool grow. Lower `max_vm_pool_size` if you need to cap
+VM memory more tightly.
+
 ### Hook refs accept per-config `options` (`ctx.options`)
 
 Any hook reference — collection/global lifecycle hooks, field hooks,

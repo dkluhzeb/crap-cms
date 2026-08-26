@@ -1,11 +1,18 @@
 //! Lua VM pool for concurrent hook execution.
+//!
+//! The pool is **elastic**: it pre-warms `vm_pool_size` VMs and then grows on
+//! demand up to `max_vm_pool_size` as concurrency rises, reusing returned VMs
+//! across threads. Only when every VM up to the cap is checked out does a
+//! further `acquire` briefly wait for one to come back. This replaces the old
+//! fixed-size pool, which blocked up to 5s whenever concurrency exceeded the
+//! pool size regardless of available capacity.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use mlua::{HookTriggers, Lua, VmState};
 use std::{
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -13,10 +20,32 @@ use std::{
 use crate::core::lua_lease::LuaVmLease;
 use crate::hooks::lifecycle::types::MaxInstructions;
 
-/// Pool of Lua VMs for concurrent hook execution.
+/// Builds a fresh, fully-initialized pool VM. The `usize` is the VM index
+/// (used only for the `vm-N` label). Boxed so the pool is decoupled from the
+/// concrete construction (production wires in `create_lua_vm`; tests inject a
+/// trivial factory).
+pub(super) type VmFactory = Box<dyn Fn(usize) -> Result<Lua> + Send + Sync>;
+
+/// How long `acquire` waits for a returned VM once the pool is at its cap and
+/// every VM is checked out.
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct PoolInner {
+    /// VMs available for immediate reuse.
+    idle: Vec<Lua>,
+    /// Total VMs created (idle + checked-out). Never exceeds `cap`.
+    live: usize,
+}
+
+/// Elastic pool of Lua VMs for concurrent hook execution.
 pub(super) struct VmPool {
-    vms: Mutex<Vec<Lua>>,
+    inner: Mutex<PoolInner>,
     available: Condvar,
+    factory: VmFactory,
+    /// Hard ceiling on `live`.
+    cap: usize,
+    /// Monotonic VM index for labels; continues past the pre-warmed VMs.
+    next_index: AtomicUsize,
 }
 
 impl LuaVmLease for VmPool {
@@ -24,52 +53,85 @@ impl LuaVmLease for VmPool {
     /// callers (scheduler, HTTP handlers) real concurrency on custom Lua
     /// providers. Never call from inside a pool VM — that would re-enter
     /// the pool and can deadlock; use a `LocalLease` there instead.
-    fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> Result<()>) -> Result<()> {
         let guard = self.acquire()?;
         f(&guard)
     }
 }
 
 impl VmPool {
-    pub(super) fn new(vms: Vec<Lua>) -> Self {
+    /// Create the pool from its pre-warmed VMs plus the factory for on-demand
+    /// growth. `cap` is floored at the pre-warm count so the pre-warmed VMs
+    /// always fit.
+    pub(super) fn new(prewarmed: Vec<Lua>, factory: VmFactory, cap: usize) -> Self {
+        let live = prewarmed.len();
         VmPool {
-            vms: Mutex::new(vms),
+            inner: Mutex::new(PoolInner {
+                idle: prewarmed,
+                live,
+            }),
             available: Condvar::new(),
+            factory,
+            cap: cap.max(live),
+            next_index: AtomicUsize::new(live + 1),
         }
     }
 
-    /// Acquire a VM from the pool, blocking up to 5 seconds.
-    pub(super) fn acquire(&self) -> anyhow::Result<VmGuard<'_>> {
-        let timeout = Duration::from_secs(5);
-        let mut pool = self
-            .vms
+    /// Acquire a VM: reuse an idle one, else build a new one while under the
+    /// cap, else wait (up to [`ACQUIRE_TIMEOUT`]) for one to be returned.
+    pub(super) fn acquire(&self) -> Result<VmGuard<'_>> {
+        let mut inner = self
+            .inner
             .lock()
             .map_err(|e| anyhow!("VM pool lock poisoned: {e}"))?;
-        loop {
-            if let Some(vm) = pool.pop() {
-                set_instruction_hook(&vm);
-                return Ok(VmGuard {
-                    pool: self,
-                    vm: Some(vm),
-                });
-            }
-            let (guard, wait_result) = self
-                .available
-                .wait_timeout(pool, timeout)
-                .map_err(|e| anyhow!("VM pool condvar wait failed: {e}"))?;
-            pool = guard;
 
-            if wait_result.timed_out() {
-                // Try one more time after timeout — another thread may have returned a VM
-                if let Some(vm) = pool.pop() {
-                    set_instruction_hook(&vm);
-                    return Ok(VmGuard {
-                        pool: self,
-                        vm: Some(vm),
-                    });
-                }
-                bail!("VM pool acquire timed out after 5s");
+        loop {
+            if let Some(vm) = inner.idle.pop() {
+                drop(inner);
+                return Ok(self.check_out(vm));
             }
+
+            // Room to grow: reserve a slot, build outside the lock.
+            if inner.live < self.cap {
+                inner.live += 1;
+                drop(inner);
+
+                match (self.factory)(self.next_index.fetch_add(1, Ordering::Relaxed)) {
+                    Ok(vm) => return Ok(self.check_out(vm)),
+                    Err(e) => {
+                        // Roll the reservation back and wake a waiter to retry.
+                        if let Ok(mut inner) = self.inner.lock() {
+                            inner.live -= 1;
+                        }
+                        self.available.notify_one();
+                        return Err(e).context("failed to build a pool Lua VM");
+                    }
+                }
+            }
+
+            // At cap and none idle — wait for a returned VM.
+            let (guard, wait) = self
+                .available
+                .wait_timeout(inner, ACQUIRE_TIMEOUT)
+                .map_err(|e| anyhow!("VM pool condvar wait failed: {e}"))?;
+            inner = guard;
+
+            if wait.timed_out() && inner.idle.is_empty() && inner.live >= self.cap {
+                bail!(
+                    "VM pool acquire timed out after {}s (all {} VMs busy)",
+                    ACQUIRE_TIMEOUT.as_secs(),
+                    self.cap
+                );
+            }
+        }
+    }
+
+    /// Arm the instruction hook and wrap the VM in a returning guard.
+    fn check_out(&self, vm: Lua) -> VmGuard<'_> {
+        set_instruction_hook(&vm);
+        VmGuard {
+            pool: self,
+            vm: Some(vm),
         }
     }
 }
@@ -97,20 +159,18 @@ impl Drop for VmGuard<'_> {
     fn drop(&mut self) {
         let Some(vm) = self.vm.take() else { return };
 
-        match self.pool.vms.lock() {
-            Ok(mut pool) => {
+        match self.pool.inner.lock() {
+            Ok(mut inner) => {
                 vm.remove_hook();
-                pool.push(vm);
+                inner.idle.push(vm);
                 self.pool.available.notify_one();
             }
-            // A poisoned lock means a thread panicked while holding it. We
-            // can't return the VM, so it's dropped — permanently shrinking
-            // the pool. Log it rather than fail silently; repeated hits
-            // eventually starve `acquire`.
+            // A poisoned lock means a thread panicked while holding it. The
+            // pool is effectively dead (every `acquire` will also fail on the
+            // poisoned lock), so we can only drop the VM. Log it rather than
+            // fail silently.
             Err(_) => {
-                tracing::error!(
-                    "VM pool mutex poisoned; dropping a Lua VM (pool capacity reduced by one)"
-                );
+                tracing::error!("VM pool mutex poisoned; dropping a Lua VM");
             }
         }
     }
@@ -155,80 +215,120 @@ fn set_instruction_hook(vm: &Lua) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
     use std::thread;
 
-    fn make_pool(n: usize) -> VmPool {
-        let vms = (0..n).map(|_| Lua::new()).collect();
-        VmPool::new(vms)
+    /// A pool whose factory builds bare VMs and counts how many it built.
+    fn make_pool_counting(prewarm: usize, cap: usize) -> (Arc<VmPool>, Arc<AtomicUsize>) {
+        let built = Arc::new(AtomicUsize::new(0));
+        let b = Arc::clone(&built);
+        let factory: VmFactory = Box::new(move |_idx| {
+            b.fetch_add(1, Ordering::Relaxed);
+            Ok(Lua::new())
+        });
+        let prewarmed = (0..prewarm)
+            .map(|_| {
+                built.fetch_add(1, Ordering::Relaxed);
+                Lua::new()
+            })
+            .collect();
+        (Arc::new(VmPool::new(prewarmed, factory, cap)), built)
+    }
+
+    fn make_pool(prewarm: usize, cap: usize) -> VmPool {
+        let factory: VmFactory = Box::new(|_idx| Ok(Lua::new()));
+        let prewarmed = (0..prewarm).map(|_| Lua::new()).collect();
+        VmPool::new(prewarmed, factory, cap)
     }
 
     #[test]
     fn acquire_returns_valid_vm() {
-        let pool = make_pool(1);
+        let pool = make_pool(1, 4);
         let guard = pool.acquire().expect("should acquire VM");
-        // Deref to Lua works — evaluate a trivial expression
         let result: i64 = guard.load("return 1 + 1").eval().expect("lua eval failed");
         assert_eq!(result, 2);
     }
 
     #[test]
     fn drop_returns_vm_to_pool() {
-        let pool = make_pool(1);
-
+        let pool = make_pool(1, 4);
         {
             let _guard = pool.acquire().expect("first acquire should succeed");
-            // guard is dropped here
         }
-
-        // After drop the VM is back; a second acquire must succeed
         let guard2 = pool.acquire().expect("acquire after drop should succeed");
         let result: i64 = guard2.load("return 42").eval().expect("lua eval failed");
         assert_eq!(result, 42);
     }
 
     #[test]
-    fn concurrent_acquire_two_vms() {
-        let pool = Arc::new(make_pool(2));
+    fn grows_beyond_prewarm_up_to_cap() {
+        // Pre-warm 1, cap 3. Holding all three simultaneously forces two
+        // on-demand builds; a fourth concurrent acquire would exceed the cap.
+        let (pool, built) = make_pool_counting(1, 3);
+        let g1 = pool.acquire().expect("acquire 1");
+        let g2 = pool.acquire().expect("acquire 2 (built on demand)");
+        let g3 = pool.acquire().expect("acquire 3 (built on demand)");
+        assert_eq!(built.load(Ordering::Relaxed), 3, "pool grew to the cap");
+        drop((g1, g2, g3));
 
-        let pool_a = Arc::clone(&pool);
-        let pool_b = Arc::clone(&pool);
-
-        // Each thread acquires a guard, uses it, and returns the Lua eval result.
-        // The guard borrows from the Arc-owned pool inside its own thread, so no
-        // lifetime escape issue.
-        let handle_a = thread::spawn(move || {
-            let guard = pool_a.acquire().expect("thread A: acquire should succeed");
-            let v: i64 = guard
-                .load("return 1")
-                .eval()
-                .expect("lua eval on guard_a failed");
-            v
-        });
-        let handle_b = thread::spawn(move || {
-            let guard = pool_b.acquire().expect("thread B: acquire should succeed");
-            let v: i64 = guard
-                .load("return 2")
-                .eval()
-                .expect("lua eval on guard_b failed");
-            v
-        });
-
-        // Both threads must complete without timing out or panicking.
-        let result_a = handle_a.join().expect("thread A panicked");
-        let result_b = handle_b.join().expect("thread B panicked");
-        assert_eq!(result_a, 1);
-        assert_eq!(result_b, 2);
+        // Reusing returned VMs must not build more.
+        let _g = pool.acquire().expect("reuse");
+        assert_eq!(built.load(Ordering::Relaxed), 3, "reuse builds nothing new");
     }
 
-    fn make_pool_with_instruction_limit(n: usize, max_instructions: u64) -> VmPool {
-        let vms = (0..n)
-            .map(|_| {
-                let lua = Lua::new();
-                lua.set_app_data(MaxInstructions(max_instructions));
-                lua
-            })
-            .collect();
-        VmPool::new(vms)
+    #[test]
+    fn at_cap_blocks_then_serves_a_returned_vm() {
+        // Cap 1: the second acquire must wait until the first is returned.
+        let pool = Arc::new({
+            let factory: VmFactory = Box::new(|_idx| Ok(Lua::new()));
+            VmPool::new(vec![Lua::new()], factory, 1)
+        });
+
+        let g1 = pool.acquire().expect("acquire the only VM");
+
+        let p2 = Arc::clone(&pool);
+        let handle = thread::spawn(move || {
+            // Blocks until g1 is dropped on the main thread, then succeeds.
+            let g = p2
+                .acquire()
+                .expect("second acquire should succeed after return");
+            let v: i64 = g.load("return 7").eval().expect("eval");
+            v
+        });
+
+        // Give the spawned thread time to reach the wait, then return the VM.
+        thread::sleep(Duration::from_millis(100));
+        drop(g1);
+
+        assert_eq!(handle.join().expect("thread panicked"), 7);
+    }
+
+    #[test]
+    fn concurrent_acquire_grows() {
+        let pool = Arc::new(make_pool(0, 2));
+        let a = Arc::clone(&pool);
+        let b = Arc::clone(&pool);
+        let ha = thread::spawn(move || {
+            let g = a.acquire().expect("thread A acquire");
+            g.load("return 1").eval::<i64>().expect("eval A")
+        });
+        let hb = thread::spawn(move || {
+            let g = b.acquire().expect("thread B acquire");
+            g.load("return 2").eval::<i64>().expect("eval B")
+        });
+        assert_eq!(ha.join().unwrap(), 1);
+        assert_eq!(hb.join().unwrap(), 2);
+    }
+
+    fn make_pool_with_instruction_limit(cap: usize, max_instructions: u64) -> VmPool {
+        let factory: VmFactory = Box::new(move |_idx| {
+            let lua = Lua::new();
+            lua.set_app_data(MaxInstructions(max_instructions));
+            Ok(lua)
+        });
+        let seed = Lua::new();
+        seed.set_app_data(MaxInstructions(max_instructions));
+        VmPool::new(vec![seed], factory, cap)
     }
 
     #[test]
@@ -254,7 +354,6 @@ mod tests {
 
     #[test]
     fn instruction_hook_resets_between_acquires() {
-        // After returning a VM to the pool and re-acquiring, the counter resets.
         let pool = make_pool_with_instruction_limit(1, 10_000_000);
         {
             let guard = pool.acquire().expect("first acquire");
@@ -263,7 +362,6 @@ mod tests {
                 .eval()
                 .expect("first run should succeed");
         }
-        // Re-acquire — fresh counter
         let guard = pool.acquire().expect("second acquire");
         let result: i64 = guard
             .load("local s = 0; for i = 1, 1000 do s = s + i end; return s")
@@ -273,17 +371,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "exercises the 5-second condvar timeout; run explicitly with --include-ignored"]
-    fn acquire_times_out_on_empty_pool() {
-        // An empty pool has no VMs. The condvar wait exhausts the 5-second timeout,
-        // the post-timeout pop also finds nothing, and acquire returns an error.
-        // The pool with 0 VMs is the simplest way to reach the timeout branch without
-        // needing a second thread to hold the only VM, but it inherently takes 5 seconds.
-        let pool = make_pool(0);
-        let err = pool.acquire().expect_err("empty pool should time out");
-        assert!(
-            err.to_string().contains("timed out"),
-            "unexpected error message: {err}"
-        );
+    fn build_failure_frees_the_reserved_slot() {
+        // A factory that always fails: acquire errors, but the reserved slot
+        // is rolled back so `live` never leaks (a later successful factory
+        // could still grow). Here we just assert the error surfaces and a
+        // second attempt also errors (not a spurious cap timeout).
+        let factory: VmFactory = Box::new(|_idx| bail!("boom"));
+        let pool = VmPool::new(vec![], factory, 2);
+        let e1 = pool.acquire().unwrap_err();
+        assert!(e1.to_string().contains("build a pool Lua VM"), "{e1}");
+        let e2 = pool.acquire().unwrap_err();
+        assert!(e2.to_string().contains("build a pool Lua VM"), "{e2}");
     }
 }

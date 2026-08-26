@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-use super::vm_pool::VmPool;
+use super::vm_pool::{VmFactory, VmPool};
 
 /// Builder for [`HookRunner`]. Created via [`HookRunner::builder`].
 pub struct HookRunnerBuilder<'a> {
@@ -102,33 +102,50 @@ impl<'a> HookRunnerBuilder<'a> {
         let populate_singleflight = self.populate_singleflight;
 
         let pool_size = config.hooks.vm_pool_size.max(1);
+        let cap = config.hooks.max_vm_pool_size.max(pool_size);
 
-        debug!("HookRunner: creating pool of {} Lua VMs", pool_size);
+        debug!(
+            "HookRunner: pre-warming {} Lua VM(s) (cap {})",
+            pool_size, cap
+        );
+
+        // Factory for on-demand growth: owns everything `create_lua_vm` needs
+        // so a fresh VM can be built on any blocking thread when concurrency
+        // exceeds the pre-warmed set.
+        let factory: VmFactory = {
+            let config_dir = config_dir.to_path_buf();
+            let registry = Arc::clone(&registry);
+            let config = config.clone();
+            let invalidation_transport = invalidation_transport.clone();
+            let populate_singleflight = populate_singleflight.clone();
+            Box::new(move |idx| {
+                create_lua_vm(
+                    &config_dir,
+                    &registry,
+                    &config,
+                    idx,
+                    invalidation_transport.clone(),
+                    populate_singleflight.clone(),
+                )
+            })
+        };
 
         let start = std::time::Instant::now();
-        let mut vms = Vec::with_capacity(pool_size);
-
+        let mut prewarmed = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
-            vms.push(create_lua_vm(
-                config_dir,
-                &registry,
-                config,
-                i + 1,
-                invalidation_transport.clone(),
-                populate_singleflight.clone(),
-            )?);
+            prewarmed.push(factory(i + 1)?);
         }
-
         let elapsed = start.elapsed();
 
         // Cache which events have globally-registered hooks (from init.lua).
         // All VMs execute the same init.lua, so checking any VM suffices.
-        let registered_events = scan_registered_events(&vms[0]);
+        let registered_events = scan_registered_events(&prewarmed[0]);
 
         info!(
-            "HookRunner ready: {} VM(s) in {:.0}ms{}",
+            "HookRunner ready: {} VM(s) pre-warmed in {:.0}ms (cap {}){}",
             pool_size,
             elapsed.as_secs_f64() * 1000.0,
+            cap,
             if registered_events.is_empty() {
                 String::new()
             } else {
@@ -137,7 +154,7 @@ impl<'a> HookRunnerBuilder<'a> {
         );
 
         Ok(HookRunner {
-            pool: Arc::new(VmPool::new(vms)),
+            pool: Arc::new(VmPool::new(prewarmed, factory, cap)),
             registered_events: Arc::new(registered_events),
             registry,
             default_deny: config.access.default_deny,

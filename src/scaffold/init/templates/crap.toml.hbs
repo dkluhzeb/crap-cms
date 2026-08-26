@@ -129,7 +129,8 @@ fallback = true
 # [hooks]
 # on_init = []                   # hook functions to run at startup
 # max_depth = 3                  # max hook recursion depth (hook > CRUD > hook)
-# vm_pool_size = 8               # Lua VMs for concurrent hooks (default: number of CPU cores)
+# vm_pool_size = 8               # Lua VMs pre-warmed at startup (default: number of CPU cores)
+# max_vm_pool_size = 64          # hard cap; pool grows on demand up to this (default: cores*8, min 32)
 # max_instructions = 10000000    # max Lua instructions per hook invocation
 # max_memory = "50MB"            # max Lua memory per VM
 # allow_private_networks = false # allow Lua HTTP requests to private/internal networks
