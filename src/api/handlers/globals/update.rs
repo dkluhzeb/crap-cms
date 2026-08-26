@@ -15,24 +15,16 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    core::{
-        DocumentFields, GlobalDefinition, Registry, SharedCache, SharedEventTransport,
-        SharedTokenProvider,
-    },
-    db::{DbPool, LocaleContext},
-    hooks::HookRunner,
-    service::{self, ServiceContext, WriteInput},
+    core::{DocumentFields, GlobalDefinition},
+    db::LocaleContext,
+    service::{self, AppInfra, ServiceContext, WriteInput},
 };
 
-/// Owned bundle for the `UpdateGlobal` spawn-blocking body.
+/// Owned bundle for the `UpdateGlobal` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct UpdateGlobalBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
     slug: String,
     def: GlobalDefinition,
     token: Option<String>,
@@ -44,6 +36,7 @@ struct UpdateGlobalBlockingInput {
 /// Resolve auth, build the context, and run `update_global_document`.
 fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::Document, Status> {
     let conn = input
+        .infra
         .pool
         .get()
         .inspect_err(|e| error!("UpdateGlobal pool error: {}", e))
@@ -52,9 +45,9 @@ fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::D
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*input.infra.token_provider,
+        &input.infra.hook_runner,
+        &input.infra.registry,
         &conn,
     )?;
 
@@ -66,12 +59,9 @@ fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::D
     drop(conn);
 
     let ctx = ServiceContext::global(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(user_doc.as_ref())
-        .event_transport(input.event_transport)
         .emit_events(input.events)
-        .cache(input.cache)
         .build();
 
     let (doc, _req_context) = service::update_global_document(
@@ -111,12 +101,7 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = UpdateGlobalBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
-            event_transport: self.event_transport.clone(),
-            cache: Some(self.cache.clone()),
+            infra: Arc::clone(&self.infra),
             slug: req.slug.clone(),
             def,
             token,

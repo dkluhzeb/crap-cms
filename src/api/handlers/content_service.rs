@@ -19,7 +19,7 @@ use crate::{
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
         AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
-        SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider, SharedStorage,
+        SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
         SharedTokenProvider, auth::TokenProvider, collection::Surface, email::EmailRenderer,
         event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
     },
@@ -74,7 +74,6 @@ pub struct ContentService {
     pub(in crate::api::handlers) wanted_strategy_headers: std::collections::HashSet<String>,
     pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
     pub(in crate::api::handlers) locale_config: LocaleConfig,
-    pub(in crate::api::handlers) storage: SharedStorage,
     pub(in crate::api::handlers) login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) reset_token_expiry: u64,
@@ -101,9 +100,6 @@ pub struct ContentService {
     /// down (e.g. after lock or hard delete). Always present — even when live
     /// updates are disabled, publishing to it is a no-op.
     pub(in crate::api::handlers) invalidation_transport: SharedInvalidationTransport,
-    /// Process-wide singleflight for deduplicating concurrent populate
-    /// cache-miss DB fetches across requests.
-    pub(in crate::api::handlers) populate_singleflight: SharedPopulateSingleflight,
     /// Process-stable infrastructure bundle. Built once here from the same
     /// dependencies as the individual fields above; handlers thread it into a
     /// `ServiceContext` via `.infra(&self.infra)` so no op can forget a field.
@@ -117,17 +113,6 @@ impl ContentService {
     #[must_use]
     pub fn cache_handle(&self) -> SharedCache {
         self.cache.clone()
-    }
-
-    /// Bundle the email config + renderer + server config into an
-    /// `EmailContext` for verification email flows.
-    pub(in crate::api::handlers) fn email_context(&self) -> EmailContext {
-        EmailContext {
-            email_config: self.email_config.clone(),
-            email_renderer: self.email_renderer.clone(),
-            server_config: self.server_config.clone(),
-            email_max_attempts: self.email_max_attempts,
-        }
     }
 
     pub(in crate::api::handlers) fn get_collection_def(
@@ -279,7 +264,7 @@ impl ContentService {
             registry: Arc::clone(&deps.registry),
             hook_runner: deps.hook_runner.clone(),
             cache: deps.cache.clone(),
-            storage: deps.storage.clone(),
+            storage: deps.storage,
             event_transport: deps.event_transport.clone(),
             invalidation_transport: invalidation_transport.clone(),
             token_provider: deps.token_provider.clone(),
@@ -291,7 +276,7 @@ impl ContentService {
             },
             locale_config: deps.config.locale.clone(),
             password_policy: deps.config.auth.password_policy.clone(),
-            populate_singleflight: populate_singleflight.clone(),
+            populate_singleflight,
         });
 
         Self {
@@ -317,7 +302,6 @@ impl ContentService {
             server_config: deps.config.server,
             event_transport: deps.event_transport,
             locale_config: deps.config.locale,
-            storage: deps.storage,
             token_provider: deps.token_provider,
             password_provider: deps.password_provider,
             login_limiter: deps.login_limiter,
@@ -333,7 +317,6 @@ impl ContentService {
             max_subscribe_connections,
             subscriber_send_timeout_ms,
             invalidation_transport,
-            populate_singleflight,
         }
     }
 

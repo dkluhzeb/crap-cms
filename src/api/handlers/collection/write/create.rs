@@ -16,33 +16,22 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    config::PasswordPolicy,
-    core::{
-        CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
-        SharedTokenProvider,
-    },
-    db::{DbPool, LocaleContext},
-    hooks::HookRunner,
-    service::{self, EmailContext, ServiceContext, ServiceError, WriteInput},
+    core::{CollectionDefinition, DocumentFields},
+    db::LocaleContext,
+    service::{self, AppInfra, ServiceContext, ServiceError, WriteInput},
 };
 
-/// Owned bundle for the `Create` spawn-blocking body.
+/// Owned bundle for the `Create` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct CreateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
     collection: String,
     def: CollectionDefinition,
-    email_ctx: Option<EmailContext>,
     token: Option<String>,
     data: DocumentFields,
     password: Option<String>,
-    password_policy: PasswordPolicy,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     events: bool,
@@ -50,6 +39,7 @@ struct CreateBlockingInput {
 
 fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Status> {
     let conn = input
+        .infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -57,29 +47,27 @@ fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Stat
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*input.infra.token_provider,
+        &input.infra.hook_runner,
+        &input.infra.registry,
         &conn,
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
 
+    // Move `data` out before borrowing `input.infra` for the context.
+    let data = input.data;
+
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(user_doc.as_ref())
-        .event_transport(input.event_transport)
         .emit_events(input.events)
-        .cache(input.cache)
-        .email_ctx(input.email_ctx)
-        .password_policy(Some(&input.password_policy))
         .build();
 
     let (doc, _req_context) = service::create_document(
         &ctx,
-        WriteInput::builder(input.data)
+        WriteInput::builder(data)
             .password(input.password.as_deref())
             .locale_ctx(input.locale_ctx.as_ref())
             .draft(input.draft)
@@ -122,21 +110,14 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = CreateBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
-            event_transport: self.event_transport.clone(),
-            cache: Some(self.cache.clone()),
             collection: req.collection.clone(),
             def,
-            email_ctx: Some(self.email_context()),
             token,
             headers,
             data,
             password,
-            password_policy: self.password_policy.clone(),
             locale_ctx,
             draft: req.draft.unwrap_or(false),
             events: req.events.unwrap_or(true),

@@ -12,38 +12,28 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedTokenProvider,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{ServiceContext, restore_collection_version},
+    core::CollectionDefinition,
+    service::{AppInfra, ServiceContext, restore_collection_version},
 };
 
-/// Owned bundle for the `RestoreVersion` spawn-blocking body.
+/// Owned bundle for the `RestoreVersion` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct RestoreVersionBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     collection: String,
     document_id: String,
     version_id: String,
     def: CollectionDefinition,
-    locale_config: LocaleConfig,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     token: Option<String>,
 }
 
 fn restore_version_blocking(
-    input: RestoreVersionBlockingInput,
+    input: &RestoreVersionBlockingInput,
 ) -> Result<content::Document, Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("RestoreVersion pool error: {}", e))
@@ -52,27 +42,23 @@ fn restore_version_blocking(
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(infra)
         .user(user_doc.as_ref())
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
-        .cache(input.cache)
         .build();
 
     let doc = restore_collection_version(
         &ctx,
         &input.document_id,
         &input.version_id,
-        &input.locale_config,
+        &infra.locale_config,
     )
     .map_err(Status::from)?;
 
@@ -100,23 +86,16 @@ impl ContentService {
         }
 
         let input = RestoreVersionBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             collection: req.collection.clone(),
             document_id: req.document_id.clone(),
             version_id: req.version_id.clone(),
             def,
-            locale_config: self.locale_config.clone(),
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            cache: Some(self.cache.clone()),
             token,
             headers,
         };
 
-        let doc = task::spawn_blocking(move || restore_version_blocking(input))
+        let doc = task::spawn_blocking(move || restore_version_blocking(&input))
             .await
             .inspect_err(|e| error!("RestoreVersion task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

@@ -15,31 +15,20 @@ use crate::{
         content,
         handlers::{ContentService, proto::data_map_to_json_map},
     },
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedTokenProvider,
-    },
-    db::{AccessResult, DbPool, LocaleContext},
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError, UpdateManyOptions},
+    core::{CollectionDefinition, DocumentFields},
+    db::{AccessResult, LocaleContext},
+    service::{self, AppInfra, ServiceContext, ServiceError, UpdateManyOptions},
 };
 
-/// Owned bundle for the `UpdateMany` spawn-blocking body.
+/// Owned bundle for the `UpdateMany` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct UpdateManyBlockingInput {
-    pool: DbPool,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     where_json: Option<String>,
     def: CollectionDefinition,
-    locale_config: LocaleConfig,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     token: Option<String>,
     data: DocumentFields,
     locale_ctx: Option<LocaleContext>,
@@ -49,8 +38,10 @@ struct UpdateManyBlockingInput {
     events: bool,
 }
 
-fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
-    let mut conn = input
+fn update_many_blocking(input: &UpdateManyBlockingInput) -> Result<i64, Status> {
+    let infra = &input.infra;
+
+    let mut conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -58,9 +49,9 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -70,7 +61,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
             .access(input.def.access.read.as_ref())
             .user(user_doc)
             .build(),
-        &input.hook_runner,
+        &infra.hook_runner,
         &mut conn,
     )?;
 
@@ -91,13 +82,9 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.hook_runner)
+        .infra(infra)
         .user(user_doc)
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
         .emit_events(input.events)
-        .cache(input.cache)
         .build();
 
     let update_opts = UpdateManyOptions {
@@ -112,7 +99,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
         &ctx,
         &filters,
         &input.data,
-        &input.locale_config,
+        &infra.locale_config,
         &update_opts,
     )
     .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
@@ -154,18 +141,11 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = UpdateManyBlockingInput {
-            pool: self.pool.clone(),
-            hook_runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             where_json: req.r#where.clone(),
             def,
-            locale_config: self.locale_config.clone(),
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            cache: Some(self.cache.clone()),
             token,
             headers,
             data,
@@ -176,7 +156,7 @@ impl ContentService {
             events: req.events.unwrap_or(false),
         };
 
-        let modified = task::spawn_blocking(move || update_many_blocking(input))
+        let modified = task::spawn_blocking(move || update_many_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

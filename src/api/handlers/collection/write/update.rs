@@ -16,34 +16,23 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    config::PasswordPolicy,
-    core::{
-        CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedTokenProvider,
-    },
-    db::{DbPool, LocaleContext},
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError, WriteInput},
+    core::{CollectionDefinition, DocumentFields},
+    db::LocaleContext,
+    service::{self, AppInfra, ServiceContext, ServiceError, WriteInput},
 };
 
-/// Owned bundle for the `Update` spawn-blocking body.
+/// Owned bundle for the `Update` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct UpdateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     collection: String,
     id: String,
     def: CollectionDefinition,
     token: Option<String>,
     data: DocumentFields,
     password: Option<String>,
-    password_policy: PasswordPolicy,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     events: bool,
@@ -51,6 +40,7 @@ struct UpdateBlockingInput {
 
 fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Status> {
     let conn = input
+        .infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -58,9 +48,9 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*input.infra.token_provider,
+        &input.infra.hook_runner,
+        &input.infra.registry,
         &conn,
     )?;
 
@@ -77,14 +67,9 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
         .build();
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(user_doc.as_ref())
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
         .emit_events(input.events)
-        .cache(input.cache)
-        .password_policy(Some(&input.password_policy))
         .build();
 
     let (doc, _req_context) = service::update_document(&ctx, &input.id, write_input)
@@ -133,14 +118,8 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = UpdateBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            cache: Some(self.cache.clone()),
             collection: req.collection.clone(),
             id: req.id.clone(),
             def,
@@ -148,7 +127,6 @@ impl ContentService {
             headers,
             data,
             password,
-            password_policy: self.password_policy.clone(),
             locale_ctx,
             draft: req.draft.unwrap_or(false),
             events: req.events.unwrap_or(true),

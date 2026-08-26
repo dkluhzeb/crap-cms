@@ -12,34 +12,26 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedTokenProvider,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError},
+    core::CollectionDefinition,
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
-/// Owned bundle for the `Undelete` spawn-blocking body.
+/// Owned bundle for the `Undelete` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct UndeleteBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     def: CollectionDefinition,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     collection: String,
     id: String,
     token: Option<String>,
 }
 
-fn undelete_blocking(input: UndeleteBlockingInput) -> Result<content::Document, Status> {
-    let conn = input
+fn undelete_blocking(input: &UndeleteBlockingInput) -> Result<content::Document, Status> {
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -47,9 +39,9 @@ fn undelete_blocking(input: UndeleteBlockingInput) -> Result<content::Document, 
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -57,12 +49,8 @@ fn undelete_blocking(input: UndeleteBlockingInput) -> Result<content::Document, 
     drop(conn);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(infra)
         .user(user_doc.as_ref())
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
-        .cache(input.cache)
         .build();
 
     let doc = service::undelete_document(&ctx, &input.id)
@@ -88,22 +76,16 @@ impl ContentService {
         // chokepoint `service::undelete_document`, so every surface agrees.
 
         let input = UndeleteBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             def,
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            cache: Some(self.cache.clone()),
             collection: req.collection.clone(),
             id: req.id.clone(),
             token,
             headers,
         };
 
-        let proto_doc = task::spawn_blocking(move || undelete_blocking(input))
+        let proto_doc = task::spawn_blocking(move || undelete_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

@@ -14,26 +14,23 @@ use crate::{
             ContentService, collection::filter_builder::FilterBuilder, proto::document_to_proto,
         },
     },
-    core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
-    db::{AccessResult, DbPool, FindQuery, LocaleContext, SharedPopulateSingleflight, query},
-    hooks::HookRunner,
-    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
+    core::CollectionDefinition,
+    db::{AccessResult, FindQuery, LocaleContext, query},
+    service::{
+        AppInfra, FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents,
+    },
 };
 
 use crate::api::handlers::proto::pagination_result_to_proto;
 
-/// Owned bundle for the `Find` spawn-blocking body.
+/// Owned bundle for the `Find` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct FindBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     def: CollectionDefinition,
-    pop_cache: SharedCache,
-    singleflight: SharedPopulateSingleflight,
     token: Option<String>,
     find_query: FindQuery,
     locale_ctx: Option<LocaleContext>,
@@ -45,9 +42,11 @@ struct FindBlockingInput {
 }
 
 fn find_blocking(
-    input: FindBlockingInput,
+    input: &FindBlockingInput,
 ) -> Result<(Vec<content::Document>, content::PaginationInfo), Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -55,9 +54,9 @@ fn find_blocking(
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -66,9 +65,9 @@ fn find_blocking(
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
+    let read_hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
+        .infra(infra)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
@@ -78,12 +77,12 @@ fn find_blocking(
         .depth(input.depth)
         .select(input.select.as_deref())
         .locale_ctx(input.locale_ctx.as_ref())
-        .registry(Some(&input.registry))
-        .cache(Some(&*input.pop_cache))
+        .registry(Some(&infra.registry))
+        .cache(Some(&*infra.cache))
         .cursor_enabled(input.cursor_enabled)
         .trash(input.is_trash)
         .include_drafts(input.include_drafts)
-        .singleflight(Some(input.singleflight))
+        .singleflight(Some(infra.populate_singleflight.clone()))
         .build();
 
     let result = find_documents(&ctx, &find_input).map_err(Status::from)?;
@@ -174,15 +173,10 @@ impl ContentService {
         let find_query = build_find_query(&req, &def, &pagination, select.as_deref())?;
 
         let input = FindBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             def,
-            pop_cache: self.cache.clone(),
-            singleflight: self.populate_singleflight.clone(),
             token,
             headers,
             find_query,
@@ -194,7 +188,7 @@ impl ContentService {
             include_drafts: req.draft.unwrap_or(false),
         };
 
-        let (proto_docs, pagination_info) = task::spawn_blocking(move || find_blocking(input))
+        let (proto_docs, pagination_info) = task::spawn_blocking(move || find_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

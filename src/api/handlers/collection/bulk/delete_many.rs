@@ -10,42 +10,34 @@ use tracing::error;
 use crate::hooks::AccessCheckInput;
 use crate::{
     api::{content, handlers::ContentService},
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedStorage, SharedTokenProvider, upload,
+    core::{CollectionDefinition, upload},
+    db::AccessResult,
+    service::{
+        AppInfra, DeleteManyOptions, DeleteManyResult, ServiceContext, ServiceError, delete_many,
     },
-    db::{AccessResult, DbPool},
-    hooks::HookRunner,
-    service::{DeleteManyOptions, DeleteManyResult, ServiceContext, ServiceError, delete_many},
 };
 
 use super::helpers::build_bulk_filters;
 
-/// Owned bundle for the `DeleteMany` spawn-blocking body.
+/// Owned bundle for the `DeleteMany` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct DeleteManyBlockingInput {
-    pool: DbPool,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     where_json: Option<String>,
-    storage: SharedStorage,
-    locale_cfg: LocaleConfig,
     def: CollectionDefinition,
-    invalidation_transport: SharedInvalidationTransport,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
     token: Option<String>,
     run_hooks: bool,
     bulk_max_documents: i64,
     events: bool,
 }
 
-fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResult, Status> {
-    let mut conn = input
+fn delete_many_blocking(input: &DeleteManyBlockingInput) -> Result<DeleteManyResult, Status> {
+    let infra = &input.infra;
+
+    let mut conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -53,9 +45,9 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -65,7 +57,7 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
             .access(input.def.access.read.as_ref())
             .user(user_doc)
             .build(),
-        &input.hook_runner,
+        &infra.hook_runner,
         &mut conn,
     )?;
 
@@ -86,13 +78,9 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.hook_runner)
+        .infra(infra)
         .user(user_doc)
-        .invalidation_transport(Some(input.invalidation_transport))
-        .event_transport(input.event_transport)
         .emit_events(input.events)
-        .cache(input.cache)
         .build();
 
     let delete_opts = DeleteManyOptions {
@@ -101,11 +89,11 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
         ..Default::default()
     };
 
-    let result = delete_many(&ctx, &filters, &input.locale_cfg, &delete_opts)
+    let result = delete_many(&ctx, &filters, &infra.locale_config, &delete_opts)
         .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
 
     for fields in &result.upload_fields_to_clean {
-        upload::delete_upload_files(&*input.storage, fields);
+        upload::delete_upload_files(&*infra.storage, fields);
     }
 
     Ok(result)
@@ -130,19 +118,11 @@ impl ContentService {
         }
 
         let input = DeleteManyBlockingInput {
-            pool: self.pool.clone(),
-            hook_runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             where_json: req.r#where.clone(),
-            storage: self.storage.clone(),
-            locale_cfg: self.locale_config.clone(),
             def,
-            invalidation_transport: self.invalidation_transport.clone(),
-            event_transport: self.event_transport.clone(),
-            cache: Some(self.cache.clone()),
             token,
             headers,
             run_hooks,
@@ -150,7 +130,7 @@ impl ContentService {
             events: req.events.unwrap_or(false),
         };
 
-        let result = task::spawn_blocking(move || delete_many_blocking(input))
+        let result = task::spawn_blocking(move || delete_many_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

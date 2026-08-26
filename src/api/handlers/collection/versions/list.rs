@@ -13,19 +13,18 @@ use crate::{
         content,
         handlers::{ContentService, enum_mapping},
     },
-    core::{CollectionDefinition, Registry, SharedTokenProvider, document::VersionSnapshot},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{ListVersionsInput, PaginatedResult, RunnerReadHooks, ServiceContext, list_versions},
+    core::{CollectionDefinition, document::VersionSnapshot},
+    service::{
+        AppInfra, ListVersionsInput, PaginatedResult, RunnerReadHooks, ServiceContext,
+        list_versions,
+    },
 };
 
-/// Owned bundle for the `ListVersions` spawn-blocking body.
+/// Owned bundle for the `ListVersions` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct ListVersionsBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     collection: String,
     id: String,
     limit: Option<i64>,
@@ -34,30 +33,30 @@ struct ListVersionsBlockingInput {
 }
 
 fn list_versions_blocking(
-    input: ListVersionsBlockingInput,
+    input: &ListVersionsBlockingInput,
 ) -> Result<PaginatedResult<VersionSnapshot>, Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("ListVersions pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
-    let token = input.token;
-    let headers = input.headers;
-
     let auth_user = ContentService::resolve_auth_user(
-        token.as_deref(),
-        &headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        input.token.as_deref(),
+        &input.headers,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
+    let hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .infra(infra)
         .conn(&conn)
         .read_hooks(&hooks)
         .user(user_doc)
@@ -91,10 +90,7 @@ impl ContentService {
         }
 
         let input = ListVersionsBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             collection: req.collection.clone(),
             id: req.id.clone(),
             limit: floor_optional_limit(req.limit),
@@ -103,7 +99,7 @@ impl ContentService {
             headers,
         };
 
-        let result = task::spawn_blocking(move || list_versions_blocking(input))
+        let result = task::spawn_blocking(move || list_versions_blocking(&input))
             .await
             .inspect_err(|e| error!("ListVersions task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

@@ -15,33 +15,20 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    config::PasswordPolicy,
-    core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{
-        self, CreateManyItem, CreateManyOptions, EmailContext, ServiceContext, ServiceError,
-    },
+    core::CollectionDefinition,
+    service::{self, AppInfra, CreateManyItem, CreateManyOptions, ServiceContext, ServiceError},
 };
 
-/// Owned bundle for the `CreateMany` spawn-blocking body.
+/// Owned bundle for the `CreateMany` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct CreateManyBlockingInput {
-    pool: DbPool,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     def: CollectionDefinition,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
-    email_ctx: Option<EmailContext>,
     token: Option<String>,
     items: Vec<CreateManyItem>,
-    password_policy: PasswordPolicy,
     run_hooks: bool,
     draft: bool,
     bulk_max_documents: i64,
@@ -49,9 +36,11 @@ struct CreateManyBlockingInput {
 }
 
 fn create_many_blocking(
-    input: CreateManyBlockingInput,
+    input: &CreateManyBlockingInput,
 ) -> Result<(i64, Vec<content::Document>), Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -59,23 +48,18 @@ fn create_many_blocking(
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.hook_runner)
+        .infra(infra)
         .user(user_doc)
-        .event_transport(input.event_transport)
         .emit_events(input.events)
-        .cache(input.cache)
-        .email_ctx(input.email_ctx)
-        .password_policy(Some(&input.password_policy))
         .build();
 
     let opts = CreateManyOptions {
@@ -136,27 +120,20 @@ impl ContentService {
         }
 
         let input = CreateManyBlockingInput {
-            pool: self.pool.clone(),
-            hook_runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             def,
-            event_transport: self.event_transport.clone(),
-            cache: Some(self.cache.clone()),
-            email_ctx: Some(self.email_context()),
             token,
             headers,
             items,
-            password_policy: self.password_policy.clone(),
             run_hooks: req.hooks.unwrap_or(true),
             draft: req.draft.unwrap_or(false),
             bulk_max_documents: self.server_config.bulk_max_documents,
             events: req.events.unwrap_or(false),
         };
 
-        let result = task::spawn_blocking(move || create_many_blocking(input))
+        let result = task::spawn_blocking(move || create_many_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

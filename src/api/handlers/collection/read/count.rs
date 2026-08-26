@@ -12,21 +12,19 @@ use crate::{
         content,
         handlers::{ContentService, collection::filter_builder::FilterBuilder},
     },
-    core::{CollectionDefinition, Registry, SharedTokenProvider},
-    db::{AccessResult, DbPool, LocaleContext},
-    hooks::HookRunner,
+    core::CollectionDefinition,
+    db::{AccessResult, LocaleContext},
     service::{
-        CountDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, count_documents,
+        AppInfra, CountDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError,
+        count_documents,
     },
 };
 
-/// Owned bundle for the `Count` spawn-blocking body.
+/// Owned bundle for the `Count` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct CountBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     def: CollectionDefinition,
@@ -39,21 +37,20 @@ struct CountBlockingInput {
 }
 
 /// Resolve auth, build the filter, and run `count_documents`.
-fn count_blocking(input: CountBlockingInput) -> Result<i64, Status> {
-    let conn = input
+fn count_blocking(input: &CountBlockingInput) -> Result<i64, Status> {
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
-    let token = input.token;
-    let headers = input.headers;
-
     let auth_user = ContentService::resolve_auth_user(
-        token.as_deref(),
-        &headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        input.token.as_deref(),
+        &input.headers,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -64,10 +61,10 @@ fn count_blocking(input: CountBlockingInput) -> Result<i64, Status> {
         .build()?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
+    let read_hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
+        .infra(infra)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
@@ -101,10 +98,7 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = CountBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             def,
@@ -117,7 +111,7 @@ impl ContentService {
             trash: req.trash.unwrap_or(false),
         };
 
-        let count = task::spawn_blocking(move || count_blocking(input))
+        let count = task::spawn_blocking(move || count_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

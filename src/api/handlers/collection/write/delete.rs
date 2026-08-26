@@ -9,38 +9,27 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedStorage, SharedTokenProvider,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceError},
+    core::CollectionDefinition,
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
-/// Owned bundle for the `Delete` spawn-blocking body.
+/// Owned bundle for the `Delete` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct DeleteBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     db_kind: String,
     def: CollectionDefinition,
     collection: String,
     id: String,
-    storage: SharedStorage,
-    locale_config: LocaleConfig,
-    invalidation_transport: SharedInvalidationTransport,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
     token: Option<String>,
     events: bool,
 }
 
-fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
-    let conn = input
+fn delete_blocking(input: &DeleteBlockingInput) -> Result<(), Status> {
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -48,9 +37,9 @@ fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -58,21 +47,17 @@ fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
 
     // Service-layer delete publishes the invalidation signal on
     // hard-delete of auth collections when a transport is attached.
-    let ctx = service::ServiceContext::collection(&input.collection, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .infra(infra)
         .user(user_doc.as_ref())
-        .invalidation_transport(Some(input.invalidation_transport))
-        .event_transport(input.event_transport)
         .emit_events(input.events)
-        .cache(input.cache)
         .build();
 
     service::delete_document(
         &ctx,
         &input.id,
-        Some(&*input.storage),
-        Some(&input.locale_config),
+        Some(&*infra.storage),
+        Some(&infra.locale_config),
     )
     .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
 
@@ -103,25 +88,17 @@ impl ContentService {
         }
 
         let input = DeleteBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             def,
             collection: req.collection.clone(),
             id: req.id.clone(),
-            storage: self.storage.clone(),
-            locale_config: self.locale_config.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            event_transport: self.event_transport.clone(),
-            cache: Some(self.cache.clone()),
             token,
             headers,
             events: req.events.unwrap_or(true),
         };
 
-        task::spawn_blocking(move || delete_blocking(input))
+        task::spawn_blocking(move || delete_blocking(&input))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

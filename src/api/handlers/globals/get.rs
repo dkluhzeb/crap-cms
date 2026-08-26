@@ -12,19 +12,16 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{Registry, SharedTokenProvider, collection::GlobalDefinition},
-    db::{DbPool, LocaleContext},
-    hooks::HookRunner,
-    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
+    core::collection::GlobalDefinition,
+    db::LocaleContext,
+    service::{AppInfra, GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
 };
 
-/// Owned bundle for the `GetGlobal` spawn-blocking body.
+/// Owned bundle for the `GetGlobal` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct GetGlobalBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     slug: String,
     def: GlobalDefinition,
     token: Option<String>,
@@ -32,31 +29,30 @@ struct GetGlobalBlockingInput {
     include_drafts: bool,
 }
 
-fn get_global_blocking(input: GetGlobalBlockingInput) -> Result<content::Document, Status> {
-    let conn = input
+fn get_global_blocking(input: &GetGlobalBlockingInput) -> Result<content::Document, Status> {
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("GetGlobal pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
-    let token = input.token;
-    let headers = input.headers;
-
     let auth_user = ContentService::resolve_auth_user(
-        token.as_deref(),
-        &headers,
-        &*input.token_provider,
-        &input.runner,
-        &input.registry,
+        input.token.as_deref(),
+        &input.headers,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
     // Access check is handled by service::get_global_document
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
+    let read_hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::global(&input.slug, &input.def)
-        .pool(&input.pool)
+        .infra(infra)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
@@ -88,10 +84,7 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = GetGlobalBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             slug: req.slug.clone(),
             def,
             token,
@@ -100,7 +93,7 @@ impl ContentService {
             include_drafts: req.draft.unwrap_or(false),
         };
 
-        let proto_doc = task::spawn_blocking(move || get_global_blocking(input))
+        let proto_doc = task::spawn_blocking(move || get_global_blocking(&input))
             .await
             .inspect_err(|e| error!("GetGlobal task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
