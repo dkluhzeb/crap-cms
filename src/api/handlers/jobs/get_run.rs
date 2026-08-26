@@ -8,27 +8,25 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::{JobRun, Registry, SharedTokenProvider},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext},
+    core::JobRun,
+    service::{self, AppInfra, ServiceContext},
 };
 
 use super::job_run_to_proto;
 
-/// Owned bundle for the `GetJobRun` spawn-blocking body.
+/// Owned bundle for the `GetJobRun` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct GetJobRunBlockingInput {
-    pool: DbPool,
-    token_provider: SharedTokenProvider,
-    hook_runner: HookRunner,
-    registry: Arc<Registry>,
+    infra: Arc<AppInfra>,
     token: Option<String>,
     headers: HashMap<String, String>,
     id: String,
 }
 
 fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("GetJobRun pool error: {}", e))
@@ -40,9 +38,9 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
     let auth_user = ContentService::resolve_auth_user(
         token.as_deref(),
         &headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -54,12 +52,12 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
     // run's own slug, so the context slug is irrelevant here.
     let ctx = ServiceContext::slug_only("")
         .conn(&conn)
-        .runner(&input.hook_runner)
+        .runner(&infra.hook_runner)
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
     // A denied or unknown run resolves to `None` → `not_found`, hiding existence.
-    service::jobs::get_job_run(&ctx, input.registry.as_ref(), &input.id)
+    service::jobs::get_job_run(&ctx, infra.registry.as_ref(), &input.id)
         .map_err(Status::from)?
         .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", input.id)))
 }
@@ -77,10 +75,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let input = GetJobRunBlockingInput {
-            pool: self.pool.clone(),
-            token_provider: self.token_provider.clone(),
-            hook_runner: self.hook_runner.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             token,
             headers,
             id: req.id.clone(),

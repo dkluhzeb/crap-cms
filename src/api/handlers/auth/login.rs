@@ -1,6 +1,7 @@
 //! Login handler — authenticate with email/password and return a JWT.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::task;
@@ -17,14 +18,14 @@ use crate::{
         CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder,
         normalize_email,
     },
-    db::DbPool,
-    hooks::{HookRunner, lifecycle::AuthStrategyInput},
-    service::{self, ServiceContext, ServiceError, auth::authenticate_local},
+    hooks::lifecycle::AuthStrategyInput,
+    service::{self, AppInfra, ServiceContext, ServiceError, auth::authenticate_local},
 };
 
-/// Owned bundle for the `Login` spawn-blocking body.
+/// Owned bundle for the `Login` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct LoginBlockingInput {
-    pool: DbPool,
+    infra: Arc<AppInfra>,
     slug: String,
     email: String,
     password: String,
@@ -32,7 +33,6 @@ struct LoginBlockingInput {
     check_verify_email: bool,
     allows_password: bool,
     password_provider: SharedPasswordProvider,
-    hook_runner: HookRunner,
     headers: HashMap<String, String>,
     remote_addr: String,
 }
@@ -45,6 +45,7 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
     // Local auth reads the user then writes lockout/attempt counters on this
     // same connection, so it is write-capable and draws from the write pool.
     let conn = input
+        .infra
         .pool
         .write()
         .inspect_err(|e| error!("Login DB connection error: {}", e))
@@ -84,11 +85,11 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
         };
 
         for strategy in auth.strategies() {
-            if let Ok(Some(doc)) =
-                input
-                    .hook_runner
-                    .run_auth_strategy(strategy.authenticate, &strategy_input, &conn)
-            {
+            if let Ok(Some(doc)) = input.infra.hook_runner.run_auth_strategy(
+                strategy.authenticate,
+                &strategy_input,
+                &conn,
+            ) {
                 let ctx = ServiceContext::slug_only(&input.slug).conn(&conn).build();
 
                 // Strategy-authenticated users still need locked/verified
@@ -172,7 +173,7 @@ impl ContentService {
         }
 
         let input = LoginBlockingInput {
-            pool: self.pool.clone(),
+            infra: Arc::clone(&self.infra),
             slug: req.collection.clone(),
             email: req.email.clone(),
             password: req.password.clone(),
@@ -180,7 +181,6 @@ impl ContentService {
             check_verify_email: def.auth.as_ref().is_some_and(Auth::requires_verify_email),
             allows_password,
             password_provider: self.password_provider.clone(),
-            hook_runner: self.hook_runner.clone(),
             headers,
             remote_addr: ip.clone(),
         };

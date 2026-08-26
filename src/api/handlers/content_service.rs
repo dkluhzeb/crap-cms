@@ -16,11 +16,11 @@ use crate::{
         content::{self, content_api_server::ContentApi},
         handlers::ContentServiceDeps,
     },
-    config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
+    config::{LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
         AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
         SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
-        SharedTokenProvider, auth::TokenProvider, collection::Surface, email::EmailRenderer,
+        SharedTokenProvider, auth::TokenProvider, collection::Surface,
         event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
     },
     db::{
@@ -41,10 +41,7 @@ pub struct ContentService {
     pub(in crate::api::handlers) hook_runner: HookRunner,
     pub(in crate::api::handlers) default_depth: i32,
     pub(in crate::api::handlers) max_depth: i32,
-    pub(in crate::api::handlers) email_config: EmailConfig,
-    pub(in crate::api::handlers) email_renderer: Arc<EmailRenderer>,
     pub(in crate::api::handlers) server_config: ServerConfig,
-    pub(in crate::api::handlers) email_max_attempts: u32,
     /// `[jobs.queues.<name>] retries` snapshot, used by gRPC
     /// `TriggerJob` to compute the effective `max_attempts` for jobs
     /// defined without an explicit `retries` field. Only populated for
@@ -289,7 +286,6 @@ impl ContentService {
             hook_runner: deps.hook_runner,
             default_depth,
             max_depth,
-            email_max_attempts: deps.config.jobs.system_email_max_attempts(),
             queue_retries: deps
                 .config
                 .jobs
@@ -297,8 +293,6 @@ impl ContentService {
                 .iter()
                 .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
                 .collect(),
-            email_config: deps.config.email,
-            email_renderer: deps.email_renderer,
             server_config: deps.config.server,
             event_transport: deps.event_transport,
             locale_config: deps.config.locale,

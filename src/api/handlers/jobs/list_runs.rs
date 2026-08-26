@@ -12,20 +12,16 @@ use crate::{
         content,
         handlers::{ContentService, enum_mapping},
     },
-    core::{JobRun, Registry, SharedTokenProvider},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, PaginatedResult, ServiceContext},
+    core::JobRun,
+    service::{self, AppInfra, PaginatedResult, ServiceContext},
 };
 
 use super::job_run_to_proto;
 
-/// Owned bundle for the `ListJobRuns` spawn-blocking body.
+/// Owned bundle for the `ListJobRuns` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct ListJobRunsBlockingInput {
-    pool: DbPool,
-    token_provider: SharedTokenProvider,
-    hook_runner: HookRunner,
-    registry: Arc<Registry>,
+    infra: Arc<AppInfra>,
     token: Option<String>,
     headers: HashMap<String, String>,
     slug: Option<String>,
@@ -38,7 +34,9 @@ struct ListJobRunsBlockingInput {
 fn list_job_runs_blocking(
     input: ListJobRunsBlockingInput,
 ) -> Result<PaginatedResult<JobRun>, Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("ListJobRuns pool error: {}", e))
@@ -50,9 +48,9 @@ fn list_job_runs_blocking(
     let auth_user = ContentService::resolve_auth_user(
         token.as_deref(),
         &headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -62,14 +60,14 @@ fn list_job_runs_blocking(
 
     let ctx = ServiceContext::slug_only(input.slug.as_deref().unwrap_or(""))
         .conn(&conn)
-        .runner(&input.hook_runner)
+        .runner(&infra.hook_runner)
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
     service::jobs::list_job_runs(
         &ctx,
         &service::jobs::ListJobRunsInput {
-            registry: input.registry.as_ref(),
+            registry: infra.registry.as_ref(),
             slug: input.slug.as_deref(),
             status: input.status.as_deref(),
             limit: input.limit,
@@ -92,10 +90,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let input = ListJobRunsBlockingInput {
-            pool: self.pool.clone(),
-            token_provider: self.token_provider.clone(),
-            hook_runner: self.hook_runner.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             token,
             headers,
             slug: req.slug.clone(),

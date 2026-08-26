@@ -1,5 +1,7 @@
 //! Me handler — return the currently authenticated user.
 
+use std::sync::Arc;
+
 use serde_json::{Map, Value};
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -11,15 +13,15 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{CollectionDefinition, Document},
-    db::{DbPool, query},
-    hooks::{HookRunner, lifecycle::access::ReadStripInput},
-    service::{self, ServiceContext, helpers::collect_api_hidden_field_names},
+    db::query,
+    hooks::lifecycle::access::ReadStripInput,
+    service::{self, AppInfra, ServiceContext, helpers::collect_api_hidden_field_names},
 };
 
-/// Owned bundle for the `Me` spawn-blocking body.
+/// Owned bundle for the `Me` spawn-blocking body. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct MeBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     collection: String,
     id: String,
     def: CollectionDefinition,
@@ -27,6 +29,7 @@ struct MeBlockingInput {
 
 fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool), Status> {
     let conn = input
+        .infra
         .pool
         .get()
         .inspect_err(|e| error!("Me DB connection error: {}", e))
@@ -54,7 +57,7 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
             .into_iter()
             .collect();
 
-        input.runner.strip_read_access(
+        input.infra.hook_runner.strip_read_access(
             &input.def.fields,
             &mut level,
             &ReadStripInput {
@@ -104,8 +107,7 @@ impl ContentService {
         let def = self.get_collection_def(&claims.collection)?;
 
         let input = MeBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
+            infra: Arc::clone(&self.infra),
             collection: claims.collection.to_string(),
             id: claims.sub.to_string(),
             def,

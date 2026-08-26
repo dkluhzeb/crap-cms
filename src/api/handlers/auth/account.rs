@@ -9,10 +9,8 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::{Registry, SharedInvalidationTransport, SharedTokenProvider},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError, auth::AccountAction},
+    core::{Registry, SharedInvalidationTransport},
+    service::{self, AppInfra, ServiceContext, ServiceError, auth::AccountAction},
 };
 
 /// Shared logic for all account action RPCs.
@@ -62,10 +60,7 @@ fn validate_verify_email_enabled(registry: &Registry, collection: &str) -> Resul
 /// publishes a user-revocation signal so live subscribers tear down the
 /// session). Other actions ignore it.
 struct AccountActionBlockingInput {
-    pool: DbPool,
-    token_provider: SharedTokenProvider,
-    hook_runner: HookRunner,
-    registry: Arc<Registry>,
+    infra: Arc<AppInfra>,
     db_kind: String,
     collection: String,
     id: String,
@@ -88,7 +83,9 @@ fn account_action_blocking(
     input: AccountActionBlockingInput,
     action: AccountAction,
 ) -> Result<(), Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
@@ -96,9 +93,9 @@ fn account_action_blocking(
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
         &input.headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -109,19 +106,19 @@ fn account_action_blocking(
     // Collection-shape validation runs only after authentication so an
     // unauthenticated caller can't probe whether a collection exists, is an
     // auth collection, or has verify_email enabled.
-    validate_auth_collection(&input.registry, &input.collection)?;
+    validate_auth_collection(&infra.registry, &input.collection)?;
     if input.verify_email_required {
-        validate_verify_email_enabled(&input.registry, &input.collection)?;
+        validate_verify_email_enabled(&infra.registry, &input.collection)?;
     }
 
-    let def = input
+    let def = infra
         .registry
         .get_collection(&input.collection)
         .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", input.collection)))?;
 
     let ctx = ServiceContext::collection(&input.collection, def)
         .conn(&conn)
-        .runner(&input.hook_runner)
+        .runner(&infra.hook_runner)
         .user(Some(&auth_user.user_doc))
         .invalidation_transport(input.invalidation_transport)
         .build();
@@ -144,10 +141,7 @@ impl ContentService {
         action: AccountAction,
     ) -> AccountActionBlockingInput {
         AccountActionBlockingInput {
-            pool: self.pool.clone(),
-            token_provider: self.token_provider.clone(),
-            hook_runner: self.hook_runner.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             id: req.id.clone(),
@@ -155,7 +149,7 @@ impl ContentService {
             headers,
             invalidation_transport: action
                 .invalidates_sessions()
-                .then(|| self.invalidation_transport.clone()),
+                .then(|| self.infra.invalidation_transport.clone()),
             verify_email_required: action.is_verification_action(),
         }
     }

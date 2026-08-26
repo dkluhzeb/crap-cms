@@ -1,5 +1,7 @@
 //! Forgot password handler — generate reset token and queue email.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response};
 use tracing::error;
@@ -7,14 +9,8 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    config::{EmailConfig, ServerConfig},
-    core::{
-        CollectionDefinition, email,
-        email::{EmailRenderer, PasswordResetEmailContext},
-        normalize_email,
-    },
-    db::DbPool,
-    service::{ServiceContext, auth::generate_reset_token},
+    core::{CollectionDefinition, email, email::PasswordResetEmailContext, normalize_email},
+    service::{AppInfra, ServiceContext, auth::generate_reset_token},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -60,27 +56,19 @@ impl ContentService {
             return ok_response;
         }
 
-        let pool = self.pool.clone();
+        let infra = Arc::clone(&self.infra);
         let slug = req.collection.clone();
         let user_email = req.email.clone();
         let def_owned = def;
-        let email_config = self.email_config.clone();
-        let email_renderer = self.email_renderer.clone();
-        let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
-        let email_max_attempts = self.email_max_attempts;
 
         task::spawn_blocking(move || {
             send_reset_email(&ResetEmailCtx {
-                pool: &pool,
+                infra: &infra,
                 slug: &slug,
                 def: &def_owned,
                 user_email: &user_email,
-                email_config: &email_config,
-                email_renderer: &email_renderer,
-                server_config: &server_config,
                 reset_expiry,
-                email_max_attempts,
             });
         });
 
@@ -88,22 +76,20 @@ impl ContentService {
     }
 }
 
-/// Context for sending a password reset email.
+/// Context for sending a password reset email. Process-stable dependencies
+/// (pool + email config/renderer/server config) come from the shared
+/// [`AppInfra`]; `reset_expiry` and the target collection are per-call.
 struct ResetEmailCtx<'a> {
-    pool: &'a DbPool,
+    infra: &'a AppInfra,
     slug: &'a str,
     def: &'a CollectionDefinition,
     user_email: &'a str,
-    email_config: &'a EmailConfig,
-    email_renderer: &'a EmailRenderer,
-    server_config: &'a ServerConfig,
     reset_expiry: u64,
-    email_max_attempts: u32,
 }
 
 /// Generate a reset token, store it, and queue the reset email.
 fn send_reset_email(ctx: &ResetEmailCtx) {
-    let conn = match ctx.pool.get() {
+    let conn = match ctx.infra.pool.get() {
         Ok(c) => c,
         Err(e) => {
             error!("DB connection for forgot password: {}", e);
@@ -127,16 +113,16 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
 
     // Use the shared `base_url()` so a configured `public_url` with a trailing
     // slash is trimmed — the hand-rolled form produced `…com//admin/…`.
-    let base_url = ctx.server_config.base_url();
+    let base_url = ctx.infra.email.server_config.base_url();
 
     let reset_url = format!("{base_url}/admin/reset-password?token={token}");
 
-    let html = match ctx.email_renderer.render(
+    let html = match ctx.infra.email.email_renderer.render(
         "password_reset",
         &PasswordResetEmailContext {
             reset_url: &reset_url,
             expiry_minutes: ctx.reset_expiry / 60,
-            from_name: &ctx.email_config.from_name,
+            from_name: &ctx.infra.email.email_config.from_name,
         },
     ) {
         Ok(h) => h,
@@ -154,7 +140,7 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
             html,
             text: None,
         },
-        ctx.email_max_attempts,
+        ctx.infra.email.email_max_attempts,
     ) {
         error!("Failed to queue reset email: {}", e);
     }

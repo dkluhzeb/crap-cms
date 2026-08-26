@@ -11,24 +11,19 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::{Registry, SharedTokenProvider},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext},
+    service::{self, AppInfra, ServiceContext},
 };
 
 /// Resolve the auth user, reject anonymous callers, and return the set of job
 /// slugs whose definitions this caller may see (those whose runs they may
 /// read). Keeps `ListJobs` consistent with the run-read access gate.
 fn readable_job_slugs_blocking(
-    pool: &DbPool,
-    token_provider: &SharedTokenProvider,
-    hook_runner: &HookRunner,
-    registry: &Arc<Registry>,
+    infra: &AppInfra,
     token: Option<&str>,
     headers: &HashMap<String, String>,
 ) -> Result<HashSet<String>, Status> {
-    let conn = pool
+    let conn = infra
+        .pool
         .get()
         .inspect_err(|e| error!("ListJobs pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
@@ -36,9 +31,9 @@ fn readable_job_slugs_blocking(
     let auth_user = ContentService::resolve_auth_user(
         token,
         headers,
-        &**token_provider,
-        hook_runner,
-        registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -48,11 +43,12 @@ fn readable_job_slugs_blocking(
 
     let ctx = ServiceContext::slug_only("")
         .conn(&conn)
-        .runner(hook_runner)
+        .runner(&infra.hook_runner)
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
-    let allowed = service::jobs::readable_job_slugs(&ctx, &conn, registry).map_err(Status::from)?;
+    let allowed =
+        service::jobs::readable_job_slugs(&ctx, &conn, &infra.registry).map_err(Status::from)?;
 
     Ok(allowed.into_iter().collect())
 }
@@ -68,20 +64,10 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
 
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let hook_runner = self.hook_runner.clone();
-        let registry = Arc::clone(&self.registry);
+        let infra = Arc::clone(&self.infra);
 
         let allowed = task::spawn_blocking(move || {
-            readable_job_slugs_blocking(
-                &pool,
-                &token_provider,
-                &hook_runner,
-                &registry,
-                token.as_deref(),
-                &headers,
-            )
+            readable_job_slugs_blocking(&infra, token.as_deref(), &headers)
         })
         .await
         .inspect_err(|e| error!("ListJobs task error: {}", e))

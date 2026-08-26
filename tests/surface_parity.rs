@@ -190,6 +190,12 @@ const INVALIDATION_WRITE_OPS: &[&str] = &[
 /// surfaces. (The service orchestrators are intentionally NOT scanned: they build
 /// an inner context without the transport because the outer surface context owns
 /// the post-commit publish.)
+///
+/// `.infra(...)` counts as attaching it: the `AppInfra` bundle carries the
+/// invalidation transport and `ServiceContext::infra` sets it unconditionally, so
+/// a handler that builds its context via `.infra(...)` cannot forget the transport
+/// (a strictly stronger guarantee than the explicit `.invalidation_transport(...)`
+/// call this guard originally looked for).
 #[test]
 fn write_surfaces_attach_invalidation_transport() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -207,7 +213,10 @@ fn write_surfaces_attach_invalidation_transport() {
                 .iter()
                 .any(|op| contents.contains(op));
 
-            if builds_ctx && does_write && !contents.contains("invalidation_transport") {
+            let attaches_transport =
+                contents.contains("invalidation_transport") || contents.contains(".infra(");
+
+            if builds_ctx && does_write && !attaches_transport {
                 let rel = file
                     .strip_prefix(root)
                     .unwrap_or(&file)
@@ -221,9 +230,11 @@ fn write_surfaces_attach_invalidation_transport() {
     assert!(
         offenders.is_empty(),
         "Write-path surface handler(s) build a ServiceContext for an \
-         access-changing write but never attach `.invalidation_transport(...)`, \
-         so live-stream teardown silently no-ops on a role change. Attach it \
-         (from the surface's invalidation transport) like the sibling \
+         access-changing write but never attach the invalidation transport \
+         (neither `.invalidation_transport(...)` nor `.infra(...)`), so \
+         live-stream teardown silently no-ops on a role change. Attach it — \
+         either explicitly from the surface's invalidation transport, or via \
+         `.infra(...)` (which bundles it) — like the sibling \
          update/undelete/restore handlers do.\n\n{}",
         offenders.join("\n")
     );

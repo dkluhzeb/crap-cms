@@ -9,19 +9,14 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::{Registry, SharedTokenProvider},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext},
+    service::{self, AppInfra, ServiceContext},
 };
 
-/// Owned bundle for the `TriggerJob` spawn-blocking body.
+/// Owned bundle for the `TriggerJob` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct TriggerJobBlockingInput {
-    pool: DbPool,
-    hook_runner: HookRunner,
+    infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    token_provider: SharedTokenProvider,
-    registry: Arc<Registry>,
     data_json: String,
     slug: String,
     token: Option<String>,
@@ -36,7 +31,9 @@ struct TriggerJobBlockingInput {
 /// Resolve the auth user, look up the job definition, and queue the job.
 /// Synchronous body of [`ContentService::trigger_job_impl`].
 fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status> {
-    let conn = input
+    let infra = &input.infra;
+
+    let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("TriggerJob pool error: {}", e))
@@ -48,9 +45,9 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
     let auth_user = ContentService::resolve_auth_user(
         token.as_deref(),
         &headers,
-        &*input.token_provider,
-        &input.hook_runner,
-        &input.registry,
+        &*infra.token_provider,
+        &infra.hook_runner,
+        &infra.registry,
         &conn,
     )?;
 
@@ -58,7 +55,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         return Err(Status::unauthenticated("Authentication required"));
     }
 
-    let job_def = input
+    let job_def = infra
         .registry
         .get_job(&input.slug)
         .cloned()
@@ -66,7 +63,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
 
     let job_ctx = ServiceContext::slug_only(&input.slug)
         .conn(&conn)
-        .runner(&input.hook_runner)
+        .runner(&infra.hook_runner)
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
@@ -104,10 +101,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let input = TriggerJobBlockingInput {
-            pool: self.pool.clone(),
-            hook_runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            infra: Arc::clone(&self.infra),
             data_json: req.data_json.unwrap_or_else(|| "{}".to_string()),
             slug: req.slug.clone(),
             token,

@@ -1,5 +1,7 @@
 //! Verify email handler — verify an email address using a verification token.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -8,13 +10,13 @@ use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     core::CollectionDefinition,
-    db::DbPool,
-    service::{ServiceContext, auth::consume_verification_token},
+    service::{AppInfra, ServiceContext, auth::consume_verification_token},
 };
 
-/// Owned bundle for the `VerifyEmail` spawn-blocking body.
+/// Owned bundle for the `VerifyEmail` spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct VerifyEmailBlockingInput {
-    pool: DbPool,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     token: String,
@@ -22,6 +24,7 @@ struct VerifyEmailBlockingInput {
 
 fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Status> {
     let mut conn = input
+        .infra
         .pool
         .write()
         .inspect_err(|e| error!("Verify email DB connection error: {}", e))
@@ -73,7 +76,7 @@ impl ContentService {
         }
 
         let input = VerifyEmailBlockingInput {
-            pool: self.pool.clone(),
+            infra: Arc::clone(&self.infra),
             slug: req.collection.clone(),
             def,
             token: req.token.clone(),

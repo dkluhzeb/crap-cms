@@ -1,5 +1,7 @@
 //! Reset password handler — reset password using a valid reset token.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -7,19 +9,19 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::{CollectionDefinition, SharedInvalidationTransport},
-    db::DbPool,
-    service::{ServiceContext, auth::consume_reset_token},
+    core::CollectionDefinition,
+    service::{AppInfra, ServiceContext, auth::consume_reset_token},
 };
 
-/// Owned bundle for the `ResetPassword` spawn-blocking body.
+/// Owned bundle for the `ResetPassword` spawn-blocking body. Process-stable
+/// dependencies (pool, invalidation transport) come from the shared
+/// [`AppInfra`]; the rest is per-call.
 struct ResetPasswordBlockingInput {
-    pool: DbPool,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     token: String,
     password: String,
-    invalidation_transport: SharedInvalidationTransport,
 }
 
 /// Returns `Ok(())` on a committed reset. Infrastructure failures (pool / tx /
@@ -30,6 +32,7 @@ struct ResetPasswordBlockingInput {
 /// caller to record — it just produces the response status.
 fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Status> {
     let mut conn = input
+        .infra
         .pool
         .write()
         .inspect_err(|e| error!("Reset password DB connection error: {}", e))
@@ -56,7 +59,7 @@ fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Sta
     // Tear down the user's open live-update streams POST-COMMIT — a rolled-back
     // reset must never tear down a stream for a change that didn't happen.
     ServiceContext::slug_only(&input.slug)
-        .invalidation_transport(Some(input.invalidation_transport.clone()))
+        .invalidation_transport(Some(input.infra.invalidation_transport.clone()))
         .build()
         .publish_user_invalidation(&user_id);
 
@@ -110,12 +113,11 @@ impl ContentService {
         }
 
         let input = ResetPasswordBlockingInput {
-            pool: self.pool.clone(),
+            infra: Arc::clone(&self.infra),
             slug: req.collection.clone(),
             def,
             token: req.token.clone(),
             password: req.new_password.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
         };
 
         task::spawn_blocking(move || reset_password_blocking(&input))
