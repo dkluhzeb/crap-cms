@@ -27,14 +27,15 @@ use crate::{
         upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_upload_files},
     },
     db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
-    hooks::HookRunner,
+    hooks::{HookRunner, LuaCrudInfra},
+    service::AppInfra,
 };
 
 use super::runner::{
-    check_cron_schedules, claim_retention_purge_tick, execute_job, purge_soft_deleted,
-    recover_stale_jobs,
+    ExecuteJobParams, check_cron_schedules, claim_retention_purge_tick, execute_job,
+    purge_soft_deleted, recover_stale_jobs,
 };
-use super::types::{SchedulerParams, SystemJobConfig};
+use super::types::{SchedulerParams, TickJobConfig};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
 ///
@@ -45,15 +46,20 @@ use super::types::{SchedulerParams, SystemJobConfig};
 #[cfg(not(tarpaulin_include))]
 pub async fn start(params: SchedulerParams) -> Result<()> {
     let SchedulerParams {
-        pool,
-        hook_runner,
-        registry,
+        infra,
         config,
         shutdown,
-        storage,
-        locale_config,
         email_provider,
     } = params;
+
+    // Unpack the core deps the loop threads through its helpers (cheap Arc
+    // clones); the scheduler uses only this subset of the bundle.
+    let pool = infra.pool.clone();
+    let hook_runner = infra.hook_runner.clone();
+    let registry = Arc::clone(&infra.registry);
+    let storage = infra.storage.clone();
+    let locale_config = infra.locale_config.clone();
+    let job_lua_infra = job_crud_infra(&infra);
 
     info!(
         "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
@@ -116,11 +122,12 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 let max_concurrent = config.max_concurrent;
 
                 let ep = email_provider.clone();
-                let sys = SystemJobConfig {
+                let sys = TickJobConfig {
                     priority_decay,
                     queue_concurrency: queue_concurrency.clone(),
                     queue_timeouts: queue_timeouts.clone(),
                     storage: storage.clone(),
+                    lua_infra: job_lua_infra.clone(),
                 };
 
                 tokio::spawn(async move {
@@ -180,6 +187,19 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
             // job queue's `max_concurrent` + per-slug `job_concurrency`
             // map handle worker throttling.
         }
+    }
+}
+
+/// Event transport + populate cache for user job handlers' Lua CRUD calls,
+/// so job writes publish live-update events and invalidate the populate
+/// cache like every other surface. The event queue is injected per
+/// invocation by `run_job_handler` (which flushes it post-handler).
+fn job_crud_infra(infra: &AppInfra) -> LuaCrudInfra {
+    LuaCrudInfra {
+        event_transport: infra.event_transport.clone(),
+        cache: Some(infra.cache.clone()),
+        event_queue: None,
+        verification_queue: None,
     }
 }
 
@@ -407,7 +427,7 @@ fn poll_and_execute(
     max_concurrent: usize,
     running_jobs: &Arc<Mutex<Vec<String>>>,
     email_provider: Option<&SharedEmailProvider>,
-    system: &SystemJobConfig,
+    system: &TickJobConfig,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
 
@@ -445,6 +465,7 @@ fn poll_and_execute(
             storage: &system.storage,
             job_run: &job_run,
             job_def: &job_def,
+            lua_infra: &system.lua_infra,
         });
     }
 
@@ -614,6 +635,7 @@ struct SpawnJobInput<'a> {
     storage: &'a SharedStorage,
     job_run: &'a JobRun,
     job_def: &'a JobDefinition,
+    lua_infra: &'a LuaCrudInfra,
 }
 
 /// Spawn a tokio task to execute a job with timeout enforcement.
@@ -637,20 +659,22 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let storage = s.storage.clone();
     let job_def = s.job_def.clone();
     let job_run = s.job_run.clone();
+    let lua_infra = s.lua_infra.clone();
 
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(timeout_secs);
         let result = tokio::time::timeout(
             timeout_dur,
             tokio::task::spawn_blocking(move || {
-                execute_job(
-                    &pool,
-                    &hook_runner,
-                    &job_def,
-                    &job_run,
-                    ep.as_deref(),
-                    &storage,
-                )
+                execute_job(ExecuteJobParams {
+                    pool: &pool,
+                    hook_runner: &hook_runner,
+                    job_def: &job_def,
+                    job_run: &job_run,
+                    email_provider: ep.as_deref(),
+                    storage: &storage,
+                    lua_infra: Some(&lua_infra),
+                })
             }),
         )
         .await;

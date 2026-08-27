@@ -13,9 +13,9 @@ use crate::{
     hooks::{
         self, HookRunner,
         lifecycle::{
-            InitPhase, LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
+            InitPhase, LuaVmInfra,
             execution::scan_registered_events,
-            types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
+            types::{HookDepth, MaxInstructions},
         },
         lua_api::{
             self, VmLabel,
@@ -185,12 +185,6 @@ fn create_lua_vm(
 
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
 
-    // The registry snapshot is stored in app-data so the access chokepoint
-    // (`check_collection_access`) can resolve a constrained collection's field
-    // types — e.g. to reject a row constraint on a locale-scoped field — for the
-    // inline Lua-CRUD path, which has no `HookRunner` handle.
-    lua.set_app_data(Arc::clone(registry));
-
     setup_package_paths(&lua, config_dir)?;
 
     register_apis(&lua, registry, config)?;
@@ -199,6 +193,7 @@ fn create_lua_vm(
         &lua,
         config_dir,
         config,
+        registry,
         invalidation_transport,
         populate_singleflight,
     )?;
@@ -272,19 +267,18 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
     Ok(())
 }
 
-/// Initialize hook depth tracking, access config, and storage backend.
+/// Initialize hook depth tracking, the instruction limit, and the VM-stable
+/// infrastructure bundle ([`LuaVmInfra`]).
 fn init_app_data(
     lua: &Lua,
     config_dir: &Path,
     config: &CrapConfig,
+    registry: &Arc<Registry>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
 ) -> Result<()> {
     lua.set_app_data(HookDepth(0));
-    lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
-    lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
-    lua.set_app_data(LuaLocaleConfig(config.locale.clone()));
 
     // Inside a pool VM, a custom backend delegates to `crap._storage`
     // (set by `crap.storage.register` during this VM's init.lua). Back it
@@ -299,15 +293,15 @@ fn init_app_data(
             .context("Failed to create storage backend for Lua VM")?
     };
 
-    lua.set_app_data(LuaStorage(storage));
-
-    if let Some(transport) = invalidation_transport {
-        lua.set_app_data(LuaInvalidationTransport(transport));
-    }
-
-    if let Some(sf) = populate_singleflight {
-        lua.set_app_data(LuaPopulateSingleflight(sf));
-    }
+    lua.set_app_data(LuaVmInfra {
+        registry: Arc::clone(registry),
+        locale_config: config.locale.clone(),
+        storage: Some(storage),
+        invalidation_transport,
+        populate_singleflight,
+        max_hook_depth: config.hooks.max_depth,
+        default_deny: config.access.default_deny,
+    });
 
     Ok(())
 }

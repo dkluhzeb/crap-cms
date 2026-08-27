@@ -13,7 +13,10 @@ use tracing::{info, warn};
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
+    core::{
+        Registry, SharedEventTransport, SharedInvalidationTransport,
+        event::{create_event_transport, create_invalidation_transport},
+    },
     db::{DbPool, migrate, pool},
     hooks::{self, HookRunner},
 };
@@ -94,6 +97,25 @@ pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
 }
 
 /// Run `on_init` hooks if configured. Failure aborts startup.
+/// Build event + invalidation transports from config. The Redis URL is shared
+/// with the cache backend (same `[cache] redis_url`). Used by every process
+/// that runs writes — `serve`, the standalone `work` worker, and stdio MCP —
+/// so cross-process (Redis) live updates and user-invalidation reach `serve`'s
+/// subscribers regardless of which process performed the write.
+///
+/// # Errors
+///
+/// Returns an error if a configured Redis transport can't be constructed.
+pub fn create_live_transports(
+    cfg: &CrapConfig,
+) -> Result<(Option<SharedEventTransport>, SharedInvalidationTransport)> {
+    let redis_url = &cfg.cache.redis_url;
+    let event_transport = create_event_transport(&cfg.live, redis_url)?;
+    let invalidation_transport = create_invalidation_transport(&cfg.live, redis_url)?;
+
+    Ok((event_transport, invalidation_transport))
+}
+
 pub fn run_on_init_hooks(cfg: &CrapConfig, pool: &DbPool, hook_runner: &HookRunner) -> Result<()> {
     if cfg.hooks.on_init.is_empty() {
         return Ok(());

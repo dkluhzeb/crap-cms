@@ -290,6 +290,7 @@ fn execute_echo_job_via_hook_runner() {
             &HookRef::new("jobs.test_job.echo"),
             &job_run("test_echo_job", "{\"hello\":\"world\"}", 1, 1),
             &pool,
+            None,
         )
         .expect("run_job_handler");
 
@@ -307,6 +308,7 @@ fn execute_job_that_creates_document() {
             &HookRef::new("jobs.test_job.create_post"),
             &job_run("test_create_post", "{\"title\":\"From Job\"}", 1, 1),
             &pool,
+            None,
         )
         .expect("run_job_handler");
 
@@ -342,7 +344,7 @@ fn job_handler_receives_run_metadata() {
         .build();
 
     let result = runner
-        .run_job_handler(&HookRef::new("jobs.test_job.job_meta"), &jr, &pool)
+        .run_job_handler(&HookRef::new("jobs.test_job.job_meta"), &jr, &pool, None)
         .expect("run_job_handler")
         .expect("handler returned a value");
     let json: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -368,6 +370,7 @@ fn execute_failing_job_returns_error() {
         &HookRef::new("jobs.test_job.fail"),
         &job_run("test_failing_job", "{}", 1, 3),
         &pool,
+        None,
     );
 
     assert!(result.is_err(), "Failing job should return an error");

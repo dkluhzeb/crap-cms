@@ -109,7 +109,7 @@ impl HookRunner {
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         // No access function configured — the in-Lua path would
-        // only read the `DefaultDeny` flag from `app_data` and
+        // only read the `default_deny` flag from the `LuaVmInfra` app-data and
         // return immediately, so skip the entire VM round-trip.
         // With pool size 16 and 50 concurrent reads, the previous
         // unconditional `pool.acquire()` serialized 34 requests on

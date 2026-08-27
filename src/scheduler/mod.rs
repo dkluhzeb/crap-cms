@@ -32,5 +32,7 @@ mod runner;
 mod types;
 
 pub use loop_runner::start;
-pub use runner::{check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs};
+pub use runner::{
+    ExecuteJobParams, check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs,
+};
 pub use types::SchedulerParams;

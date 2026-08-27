@@ -16,7 +16,7 @@ use crate::{
         upload::{self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage},
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
-    hooks::HookRunner,
+    hooks::{HookRunner, LuaCrudInfra},
 };
 
 /// Write a job-failure outcome to the queue row and log it at the right level.
@@ -75,6 +75,23 @@ fn record_permanent_job_failure(
     write_job_failure(pool, job_run, label, error_msg, false)
 }
 
+/// Borrowed inputs for [`execute_job`], grouped per the >4-params rule.
+/// All fields are references (or `Copy` options of references), so the
+/// struct itself is `Copy` and passing it by value is free.
+#[derive(Clone, Copy)]
+pub struct ExecuteJobParams<'a> {
+    pub pool: &'a DbPool,
+    pub hook_runner: &'a HookRunner,
+    pub job_def: &'a JobDefinition,
+    pub job_run: &'a JobRun,
+    pub email_provider: Option<&'a dyn EmailProvider>,
+    pub storage: &'a SharedStorage,
+    /// Event transport + populate cache for the handler's Lua CRUD calls
+    /// (cloned per handler invocation; the queues stay `None` in pool-mode).
+    /// `None` = job writes publish no events and skip cache invalidation.
+    pub lua_infra: Option<&'a LuaCrudInfra>,
+}
+
 /// Execute a single job: call the Lua handler with CRUD access,
 /// or handle system jobs (`_system_email`, `_system_image_convert`)
 /// directly in Rust.
@@ -83,14 +100,17 @@ fn record_permanent_job_failure(
 ///
 /// Returns an error if the connection acquisition, Lua hook execution,
 /// system-job handler, or job-status update fails.
-pub fn execute_job(
-    pool: &DbPool,
-    hook_runner: &HookRunner,
-    job_def: &JobDefinition,
-    job_run: &JobRun,
-    email_provider: Option<&dyn EmailProvider>,
-    storage: &SharedStorage,
-) -> Result<()> {
+pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
+    let ExecuteJobParams {
+        pool,
+        hook_runner,
+        job_def,
+        job_run,
+        email_provider,
+        storage,
+        lua_infra,
+    } = p;
+
     let start = Instant::now();
 
     info!(
@@ -118,7 +138,7 @@ pub fn execute_job(
     // This avoids the `SQLITE_BUSY_SNAPSHOT` hazard that the previous
     // single-deferred-outer-tx model exposed for long-running handlers
     // that did read-then-write.
-    let result = hook_runner.run_job_handler(&job_def.handler, job_run, pool);
+    let result = hook_runner.run_job_handler(&job_def.handler, job_run, pool, lua_infra.cloned());
 
     match result {
         Ok(result_json) => {

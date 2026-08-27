@@ -127,8 +127,16 @@ fn execute_job_echo_completes_successfully() {
     let job_def = registry.get_job("test_echo_job").unwrap().clone();
 
     let job_run = &claimed[0];
-    scheduler::execute_job(&pool, &runner, &job_def, job_run, None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run,
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     // Verify the job is marked as completed
     let conn = pool.get().expect("DB connection");
@@ -164,8 +172,16 @@ fn execute_job_creates_document() {
 
     let job_def = registry.get_job("test_create_post").unwrap().clone();
 
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     // Verify the document was created
     let def = registry.get_collection("posts").unwrap().clone();
@@ -204,8 +220,16 @@ fn execute_job_failing_handler_marks_failed() {
         .build();
 
     // execute_job itself returns Ok — it handles the error internally
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     // Verify the job is marked as failed (attempt 1, max_attempts 1 => no retry)
     let conn = pool.get().expect("DB connection");
@@ -241,8 +265,16 @@ fn execute_job_failing_handler_retries() {
         .build();
 
     // claimed[0].attempt = 1 (after claim), max_attempts = 3 => should_retry = true
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     let conn = pool.get().expect("DB connection");
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
@@ -377,8 +409,16 @@ fn tx_two_creates_both_committed() {
     drop(conn);
 
     let job_def = registry.get_job("test_tx_two_creates").unwrap().clone();
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     let posts_def = registry.get_collection("posts").unwrap().clone();
     let conn = pool.get().expect("DB connection");
@@ -424,8 +464,16 @@ fn tx_rollback_leaves_no_documents() {
     drop(conn);
 
     let job_def = registry.get_job("test_tx_rollback_mid").unwrap().clone();
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     let posts_def = registry.get_collection("posts").unwrap().clone();
     let conn = pool.get().expect("DB connection");
@@ -473,8 +521,16 @@ fn tx_separate_blocks_first_commits_when_second_rolls_back() {
     drop(conn);
 
     let job_def = registry.get_job("test_tx_separate_blocks").unwrap().clone();
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
-        .expect("execute_job");
+    scheduler::execute_job(scheduler::ExecuteJobParams {
+        pool: &pool,
+        hook_runner: &runner,
+        job_def: &job_def,
+        job_run: &claimed[0],
+        email_provider: None,
+        storage: &test_storage(),
+        lua_infra: None,
+    })
+    .expect("execute_job");
 
     let posts_def = registry.get_collection("posts").unwrap().clone();
     let conn = pool.get().expect("DB connection");

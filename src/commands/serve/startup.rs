@@ -13,17 +13,18 @@ use tracing::{debug, error, info, warn};
 use crate::{
     admin, api,
     commands::{
-        helpers::{load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
+        helpers::{
+            create_live_transports, load_and_validate_config, run_on_init_hooks,
+            spawn_shutdown_signal,
+        },
         update,
     },
     config::{AuthConfig, CrapConfig},
     core::{
-        Registry, SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
-        SharedTokenProvider,
+        Registry, SharedPasswordProvider, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::create_cache,
         email::{EmailRenderer, create_email_provider_with_lease},
-        event::{create_event_transport, create_invalidation_transport},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
         },
@@ -347,18 +348,6 @@ fn create_rate_limiters(cfg: &CrapConfig) -> Result<RateLimiters> {
     })
 }
 
-/// Build event + invalidation transports from config. The Redis URL is shared
-/// with the cache backend (same `[cache] redis_url`).
-fn create_live_transports(
-    cfg: &CrapConfig,
-) -> Result<(Option<SharedEventTransport>, SharedInvalidationTransport)> {
-    let redis_url = &cfg.cache.redis_url;
-    let event_transport = create_event_transport(&cfg.live, redis_url)?;
-    let invalidation_transport = create_invalidation_transport(&cfg.live, redis_url)?;
-
-    Ok((event_transport, invalidation_transport))
-}
-
 /// Log which components will start based on the serve mode.
 fn log_component_status(
     run_admin: bool,
@@ -426,19 +415,12 @@ fn shutdown_cleanup(config_dir: &Path, pool: &DbPool) -> Vec<anyhow::Error> {
 struct StartupResources {
     config: CrapConfig,
     config_dir: std::path::PathBuf,
-    pool: DbPool,
-    registry: Arc<Registry>,
-    hook_runner: HookRunner,
     jwt_secret: String,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    storage: crate::core::SharedStorage,
-    cache: crate::core::SharedCache,
-    token_provider: SharedTokenProvider,
     password_provider: SharedPasswordProvider,
     rate_limiters: RateLimiters,
     /// Process-stable infrastructure bundle, assembled once here and shared
-    /// (as `Arc<AppInfra>`) by every surface that has been ported to `.infra()`.
+    /// (as `Arc<AppInfra>`) by every surface — admin, gRPC, and the scheduler
+    /// all receive this same instance.
     infra: Arc<AppInfra>,
 }
 
@@ -500,22 +482,21 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
     let password_provider: SharedPasswordProvider = Arc::new(Argon2PasswordProvider);
     let rate_limiters = create_rate_limiters(&config)?;
 
-    // Assemble the process-stable infrastructure bundle once, here at boot, so
-    // every surface shares a single `Arc<AppInfra>` (the email renderer, in
-    // particular, is compiled once instead of per-surface). Clones are cheap —
-    // every field is `Arc`-backed or a small config value — and the originals
-    // flow on into `StartupResources` for the not-yet-ported surfaces.
+    // Assemble the process-stable infrastructure bundle once, here at boot —
+    // the single `Arc<AppInfra>` every surface (admin, gRPC, scheduler)
+    // shares. The email renderer is compiled once, and the process-wide
+    // populate singleflight dedups cache-miss fetches across all surfaces.
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
     let infra = Arc::new(
         AppInfra::builder()
-            .pool(pool.clone())
-            .registry(Arc::clone(&registry))
-            .hook_runner(hook_runner.clone())
-            .cache(cache.clone())
-            .storage(storage.clone())
-            .event_transport(event_transport.clone())
-            .invalidation_transport(invalidation_transport.clone())
-            .token_provider(token_provider.clone())
+            .pool(pool)
+            .registry(registry)
+            .hook_runner(hook_runner)
+            .cache(cache)
+            .storage(storage)
+            .event_transport(event_transport)
+            .invalidation_transport(invalidation_transport)
+            .token_provider(token_provider)
             .email(EmailContext {
                 email_config: config.email.clone(),
                 email_renderer,
@@ -524,22 +505,14 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
             })
             .locale_config(config.locale.clone())
             .password_policy(config.auth.password_policy.clone())
-            .populate_singleflight(populate_singleflight.clone())
+            .populate_singleflight(populate_singleflight)
             .build(),
     );
 
     Ok(StartupResources {
         config,
         config_dir,
-        pool,
-        registry,
-        hook_runner,
         jwt_secret,
-        event_transport,
-        invalidation_transport,
-        storage,
-        cache,
-        token_provider,
         password_provider,
         rate_limiters,
         infra,
@@ -552,22 +525,15 @@ fn build_admin_params(res: &StartupResources) -> admin::server::AdminStartParams
     admin::server::AdminStartParams::builder()
         .config(res.config.clone())
         .config_dir(res.config_dir.clone())
-        .pool(res.pool.clone())
-        .registry(Arc::clone(&res.registry))
-        .hook_runner(res.hook_runner.clone())
         .jwt_secret(res.jwt_secret.clone())
-        .event_transport(res.event_transport.clone())
         .login_limiter(res.rate_limiters.login.clone())
         .ip_login_limiter(res.rate_limiters.ip_login.clone())
         .forgot_password_limiter(res.rate_limiters.forgot_password.clone())
         .ip_forgot_password_limiter(res.rate_limiters.ip_forgot_password.clone())
         .mfa_limiter(res.rate_limiters.mfa.clone())
         .ip_mfa_limiter(res.rate_limiters.ip_mfa.clone())
-        .storage(res.storage.clone())
-        .token_provider(res.token_provider.clone())
         .password_provider(res.password_provider.clone())
-        .invalidation_transport(res.invalidation_transport.clone())
-        .cache(Some(res.cache.clone()))
+        .infra(Arc::clone(&res.infra))
         .build()
 }
 
@@ -626,16 +592,12 @@ async fn run_scheduler_task(
         return Ok(());
     }
     scheduler::start(scheduler::SchedulerParams {
-        pool: res.pool.clone(),
-        hook_runner: res.hook_runner.clone(),
-        registry: Arc::clone(&res.registry),
+        infra: Arc::clone(&res.infra),
         config: res.config.jobs.clone(),
         shutdown,
-        storage: res.storage.clone(),
-        locale_config: res.config.locale.clone(),
         email_provider: Some(create_email_provider_with_lease(
             &res.config.email,
-            res.hook_runner.lua_lease(),
+            res.infra.hook_runner.lua_lease(),
         )?),
     })
     .await
@@ -689,7 +651,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     )
     .inspect_err(|e| error!("Server error: {}", e))?;
 
-    let cleanup_errors = shutdown_cleanup(&res.config_dir, &res.pool);
+    let cleanup_errors = shutdown_cleanup(&res.config_dir, &res.infra.pool);
     let exit_code = compute_shutdown_exit_code(&cleanup_errors);
 
     // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely

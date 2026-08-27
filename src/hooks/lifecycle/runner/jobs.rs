@@ -1,5 +1,7 @@
 //! `HookRunner` methods for job execution and arbitrary Lua evaluation.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::{Result, anyhow};
 use mlua::{LuaSerdeExt as _, Value};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -8,13 +10,14 @@ use crate::{
     core::{Document, HookRef, job::JobRun},
     db::{DbConnection, DbPool},
     hooks::{
-        HookRunner,
+        HookRunner, LuaCrudInfra,
         lifecycle::{
             InitPhase, JobHandlerContext, JobInfo, execution::resolve_hook_function,
             types::TxContextGuard,
         },
         lua_api,
     },
+    service::{EventQueue, ServiceContext, flush_queue},
 };
 
 impl HookRunner {
@@ -32,6 +35,18 @@ impl HookRunner {
     /// `crap.transaction(function() ... end)` which temporarily swaps
     /// the pool context for a single shared tx context.
     ///
+    /// `infra` carries the event transport and populate cache into the
+    /// handler's Lua CRUD calls — without it, job-mode writes publish no
+    /// live-update events (even with `events = true`) and never invalidate
+    /// the populate cache. The scheduler passes it from its `AppInfra`.
+    ///
+    /// Events are queued during the handler and flushed after it returns:
+    /// publishing needs the runner itself (`before_broadcast` hooks, live
+    /// settings run in a VM), which is not reachable from inside the handler's
+    /// VM — and post-handler is also post-commit for every per-op transaction
+    /// the handler ran. The flush happens even when the handler errored, since
+    /// earlier ops committed their own transactions.
+    ///
     /// # Errors
     ///
     /// Returns an error if VM acquisition, handler resolution, the handler
@@ -41,9 +56,41 @@ impl HookRunner {
         handler: &HookRef,
         job_run: &JobRun,
         pool: &DbPool,
+        infra: Option<LuaCrudInfra>,
+    ) -> Result<Option<String>> {
+        let event_queue: Option<EventQueue> =
+            infra.as_ref().map(|_| Rc::new(RefCell::new(Vec::new())));
+        let event_transport = infra.as_ref().and_then(|i| i.event_transport.clone());
+        let infra = infra.map(|mut i| {
+            i.event_queue.clone_from(&event_queue);
+            i
+        });
+
+        let result = self.run_job_handler_in_vm(handler, job_run, pool, infra);
+
+        if let Some(queue) = event_queue {
+            let flush_ctx = ServiceContext::slug_only("")
+                .runner(self)
+                .event_transport(event_transport)
+                .build();
+            flush_queue(&flush_ctx, &queue);
+        }
+
+        result
+    }
+
+    /// The VM-holding body of [`Self::run_job_handler`] — split out so the VM
+    /// lease is released before the post-handler event flush (whose
+    /// `before_broadcast` hooks acquire their own VM).
+    fn run_job_handler_in_vm(
+        &self,
+        handler: &HookRef,
+        job_run: &JobRun,
+        pool: &DbPool,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set_pool(&lua, pool.clone(), None, None, None);
+        let _guard = TxContextGuard::set_pool(&lua, pool.clone(), None, None, infra);
 
         // Build context from a typed Rust struct so the Lua shape is
         // the single source of truth (see

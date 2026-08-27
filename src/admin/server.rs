@@ -55,42 +55,32 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
     core::{
-        CollectionDefinition, JwtSecret, Registry, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
-        cache::NoneCache,
-        email::{EmailRenderer, create_email_provider_with_lease},
-        event::InProcessInvalidationBus,
-        rate_limit::LoginRateLimiter,
+        CollectionDefinition, JwtSecret, SharedPasswordProvider,
+        email::create_email_provider_with_lease, rate_limit::LoginRateLimiter,
     },
-    db::{DbConnection, DbPool},
-    hooks::HookRunner,
-    service::{AppInfra, EmailContext},
+    db::DbConnection,
+    service::AppInfra,
 };
 
 /// Parameters for starting the admin HTTP server.
+///
+/// All process-stable infrastructure (pool, registry, hook runner, caches,
+/// transports, providers) lives in [`AppInfra`]; only the per-surface bits
+/// (config, JWT secret, rate limiters, password provider) sit alongside it.
 pub struct AdminStartParams {
     pub config: CrapConfig,
     pub config_dir: PathBuf,
-    pub pool: DbPool,
-    pub registry: Arc<Registry>,
-    pub hook_runner: HookRunner,
     pub jwt_secret: JwtSecret,
-    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub mfa_limiter: Arc<LoginRateLimiter>,
     pub ip_mfa_limiter: Arc<LoginRateLimiter>,
-    pub storage: SharedStorage,
-    pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
-    /// Optional shared invalidation transport — when `None`, a fresh
-    /// in-process one is created.
-    pub invalidation_transport: Option<SharedInvalidationTransport>,
-    /// Shared cross-request cache for populated relationship documents.
-    /// Passed to service-layer write operations for cache invalidation.
-    pub cache: Option<SharedCache>,
+    /// Process-stable infrastructure bundle, assembled once at boot and shared
+    /// across surfaces.
+    pub infra: Arc<AppInfra>,
 }
 
 impl AdminStartParams {
@@ -123,80 +113,49 @@ pub async fn start(
 }
 
 /// Assemble the [`AdminState`] from the start-params: load templates and
-/// translations, build the email renderer/provider, and resolve derived
-/// settings. Kept separate from the listener/serve loop so each stays focused.
+/// translations, build the email provider, and resolve derived settings. The
+/// process-stable infra arrives pre-assembled from boot (`params.infra`) —
+/// this surface shares the same `Arc<AppInfra>` as gRPC and MCP. Kept separate
+/// from the listener/serve loop so each stays focused.
 fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> Result<AdminState> {
     let AdminStartParams {
         config,
         config_dir,
-        pool,
-        registry,
-        hook_runner,
         jwt_secret,
-        event_transport,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter,
         ip_forgot_password_limiter,
         mfa_limiter,
         ip_mfa_limiter,
-        storage,
-        token_provider,
         password_provider,
-        invalidation_transport,
-        cache,
+        infra,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars = templates::create_handlebars(
         &config_dir,
         config.admin.dev_mode,
         translations.clone(),
-        Some(Arc::new(hook_runner.clone())),
+        Some(Arc::new(infra.hook_runner.clone())),
     )?;
     let custom_pages = crate::admin::custom_pages::CustomPageRegistry::from_pages(
-        hook_runner.extract_custom_pages(),
+        infra.hook_runner.extract_custom_pages(),
     );
-    let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
     // Pool-backed for `provider = "custom"`: admin-sent mail (password
     // reset, verification) delegates to the registered Lua handler via the
     // hook-runner VM pool.
-    let email_provider = create_email_provider_with_lease(&config.email, hook_runner.lua_lease())?;
+    let email_provider =
+        create_email_provider_with_lease(&config.email, infra.hook_runner.lua_lease())?;
 
     // Check if any auth collections exist
-    let has_auth = registry
+    let has_auth = infra
+        .registry
         .collections
         .values()
         .any(CollectionDefinition::is_auth_collection);
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
-    let invalidation_transport: SharedInvalidationTransport =
-        invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
-
-    // Assemble the process-stable infra bundle once from the admin dependencies.
-    // Handlers read individual deps from it (`state.infra.pool`, …) and thread it
-    // into write contexts via `.infra()`; the individual fields are gone.
-    let infra = Arc::new(
-        AppInfra::builder()
-            .pool(pool)
-            .registry(Arc::clone(&registry))
-            .hook_runner(hook_runner)
-            .cache(cache.unwrap_or_else(|| Arc::new(NoneCache)))
-            .storage(storage)
-            .event_transport(event_transport)
-            .invalidation_transport(invalidation_transport)
-            .token_provider(token_provider)
-            .email(EmailContext {
-                email_config: config.email.clone(),
-                email_renderer,
-                server_config: config.server.clone(),
-                email_max_attempts: config.jobs.system_email_max_attempts(),
-            })
-            .locale_config(config.locale.clone())
-            .password_policy(config.auth.password_policy.clone())
-            .populate_singleflight(Arc::new(crate::db::query::Singleflight::new()))
-            .build(),
-    );
 
     Ok(AdminState {
         infra,

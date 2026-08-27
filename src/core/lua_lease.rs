@@ -33,7 +33,7 @@ pub trait LuaVmLease: Send + Sync {
 /// re-entrant pool acquisition.
 ///
 /// The handle is weak on purpose. A `LocalLease` is stored *inside* the
-/// very VM it points at (as `LuaStorage` app-data, or inside the
+/// very VM it points at (inside the `LuaVmInfra` app-data, or the
 /// `EmailState` captured by the `crap.email.*` closures). A strong `Lua`
 /// back-reference would form a cycle (`RawLua → provider → LocalLease →
 /// Lua → RawLua`) that pins the VM forever — leaking pool VMs and, worse,

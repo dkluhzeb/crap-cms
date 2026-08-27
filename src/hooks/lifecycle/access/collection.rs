@@ -3,18 +3,15 @@
 //! - `false`/`nil`/unexpected type → Denied
 //! - `table` → Constrained (read-only WHERE filters merged into the query)
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use mlua::{Lua, LuaSerdeExt, Value};
 use tracing::warn;
 
 use crate::{
-    core::Registry,
     db::{AccessResult, Filter, FilterClause, FilterOp},
     hooks::{
         lifecycle::{
-            AccessCheckInput, AccessContext, DefaultDeny, execution::resolve_hook_function,
+            AccessCheckInput, AccessContext, LuaVmInfra, execution::resolve_hook_function,
         },
         lua_api::crud::filter::FilterValue,
     },
@@ -27,7 +24,9 @@ pub(crate) fn check_access_with_lua(
 ) -> Result<AccessResult> {
     let Some(hook) = input.access else {
         // No access function configured — check if default-deny is enabled
-        let deny = lua.app_data_ref::<DefaultDeny>().is_some_and(|d| d.0);
+        let deny = lua
+            .app_data_ref::<LuaVmInfra>()
+            .is_some_and(|i| i.default_deny);
 
         return Ok(if deny {
             AccessResult::Denied
@@ -122,10 +121,12 @@ pub(crate) fn check_collection_access(
             .map_err(anyhow::Error::new)?;
 
         // Locale-scoped-field rule (needs the collection's field types). The
-        // registry snapshot is in the VM's app-data, so this fires uniformly for
-        // every surface that resolves access through this chokepoint — direct
-        // reads, Lua CRUD, relationship/join population, and live event streams.
-        if let Some(registry) = lua.app_data_ref::<Arc<Registry>>() {
+        // registry snapshot is in the VM-stable infra bundle, so this fires
+        // uniformly for every surface that resolves access through this
+        // chokepoint — direct reads, Lua CRUD, relationship/join population,
+        // and live event streams.
+        if let Some(infra) = lua.app_data_ref::<LuaVmInfra>() {
+            let registry = &infra.registry;
             let fields = registry
                 .get_collection(input.collection)
                 .map(|d| &d.fields)
@@ -240,7 +241,7 @@ mod tests {
     #[test]
     fn access_none_ref_returns_allowed() {
         let lua = setup_lua();
-        // No DefaultDeny in app_data = defaults to allow
+        // No LuaVmInfra in app_data = defaults to allow
         let result = check_access_with_lua(&lua, &acc(None, None)).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
@@ -248,7 +249,7 @@ mod tests {
     #[test]
     fn access_none_ref_default_deny_false_returns_allowed() {
         let lua = setup_lua();
-        lua.set_app_data(DefaultDeny(false));
+        lua.set_app_data(LuaVmInfra::default());
         let result = check_access_with_lua(&lua, &acc(None, None)).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
@@ -256,7 +257,10 @@ mod tests {
     #[test]
     fn access_none_ref_default_deny_true_returns_denied() {
         let lua = setup_lua();
-        lua.set_app_data(DefaultDeny(true));
+        lua.set_app_data(LuaVmInfra {
+            default_deny: true,
+            ..Default::default()
+        });
         let result = check_access_with_lua(&lua, &acc(None, None)).unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
@@ -264,7 +268,10 @@ mod tests {
     #[test]
     fn access_explicit_allow_overrides_default_deny() {
         let lua = setup_lua();
-        lua.set_app_data(DefaultDeny(true));
+        lua.set_app_data(LuaVmInfra {
+            default_deny: true,
+            ..Default::default()
+        });
         // When an access function IS defined and returns true, default-deny doesn't matter
         let result =
             check_access_with_lua(&lua, &acc(Some(&HookRef::new("test_access.allow")), None))

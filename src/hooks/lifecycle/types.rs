@@ -1,12 +1,14 @@
 //! Core types used across the lifecycle module.
 
+use std::sync::Arc;
+
 use mlua::Lua;
 
 use crate::{
     config::LocaleConfig,
     core::{
-        ConditionExpr, Document, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        SharedStorage,
+        ConditionExpr, Document, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedStorage,
     },
     db::{DbConnection, DbPool, query::SharedPopulateSingleflight},
     service::{EventQueue, ServiceContext, VerificationQueue},
@@ -147,27 +149,62 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 /// Maximum Lua instructions per hook invocation. Stored in `app_data`.
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
-/// Storage backend, stored in Lua `app_data` for upload file cleanup in CRUD hooks.
-pub(crate) struct LuaStorage(pub(crate) SharedStorage);
+/// VM-stable infrastructure bundle, set once in Lua `app_data` at VM build
+/// (`create_lua_vm`) and read by the CRUD and access layers. Bundles what used
+/// to be six separate app-data newtypes so a VM can't end up with a partial
+/// set. Everything here is stable for the VM's lifetime; per-call state
+/// (`TxContext`, `UserContext`, `LuaCrudInfra`, `HookDepth`) stays separate.
+///
+/// This is the Lua analogue of the process-wide [`crate::service::AppInfra`]:
+/// the values originate from the same boot wiring (`HookRunner::builder`), but
+/// a VM cannot hold `AppInfra` itself — `AppInfra` owns the `HookRunner`,
+/// which owns the VMs (an `Arc` cycle, and `AppInfra` is assembled after the
+/// runner), and `storage` is genuinely per-VM: a `Custom` upload backend
+/// delegates to THIS VM via a `LocalLease` so CRUD-delete doesn't re-acquire
+/// from the pool (which would deadlock).
+pub(crate) struct LuaVmInfra {
+    /// Registry snapshot — resolves collection/global defs for the inline
+    /// Lua-CRUD path and the access chokepoint (which has no `HookRunner`
+    /// handle to ask).
+    pub(crate) registry: Arc<Registry>,
+    /// Locale configuration, so Lua CRUD write paths (notably `unpublish`)
+    /// can build a default `LocaleContext` for raw reads of localized fields.
+    /// Without it the service layer falls back to bare column names and
+    /// `SQLite` errors with `no such column`.
+    pub(crate) locale_config: LocaleConfig,
+    /// Per-VM storage backend for upload file cleanup in CRUD hooks (see the
+    /// struct docs for why it's per-VM). `None` only in tests.
+    pub(crate) storage: Option<SharedStorage>,
+    /// User-invalidation transport so CRUD delete and lock paths can publish
+    /// live-stream tear-down signals from Lua-invoked service calls.
+    /// `None` = no-op.
+    pub(crate) invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Process-wide populate singleflight so Lua-invoked finds can dedup
+    /// populate cache-miss fetches across concurrent requests. `None` falls
+    /// back to a fresh per-call singleflight. For override-access Lua calls
+    /// the service layer's guardrail discards it either way.
+    pub(crate) populate_singleflight: Option<SharedPopulateSingleflight>,
+    /// Max allowed hook recursion depth, from `[hooks] max_depth`.
+    pub(crate) max_hook_depth: u32,
+    /// Whether the system is in default-deny mode for access control.
+    pub(crate) default_deny: bool,
+}
 
-/// User-invalidation transport, stored in Lua `app_data` so CRUD delete
-/// and lock paths can publish live-stream tear-down signals from inside
-/// Lua-invoked service calls. `None` (missing `app_data`) = no-op.
-pub(crate) struct LuaInvalidationTransport(pub(crate) SharedInvalidationTransport);
-
-/// Process-wide populate singleflight, stored in Lua `app_data` so Lua-invoked
-/// `crap.collections.find` / `crap.collections.find_by_id` calls can dedup
-/// populate cache-miss fetches across concurrent requests. `None` (missing
-/// `app_data`) falls back to a fresh per-call singleflight. For override-access
-/// Lua calls the service layer's guardrail discards whatever we pass here,
-/// so the Arc only pays off for ordinary (non-override) Lua reads.
-pub(crate) struct LuaPopulateSingleflight(pub(crate) SharedPopulateSingleflight);
-
-/// Locale configuration, stored in Lua `app_data` so Lua CRUD write paths
-/// (notably `unpublish`) can build a default `LocaleContext` for raw reads
-/// of collections with localized fields. Without this the service layer
-/// falls back to bare column names and `SQLite` errors with `no such column`.
-pub(crate) struct LuaLocaleConfig(pub(crate) LocaleConfig);
+impl Default for LuaVmInfra {
+    /// Test convenience: an empty registry, default locale, no storage or
+    /// transports, `max_hook_depth = 3`, allow-by-default access.
+    fn default() -> Self {
+        Self {
+            registry: Arc::new(Registry::default()),
+            locale_config: LocaleConfig::default(),
+            storage: None,
+            invalidation_transport: None,
+            populate_singleflight: None,
+            max_hook_depth: 3,
+            default_deny: false,
+        }
+    }
+}
 
 /// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
 /// queueing. Stored in Lua `app_data` alongside `TxContext` so that CRUD
@@ -213,13 +250,6 @@ unsafe impl Sync for LuaCrudInfra {}
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);
-
-/// Max allowed hook depth, read from config and stored in Lua `app_data`.
-pub(crate) struct MaxHookDepth(pub(crate) u32);
-
-/// Whether the system is in default-deny mode for access control.
-/// Stored in Lua `app_data` so access checks can read it without signature changes.
-pub(crate) struct DefaultDeny(pub(crate) bool);
 
 /// Marker stored in Lua `app_data` for the duration of init-time loading
 /// (collection / global / job def files plus `init.lua`). APIs that only
@@ -481,19 +511,20 @@ mod tests {
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
     }
 
-    /// Regression: `LuaStorage` must be retrievable from Lua `app_data` so that
-    /// `delete/delete_many` CRUD functions can clean up upload files.
+    /// Regression: the VM-infra storage must be retrievable from Lua `app_data`
+    /// so that `delete/delete_many` CRUD functions can clean up upload files.
     #[test]
-    fn lua_storage_stored_and_retrieved() {
-        use std::sync::Arc;
-
+    fn lua_vm_infra_storage_stored_and_retrieved() {
         use crate::core::upload::storage::LocalStorage;
 
         let lua = Lua::new();
         let storage: SharedStorage = Arc::new(LocalStorage::new("/tmp/test-uploads"));
-        lua.set_app_data(LuaStorage(storage));
+        lua.set_app_data(LuaVmInfra {
+            storage: Some(storage),
+            ..Default::default()
+        });
 
-        let retrieved = lua.app_data_ref::<LuaStorage>().unwrap();
-        assert_eq!(retrieved.0.kind(), "local");
+        let retrieved = lua.app_data_ref::<LuaVmInfra>().unwrap();
+        assert_eq!(retrieved.storage.as_ref().unwrap().kind(), "local");
     }
 }

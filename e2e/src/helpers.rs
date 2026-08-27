@@ -9,9 +9,7 @@ use crap_cms::{
     config::CrapConfig,
     config::EmailConfig,
     core::{
-        DocumentFields, JwtSecret, Registry, auth,
-        collection::*,
-        email::{EmailRenderer, create_email_provider},
+        DocumentFields, JwtSecret, Registry, auth, collection::*, email::create_email_provider,
         field::*,
     },
     db::{migrate, pool, query},
@@ -115,24 +113,41 @@ pub fn setup_app_at(
     let translations = Arc::new(Translations::load(tmp.path()));
     let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
-    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = registry
         .collections
         .values()
         .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
+    let storage = crap_cms::core::upload::create_storage(
+        tmp.path(),
+        &crap_cms::config::UploadConfig::default(),
+    )
+    .unwrap();
+    // Must match `jwt_secret` below — the login handler signs JWTs with the
+    // token_provider, and the auth middleware verifies with `jwt_secret`.
+    // If these diverge, every authenticated request 401's because the
+    // signature won't validate.
+    let token_provider: crap_cms::core::SharedTokenProvider = std::sync::Arc::new(
+        crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+    );
+    let infra = crap_cms::admin::test_support::test_infra(
+        db_pool.clone(),
+        Arc::clone(&registry),
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
+
     let state = AdminState {
+        infra,
         config,
         config_dir: tmp.path().to_path_buf(),
-        pool: db_pool.clone(),
-        registry: Arc::clone(&registry),
         handlebars,
-        hook_runner,
         jwt_secret: "test-jwt-secret".into(),
-        email_renderer,
         email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
-        event_transport: None,
         login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
@@ -148,25 +163,8 @@ pub fn setup_app_at(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        storage: crap_cms::core::upload::create_storage(
-            tmp.path(),
-            &crap_cms::config::UploadConfig::default(),
-        )
-        .unwrap(),
-        // Must match `jwt_secret` above — the login handler signs JWTs with the
-        // token_provider, and the auth middleware verifies with `jwt_secret`.
-        // If these diverge, every authenticated request 401's because the
-        // signature won't validate.
-        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-jwt-secret",
-        )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        invalidation_transport: std::sync::Arc::new(
-            crap_cms::core::event::InProcessInvalidationBus::new(),
-        ),
-        populate_singleflight: std::sync::Arc::new(query::Singleflight::new()),
-        cache: None,
         custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 

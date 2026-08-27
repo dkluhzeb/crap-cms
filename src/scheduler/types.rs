@@ -5,10 +5,10 @@ use std::{collections::HashMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::{JobsConfig, LocaleConfig},
-    core::{Registry, SharedEmailProvider, SharedStorage},
-    db::DbPool,
-    hooks::HookRunner,
+    config::JobsConfig,
+    core::{SharedEmailProvider, SharedStorage},
+    hooks::LuaCrudInfra,
+    service::AppInfra,
 };
 
 /// Parameters for starting the scheduler. Constructed via plain
@@ -16,25 +16,27 @@ use crate::{
 /// and `serve`'s startup) supply every field, so a builder added no
 /// real DX over the literal form.
 ///
+/// The scheduler consumes the "core" subset of [`AppInfra`] (pool, hook
+/// runner, registry, storage, locale config); `serve` shares the boot bundle,
+/// the standalone `work` command assembles one via `AppInfra::standalone`.
+///
 /// Email-job timeout / retries / concurrency are NOT here — they flow
 /// through `JobsConfig::queues["email"]` (resolved by
 /// `apply_queue_defaults` at load time, same path as image jobs).
 pub struct SchedulerParams {
-    pub pool: DbPool,
-    pub hook_runner: HookRunner,
-    pub registry: Arc<Registry>,
+    pub infra: Arc<AppInfra>,
     pub config: JobsConfig,
     pub shutdown: CancellationToken,
-    pub storage: SharedStorage,
-    pub locale_config: LocaleConfig,
     pub email_provider: Option<SharedEmailProvider>,
 }
 
-/// Per-tick system-job config — the parts the poll loop reads from
-/// `JobsConfig` but doesn't carry on `JobDefinition`. Currently:
-/// image conversion concurrency + priority-decay aging. Future system
-/// jobs (email retention sweeps etc.) land here.
-pub(super) struct SystemJobConfig {
+/// Per-tick job-execution config — the parts the poll loop reads from
+/// `JobsConfig` (image conversion concurrency, priority-decay aging,
+/// per-queue timeouts) plus the execution infrastructure the spawned
+/// jobs need (storage for system image jobs, the Lua-CRUD infra for
+/// user handlers). Future system jobs (email retention sweeps etc.)
+/// land here.
+pub(super) struct TickJobConfig {
     pub priority_decay: u64,
     /// Per-queue aggregate concurrency caps, sourced from
     /// `[jobs.queues.<name>] concurrency = N` plus framework defaults
@@ -51,4 +53,10 @@ pub(super) struct SystemJobConfig {
     /// hardcoded default in the scheduler.
     pub queue_timeouts: HashMap<String, u64>,
     pub storage: SharedStorage,
+    /// Event transport + populate cache threaded into user job handlers'
+    /// Lua CRUD calls (cloned per handler; `run_job_handler` injects and
+    /// flushes the event queue per invocation). Built from the scheduler's
+    /// [`AppInfra`] so job writes publish live-update events and invalidate
+    /// the populate cache like every other surface.
+    pub lua_infra: LuaCrudInfra,
 }

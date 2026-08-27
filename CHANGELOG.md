@@ -1290,6 +1290,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Job-handler writes now publish live-update events and invalidate the
+  populate cache.** A Lua job handler's CRUD calls ran with no event transport
+  and no cache attached, so a `crap.collections.create`/`update`/`delete`
+  inside a job published no live-update event (even though the `events` option
+  defaults to `true`) and never invalidated the populate cache — live
+  subscribers missed job-driven changes and could read stale populated
+  documents until the periodic cache clear. The scheduler now threads its
+  event transport + cache into every job handler invocation.
+- **Standalone processes participate in Redis live updates.** The `work` job
+  worker and the stdio MCP server never built the `[live]` transports, so with
+  Redis configured their writes reached no `serve` subscribers and could not
+  tear down live sessions on auth-document deletes/locks. Both processes now
+  build the event + user-invalidation transports from config, exactly like
+  `serve` (in-process deployments are unaffected — those transports were
+  no-ops there).
+
 - **Admin list filters accept nested group sub-fields.** The admin `?where[…]`
   filter parser rejected a group sub-field column (e.g. `seo__title`) as an
   unknown field even though list sorting and the service-layer filter validator

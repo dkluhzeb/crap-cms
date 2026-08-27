@@ -5,34 +5,23 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     admin::server::AdminStartParams,
     config::CrapConfig,
-    core::{
-        JwtSecret, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        SharedPasswordProvider, SharedStorage, SharedTokenProvider, rate_limit::LoginRateLimiter,
-    },
-    db::DbPool,
-    hooks::HookRunner,
+    core::{JwtSecret, SharedPasswordProvider, rate_limit::LoginRateLimiter},
+    service::AppInfra,
 };
 
 /// Builder for [`AdminStartParams`]. Created via [`AdminStartParams::builder`].
 pub struct AdminStartParamsBuilder {
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
-    pool: Option<DbPool>,
-    registry: Option<Arc<Registry>>,
-    hook_runner: Option<HookRunner>,
     jwt_secret: Option<JwtSecret>,
-    event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     mfa_limiter: Option<Arc<LoginRateLimiter>>,
     ip_mfa_limiter: Option<Arc<LoginRateLimiter>>,
-    storage: Option<SharedStorage>,
-    token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-    cache: Option<SharedCache>,
+    infra: Option<Arc<AppInfra>>,
 }
 
 impl AdminStartParamsBuilder {
@@ -40,22 +29,15 @@ impl AdminStartParamsBuilder {
         Self {
             config: None,
             config_dir: None,
-            pool: None,
-            registry: None,
-            hook_runner: None,
             jwt_secret: None,
-            event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
             mfa_limiter: None,
             ip_mfa_limiter: None,
-            storage: None,
-            token_provider: None,
             password_provider: None,
-            invalidation_transport: None,
-            cache: None,
+            infra: None,
         }
     }
 
@@ -71,32 +53,8 @@ impl AdminStartParamsBuilder {
         self
     }
 
-    pub fn pool(mut self, pool: DbPool) -> Self {
-        self.pool = Some(pool);
-
-        self
-    }
-
-    pub fn registry(mut self, registry: Arc<Registry>) -> Self {
-        self.registry = Some(registry);
-
-        self
-    }
-
-    pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
-        self.hook_runner = Some(hook_runner);
-
-        self
-    }
-
     pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
         self.jwt_secret = Some(jwt_secret.into());
-
-        self
-    }
-
-    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
-        self.event_transport = transport;
 
         self
     }
@@ -137,32 +95,15 @@ impl AdminStartParamsBuilder {
         self
     }
 
-    pub fn storage(mut self, storage: SharedStorage) -> Self {
-        self.storage = Some(storage);
-
-        self
-    }
-
-    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
-        self.token_provider = Some(token_provider);
-
-        self
-    }
-
     pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
         self.password_provider = Some(password_provider);
 
         self
     }
 
-    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
-        self.invalidation_transport = Some(transport);
-
-        self
-    }
-
-    pub fn cache(mut self, cache: Option<SharedCache>) -> Self {
-        self.cache = cache;
+    /// Process-stable [`AppInfra`] assembled once at boot.
+    pub fn infra(mut self, infra: Arc<AppInfra>) -> Self {
+        self.infra = Some(infra);
 
         self
     }
@@ -171,11 +112,7 @@ impl AdminStartParamsBuilder {
         AdminStartParams {
             config: self.config.expect("config is required"),
             config_dir: self.config_dir.expect("config_dir is required"),
-            pool: self.pool.expect("pool is required"),
-            registry: self.registry.expect("registry is required"),
-            hook_runner: self.hook_runner.expect("hook_runner is required"),
             jwt_secret: self.jwt_secret.expect("jwt_secret is required"),
-            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -186,13 +123,10 @@ impl AdminStartParamsBuilder {
                 .expect("ip_forgot_password_limiter is required"),
             mfa_limiter: self.mfa_limiter.expect("mfa_limiter is required"),
             ip_mfa_limiter: self.ip_mfa_limiter.expect("ip_mfa_limiter is required"),
-            storage: self.storage.expect("storage is required"),
-            token_provider: self.token_provider.expect("token_provider is required"),
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
-            invalidation_transport: self.invalidation_transport,
-            cache: self.cache,
+            infra: self.infra.expect("infra is required"),
         }
     }
 }

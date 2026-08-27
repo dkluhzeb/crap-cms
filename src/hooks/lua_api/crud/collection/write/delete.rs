@@ -10,7 +10,7 @@ use crate::{
     config::LocaleConfig,
     core::Registry,
     hooks::{
-        lifecycle::LuaStorage,
+        lifecycle::LuaVmInfra,
         lua_api::crud::{
             get_tx_conn,
             helpers::{
@@ -109,7 +109,9 @@ fn collections_delete(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    let storage = lua.app_data_ref::<LuaStorage>().map(|s| s.0.clone());
+    let storage = lua
+        .app_data_ref::<LuaVmInfra>()
+        .and_then(|i| i.storage.clone());
     let invalidation_transport = hook_invalidation_transport(lua);
 
     let ctx = ServiceContext::collection(&collection, &def)

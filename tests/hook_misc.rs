@@ -413,6 +413,7 @@ fn run_job_handler_with_valid_function() {
         &HookRef::new("hooks.field_hooks.system_init"),
         &job_run("test-job", r#"{"key": "value"}"#, 1, 3),
         &pool,
+        None,
     );
     assert!(
         result.is_ok(),
@@ -429,6 +430,7 @@ fn run_job_handler_invalid_ref_fails() {
         &HookRef::new("hooks.nonexistent.handler"),
         &job_run("test-job", "{}", 1, 3),
         &pool,
+        None,
     );
     assert!(result.is_err(), "Invalid handler ref should fail");
 }
@@ -666,6 +668,7 @@ fn run_job_handler_with_return_value() {
             &HookRef::new("jobs.test_job.run"),
             &job_run("test-job", r#"{"key": "hello"}"#, 1, 3),
             &pool,
+            None,
         )
         .expect("run_job_handler failed");
 
@@ -731,10 +734,118 @@ fn run_job_handler_nil_return() {
             &HookRef::new("jobs.void_job.run"),
             &job_run("void-job", "{}", 1, 1),
             &pool,
+            None,
         )
         .expect("run_job_handler failed");
 
     assert!(result.is_none(), "Job returning nil should give None");
+}
+
+/// Shared setup for the job-event regression tests: tmp config dir with an
+/// `articles` collection and a job handler that creates one (Lua CRUD
+/// `events` defaults to `true`).
+fn setup_event_job() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::hooks::lifecycle::HookRunner,
+) {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let collections_dir = tmp.path().join("collections");
+    let jobs_dir = tmp.path().join("jobs");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("articles.lua"),
+        r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
+    ).unwrap();
+    std::fs::write(
+        jobs_dir.join("create_job.lua"),
+        r#"
+        local M = {}
+        function M.run(ctx)
+            crap.collections.create("articles", { title = "from-job" }, { override_access = true })
+            return nil
+        end
+        return M
+    "#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+
+    let mut pool_config = CrapConfig::test_default();
+    pool_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
+    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
+        .expect("HookRunner::new");
+
+    (tmp, pool, runner)
+}
+
+/// Regression: `run_job_handler` must thread the scheduler's `LuaCrudInfra`
+/// into the handler's Lua CRUD calls. Before the fix, job-mode writes had no
+/// event transport at all, so a create (whose `events` option defaults to
+/// `true`) silently published nothing.
+#[tokio::test]
+async fn run_job_handler_infra_publishes_crud_events() {
+    let (_tmp, pool, runner) = setup_event_job();
+
+    let transport: crap_cms::core::SharedEventTransport =
+        Arc::new(crap_cms::core::event::InProcessEventBus::new(16));
+    let mut rx = transport.subscribe();
+
+    let infra = crap_cms::hooks::LuaCrudInfra {
+        event_transport: Some(transport.clone()),
+        cache: None,
+        event_queue: None,
+        verification_queue: None,
+    };
+
+    runner
+        .run_job_handler(
+            &HookRef::new("jobs.create_job.run"),
+            &job_run("create-job", "{}", 1, 1),
+            &pool,
+            Some(infra),
+        )
+        .expect("run_job_handler failed");
+
+    let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("job-created event must arrive")
+        .expect("receive event");
+    assert_eq!(ev.collection, "articles");
+}
+
+/// Without an infra bundle the handler's writes stay quiet — no transport, no
+/// event (the pre-fix behavior, still reachable by passing `None`).
+#[tokio::test]
+async fn run_job_handler_without_infra_publishes_nothing() {
+    let (_tmp, pool, runner) = setup_event_job();
+
+    let transport: crap_cms::core::SharedEventTransport =
+        Arc::new(crap_cms::core::event::InProcessEventBus::new(16));
+    let mut rx = transport.subscribe();
+
+    runner
+        .run_job_handler(
+            &HookRef::new("jobs.create_job.run"),
+            &job_run("create-job", "{}", 1, 1),
+            &pool,
+            None,
+        )
+        .expect("run_job_handler failed");
+
+    let waited = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
+    assert!(waited.is_err(), "no event must be published without infra");
 }
 
 // ── 7F. call_row_label and call_display_condition with standalone hooks ───────

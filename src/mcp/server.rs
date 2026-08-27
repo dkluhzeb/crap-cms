@@ -330,14 +330,17 @@ mod tests {
         // cleanup is exercised end-to-end (mirrors production wiring).
         let storage: crate::core::SharedStorage =
             Arc::new(LocalStorage::new(tmp.path().join("uploads")));
-        let infra = crate::mcp::infra::standalone_infra(
-            db_pool,
+        let infra = AppInfra::standalone(crate::service::StandaloneInfra {
+            pool: db_pool,
             registry,
-            runner,
+            hook_runner: runner,
             storage,
-            &config,
-            tmp.path(),
-        )
+            token_provider: None,
+            event_transport: None,
+            invalidation_transport: None,
+            config: &config,
+            config_dir: tmp.path(),
+        })
         .expect("build test infra");
 
         let server = McpServer {

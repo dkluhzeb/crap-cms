@@ -16,7 +16,7 @@ use crate::{
         query::filter::normalize_filter_fields,
     },
     hooks::{
-        lifecycle::LuaStorage,
+        lifecycle::LuaVmInfra,
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
@@ -235,10 +235,12 @@ fn collections_delete_many(
     let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts).map_err(lua_err)?;
 
     if !service_def.soft_delete
-        && let Some(lua_storage) = lua.app_data_ref::<LuaStorage>()
+        && let Some(storage) = lua
+            .app_data_ref::<LuaVmInfra>()
+            .and_then(|i| i.storage.clone())
     {
         for fields in &svc_result.upload_fields_to_clean {
-            upload::delete_upload_files(&*lua_storage.0, fields);
+            upload::delete_upload_files(&*storage, fields);
         }
     }
 

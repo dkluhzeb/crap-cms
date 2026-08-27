@@ -14,7 +14,7 @@ use crate::{
     },
     db::DbPool,
     hooks::lifecycle::HookRunner,
-    mcp::infra::standalone_infra,
+    service::{AppInfra, StandaloneInfra},
 };
 
 use super::ToolExecCtx;
@@ -40,14 +40,17 @@ pub(in crate::mcp::tools) fn make_exec_ctx<'a>(
     config_dir: &Path,
 ) -> ToolExecCtx<'a> {
     let storage: SharedStorage = Arc::new(LocalStorage::new(config_dir.join("uploads")));
-    let infra = standalone_infra(
-        pool.clone(),
-        Arc::clone(registry),
-        runner.clone(),
+    let infra = AppInfra::standalone(StandaloneInfra {
+        pool: pool.clone(),
+        registry: Arc::clone(registry),
+        hook_runner: runner.clone(),
         storage,
+        token_provider: None,
+        event_transport: None,
+        invalidation_transport: None,
         config,
         config_dir,
-    )
+    })
     .expect("build test infra");
 
     ToolExecCtx {

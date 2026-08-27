@@ -23,11 +23,15 @@ use tracing::{debug, warn};
 use crate::commands::helpers::{is_process_running, read_pid, send_signal};
 use crate::{
     cli,
-    commands::helpers::{self, load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
+    commands::helpers::{
+        self, create_live_transports, load_and_validate_config, run_on_init_hooks,
+        spawn_shutdown_signal,
+    },
     core::{email::create_email_provider_with_lease, upload::create_storage_with_lease},
     db::{migrate, pool},
     hooks::{self, HookRunner},
     scheduler::{self, SchedulerParams},
+    service::{AppInfra, StandaloneInfra},
 };
 
 /// Worker PID filename (separate from server's crap.pid).
@@ -240,10 +244,17 @@ pub async fn run(
     migrate::sync_all(&db_pool, &registry, &cfg.locale)
         .context("Failed to sync database schema")?;
 
+    // Live transports from config: with Redis live updates, this worker's
+    // Lua-CRUD writes must publish events and user-invalidation that reach
+    // the `serve` process's subscribers. (In-process transports are no-ops
+    // here — there are no local subscribers — so this only matters for Redis.)
+    let (event_transport, invalidation_transport) = create_live_transports(&cfg)?;
+
     let hook_runner = HookRunner::builder()
         .config_dir(config_dir)
         .registry(Arc::clone(&registry))
         .config(&cfg)
+        .invalidation_transport(invalidation_transport.clone())
         .build()?;
 
     run_on_init_hooks(&cfg, &db_pool, &hook_runner)?;
@@ -265,14 +276,24 @@ pub async fn run(
 
     log_worker_config(queues.as_deref(), no_cron, jobs_config.max_concurrent);
 
-    scheduler::start(SchedulerParams {
+    // The standalone worker builds its own process-stable bundle, carrying
+    // the config-built live transports so job writes behave like `serve`'s.
+    let infra = AppInfra::standalone(StandaloneInfra {
         pool: db_pool,
-        hook_runner,
         registry,
+        hook_runner,
+        storage,
+        token_provider: None,
+        event_transport,
+        invalidation_transport: Some(invalidation_transport),
+        config: &cfg,
+        config_dir,
+    })?;
+
+    scheduler::start(SchedulerParams {
+        infra,
         config: jobs_config,
         shutdown,
-        storage,
-        locale_config: cfg.locale.clone(),
         email_provider: Some(email_provider),
     })
     .await?;

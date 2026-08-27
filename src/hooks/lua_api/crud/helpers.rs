@@ -16,8 +16,8 @@ use crate::{
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        AccessCheckInput, HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport,
-        LuaLocaleConfig, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext, UserContext,
+        AccessCheckInput, HookDepth, HookDepthGuard, LuaCrudInfra, LuaVmInfra, UiLocaleContext,
+        UserContext,
         access::check_access_with_lua,
         converters::{lua_table_to_hashmap, lua_table_to_json_map},
     },
@@ -36,14 +36,14 @@ pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
         .and_then(|uc| uc.0.clone())
 }
 
-/// Extract the process-wide populate singleflight from Lua `app_data` (if set
-/// via `HookRunner::builder().populate_singleflight(..)`). Returns `None` when
-/// no singleflight was threaded in, so the service layer falls back to a
+/// Extract the process-wide populate singleflight from the VM-stable
+/// [`LuaVmInfra`] (threaded in via `HookRunner::builder()`). Returns `None`
+/// when no singleflight was threaded in, so the service layer falls back to a
 /// fresh per-call singleflight. For override-access reads the service layer
 /// discards this Arc via its access-leak guardrail.
 pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSingleflight> {
-    lua.app_data_ref::<LuaPopulateSingleflight>()
-        .map(|sf| sf.0.clone())
+    lua.app_data_ref::<LuaVmInfra>()
+        .and_then(|i| i.populate_singleflight.clone())
 }
 
 /// Build a `LuaCrudInfra` from all available Lua `app_data` fields.
@@ -52,20 +52,21 @@ pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
     lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())
 }
 
-/// Extract the invalidation transport from Lua `app_data` (if set via
-/// `HookRunner::builder().invalidation_transport(..)`). Used by delete
-/// operations to tear down live sessions for deleted auth-collection users.
+/// Extract the invalidation transport from the VM-stable [`LuaVmInfra`]. Used
+/// by delete operations to tear down live sessions for deleted
+/// auth-collection users.
 pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidationTransport> {
-    lua.app_data_ref::<LuaInvalidationTransport>()
-        .map(|t| t.0.clone())
+    lua.app_data_ref::<LuaVmInfra>()
+        .and_then(|i| i.invalidation_transport.clone())
 }
 
-/// Extract the locale configuration from Lua `app_data` (set during VM
-/// initialization). Used by write paths (notably `unpublish`) to thread
-/// `LocaleConfig` into a `ServiceContext` so the service layer can build
-/// a default `LocaleContext` for raw reads of localized fields.
+/// Extract the locale configuration from the VM-stable [`LuaVmInfra`]. Used by
+/// write paths (notably `unpublish`) to thread `LocaleConfig` into a
+/// `ServiceContext` so the service layer can build a default `LocaleContext`
+/// for raw reads of localized fields.
 pub(crate) fn hook_locale_config(lua: &Lua) -> Option<LocaleConfig> {
-    lua.app_data_ref::<LuaLocaleConfig>().map(|lc| lc.0.clone())
+    lua.app_data_ref::<LuaVmInfra>()
+        .map(|i| i.locale_config.clone())
 }
 
 /// Look up a collection definition from the registry snapshot, returning a
@@ -97,7 +98,9 @@ pub(crate) fn check_hook_depth<'a>(
     operation: &str,
 ) -> (bool, Option<HookDepthGuard<'a>>) {
     let current_depth = lua.app_data_ref::<HookDepth>().map_or(0, |d| d.0);
-    let max_depth = lua.app_data_ref::<MaxHookDepth>().map_or(3, |d| d.0);
+    let max_depth = lua
+        .app_data_ref::<LuaVmInfra>()
+        .map_or(3, |i| i.max_hook_depth);
     let hooks_enabled = run_hooks && current_depth < max_depth;
 
     if run_hooks && current_depth >= max_depth {
@@ -174,8 +177,9 @@ pub(crate) fn enforce_access(
             // Reject locale-scoped-field constraints here too (Lua bulk
             // update_many/delete_many): consume them as SQL only, so no leak,
             // but keep operator feedback uniform with every other surface. The
-            // registry snapshot is in the VM's app-data.
-            if let Some(registry) = lua.app_data_ref::<std::sync::Arc<crate::core::Registry>>() {
+            // registry snapshot is in the VM-stable infra bundle.
+            if let Some(infra) = lua.app_data_ref::<LuaVmInfra>() {
+                let registry = &infra.registry;
                 let fields = registry
                     .get_collection(params.slug)
                     .map(|d| &d.fields)
@@ -264,7 +268,10 @@ mod tests {
     fn check_hook_depth_enables_hooks_when_under_limit() {
         let lua = Lua::new();
         lua.set_app_data(HookDepth(0));
-        lua.set_app_data(MaxHookDepth(3));
+        lua.set_app_data(LuaVmInfra {
+            max_hook_depth: 3,
+            ..Default::default()
+        });
 
         let (enabled, guard) = check_hook_depth(&lua, true, "test", "delete");
         assert!(enabled);
@@ -282,7 +289,10 @@ mod tests {
     fn check_hook_depth_disables_when_at_limit() {
         let lua = Lua::new();
         lua.set_app_data(HookDepth(3));
-        lua.set_app_data(MaxHookDepth(3));
+        lua.set_app_data(LuaVmInfra {
+            max_hook_depth: 3,
+            ..Default::default()
+        });
 
         let (enabled, guard) = check_hook_depth(&lua, true, "test", "update_many");
         assert!(!enabled);
@@ -293,7 +303,10 @@ mod tests {
     fn check_hook_depth_disables_when_run_hooks_false() {
         let lua = Lua::new();
         lua.set_app_data(HookDepth(0));
-        lua.set_app_data(MaxHookDepth(3));
+        lua.set_app_data(LuaVmInfra {
+            max_hook_depth: 3,
+            ..Default::default()
+        });
 
         let (enabled, guard) = check_hook_depth(&lua, false, "test", "delete");
         assert!(!enabled);

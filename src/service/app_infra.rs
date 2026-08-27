@@ -12,19 +12,59 @@
 //! Per-*call* state — the authenticated user, the target slug/definition, the
 //! active transaction, access-override flags — is **not** here; it lives on the
 //! `ServiceContext` per operation.
+//!
+//! # The Lua surface
+//!
+//! The Lua hook/CRUD surface deliberately does **not** hold an `AppInfra`:
+//! `AppInfra` owns the [`HookRunner`], which owns the Lua VMs, so a VM holding
+//! `Arc<AppInfra>` would be a reference cycle (and the bundle is assembled
+//! *after* the runner at boot). Lua instead receives the same values through
+//! the hook contract: VM-stable pieces (registry, locale config, invalidation
+//! transport, populate singleflight, per-VM storage) are threaded into
+//! `HookRunner::builder` from the same boot wiring and bundled per-VM as
+//! `hooks::lifecycle::LuaVmInfra`; per-call pieces (event transport, cache,
+//! post-commit event queues) flow from the calling surface's
+//! `ServiceContext` — itself built via
+//! [`ServiceContextBuilder::infra`](crate::service::ServiceContextBuilder::infra) —
+//! so conn-mode writes keep their queue-until-commit semantics. There is one
+//! source of truth; Lua consumes it indirectly by design.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
+
+use anyhow::Result;
 
 use crate::{
-    config::{LocaleConfig, PasswordPolicy},
+    config::{CrapConfig, LocaleConfig, PasswordPolicy},
     core::{
         Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
-        SharedTokenProvider,
+        SharedTokenProvider, auth::JwtTokenProvider, cache::create_cache, email::EmailRenderer,
+        event::InProcessInvalidationBus,
     },
-    db::{DbPool, SharedPopulateSingleflight},
+    db::{DbPool, SharedPopulateSingleflight, Singleflight},
     hooks::HookRunner,
     service::EmailContext,
 };
+
+/// Parameters for [`AppInfra::standalone`].
+#[doc(hidden)]
+pub struct StandaloneInfra<'a> {
+    pub pool: DbPool,
+    pub registry: Arc<Registry>,
+    pub hook_runner: HookRunner,
+    pub storage: SharedStorage,
+    /// `None` → an ephemeral placeholder provider, for surfaces that never
+    /// issue or validate tokens (standalone MCP, the job worker).
+    pub token_provider: Option<SharedTokenProvider>,
+    /// Live mutation-event transport, built from config
+    /// (`create_live_transports`) so a standalone process's writes reach
+    /// `serve`'s subscribers over Redis. `None` = live events off.
+    pub event_transport: Option<SharedEventTransport>,
+    /// User-invalidation transport from the same config wiring. `None` → a
+    /// fresh in-process bus (no cross-process delivery; fine for tests).
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
+    pub config: &'a CrapConfig,
+    pub config_dir: &'a Path,
+}
 
 impl AppInfra {
     /// Start building an [`AppInfra`]. Every field is required except
@@ -32,6 +72,50 @@ impl AppInfra {
     #[must_use]
     pub fn builder() -> AppInfraBuilder {
         AppInfraBuilder::default()
+    }
+
+    /// Assemble a standalone bundle from core deps plus config — for processes
+    /// that build their own state instead of sharing the boot bundle (the stdio
+    /// MCP transport, the `work` job worker) and for test fixtures. The populate
+    /// singleflight is process-local to this bundle; the live transports come
+    /// from the caller (config-built for real processes so Redis-backed writes
+    /// reach `serve`'s subscribers; `None` for tests).
+    ///
+    /// Doc-hidden `pub` so integration tests can build fixture bundles; not
+    /// part of the supported API.
+    #[doc(hidden)]
+    pub fn standalone(p: StandaloneInfra<'_>) -> Result<Arc<Self>> {
+        let email = EmailContext {
+            email_config: p.config.email.clone(),
+            email_renderer: Arc::new(EmailRenderer::new(p.config_dir)?),
+            server_config: p.config.server.clone(),
+            email_max_attempts: p.config.jobs.system_email_max_attempts(),
+        };
+
+        let token_provider = p
+            .token_provider
+            .unwrap_or_else(|| Arc::new(JwtTokenProvider::new("standalone-unused-token-provider")));
+
+        let invalidation_transport = p
+            .invalidation_transport
+            .unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
+
+        Ok(Arc::new(
+            Self::builder()
+                .pool(p.pool)
+                .registry(p.registry)
+                .hook_runner(p.hook_runner)
+                .cache(create_cache(&p.config.cache)?)
+                .storage(p.storage)
+                .event_transport(p.event_transport)
+                .invalidation_transport(invalidation_transport)
+                .token_provider(token_provider)
+                .email(email)
+                .locale_config(p.config.locale.clone())
+                .password_policy(p.config.auth.password_policy.clone())
+                .populate_singleflight(Arc::new(Singleflight::new()))
+                .build(),
+        ))
     }
 }
 
