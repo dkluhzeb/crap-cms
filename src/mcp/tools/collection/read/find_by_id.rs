@@ -27,11 +27,12 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = ctx.pool.get().context("DB connection")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
@@ -49,9 +50,10 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         ctx.config.depth.max_depth,
     );
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
+    let hooks =
+        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
+        .pool(&ctx.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -72,7 +74,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let input = FindByIdInput::builder(id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(ctx.registry.as_ref()))
+        .registry(Some(ctx.infra.registry.as_ref()))
         .use_draft(use_draft)
         .include_deleted(include_deleted)
         .build();

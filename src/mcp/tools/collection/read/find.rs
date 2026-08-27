@@ -27,11 +27,12 @@ pub(in crate::mcp::tools) fn exec_find(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = ctx.pool.get().context("DB connection")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     let limit = args.get("limit").and_then(serde_json::Value::as_i64);
     let page = args.get("page").and_then(serde_json::Value::as_i64);
@@ -93,9 +94,10 @@ pub(in crate::mcp::tools) fn exec_find(
         .search(search.clone())
         .build();
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
+    let hooks =
+        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
+        .pool(&ctx.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -104,7 +106,7 @@ pub(in crate::mcp::tools) fn exec_find(
     let input = FindDocumentsInput::builder(&fq)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(ctx.registry.as_ref()))
+        .registry(Some(ctx.infra.registry.as_ref()))
         .cursor_enabled(ctx.config.pagination.is_cursor())
         .trash(is_trash)
         .include_drafts(include_drafts)

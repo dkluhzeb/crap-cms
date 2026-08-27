@@ -23,6 +23,7 @@ pub(in crate::mcp::tools) fn exec_create(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -45,12 +46,12 @@ pub(in crate::mcp::tools) fn exec_create(
     let data = extract_data_from_args(args, &reserved_data_keys(def, false), &def.fields)?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .password_policy(Some(&ctx.config.auth.password_policy))
         .build();
 

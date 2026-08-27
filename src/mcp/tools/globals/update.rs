@@ -19,7 +19,12 @@ pub(in crate::mcp::tools) fn exec_update_global(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = ctx.registry.globals.get(slug).context("Global not found")?;
+    let def = ctx
+        .infra
+        .registry
+        .globals
+        .get(slug)
+        .context("Global not found")?;
 
     // `locale` is a reserved top-level key — excluded from field data.
     let locale = args.get("locale").and_then(|v| v.as_str());
@@ -34,12 +39,12 @@ pub(in crate::mcp::tools) fn exec_update_global(
     let data = extract_data_from_args(args, &["locale", "draft", "events"], &def.fields)?;
 
     let svc_ctx = ServiceContext::global(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .build();
 
     let (doc, _ctx) = update_global_document(

@@ -28,6 +28,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -69,13 +70,13 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .build();
 
     let opts = UpdateManyOptions {

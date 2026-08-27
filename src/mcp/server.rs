@@ -9,14 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, from_value, json, to_value};
 use tracing::info;
 
-use crate::{
-    config::CrapConfig,
-    core::{
-        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-};
+use crate::{config::CrapConfig, service::AppInfra};
 
 use super::protocol::{
     INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, InitializeParams, JsonRpcRequest,
@@ -30,22 +23,14 @@ use super::{
 
 /// Shared state for the MCP server.
 pub struct McpServer {
-    pub pool: DbPool,
-    pub registry: Arc<Registry>,
-    pub runner: HookRunner,
+    /// Process-stable infrastructure bundle (pool, registry, hook runner,
+    /// caches, transports, storage). MCP uses the "core" subset — it runs
+    /// `override_access` with transport-level auth, so `AppInfra`'s auth / email
+    /// / populate fields are present but unused. Built once per server (shared
+    /// from boot for the HTTP transport; assembled from config for stdio).
+    pub infra: Arc<AppInfra>,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
-    /// Transport for publishing mutation events to live-update subscribers.
-    pub event_transport: Option<SharedEventTransport>,
-    /// Transport for publishing user-invalidation signals on hard-delete
-    /// of auth documents. `None` = no-op (MCP built in isolation / tests).
-    pub invalidation_transport: Option<SharedInvalidationTransport>,
-    /// Shared cross-request cache for cache invalidation on write ops.
-    /// `None` = no cache invalidation (standalone CLI / tests).
-    pub cache: Option<SharedCache>,
-    /// Storage backend for deleting uploaded files on hard-delete.
-    /// `None` = files are left in place (tests without an upload backend).
-    pub storage: Option<SharedStorage>,
     /// Client name from the MCP `initialize` handshake. One-shot — the
     /// spec mandates `initialize` happens exactly once per session, so
     /// later calls are silently ignored. `get()` returns `None` until
@@ -181,8 +166,8 @@ impl McpServer {
     /// its own connection, so a hidden collection's data is never reachable even
     /// if it briefly remains advertised.
     fn mcp_exposure(&self) -> McpExposure {
-        match self.pool.get() {
-            Ok(conn) => McpExposure::resolve(&self.registry, &self.runner, &conn),
+        match self.infra.pool.get() {
+            Ok(conn) => McpExposure::resolve(&self.infra.registry, &self.infra.hook_runner, &conn),
             Err(e) => {
                 tracing::warn!("access.mcp exposure unresolved ({e}); advertising all collections");
                 McpExposure::default()
@@ -193,7 +178,7 @@ impl McpServer {
     /// List all available MCP tools.
     fn handle_tools_list(&self, id: Option<Value>) -> JsonRpcResponse {
         let exposure = self.mcp_exposure();
-        let tool_defs = tools::generate_tools(&self.registry, &self.config.mcp, &exposure);
+        let tool_defs = tools::generate_tools(&self.infra.registry, &self.config.mcp, &exposure);
         let tools_json: Vec<Value> = tool_defs
             .iter()
             .map(|t| to_value(t).unwrap_or(Value::Null))
@@ -210,14 +195,8 @@ impl McpServer {
         };
 
         let exec_ctx = ToolExecCtx {
-            registry: &self.registry,
-            pool: &self.pool,
-            runner: &self.runner,
+            infra: Arc::clone(&self.infra),
             config: &self.config,
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: self.invalidation_transport.clone(),
-            cache: self.cache.clone(),
-            storage: self.storage.clone(),
             client_label: self.audit_label(),
         };
         let result = tools::execute_tool(&call.name, &call.arguments, &self.config_dir, &exec_ctx);
@@ -256,9 +235,12 @@ impl McpServer {
         };
 
         let exposure = self.mcp_exposure();
-        let Some(content) =
-            resources::read_resource(&read_params.uri, &self.registry, &self.config, &exposure)
-        else {
+        let Some(content) = resources::read_resource(
+            &read_params.uri,
+            &self.infra.registry,
+            &self.config,
+            &exposure,
+        ) else {
             return JsonRpcResponse::error(
                 id,
                 INTERNAL_ERROR,
@@ -344,18 +326,24 @@ mod tests {
             .build()
             .expect("hook runner");
 
-        let server = McpServer {
-            pool: db_pool,
+        // Real local-disk storage rooted at `<tmp>/uploads` so hard-delete file
+        // cleanup is exercised end-to-end (mirrors production wiring).
+        let storage: crate::core::SharedStorage =
+            Arc::new(LocalStorage::new(tmp.path().join("uploads")));
+        let infra = crate::mcp::infra::standalone_infra(
+            db_pool,
             registry,
             runner,
+            storage,
+            &config,
+            tmp.path(),
+        )
+        .expect("build test infra");
+
+        let server = McpServer {
+            infra,
             config,
             config_dir: tmp.path().to_path_buf(),
-            event_transport: None,
-            invalidation_transport: None,
-            cache: None,
-            // Real local-disk storage rooted at `<tmp>/uploads` so hard-delete
-            // file cleanup is exercised end-to-end (mirrors production wiring).
-            storage: Some(Arc::new(LocalStorage::new(tmp.path().join("uploads")))),
             client_name: OnceLock::new(),
             transport_label: "(test)",
         };

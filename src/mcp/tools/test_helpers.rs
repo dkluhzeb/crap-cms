@@ -4,13 +4,17 @@
 //! construction and `ToolExecCtx` building so we don't duplicate the
 //! boilerplate per file.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use crate::{
     config::CrapConfig,
-    core::{CollectionDefinition, Registry, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Registry, SharedStorage, collection::GlobalDefinition,
+        upload::storage::LocalStorage,
+    },
     db::DbPool,
     hooks::lifecycle::HookRunner,
+    mcp::infra::standalone_infra,
 };
 
 use super::ToolExecCtx;
@@ -26,23 +30,29 @@ pub(in crate::mcp::tools) fn make_registry() -> Registry {
     reg
 }
 
-/// Build a minimal `ToolExecCtx` for tests — no event/invalidation/cache
-/// wiring, since tests focus on dispatch and per-tool happy paths.
+/// Build a `ToolExecCtx` for tests. Assembles a standalone `AppInfra` (MCP uses
+/// only its core subset) with local-disk storage rooted at `config_dir`.
 pub(in crate::mcp::tools) fn make_exec_ctx<'a>(
-    pool: &'a DbPool,
-    registry: &'a Arc<Registry>,
-    runner: &'a HookRunner,
+    pool: &DbPool,
+    registry: &Arc<Registry>,
+    runner: &HookRunner,
     config: &'a CrapConfig,
+    config_dir: &Path,
 ) -> ToolExecCtx<'a> {
-    ToolExecCtx {
-        registry,
-        pool,
-        runner,
+    let storage: SharedStorage = Arc::new(LocalStorage::new(config_dir.join("uploads")));
+    let infra = standalone_infra(
+        pool.clone(),
+        Arc::clone(registry),
+        runner.clone(),
+        storage,
         config,
-        event_transport: None,
-        invalidation_transport: None,
-        cache: None,
-        storage: None,
+        config_dir,
+    )
+    .expect("build test infra");
+
+    ToolExecCtx {
+        infra,
+        config,
         client_label: "(test)",
     }
 }

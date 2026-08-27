@@ -1,36 +1,29 @@
 //! Shared execution context for MCP tool functions.
 //!
-//! Bundles the deps every CRUD-style tool needs: registry, pool,
-//! hook runner, config, and the optional event / invalidation /
-//! cache attachments. Lets each `exec_*` fn take a flat
+//! Bundles the process-stable [`AppInfra`] every CRUD-style tool needs, plus the
+//! resolved config and an audit label. Lets each `exec_*` fn take a flat
 //! `(args, slug, ctx)` signature instead of 7-9 positional params.
 //!
-//! `args` and `slug` stay separate because they're per-call inputs;
-//! everything in here is stable across calls within a single MCP
-//! server lifetime.
+//! `args` and `slug` stay separate because they're per-call inputs; the infra
+//! and config here are stable across calls within a single MCP server lifetime.
 
 use std::sync::Arc;
 
-use crate::{
-    config::CrapConfig,
-    core::{
-        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-};
+use crate::{config::CrapConfig, service::AppInfra};
 
 pub(in crate::mcp) struct ToolExecCtx<'a> {
-    pub registry: &'a Arc<Registry>,
-    pub pool: &'a DbPool,
-    pub runner: &'a HookRunner,
+    /// Process-stable infrastructure — pool, registry, hook runner, caches,
+    /// transports, storage. MCP uses the "core" subset: it runs
+    /// `override_access` with transport-level auth (process access for stdio,
+    /// API key for HTTP), so the auth / email / populate-singleflight fields of
+    /// [`AppInfra`] are present but unused here. Locale and password policy are
+    /// read from [`Self::config`] rather than the pre-extracted infra fields.
+    ///
+    /// Held as an owned `Arc` (cheap clone) so a `ToolExecCtx` doesn't have to
+    /// borrow a separately-kept `AppInfra` — the HTTP transport clones the
+    /// server's shared bundle, the stdio/test transports build their own.
+    pub infra: Arc<AppInfra>,
     pub config: &'a CrapConfig,
-    pub event_transport: Option<SharedEventTransport>,
-    pub invalidation_transport: Option<SharedInvalidationTransport>,
-    pub cache: Option<SharedCache>,
-    /// Storage backend for deleting uploaded files on hard-delete.
-    /// `None` = files are left in place (tests without an upload backend).
-    pub storage: Option<SharedStorage>,
     /// Audit identifier for the current call. The literal client
     /// name from the MCP `initialize` handshake when known (stdio
     /// after init); otherwise the transport-level fallback wrapped

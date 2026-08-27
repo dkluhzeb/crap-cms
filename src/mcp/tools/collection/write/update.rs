@@ -27,6 +27,7 @@ pub(in crate::mcp::tools) fn exec_update(
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -49,13 +50,13 @@ pub(in crate::mcp::tools) fn exec_update(
     let data = extract_data_from_args(args, &reserved_data_keys(def, true), &def.fields)?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .password_policy(Some(&ctx.config.auth.password_policy))
         .build();
 

@@ -20,18 +20,19 @@ pub(in crate::mcp::tools) fn exec_unpublish(
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
-        .cache(ctx.cache.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
+        .cache(Some(ctx.infra.cache.clone()))
         // Required so the raw read inside `unpublish_document_in_conn` builds
         // a default `LocaleContext` for collections with localized fields.
         // Without this, the SELECT references bare column names that

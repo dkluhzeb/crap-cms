@@ -15,16 +15,22 @@ pub(in crate::mcp::tools) fn exec_read_global(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = ctx.registry.globals.get(slug).context("Global not found")?;
-    let conn = ctx.pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
+    let def = ctx
+        .infra
+        .registry
+        .globals
+        .get(slug)
+        .context("Global not found")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
+    let hooks =
+        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
     let svc_ctx = ServiceContext::global(slug, def)
-        .pool(ctx.pool)
+        .pool(&ctx.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)

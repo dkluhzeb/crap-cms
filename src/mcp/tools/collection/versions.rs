@@ -34,6 +34,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -52,8 +53,9 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .map(|o| o.max(0));
 
     // MCP operates with full access — override access checks
-    let conn = ctx.pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
+    let conn = ctx.infra.pool.get().context("DB connection")?;
+    let hooks =
+        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&hooks)
@@ -96,18 +98,19 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .and_then(|v| v.as_str())
         .context("Missing 'version_id' argument")?;
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
-        .cache(ctx.cache.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
+        .cache(Some(ctx.infra.cache.clone()))
         .build();
 
     let doc = restore_collection_version(&svc_ctx, id, version_id, &ctx.config.locale)?;

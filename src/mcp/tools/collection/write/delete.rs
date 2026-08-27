@@ -31,6 +31,7 @@ pub(in crate::mcp::tools) fn exec_delete(
         .unwrap_or(false);
 
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -46,18 +47,18 @@ pub(in crate::mcp::tools) fn exec_delete(
     let events = events_flag(args);
 
     let svc_ctx = ServiceContext::collection(slug, &def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .build();
     delete_document(
         &svc_ctx,
         id,
-        ctx.storage.as_deref(),
+        Some(ctx.infra.storage.as_ref()),
         Some(&ctx.config.locale),
     )?;
 

@@ -21,9 +21,14 @@ pub(in crate::mcp::tools) fn exec_validate_global(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = ctx.registry.globals.get(slug).context("Global not found")?;
+    let def = ctx
+        .infra
+        .registry
+        .globals
+        .get(slug)
+        .context("Global not found")?;
 
-    let conn = ctx.pool.get().context("DB connection")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     // `locale` and `draft` are reserved top-level keys — excluded from field data.
     let locale = args.get("locale").and_then(|v| v.as_str());
@@ -32,7 +37,7 @@ pub(in crate::mcp::tools) fn exec_validate_global(
 
     let data = extract_data_from_args(args, &["locale", "draft"], &def.fields)?;
 
-    let write_hooks = RunnerWriteHooks::new(ctx.runner);
+    let write_hooks = RunnerWriteHooks::new(&ctx.infra.hook_runner);
 
     // Globals are a singleton row keyed `default` in the `_global_<slug>`
     // table — validate as an update that excludes that row from unique checks.

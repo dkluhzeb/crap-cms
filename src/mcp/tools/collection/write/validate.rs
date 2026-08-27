@@ -26,12 +26,13 @@ pub(in crate::mcp::tools) fn exec_validate(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
 
-    let conn = ctx.pool.get().context("DB connection")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     // `id`, `locale`, `draft`, and `password` are reserved top-level keys —
     // excluded from the document field data (mirrors the create/update tools).
@@ -56,7 +57,7 @@ pub(in crate::mcp::tools) fn exec_validate(
     // Attach the connection so field-level write-access denials are actually
     // evaluated (a connless hooks object skips them, diverging from the real
     // write path).
-    let write_hooks = RunnerWriteHooks::new(ctx.runner).with_conn(&conn);
+    let write_hooks = RunnerWriteHooks::new(&ctx.infra.hook_runner).with_conn(&conn);
 
     let validate_ctx = ValidateContext {
         slug,

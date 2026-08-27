@@ -102,10 +102,15 @@ pub(in crate::mcp) fn should_include(slug: &str, config: &McpConfig) -> bool {
 /// for every collection/global that sets it; cheap when none do).
 fn mcp_exposure(ctx: &ToolExecCtx<'_>) -> Result<McpExposure> {
     let conn = ctx
+        .infra
         .pool
         .get()
         .context("DB connection for access.mcp check")?;
-    Ok(McpExposure::resolve(ctx.registry, ctx.runner, &conn))
+    Ok(McpExposure::resolve(
+        &ctx.infra.registry,
+        &ctx.infra.hook_runner,
+        &conn,
+    ))
 }
 
 /// Generate all MCP tool definitions from the registry, skipping collections
@@ -468,11 +473,11 @@ pub(in crate::mcp) fn execute_tool(
     match name {
         TOOL_LIST_COLLECTIONS => {
             let exposure = mcp_exposure(ctx)?;
-            return exec_list_collections(ctx.registry, &ctx.config.mcp, &exposure);
+            return exec_list_collections(&ctx.infra.registry, &ctx.config.mcp, &exposure);
         }
         TOOL_DESCRIBE_COLLECTION => {
             let exposure = mcp_exposure(ctx)?;
-            return exec_describe_collection(args, ctx.registry, &ctx.config.mcp, &exposure);
+            return exec_describe_collection(args, &ctx.infra.registry, &ctx.config.mcp, &exposure);
         }
         TOOL_LIST_FIELD_TYPES => return exec_list_field_types(),
         TOOL_CLI_REFERENCE => {
@@ -512,7 +517,7 @@ pub(in crate::mcp) fn execute_tool(
     }
 
     // Dynamic CRUD tools
-    let Some(parsed) = parse_tool_name(name, ctx.registry) else {
+    let Some(parsed) = parse_tool_name(name, &ctx.infra.registry) else {
         bail!("Unknown tool: {name}");
     };
 
@@ -527,17 +532,29 @@ pub(in crate::mcp) fn execute_tool(
     // service layer runs with override_access, so it can't gate MCP). Only
     // fetches a connection when the collection actually sets `access.mcp`.
     let access_mcp = ctx
+        .infra
         .registry
         .get_collection(&parsed.slug)
         .map(|d| &d.access)
-        .or_else(|| ctx.registry.get_global(&parsed.slug).map(|d| &d.access))
+        .or_else(|| {
+            ctx.infra
+                .registry
+                .get_global(&parsed.slug)
+                .map(|d| &d.access)
+        })
         .and_then(|a| a.mcp.as_ref());
     if access_mcp.is_some() {
         let conn = ctx
+            .infra
             .pool
             .get()
             .context("DB connection for access.mcp check")?;
-        if !crate::mcp::access::slug_exposed(access_mcp, ctx.runner, &conn, &parsed.slug) {
+        if !crate::mcp::access::slug_exposed(
+            access_mcp,
+            &ctx.infra.hook_runner,
+            &conn,
+            &parsed.slug,
+        ) {
             bail!("Tool not available: {name}");
         }
     }
@@ -869,7 +886,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err = execute_tool(
             "read_config_file",
             &json!({ "path": "init.lua" }),
@@ -897,7 +914,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err = execute_tool("completely_unknown", &json!({}), tmp.path(), &ctx).unwrap_err();
         assert!(err.to_string().contains("Unknown tool"));
     }
@@ -926,7 +943,7 @@ mod tests {
             .unwrap();
 
         // An attacker who knows the slug "posts" tries to call find_posts directly
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err =
             execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
         assert!(
@@ -963,7 +980,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err =
             execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
         assert!(
@@ -997,7 +1014,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
 
         // find_posts should work (included)
         let result = execute_tool("find_posts", &json!({}), tmp.path(), &ctx);
@@ -1042,7 +1059,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
 
         // `site_name` exceeds max_length(3) → invalid with a per-field error.
         let text = execute_tool(

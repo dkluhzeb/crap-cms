@@ -24,11 +24,12 @@ pub(in crate::mcp::tools) fn exec_count(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = ctx.pool.get().context("DB connection")?;
+    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     let filters = parse_where_filters(args)?;
     let include_drafts = args
@@ -40,9 +41,10 @@ pub(in crate::mcp::tools) fn exec_count(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
+    let hooks =
+        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(ctx.pool)
+        .pool(&ctx.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)

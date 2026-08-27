@@ -16,12 +16,12 @@ use crate::{
     core::{
         JwtSecret, Registry, SharedCache, SharedEmailProvider, SharedEventTransport,
         SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
-        email::EmailRenderer, rate_limit::LoginRateLimiter,
+        cache::NoneCache, email::EmailRenderer, rate_limit::LoginRateLimiter,
     },
     db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
     mcp::McpServer,
-    service::EmailContext,
+    service::{AppInfra, EmailContext},
 };
 
 use super::{Translations, custom_pages};
@@ -125,16 +125,33 @@ impl AdminState {
     /// the HTTP MCP transport (`mcp_handler::mcp_http_handler`) to hand off
     /// each request to a fresh server instance for the spawn-blocking call.
     pub(crate) fn mcp_server(&self) -> McpServer {
+        // Bundle the admin's process-stable deps into an `AppInfra` for the MCP
+        // surface. All cheap `Arc` clones — `email_context()` reuses the existing
+        // renderer (no template recompile) — so building it per request is fine.
+        // The real event transport is preserved so HTTP MCP writes still publish
+        // live updates; MCP uses only the core subset (`populate_singleflight` and
+        // the auth/email fields go unused under `override_access`).
+        let infra = Arc::new(
+            AppInfra::builder()
+                .pool(self.pool.clone())
+                .registry(Arc::clone(&self.registry))
+                .hook_runner(self.hook_runner.clone())
+                .cache(self.cache.clone().unwrap_or_else(|| Arc::new(NoneCache)))
+                .storage(self.storage.clone())
+                .event_transport(self.event_transport.clone())
+                .invalidation_transport(self.invalidation_transport.clone())
+                .token_provider(self.token_provider.clone())
+                .email(self.email_context())
+                .locale_config(self.config.locale.clone())
+                .password_policy(self.config.auth.password_policy.clone())
+                .populate_singleflight(Arc::clone(&self.populate_singleflight))
+                .build(),
+        );
+
         McpServer {
-            pool: self.pool.clone(),
-            registry: Arc::clone(&self.registry),
-            runner: self.hook_runner.clone(),
+            infra,
             config: self.config.clone(),
             config_dir: self.config_dir.clone(),
-            event_transport: self.event_transport.clone(),
-            invalidation_transport: Some(self.invalidation_transport.clone()),
-            cache: self.cache.clone(),
-            storage: Some(self.storage.clone()),
             // HTTP transport: every request gets a fresh `McpServer`,
             // so `client_name` never gets populated by `initialize`
             // (the request that initialized is a different instance).

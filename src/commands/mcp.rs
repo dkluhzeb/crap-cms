@@ -52,18 +52,15 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     info!("MCP server starting (stdio mode)");
 
+    // Standalone stdio builds its own process-stable bundle. MCP uses only the
+    // core subset; upload files are still cleaned on hard-delete via `storage`.
+    let infra =
+        mcp::infra::standalone_infra(pool, registry, hook_runner, storage, &cfg, &config_dir)?;
+
     let server = mcp::McpServer {
-        pool,
-        registry,
-        runner: hook_runner,
+        infra,
         config: cfg,
         config_dir,
-        // Stdio MCP runs standalone — no live-update streams or cache.
-        event_transport: None,
-        invalidation_transport: None,
-        cache: None,
-        // Upload files are still cleaned on hard-delete via the storage backend.
-        storage: Some(storage),
         client_name: OnceLock::new(),
         transport_label: "(stdio)",
     };

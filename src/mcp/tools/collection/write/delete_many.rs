@@ -32,6 +32,7 @@ pub(in crate::mcp::tools) fn exec_delete_many(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let mut def = ctx
+        .infra
         .registry
         .collections
         .get(slug)
@@ -60,13 +61,13 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         .unwrap_or(false);
 
     let svc_ctx = ServiceContext::collection(slug, &def)
-        .pool(ctx.pool)
-        .runner(ctx.runner)
+        .pool(&ctx.infra.pool)
+        .runner(&ctx.infra.hook_runner)
         .override_access(true)
-        .event_transport(ctx.event_transport.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.infra.event_transport.clone())
+        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
         .emit_events(events)
-        .cache(ctx.cache.clone())
+        .cache(Some(ctx.infra.cache.clone()))
         .build();
 
     let opts = DeleteManyOptions {
@@ -78,11 +79,10 @@ pub(in crate::mcp::tools) fn exec_delete_many(
     let result = service::delete_many(&svc_ctx, &filters, &ctx.config.locale, &opts)?;
 
     // Hard-deleted rows leave orphaned upload files — clean them post-commit
-    // when a storage backend is available (mirrors the gRPC/admin surfaces).
-    if let Some(storage) = ctx.storage.as_deref() {
-        for fields in &result.upload_fields_to_clean {
-            upload::delete_upload_files(storage, fields);
-        }
+    // (mirrors the gRPC/admin surfaces).
+    let storage = ctx.infra.storage.as_ref();
+    for fields in &result.upload_fields_to_clean {
+        upload::delete_upload_files(storage, fields);
     }
 
     info!(
