@@ -70,7 +70,7 @@ pub fn custom_routes_router(state: &AdminState) -> Router<AdminState> {
     let default_max_body = state.config.routes.max_body;
 
     let mut router = Router::new();
-    for def in state.hook_runner.extract_routes() {
+    for def in state.infra.hook_runner.extract_routes() {
         let Some(filter) = methods_to_filter(&def.methods) else {
             continue;
         };

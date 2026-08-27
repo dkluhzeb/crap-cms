@@ -1,6 +1,6 @@
 //! `AdminState` — the application-wide bundle handed to every admin
 //! handler via `axum::extract::State<AdminState>`. Plus the helper
-//! methods that derive sub-bundles (`email_context`, `mcp_server`).
+//! methods that derive sub-bundles (`mcp_server`) from the shared `infra`.
 
 use std::{
     path::PathBuf,
@@ -13,15 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::CrapConfig,
-    core::{
-        JwtSecret, Registry, SharedCache, SharedEmailProvider, SharedEventTransport,
-        SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
-        cache::NoneCache, email::EmailRenderer, rate_limit::LoginRateLimiter,
-    },
-    db::{DbPool, query::SharedPopulateSingleflight},
-    hooks::HookRunner,
+    core::{JwtSecret, SharedEmailProvider, SharedPasswordProvider, rate_limit::LoginRateLimiter},
     mcp::McpServer,
-    service::{AppInfra, EmailContext},
+    service::AppInfra,
 };
 
 use super::{Translations, custom_pages};
@@ -29,27 +23,21 @@ use super::{Translations, custom_pages};
 /// Shared state for all admin handlers.
 #[derive(Clone)]
 pub struct AdminState {
+    /// Process-stable infrastructure bundle — pool, registry, hook runner,
+    /// caches, transports, storage, token provider, email context. Handlers read
+    /// individual deps as `state.infra.pool`, `state.infra.registry`, … and write
+    /// paths thread it into a `ServiceContext` via `.infra(&state.infra)`.
+    pub infra: Arc<AppInfra>,
     /// The global configuration for the CMS.
     pub config: CrapConfig,
     /// The directory where the configuration is located.
     pub config_dir: PathBuf,
-    /// The database connection pool.
-    pub pool: DbPool,
-    /// The registry containing all registered collections and globals.
-    pub registry: Arc<Registry>,
     /// The Handlebars template engine instance.
     pub handlebars: Arc<Handlebars<'static>>,
-    /// The runner for executing lifecycle hooks.
-    pub hook_runner: HookRunner,
     /// The secret key used for signing and verifying JWTs.
     pub jwt_secret: JwtSecret,
-    /// The renderer for email notifications.
-    pub email_renderer: Arc<EmailRenderer>,
     /// The email provider for sending emails.
     pub email_provider: SharedEmailProvider,
-    /// The event transport for live updates (in-process or Redis). None when
-    /// live updates are disabled.
-    pub event_transport: Option<SharedEventTransport>,
     /// The rate limiter for login attempts (per-email).
     pub login_limiter: Arc<LoginRateLimiter>,
     /// The rate limiter for login attempts (per-IP).
@@ -74,23 +62,10 @@ pub struct AdminState {
     pub sse_connections: Arc<AtomicUsize>,
     /// Maximum allowed concurrent SSE connections. 0 = unlimited.
     pub max_sse_connections: usize,
-    /// The storage backend for uploaded files.
-    pub storage: SharedStorage,
-    /// The token provider for JWT creation and validation.
-    pub token_provider: SharedTokenProvider,
     /// The password provider for hashing and verification.
     pub password_provider: SharedPasswordProvider,
     /// Per-subscriber SSE send timeout in milliseconds.
     pub subscriber_send_timeout_ms: u64,
-    /// Transport for signalling user revocation to active live-update subscribers.
-    pub invalidation_transport: SharedInvalidationTransport,
-    /// Process-wide singleflight for deduplicating concurrent populate
-    /// cache-miss DB fetches across requests. Plumbed into populate contexts
-    /// that opt in via the service layer.
-    pub populate_singleflight: SharedPopulateSingleflight,
-    /// Shared cross-request cache for populated relationship documents.
-    /// Passed to service-layer write operations for cache invalidation.
-    pub cache: Option<SharedCache>,
     /// Discovered filesystem-routed custom pages
     /// (`<config_dir>/templates/pages/<slug>.hbs`). Populated once at
     /// startup; the route handler validates incoming slugs against this,
@@ -110,46 +85,12 @@ impl AdminState {
             .map_err(|e| format!("Template error: {e}"))
     }
 
-    /// Bundle the email config + renderer + server config into an
-    /// `EmailContext` for verification email flows.
-    pub(crate) fn email_context(&self) -> EmailContext {
-        EmailContext {
-            email_config: self.config.email.clone(),
-            email_renderer: self.email_renderer.clone(),
-            server_config: self.config.server.clone(),
-            email_max_attempts: self.config.jobs.system_email_max_attempts(),
-        }
-    }
-
-    /// Build an [`McpServer`] from the relevant `AdminState` fields. Used by
-    /// the HTTP MCP transport (`mcp_handler::mcp_http_handler`) to hand off
-    /// each request to a fresh server instance for the spawn-blocking call.
+    /// Build an [`McpServer`] for the HTTP MCP transport, sharing the admin's
+    /// process-stable infra bundle (a fresh `McpServer` wrapper per request, the
+    /// same `Arc<AppInfra>`).
     pub(crate) fn mcp_server(&self) -> McpServer {
-        // Bundle the admin's process-stable deps into an `AppInfra` for the MCP
-        // surface. All cheap `Arc` clones — `email_context()` reuses the existing
-        // renderer (no template recompile) — so building it per request is fine.
-        // The real event transport is preserved so HTTP MCP writes still publish
-        // live updates; MCP uses only the core subset (`populate_singleflight` and
-        // the auth/email fields go unused under `override_access`).
-        let infra = Arc::new(
-            AppInfra::builder()
-                .pool(self.pool.clone())
-                .registry(Arc::clone(&self.registry))
-                .hook_runner(self.hook_runner.clone())
-                .cache(self.cache.clone().unwrap_or_else(|| Arc::new(NoneCache)))
-                .storage(self.storage.clone())
-                .event_transport(self.event_transport.clone())
-                .invalidation_transport(self.invalidation_transport.clone())
-                .token_provider(self.token_provider.clone())
-                .email(self.email_context())
-                .locale_config(self.config.locale.clone())
-                .password_policy(self.config.auth.password_policy.clone())
-                .populate_singleflight(Arc::clone(&self.populate_singleflight))
-                .build(),
-        );
-
         McpServer {
-            infra,
+            infra: Arc::clone(&self.infra),
             config: self.config.clone(),
             config_dir: self.config_dir.clone(),
             // HTTP transport: every request gets a fresh `McpServer`,

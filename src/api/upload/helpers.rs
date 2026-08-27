@@ -76,21 +76,25 @@ pub fn extract_bearer_user(
         )));
     };
 
-    // Route through `state.token_provider` (the trait-object form)
+    // Route through `state.infra.token_provider` (the trait-object form)
     // rather than the free `validate_token` against `jwt_secret`.
     // The two are wired with the same secret today (`startup.rs` ties
     // them) but a future backend swap (Paseto, opaque tokens, …) flows
     // here automatically only via the provider.
-    let claims = state.token_provider.validate_token(token).map_err(|_| {
-        Box::new(json_error(
-            StatusCode::UNAUTHORIZED,
-            "Invalid or expired token",
-        ))
-    })?;
+    let claims = state
+        .infra
+        .token_provider
+        .validate_token(token)
+        .map_err(|_| {
+            Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "Invalid or expired token",
+            ))
+        })?;
 
     Ok(load_auth_user(
-        &state.pool,
-        &state.registry,
+        &state.infra.pool,
+        &state.infra.registry,
         &claims,
         &state.config.locale,
     ))
@@ -124,7 +128,7 @@ pub fn check_upload_access(
     operation: &str,
     collection: &str,
 ) -> Result<(), Box<Response>> {
-    let mut conn = state.pool.get().map_err(|_| {
+    let mut conn = state.infra.pool.get().map_err(|_| {
         Box::new(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Database error",
@@ -138,7 +142,7 @@ pub fn check_upload_access(
         ))
     })?;
 
-    let result = state.hook_runner.check_access(
+    let result = state.infra.hook_runner.check_access(
         &AccessCheckInput::builder(operation, collection)
             .access(access)
             .user(user_doc)
@@ -203,8 +207,8 @@ pub fn publish_upload_event(
         builder = builder.data(d);
     }
 
-    state.hook_runner.publish_event(
-        &state.event_transport,
+    state.infra.hook_runner.publish_event(
+        &state.infra.event_transport,
         &def.hooks,
         def.live.as_ref(),
         builder.build(),

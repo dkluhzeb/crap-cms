@@ -35,10 +35,7 @@ use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::{
     admin::{AdminState, server::build_router, templates},
     config::CrapConfig,
-    core::{
-        JwtSecret, Registry, auth, collection::*, email::EmailRenderer, field::*,
-        rate_limit::LoginRateLimiter,
-    },
+    core::{JwtSecret, Registry, auth, collection::*, field::*, rate_limit::LoginRateLimiter},
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -148,7 +145,6 @@ fn setup_app_in_dir(
     ));
     let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
-    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = registry
         .collections
@@ -160,20 +156,34 @@ fn setup_app_in_dir(
     let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
     let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
 
+    let storage = crap_cms::core::upload::create_storage(
+        tmp.path(),
+        &crap_cms::config::UploadConfig::default(),
+    )
+    .unwrap();
+    let token_provider: crap_cms::core::SharedTokenProvider = std::sync::Arc::new(
+        crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+    );
+    let infra = crap_cms::admin::test_support::test_infra(
+        db_pool.clone(),
+        Arc::clone(&registry),
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
+
     let state = AdminState {
+        infra,
         config,
         config_dir: tmp.path().to_path_buf(),
-        pool: db_pool.clone(),
-        registry: Arc::clone(&registry),
         handlebars,
-        hook_runner,
         jwt_secret: "test-jwt-secret".into(),
-        email_renderer,
         email_provider: crap_cms::core::email::create_email_provider(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_transport: None,
         login_limiter: Arc::clone(&login_limiter),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: std::sync::Arc::new(
@@ -187,26 +197,8 @@ fn setup_app_in_dir(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        storage: crap_cms::core::upload::create_storage(
-            tmp.path(),
-            &crap_cms::config::UploadConfig::default(),
-        )
-        .unwrap(),
-        // Must use the same secret as `jwt_secret` above — `make_auth_cookie`
-        // signs with `state.jwt_secret`, and the unified auth evaluator
-        // verifies via `state.token_provider`. A mismatch would silently
-        // reject every test cookie as `Invalid(BadToken)` and break every
-        // cookie-bound assertion.
-        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-jwt-secret",
-        )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        invalidation_transport: std::sync::Arc::new(
-            crap_cms::core::event::InProcessInvalidationBus::new(),
-        ),
-        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
-        cache: None,
         custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
@@ -1880,7 +1872,6 @@ end"#,
     ));
     let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
-    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = registry
         .collections
@@ -1892,20 +1883,34 @@ end"#,
     let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
     let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
 
+    let storage = crap_cms::core::upload::create_storage(
+        tmp.path(),
+        &crap_cms::config::UploadConfig::default(),
+    )
+    .unwrap();
+    let token_provider: crap_cms::core::SharedTokenProvider = std::sync::Arc::new(
+        crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+    );
+    let infra = crap_cms::admin::test_support::test_infra(
+        db_pool.clone(),
+        Arc::clone(&registry),
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
+
     let state = AdminState {
+        infra,
         config,
         config_dir: tmp.path().to_path_buf(),
-        pool: db_pool.clone(),
-        registry: Arc::clone(&registry),
         handlebars,
-        hook_runner,
         jwt_secret: "test-jwt-secret".into(),
-        email_renderer,
         email_provider: crap_cms::core::email::create_email_provider(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_transport: None,
         login_limiter: Arc::clone(&login_limiter),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
@@ -1917,26 +1922,8 @@ end"#,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        storage: crap_cms::core::upload::create_storage(
-            tmp.path(),
-            &crap_cms::config::UploadConfig::default(),
-        )
-        .unwrap(),
-        // Must use the same secret as `jwt_secret` above — `make_auth_cookie`
-        // signs with `state.jwt_secret`, and the unified auth evaluator
-        // verifies via `state.token_provider`. A mismatch would silently
-        // reject every test cookie as `Invalid(BadToken)` and break every
-        // cookie-bound assertion.
-        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-jwt-secret",
-        )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        invalidation_transport: std::sync::Arc::new(
-            crap_cms::core::event::InProcessInvalidationBus::new(),
-        ),
-        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
-        cache: None,
         custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 

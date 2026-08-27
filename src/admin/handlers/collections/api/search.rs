@@ -76,7 +76,7 @@ pub async fn search_collection(
     Query(params): Query<SearchQuery>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Json<Value> {
-    let Some(def) = state.registry.get_collection(&slug) else {
+    let Some(def) = state.infra.registry.get_collection(&slug) else {
         return Json(json!([]));
     };
 
@@ -89,7 +89,7 @@ pub async fn search_collection(
     // Autocomplete endpoint: always answers with a JSON array. A missing
     // collection is silent (client/config issue), but a real DB failure is
     // logged so it isn't invisibly masked as "no results".
-    let conn = match state.pool.get() {
+    let conn = match state.infra.pool.get() {
         Ok(conn) => conn,
         Err(e) => {
             warn!("Relationship search: DB pool unavailable for '{slug}': {e}");
@@ -100,7 +100,7 @@ pub async fn search_collection(
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
     let user_doc = get_user_doc(auth_user.as_ref());
 
-    let read_hooks = service::RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
+    let read_hooks = service::RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
 
     let search = if search_term.is_empty() {
         None
@@ -114,7 +114,7 @@ pub async fn search_collection(
         .build();
 
     let ctx = service::ServiceContext::collection(&slug, def)
-        .pool(&state.pool)
+        .pool(&state.infra.pool)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)

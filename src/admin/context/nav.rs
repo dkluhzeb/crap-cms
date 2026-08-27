@@ -47,6 +47,7 @@ impl NavData {
     /// Build sidebar nav from the registry. Sorted alphabetically by slug.
     pub fn from_state(state: &AdminState) -> Self {
         let mut collections: Vec<NavCollection> = state
+            .infra
             .registry
             .collections
             .values()
@@ -60,6 +61,7 @@ impl NavData {
         collections.sort_by(|a, b| a.slug.cmp(&b.slug));
 
         let mut globals: Vec<NavGlobal> = state
+            .infra
             .registry
             .globals
             .values()

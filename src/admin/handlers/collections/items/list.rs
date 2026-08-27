@@ -60,15 +60,25 @@ struct FetchListArgs<'a> {
 fn fetch_list_documents(
     args: FetchListArgs<'_>,
 ) -> Result<PaginatedResult<Document>, ServiceError> {
-    let conn = args.state.pool.get().map_err(ServiceError::Internal)?;
+    let conn = args
+        .state
+        .infra
+        .pool
+        .get()
+        .map_err(ServiceError::Internal)?;
     let user_doc = args
         .auth_user
         .as_ref()
         .map(|Extension(au)| au.user_doc.clone());
 
-    let hooks = RunnerReadHooks::new(&args.state.hook_runner, &conn, user_doc.as_ref(), None);
+    let hooks = RunnerReadHooks::new(
+        &args.state.infra.hook_runner,
+        &conn,
+        user_doc.as_ref(),
+        None,
+    );
     let ctx = ServiceContext::collection(args.slug, args.def)
-        .pool(&args.state.pool)
+        .pool(&args.state.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .user(user_doc.as_ref())
@@ -197,7 +207,7 @@ fn load_user_columns(
     slug: &str,
 ) -> Option<Vec<String>> {
     let Extension(au) = auth_user?;
-    let conn = state.pool.get().ok()?;
+    let conn = state.infra.pool.get().ok()?;
     let settings_json = get_user_settings(&conn, &au.claims.sub).ok()??;
     let settings: Value = from_str(&settings_json).ok()?;
     let cols = settings.get(slug)?.get("columns")?.as_array()?;

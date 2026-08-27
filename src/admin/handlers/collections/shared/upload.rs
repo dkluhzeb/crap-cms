@@ -54,6 +54,7 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
     // Internal lookup for file cleanup planning, not a user-facing read.
     let old_doc_fields = if let Some(id) = p.doc_id {
         p.state
+            .infra
             .pool
             .get()
             .ok()
@@ -64,7 +65,7 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
         None
     };
 
-    let storage = p.state.storage.clone();
+    let storage = p.state.infra.storage.clone();
     let slug_owned = p.slug.to_string();
     let global_max = p.state.config.upload.max_file_size;
 

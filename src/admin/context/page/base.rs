@@ -229,7 +229,7 @@ fn filter_nav_in_place(
     // would fan out into many short-lived transactions under load. If a
     // connection can't be acquired, hide everything (fail-safe, matching the
     // per-entry behavior the pooled path had).
-    let Ok(mut conn) = state.pool.get() else {
+    let Ok(mut conn) = state.infra.pool.get() else {
         nav.collections.clear();
         nav.globals.clear();
         nav.custom_pages.clear();
@@ -243,7 +243,7 @@ fn filter_nav_in_place(
     };
 
     nav.collections.retain(|c| {
-        let def = state.registry.collections.get(c.slug.as_str());
+        let def = state.infra.registry.collections.get(c.slug.as_str());
 
         is_admin_visible_with_conn(
             state,
@@ -256,7 +256,7 @@ fn filter_nav_in_place(
     });
 
     nav.globals.retain(|g| {
-        let def = state.registry.globals.get(g.slug.as_str());
+        let def = state.infra.registry.globals.get(g.slug.as_str());
 
         is_admin_visible_with_conn(
             state,

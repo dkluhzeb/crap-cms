@@ -16,29 +16,19 @@ use crate::{
             json_bad_request, json_forbidden, json_server_error, require_collection_json,
         },
     },
-    config::LocaleConfig,
-    core::{
-        AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, upload, upload::StorageBackend,
-    },
-    db::{DbPool, Filter, FilterClause, FilterOp},
-    hooks::HookRunner,
-    service::{DeleteManyOptions, ServiceContext, ServiceError, delete_many},
+    core::{AuthUser, CollectionDefinition, Document, upload},
+    db::{Filter, FilterClause, FilterOp},
+    service::{AppInfra, DeleteManyOptions, ServiceContext, ServiceError, delete_many},
 };
 
-/// Bundled inputs for [`empty_trash`]. Grouped to keep the spawn-blocking
+/// Bundled inputs for [`empty_trash`]. Process-stable dependencies come from the
+/// shared [`AppInfra`]; the rest is per-call. Grouped to keep the spawn-blocking
 /// closure tidy and to satisfy the `>4 args` rule from CLAUDE.md.
 struct EmptyTrashInput<'a> {
-    pool: &'a DbPool,
-    runner: &'a HookRunner,
+    infra: &'a AppInfra,
     def: &'a CollectionDefinition,
     slug: &'a str,
-    locale_cfg: &'a LocaleConfig,
-    storage: &'a dyn StorageBackend,
     user_doc: Option<&'a Document>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
     bulk_max_documents: i64,
 }
 
@@ -51,7 +41,7 @@ fn trash_filters() -> Vec<FilterClause> {
 }
 
 /// Find all trashed documents and permanently delete them via the service layer.
-fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
+fn empty_trash(input: &EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
     // Clone the def with `soft_delete = false` so the per-row delete hard-deletes
     // (gated by `access.delete`) instead of re-trashing. Note this also makes the
     // delete's `enforce_access_constraints` count the trashed rows: the read
@@ -64,14 +54,10 @@ fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
     let filters = trash_filters();
 
     let ctx = ServiceContext::collection(input.slug, &hard_def)
-        .pool(input.pool)
-        .runner(input.runner)
+        .infra(input.infra)
         .user(input.user_doc)
-        .invalidation_transport(input.invalidation_transport)
-        .event_transport(input.event_transport)
         // Bulk trash purge is quiet — no per-document live-update events.
         .emit_events(false)
-        .cache(input.cache)
         .build();
 
     let delete_opts = DeleteManyOptions {
@@ -80,10 +66,10 @@ fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
         max_documents: input.bulk_max_documents,
     };
 
-    let result = delete_many(&ctx, &filters, input.locale_cfg, &delete_opts)?;
+    let result = delete_many(&ctx, &filters, &input.infra.locale_config, &delete_opts)?;
 
     for fields in &result.upload_fields_to_clean {
-        upload::delete_upload_files(input.storage, fields);
+        upload::delete_upload_files(input.infra.storage.as_ref(), fields);
     }
 
     Ok(usize::try_from(result.hard_deleted.max(0)).unwrap_or(0))
@@ -105,28 +91,16 @@ pub async fn empty_trash_action(
         return json_bad_request("Collection does not support soft delete");
     }
 
-    let pool = state.pool.clone();
-    let storage = state.storage.clone();
-    let locale_cfg = state.config.locale.clone();
+    let infra = state.infra.clone();
     let bulk_max_documents = state.config.server.bulk_max_documents;
-    let runner = state.hook_runner.clone();
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
-    let invalidation_transport = state.invalidation_transport.clone();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
 
     let result = task::spawn_blocking(move || {
-        empty_trash(EmptyTrashInput {
-            pool: &pool,
-            runner: &runner,
+        empty_trash(&EmptyTrashInput {
+            infra: &infra,
             def: &def,
             slug: &slug,
-            locale_cfg: &locale_cfg,
-            storage: &*storage,
             user_doc: user_doc.as_ref(),
-            invalidation_transport: Some(invalidation_transport),
-            event_transport,
-            cache,
             bulk_max_documents,
         })
     })

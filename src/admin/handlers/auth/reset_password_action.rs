@@ -138,11 +138,11 @@ pub async fn reset_password_action(
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 
-    let pool = state.pool.clone();
-    let registry = Arc::clone(&state.registry);
+    let pool = state.infra.pool.clone();
+    let registry = Arc::clone(&state.infra.registry);
     let token = form.token.clone();
     let password = form.password.clone();
-    let invalidation_transport = state.invalidation_transport.clone();
+    let invalidation_transport = state.infra.invalidation_transport.clone();
 
     let result = task::spawn_blocking(move || {
         consume_reset_token(&pool, &registry, &token, &password, &invalidation_transport)

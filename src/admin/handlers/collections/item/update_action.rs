@@ -24,7 +24,7 @@ pub async fn update_action(
     auth_user: Option<Extension<AuthUser>>,
     request: Request,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT);
     };
 

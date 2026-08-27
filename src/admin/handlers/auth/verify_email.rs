@@ -91,8 +91,8 @@ pub async fn verify_email(
         return Redirect::to(paths::LOGIN);
     }
 
-    let pool = state.pool.clone();
-    let registry = Arc::clone(&state.registry);
+    let pool = state.infra.pool.clone();
+    let registry = Arc::clone(&state.infra.registry);
     let token = query.token;
 
     let result =

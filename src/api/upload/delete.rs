@@ -83,6 +83,7 @@ fn ensure_upload_exists(
         .map_err(|_| internal())?;
 
     let conn = state
+        .infra
         .pool
         .get()
         .inspect_err(|e| error!("Upload delete pool error: {e}"))
@@ -113,7 +114,7 @@ pub(super) async fn delete_upload(
         Err(e) => return *e,
     };
 
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return json_error(
             StatusCode::NOT_FOUND,
             &format!("Collection '{slug}' not found"),
@@ -156,15 +157,15 @@ pub(super) async fn delete_upload(
     }
 
     let input = UploadDeleteBlockingInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
         def: def.clone(),
         slug: slug.clone(),
         id: id.clone(),
         user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
-        storage: state.storage.clone(),
+        storage: state.infra.storage.clone(),
         locale_config: state.config.locale.clone(),
-        invalidation_transport: state.invalidation_transport.clone(),
+        invalidation_transport: state.infra.invalidation_transport.clone(),
     };
 
     let result = task::spawn_blocking(move || delete_upload_blocking(input)).await;

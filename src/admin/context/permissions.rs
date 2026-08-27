@@ -68,7 +68,7 @@ impl CollectionPermissions {
     ) -> Self {
         let user_doc = get_user_doc(auth_user);
 
-        let Ok(mut conn) = state.pool.get() else {
+        let Ok(mut conn) = state.infra.pool.get() else {
             return Self::default();
         };
         let Ok(tx) = conn.transaction() else {
@@ -198,7 +198,7 @@ impl GlobalPermissions {
     ) -> Self {
         let user_doc = get_user_doc(auth_user);
 
-        let Ok(mut conn) = state.pool.get() else {
+        let Ok(mut conn) = state.infra.pool.get() else {
             return Self::default();
         };
         let Ok(tx) = conn.transaction() else {

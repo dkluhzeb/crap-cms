@@ -62,13 +62,13 @@ pub async fn list_versions_page(
         return redirect_response(&paths::global(&slug));
     }
 
-    let Ok(conn) = state.pool.get() else {
+    let Ok(conn) = state.infra.pool.get() else {
         return server_error(&state, "Database error");
     };
 
     let user_doc = get_user_doc(auth_user.as_ref());
     let pg = params.resolve(&state.config.pagination);
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
+    let hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::global(&slug, &def)
         .conn(&conn)

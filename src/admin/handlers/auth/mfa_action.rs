@@ -81,7 +81,11 @@ pub async fn verify_mfa_action(
         return Redirect::to(paths::LOGIN).into_response();
     };
 
-    let Ok(pending_claims) = state.token_provider.validate_pending_token(&mfa_token) else {
+    let Ok(pending_claims) = state
+        .infra
+        .token_provider
+        .validate_pending_token(&mfa_token)
+    else {
         // Token expired, invalid, or not an MFA-pending token (a full session
         // token can't be replayed here) — clear cookie, redirect to login.
         let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
@@ -110,7 +114,7 @@ pub async fn verify_mfa_action(
     }
 
     // Verify the MFA code against the database.
-    let pool = state.pool.clone();
+    let pool = state.infra.pool.clone();
     let slug = pending_claims.collection.to_string();
     let code = form.code.clone();
 

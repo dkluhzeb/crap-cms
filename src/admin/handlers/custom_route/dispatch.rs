@@ -166,7 +166,7 @@ fn resolve_principal(
     headers: &HeaderMap,
     allow_cookie: bool,
 ) -> Option<Principal> {
-    let conn = state.pool.get().ok()?;
+    let conn = state.infra.pool.get().ok()?;
 
     let cookie_header = headers
         .get(COOKIE)
@@ -193,9 +193,9 @@ fn resolve_principal(
             headers: &headers_map,
         },
         &EvaluateDeps {
-            registry: &state.registry,
-            token_provider: state.token_provider.as_ref(),
-            hook_runner: &state.hook_runner,
+            registry: &state.infra.registry,
+            token_provider: state.infra.token_provider.as_ref(),
+            hook_runner: &state.infra.hook_runner,
             conn: &conn,
         },
     );
@@ -261,8 +261,9 @@ fn run_dispatch_blocking(job: DispatchJob) -> Result<DispatchOutcome> {
     let allowed = match &def.access {
         RouteAccess::Gated(access) => {
             state
+                .infra
                 .hook_runner
-                .run_route_access(access, &input, &state.pool)?
+                .run_route_access(access, &input, &state.infra.pool)?
         }
         // Disabled is rejected before the blocking phase; Public allows.
         _ => true,
@@ -271,9 +272,11 @@ fn run_dispatch_blocking(job: DispatchJob) -> Result<DispatchOutcome> {
         return Ok(DispatchOutcome::Forbidden);
     }
 
-    let resp = state
-        .hook_runner
-        .run_route_handler(&def.handler, &input, &state.pool)?;
+    let resp =
+        state
+            .infra
+            .hook_runner
+            .run_route_handler(&def.handler, &input, &state.infra.pool)?;
     Ok(DispatchOutcome::Response(resp))
 }
 

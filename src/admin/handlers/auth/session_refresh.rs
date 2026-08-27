@@ -90,7 +90,7 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    let pool = state.pool.clone();
+    let pool = state.infra.pool.clone();
     let slug = claims.collection.clone();
     let user_id = claims.sub.clone();
 

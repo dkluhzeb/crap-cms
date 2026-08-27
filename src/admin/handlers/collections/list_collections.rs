@@ -22,6 +22,7 @@ pub async fn list_collections(
     let user_doc = get_user_doc(auth_user.as_ref());
 
     let mut collections: Vec<CollectionEntry> = state
+        .infra
         .registry
         .collections
         .iter()

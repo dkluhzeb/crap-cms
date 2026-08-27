@@ -28,8 +28,8 @@ pub async fn logout_action(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     if let Some(Extension(user)) = auth_user {
-        let pool = state.pool.clone();
-        let transport = state.invalidation_transport.clone();
+        let pool = state.infra.pool.clone();
+        let transport = state.infra.invalidation_transport.clone();
         let collection = user.claims.collection.clone();
         let sub = user.claims.sub.clone();
         let _ = spawn_blocking(move || {

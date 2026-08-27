@@ -66,7 +66,7 @@ fn prepare_create_fields(
         &mut fields,
         &def.fields,
         &json!({}),
-        &state.hook_runner,
+        &state.infra.hook_runner,
         true,
         &cond_ctx,
     );

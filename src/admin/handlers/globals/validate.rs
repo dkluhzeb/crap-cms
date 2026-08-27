@@ -34,7 +34,7 @@ pub async fn validate_global(
     auth_user: Option<Extension<AuthUser>>,
     Json(payload): Json<ValidateRequest>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
+    let def = match state.infra.registry.get_global(&slug) {
         Some(d) => d.clone(),
         None => return validation_error_response_simple("Global not found"),
     };
@@ -66,8 +66,8 @@ pub async fn validate_global(
             .unwrap_or(None);
 
     let gtable = global_table(&slug);
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let runner = state.infra.hook_runner.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user.as_ref()).cloned();

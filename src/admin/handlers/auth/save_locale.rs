@@ -46,7 +46,7 @@ pub async fn save_locale(
         return StatusCode::BAD_REQUEST;
     }
 
-    let pool = state.pool.clone();
+    let pool = state.infra.pool.clone();
     let user_id = auth_user.claims.sub.clone();
     let locale = form.locale.clone();
 

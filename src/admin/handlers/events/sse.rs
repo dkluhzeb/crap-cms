@@ -227,7 +227,7 @@ pub async fn sse_handler(
         counter: state.sse_connections.clone(),
     };
 
-    let event_transport = state.event_transport.clone();
+    let event_transport = state.infra.event_transport.clone();
     let shutdown = state.shutdown.clone();
 
     let user_doc = auth_user.as_ref().map(|ext| &ext.0.user_doc);
@@ -237,12 +237,12 @@ pub async fn sse_handler(
         SseAccess::empty()
     };
 
-    let hook_runner = state.hook_runner.clone();
-    let registry = Arc::clone(&state.registry);
+    let hook_runner = state.infra.hook_runner.clone();
+    let registry = Arc::clone(&state.infra.registry);
     let subscriber_user_doc = auth_user.as_ref().map(|ext| ext.0.user_doc.clone());
     let subscriber_user_id = auth_user.as_ref().map(|ext| ext.0.claims.sub.to_string());
     let send_timeout = Duration::from_millis(state.subscriber_send_timeout_ms);
-    let invalidation_rx = state.invalidation_transport.subscribe();
+    let invalidation_rx = state.infra.invalidation_transport.subscribe();
 
     let stream: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
         match event_transport {

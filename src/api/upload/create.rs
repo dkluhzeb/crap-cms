@@ -79,7 +79,7 @@ pub(super) async fn create_upload(
         Err(e) => return *e,
     };
 
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return json_error(
             StatusCode::NOT_FOUND,
             &format!("Collection '{slug}' not found"),
@@ -125,9 +125,9 @@ pub(super) async fn create_upload(
     };
 
     let input = UploadCreateBlockingInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        storage: state.storage.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
+        storage: state.infra.storage.clone(),
         slug: slug.clone(),
         def: def.clone(),
         user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),

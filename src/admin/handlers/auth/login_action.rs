@@ -271,7 +271,7 @@ fn handle_mfa_challenge(
         }
     };
 
-    let mfa_token = match state.token_provider.create_token(&claims) {
+    let mfa_token = match state.infra.token_provider.create_token(&claims) {
         Ok(t) => t,
         Err(e) => {
             error!("MFA pending token error: {}", e);
@@ -300,12 +300,12 @@ fn handle_mfa_challenge(
         let code_for_db = code.clone();
 
         let params = MfaCodeParams {
-            pool: state.pool.clone(),
+            pool: state.infra.pool.clone(),
             slug: form.collection.clone(),
             user_id: user.id.clone(),
             user_email,
             email_config: state.config.email.clone(),
-            email_renderer: state.email_renderer.clone(),
+            email_renderer: state.infra.email.email_renderer.clone(),
             email_max_attempts: state.config.jobs.system_email_max_attempts(),
         };
 
@@ -383,6 +383,7 @@ pub async fn login_action(
     }
 
     let Some(def) = state
+        .infra
         .registry
         .get_collection(&form.collection)
         .cloned()
@@ -402,7 +403,7 @@ pub async fn login_action(
     let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let result = verify_credentials(VerifyParams {
-        pool: state.pool.clone(),
+        pool: state.infra.pool.clone(),
         password_provider: state.password_provider.clone(),
         slug: form.collection.clone(),
         def: def.clone(),
@@ -410,7 +411,7 @@ pub async fn login_action(
         password: form.password.clone(),
         verify_email_flag: verify_email,
         allows_password,
-        hook_runner: Some(state.hook_runner.clone()),
+        hook_runner: Some(state.infra.hook_runner.clone()),
         headers: headers_to_map(&headers),
     })
     .await;

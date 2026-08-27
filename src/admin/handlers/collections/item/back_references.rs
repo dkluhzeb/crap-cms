@@ -93,9 +93,9 @@ pub async fn back_references(
     };
 
     let params = BackRefParams {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        registry: state.registry.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
+        registry: state.infra.registry.clone(),
         locale: state.config.locale.clone(),
         slug,
         target_id: id,

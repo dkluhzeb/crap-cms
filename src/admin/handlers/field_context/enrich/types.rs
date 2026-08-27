@@ -240,7 +240,7 @@ fn build_array_row(
         &field_def.admin,
         None,
         row.as_object(),
-        &enrich.state.hook_runner,
+        &enrich.state.infra.hook_runner,
     );
 
     ArrayRow {
@@ -504,7 +504,7 @@ fn build_blocks_row(
         &field_def.admin,
         block_label_field,
         row_obj,
-        &enrich.state.hook_runner,
+        &enrich.state.infra.hook_runner,
     );
 
     BlockRow {

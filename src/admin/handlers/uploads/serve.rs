@@ -159,7 +159,11 @@ async fn check_upload_access(
     filename: &str,
     auth_user: Option<AuthUser>,
 ) -> Option<&'static str> {
-    let def = state.registry.get_collection(collection_slug)?.clone();
+    let def = state
+        .infra
+        .registry
+        .get_collection(collection_slug)?
+        .clone();
 
     // Fast public path: only when "no read hook" genuinely means ALLOW — i.e.
     // `default_deny` is off — and there is no draft/trash axis (no status- or
@@ -176,8 +180,8 @@ async fn check_upload_access(
     }
 
     let input = UploadVisibilityInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
         def,
         slug: collection_slug.to_string(),
         filename: filename.to_string(),
@@ -234,13 +238,18 @@ pub async fn serve_upload(
 }
 
 /// Try to authenticate from a raw token string (cookie value or Bearer token).
-/// Routes through `state.token_provider` (not the free `validate_token`
+/// Routes through `state.infra.token_provider` (not the free `validate_token`
 /// function) so a future swap of the JWT backend / signing key flows
 /// here automatically — the older `jwt_secret`-direct form silently
 /// 401'd everything in that scenario.
 fn auth_from_token(token: &str, state: &AdminState) -> Option<AuthUser> {
-    let claims = state.token_provider.validate_token(token).ok()?;
-    load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+    let claims = state.infra.token_provider.validate_token(token).ok()?;
+    load_auth_user(
+        &state.infra.pool,
+        &state.infra.registry,
+        &claims,
+        &state.config.locale,
+    )
 }
 
 fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<AuthUser> {
@@ -278,7 +287,7 @@ async fn serve_file(
     accepts_webp: bool,
     original_request: Request<Body>,
 ) -> Response {
-    let storage = &*state.storage;
+    let storage = &*state.infra.storage;
 
     // Extract conditional headers from original request for ServeFile forwarding
     let conditional_headers = extract_conditional_headers(&original_request);
@@ -294,7 +303,7 @@ async fn serve_file(
                 return serve_with_headers(&local_path, req, cache_control, true, variant_mime)
                     .await;
             }
-        } else if let Ok(data) = storage_get_blocking(&state.storage, variant_key).await {
+        } else if let Ok(data) = storage_get_blocking(&state.infra.storage, variant_key).await {
             return serve_bytes(data, cache_control, true, variant_mime);
         }
     }
@@ -315,7 +324,7 @@ async fn serve_file(
         let req = build_serve_request(&conditional_headers);
         serve_with_headers(&local_path, req, cache_control, is_image, &requested_mime).await
     } else {
-        match storage_get_blocking(&state.storage, original_key).await {
+        match storage_get_blocking(&state.infra.storage, original_key).await {
             Ok(data) => serve_bytes(data, cache_control, is_image, &requested_mime),
             Err(e) if e.downcast_ref::<StorageNotFound>().is_some() => {
                 StatusCode::NOT_FOUND.into_response()

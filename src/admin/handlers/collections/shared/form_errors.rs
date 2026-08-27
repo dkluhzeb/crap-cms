@@ -127,7 +127,7 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
         &mut fields,
         &p.def.fields,
         &form_json,
-        &p.state.hook_runner,
+        &p.state.infra.hook_runner,
         true,
         &cond_ctx,
     );
@@ -329,13 +329,13 @@ pub(in crate::admin::handlers::collections) fn handle_collection_write_error(
             toast_only_error(&write_error_toast(
                 op_label(editing),
                 p.err,
-                p.state.pool.kind(),
+                p.state.infra.pool.kind(),
             ))
         }
         WriteErrorResponse::Toast => toast_only_error(&write_error_toast(
             op_label(editing),
             p.err,
-            p.state.pool.kind(),
+            p.state.infra.pool.kind(),
         )),
     }
 }

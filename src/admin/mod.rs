@@ -46,7 +46,7 @@
 //!
 //! [`AdminState`] is the application-wide bundle handed to every handler via
 //! `State<AdminState>`. It is `Clone` (cheap — Arcs and small handles). Helper
-//! methods like [`AdminState::email_context`] and [`AdminState::mcp_server`]
+//! methods like [`AdminState::mcp_server`]
 //! bundle subsets of fields for downstream consumers without exposing the
 //! struct's internals. Definition lives in the sibling [`state`] module so
 //! `mod.rs` stays a thin declarations + re-exports file per CLAUDE.md.
@@ -62,6 +62,8 @@ pub mod server;
 pub(crate) mod server_builder;
 mod state;
 pub mod templates;
+#[doc(hidden)]
+pub mod test_support;
 pub mod translations;
 
 pub use csp_nonce::{CSP_NONCE, CspNonce, current_nonce_or_empty};

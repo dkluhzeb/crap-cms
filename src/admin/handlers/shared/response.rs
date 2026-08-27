@@ -28,7 +28,7 @@ use crate::{
 /// world the Lua hook + Handlebars renderer operate in.
 pub fn render_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
     let data = to_value(ctx).expect("admin page context serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     render_or_error(state, template, &data)
 }
@@ -54,7 +54,7 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
@@ -155,7 +155,7 @@ pub fn page_with_toast<T: Serialize>(
     toast: &str,
 ) -> Response {
     let data = to_value(ctx).expect("page context serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     html_with_toast(state, template, &data, toast)
 }
@@ -225,7 +225,7 @@ pub fn bad_request(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/400", &data) {
         Ok(html) => Html(html),
@@ -248,7 +248,7 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
@@ -272,6 +272,7 @@ pub fn require_collection(
     slug: &str,
 ) -> Result<CollectionDefinition, Box<Response>> {
     state
+        .infra
         .registry
         .get_collection(slug)
         .cloned()
@@ -287,6 +288,7 @@ pub fn require_collection(
 /// no global matches `slug`.
 pub fn require_global(state: &AdminState, slug: &str) -> Result<GlobalDefinition, Box<Response>> {
     state
+        .infra
         .registry
         .get_global(slug)
         .cloned()
@@ -341,6 +343,7 @@ pub fn require_collection_json(
     slug: &str,
 ) -> Result<CollectionDefinition, Box<Response>> {
     state
+        .infra
         .registry
         .get_collection(slug)
         .cloned()
@@ -395,7 +398,7 @@ pub fn server_error(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.hook_runner.run_before_render(data);
+    let data = state.infra.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),

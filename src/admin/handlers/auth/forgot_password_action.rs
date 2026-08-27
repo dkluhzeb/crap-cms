@@ -44,7 +44,7 @@ fn forgot_password_collection(
     state: &AdminState,
     collection: &str,
 ) -> Option<CollectionDefinition> {
-    let def = state.registry.get_collection(collection)?;
+    let def = state.infra.registry.get_collection(collection)?;
 
     if def.is_auth_collection()
         && def.auth.as_ref().is_some_and(Auth::forgot_password_enabled)
@@ -145,12 +145,12 @@ pub async fn forgot_password_action(
 
     if let Some(def) = forgot_password_collection(&state, &form.collection) {
         let params = ResetEmailParams {
-            pool: state.pool.clone(),
+            pool: state.infra.pool.clone(),
             slug: form.collection.clone(),
             def,
             user_email: form.email.clone(),
             email_config: state.config.email.clone(),
-            email_renderer: state.email_renderer.clone(),
+            email_renderer: state.infra.email.email_renderer.clone(),
             base_url: state.config.server.base_url(),
             reset_expiry: state.config.auth.reset_token_expiry,
             email_max_attempts: state.config.jobs.system_email_max_attempts(),

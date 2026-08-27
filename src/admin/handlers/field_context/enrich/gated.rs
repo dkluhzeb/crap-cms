@@ -23,7 +23,7 @@ fn view_filters(
     slug: &str,
     def: &CollectionDefinition,
 ) -> Option<Vec<FilterClause>> {
-    let hooks = RunnerReadHooks::new(&ctx.state.hook_runner, ctx.conn, ctx.user, None);
+    let hooks = RunnerReadHooks::new(&ctx.state.infra.hook_runner, ctx.conn, ctx.user, None);
     let read_ctx = ReadAccessCtx {
         def,
         slug,

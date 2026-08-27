@@ -1,6 +1,7 @@
 //! Update handler — processes form submissions for editing collection items.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::{
@@ -18,16 +19,13 @@ use crate::{
             shared::{get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error},
         },
     },
-    config::{LocaleConfig, PasswordPolicy},
     core::{
-        AuthUser, CollectionDefinition, Document, ReqContext, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport,
+        AuthUser, CollectionDefinition, Document, ReqContext,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
-    db::{DbPool, LocaleContext, LocaleMode},
-    hooks::HookRunner,
+    db::{LocaleContext, LocaleMode},
     service::{
-        self, ServiceContext, ServiceError,
+        self, AppInfra, ServiceContext, ServiceError,
         auth::{AccountAction, perform_account_action},
     },
 };
@@ -41,11 +39,11 @@ fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Optio
         ur.guard.commit();
 
         if let Some(old_fields) = ur.old_doc_fields {
-            delete_upload_files(&*state.storage, &old_fields);
+            delete_upload_files(&*state.infra.storage, &old_fields);
         }
 
         if !ur.queued_conversions.is_empty()
-            && let Ok(conn) = state.pool.get()
+            && let Ok(conn) = state.infra.pool.get()
             && let Err(e) = enqueue_conversions(
                 &conn,
                 slug,
@@ -79,21 +77,16 @@ struct UpdateInput {
     action: String,
 }
 
-/// Owned bundle for the spawn-blocking update body.
+/// Owned bundle for the spawn-blocking update body. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct UpdateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
-    invalidation_bus: SharedInvalidationTransport,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
+    infra: Arc<AppInfra>,
     slug: String,
     id: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
     locale: Option<String>,
     ui_locale: Option<String>,
-    locale_config: LocaleConfig,
-    password_policy: PasswordPolicy,
     input: UpdateInput,
 }
 
@@ -105,14 +98,8 @@ fn update_document_blocking(
     args: UpdateBlockingInput,
 ) -> Result<service::WriteResult, ServiceError> {
     let ctx = service::ServiceContext::collection(&args.slug, &args.def)
-        .pool(&args.pool)
-        .runner(&args.runner)
+        .infra(&args.infra)
         .user(args.user_doc.as_ref())
-        .event_transport(args.event_transport)
-        .invalidation_transport(Some(args.invalidation_bus.clone()))
-        .cache(args.cache)
-        .locale_config(Some(&args.locale_config))
-        .password_policy(Some(&args.password_policy))
         .build();
 
     // Route an unpublish action to the unpublish path regardless of versioning:
@@ -140,7 +127,11 @@ fn update_document_blocking(
     if result.is_ok()
         && let LockUpdate::Set(should_lock) = args.input.lock
     {
-        let conn = args.pool.get().context("DB connection for lock update")?;
+        let conn = args
+            .infra
+            .pool
+            .get()
+            .context("DB connection for lock update")?;
         // Gate the lock toggle through `perform_account_action` so the admin
         // surface honors `access.unlock` (`?? update`) against the target user —
         // identical to the gRPC LockAccount/UnlockAccount path. Building a
@@ -148,9 +139,9 @@ fn update_document_blocking(
         // access hook run; a `slug_only` context would silently skip the check.
         let ctx = ServiceContext::collection(&args.slug, &args.def)
             .conn(&conn)
-            .runner(&args.runner)
+            .runner(&args.infra.hook_runner)
             .user(args.user_doc.as_ref())
-            .invalidation_transport(Some(args.invalidation_bus))
+            .invalidation_transport(Some(args.infra.invalidation_transport.clone()))
             .build();
 
         let action = if should_lock {
@@ -183,19 +174,13 @@ async fn spawn_update(
     // fields when locales are enabled. Threading the config through
     // `ServiceContext` lets the service build a default `All` context.
     let args = UpdateBlockingInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        invalidation_bus: state.invalidation_transport.clone(),
-        event_transport: state.event_transport.clone(),
-        cache: state.cache.clone(),
+        infra: state.infra.clone(),
         slug: slug.to_string(),
         id: id.to_string(),
         def: def.clone(),
         user_doc: get_user_doc(auth_user).cloned(),
         locale,
         ui_locale,
-        locale_config: state.config.locale.clone(),
-        password_policy: state.config.auth.password_policy.clone(),
         input,
     };
 
@@ -211,7 +196,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     file: Option<UploadedFile>,
     auth_user: Option<&Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT).into_response();
     };
 

@@ -144,6 +144,7 @@ pub(in crate::admin::handlers) fn login_error(
 /// email/password inputs at all).
 pub(in crate::admin::handlers) fn all_disable_local(state: &AdminState) -> bool {
     let auth_collections: Vec<_> = state
+        .infra
         .registry
         .collections
         .values()
@@ -166,6 +167,7 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
     }
 
     state
+        .infra
         .registry
         .collections
         .values()
@@ -175,6 +177,7 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
 
 pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<AuthCollection> {
     let mut collections: Vec<AuthCollection> = state
+        .infra
         .registry
         .collections
         .values()
@@ -275,6 +278,7 @@ pub(in crate::admin::handlers) fn create_session_token(
     auth_time: u64,
 ) -> Result<SessionToken, String> {
     let expiry = state
+        .infra
         .registry
         .get_collection(collection)
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
@@ -289,6 +293,7 @@ pub(in crate::admin::handlers) fn create_session_token(
         .map_err(|e| format!("Claims build error: {e}"))?;
 
     let token = state
+        .infra
         .token_provider
         .create_token(&claims)
         .map_err(|e| format!("Token creation error: {e}"))?;

@@ -28,7 +28,7 @@ pub(crate) async fn evaluate_conditions(
     auth_user: Option<Extension<AuthUser>>,
     Json(req): Json<EvaluateConditionsRequest>,
 ) -> impl IntoResponse {
-    let Some(def) = state.registry.get_global(&slug) else {
+    let Some(def) = state.infra.registry.get_global(&slug) else {
         return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
     };
 
@@ -58,7 +58,8 @@ pub(crate) async fn evaluate_conditions(
         options: None,
     };
 
-    let results = evaluate_condition_results(&state.hook_runner, &def.fields, &req, &cond_ctx);
+    let results =
+        evaluate_condition_results(&state.infra.hook_runner, &def.fields, &req, &cond_ctx);
 
     Json(Value::Object(results)).into_response()
 }

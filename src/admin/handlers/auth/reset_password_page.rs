@@ -45,8 +45,8 @@ pub async fn reset_password_page(
     State(state): State<AdminState>,
     Query(query): Query<ResetPasswordQuery>,
 ) -> Response {
-    let pool = state.pool.clone();
-    let registry = Arc::clone(&state.registry);
+    let pool = state.infra.pool.clone();
+    let registry = Arc::clone(&state.infra.registry);
     let token = query.token.clone();
 
     let valid = task::spawn_blocking(move || is_valid_reset_token(&pool, &registry, &token))

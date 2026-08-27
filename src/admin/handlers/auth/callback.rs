@@ -72,8 +72,8 @@ async fn run_auth_callback_hook(
     collection: &str,
 ) -> Result<Option<Document>, ()> {
     let hook_ref = format!("auth_callback.{name}");
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let hook_runner = state.infra.hook_runner.clone();
     let collection = collection.to_string();
 
     let mut ctx = headers_to_map(headers);
@@ -121,12 +121,13 @@ async fn run_auth_callback_hook(
 /// verification.
 fn validate_callback_user(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
     let requires_verify = state
+        .infra
         .registry
         .get_collection(slug)
         .and_then(|def| def.auth.as_ref())
         .is_some_and(Auth::requires_verify_email);
 
-    let conn = state.pool.get().ok()?;
+    let conn = state.infra.pool.get().ok()?;
     let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
     // Bind only to `slug`: the user must exist in this collection. This is the
@@ -245,7 +246,7 @@ pub async fn auth_callback(
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(collection) = sole_auth_collection(&state.registry) else {
+    let Some(collection) = sole_auth_collection(&state.infra.registry) else {
         warn!(
             "un-scoped auth callback {name:?} has no unambiguous auth collection \
              (need exactly one); use /admin/auth/callback/{{collection}}/{name} \

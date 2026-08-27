@@ -57,12 +57,14 @@ use crate::{
     core::{
         CollectionDefinition, JwtSecret, Registry, SharedCache, SharedEventTransport,
         SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
+        cache::NoneCache,
         email::{EmailRenderer, create_email_provider_with_lease},
         event::InProcessInvalidationBus,
         rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool},
     hooks::HookRunner,
+    service::{AppInfra, EmailContext},
 };
 
 /// Parameters for starting the admin HTTP server.
@@ -171,17 +173,38 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
     let invalidation_transport: SharedInvalidationTransport =
         invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
 
+    // Assemble the process-stable infra bundle once from the admin dependencies.
+    // Handlers read individual deps from it (`state.infra.pool`, …) and thread it
+    // into write contexts via `.infra()`; the individual fields are gone.
+    let infra = Arc::new(
+        AppInfra::builder()
+            .pool(pool)
+            .registry(Arc::clone(&registry))
+            .hook_runner(hook_runner)
+            .cache(cache.unwrap_or_else(|| Arc::new(NoneCache)))
+            .storage(storage)
+            .event_transport(event_transport)
+            .invalidation_transport(invalidation_transport)
+            .token_provider(token_provider)
+            .email(EmailContext {
+                email_config: config.email.clone(),
+                email_renderer,
+                server_config: config.server.clone(),
+                email_max_attempts: config.jobs.system_email_max_attempts(),
+            })
+            .locale_config(config.locale.clone())
+            .password_policy(config.auth.password_policy.clone())
+            .populate_singleflight(Arc::new(crate::db::query::Singleflight::new()))
+            .build(),
+    );
+
     Ok(AdminState {
+        infra,
         config,
         config_dir: config_dir.clone(),
-        pool,
-        registry,
         handlebars,
-        hook_runner,
         jwt_secret,
-        email_renderer,
         email_provider,
-        event_transport,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter,
@@ -193,13 +216,8 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
         shutdown,
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections,
-        storage,
-        token_provider,
         password_provider,
         subscriber_send_timeout_ms,
-        invalidation_transport,
-        populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
-        cache,
         custom_pages,
     })
 }
@@ -606,7 +624,7 @@ async fn health_liveness() -> StatusCode {
 
 /// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
 async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
-    match state.pool.get() {
+    match state.infra.pool.get() {
         Ok(conn) => match conn.query_one("SELECT 1", &[]) {
             Ok(_) => StatusCode::OK,
             Err(_) => StatusCode::SERVICE_UNAVAILABLE,

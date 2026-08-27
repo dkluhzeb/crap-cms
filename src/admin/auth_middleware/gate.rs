@@ -56,8 +56,8 @@ pub(crate) async fn check_admin_gate_for_doc(
     user_doc: &Document,
 ) -> Option<Response> {
     let access = state.config.admin.access.clone()?;
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let hook_runner = state.infra.hook_runner.clone();
     let user_doc = user_doc.clone();
 
     let result = spawn_blocking(move || {
@@ -97,14 +97,15 @@ pub(crate) async fn check_collection_admin_gate(
     user_doc: &Document,
 ) -> Option<Response> {
     let access = state
+        .infra
         .registry
         .get_collection(slug)
         .map(|d| &d.access)
-        .or_else(|| state.registry.get_global(slug).map(|d| &d.access))?
+        .or_else(|| state.infra.registry.get_global(slug).map(|d| &d.access))?
         .admin
         .clone()?;
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let hook_runner = state.infra.hook_runner.clone();
     let slug_owned = slug.to_string();
     let user_doc = user_doc.clone();
 

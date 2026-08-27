@@ -33,6 +33,7 @@ fn build_collection_cards(
     let hooks = RunnerReadHooks::new(runner, conn, user_doc, None);
 
     let mut cards: Vec<CollectionCard> = state
+        .infra
         .registry
         .collections
         .iter()
@@ -86,6 +87,7 @@ fn build_global_cards(
     user_doc: Option<&Document>,
 ) -> Vec<GlobalCard> {
     let mut cards: Vec<GlobalCard> = state
+        .infra
         .registry
         .globals
         .iter()
@@ -129,7 +131,7 @@ pub async fn index(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Ok(conn) = state.pool.get() else {
+    let Ok(conn) = state.infra.pool.get() else {
         return crate::admin::handlers::shared::render_or_error(
             &state,
             "errors/500",
@@ -138,7 +140,8 @@ pub async fn index(
     };
 
     let user_doc = get_user_doc(auth_user.as_ref());
-    let collection_cards = build_collection_cards(&state, &conn, &state.hook_runner, user_doc);
+    let collection_cards =
+        build_collection_cards(&state, &conn, &state.infra.hook_runner, user_doc);
     let global_cards = build_global_cards(&state, &conn, user_doc);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);

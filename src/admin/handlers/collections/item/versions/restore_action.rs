@@ -5,52 +5,45 @@ use axum::{
 };
 use tokio::task;
 
+use std::sync::Arc;
+
 use crate::{
     admin::{
         AdminState,
         handlers::shared::{finish_version_restore, get_user_doc, paths, redirect_response},
     },
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, Document, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, auth::AuthUser,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{ServiceContext, ServiceError, restore_collection_version},
+    core::{CollectionDefinition, Document, auth::AuthUser},
+    service::{AppInfra, ServiceContext, ServiceError, restore_collection_version},
 };
 
-/// Owned inputs for the spawn-blocking restore body.
+/// Owned inputs for the spawn-blocking restore body. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct RestoreVersionInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     id: String,
     version_id: String,
-    locale_config: LocaleConfig,
 }
 
 /// Build the service context and run the version-restore service call. Wraps
 /// the inline closure body so the `spawn_blocking` call is a single fn
 /// invocation per CLAUDE.md.
 fn restore_collection_version_blocking(
-    input: RestoreVersionInput,
+    input: &RestoreVersionInput,
 ) -> Result<Document, ServiceError> {
     let ctx = ServiceContext::collection(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(input.user_doc.as_ref())
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
-        .cache(input.cache)
         .build();
 
-    restore_collection_version(&ctx, &input.id, &input.version_id, &input.locale_config)
+    restore_collection_version(
+        &ctx,
+        &input.id,
+        &input.version_id,
+        &input.infra.locale_config,
+    )
 }
 
 /// `POST /admin/collections/{slug}/{id}/versions/{version_id}/restore` — restore a version
@@ -59,7 +52,7 @@ pub async fn restore_version(
     Path((slug, id, version_id)): Path<(String, String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT);
     };
 
@@ -69,20 +62,15 @@ pub async fn restore_version(
 
     let redirect = paths::collection_item(&slug, &id);
     let input = RestoreVersionInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        infra: state.infra.clone(),
         slug,
         def,
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
-        event_transport: state.event_transport.clone(),
-        invalidation_transport: state.invalidation_transport.clone(),
-        cache: state.cache.clone(),
         id,
         version_id,
-        locale_config: state.config.locale.clone(),
     };
 
-    let result = task::spawn_blocking(move || restore_collection_version_blocking(input)).await;
+    let result = task::spawn_blocking(move || restore_collection_version_blocking(&input)).await;
 
     finish_version_restore(&state, result, &redirect, "version")
 }

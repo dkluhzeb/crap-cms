@@ -206,8 +206,8 @@ pub fn enrich_field_contexts(
     state: &AdminState,
     opts: &EnrichOptions,
 ) {
-    let reg = &state.registry;
-    let Ok(conn) = state.pool.get() else {
+    let reg = &state.infra.registry;
+    let Ok(conn) = state.infra.pool.get() else {
         return;
     };
 

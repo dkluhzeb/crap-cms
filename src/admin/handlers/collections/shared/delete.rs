@@ -8,6 +8,8 @@ use serde_json::json;
 use tokio::task;
 use tracing::error;
 
+use std::sync::Arc;
+
 use crate::{
     admin::{
         AdminState,
@@ -16,48 +18,33 @@ use crate::{
             json_server_error, paths,
         },
     },
-    config::LocaleConfig,
     core::ReqContext,
-    core::{
-        AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, SharedStorage,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceError},
+    core::{AuthUser, CollectionDefinition, Document},
+    service::{self, AppInfra, ServiceError},
 };
 
-/// Owned inputs for the spawn-blocking delete body.
+/// Owned inputs for the spawn-blocking delete body. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct DeleteBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
-    invalidation_transport: SharedInvalidationTransport,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
-    storage: SharedStorage,
     id: String,
-    locale_config: LocaleConfig,
 }
 
 /// Build the service context and run the delete service call.
-fn delete_document_blocking(input: DeleteBlockingInput) -> Result<ReqContext, ServiceError> {
+fn delete_document_blocking(input: &DeleteBlockingInput) -> Result<ReqContext, ServiceError> {
     let ctx = service::ServiceContext::collection(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(input.user_doc.as_ref())
-        .invalidation_transport(Some(input.invalidation_transport))
-        .event_transport(input.event_transport)
-        .cache(input.cache)
         .build();
 
     service::delete_document(
         &ctx,
         &input.id,
-        Some(&*input.storage),
-        Some(&input.locale_config),
+        Some(input.infra.storage.as_ref()),
+        Some(&input.infra.locale_config),
     )
 }
 
@@ -75,7 +62,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     force_hard_delete: bool,
     json_response: bool,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(slug).cloned() else {
         if json_response {
             return json_not_found("Collection not found");
         }
@@ -83,37 +70,21 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
         return Redirect::to(paths::COLLECTIONS_ROOT).into_response();
     };
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
     let mut def_clone = def.clone();
-    let slug_owned = slug.to_string();
-    let id_owned = id.to_string();
-    let user_doc = get_user_doc(auth_user).cloned();
-    let storage = state.storage.clone();
-    let locale_config = state.config.locale.clone();
-    let invalidation_transport = state.invalidation_transport.clone();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
 
     if force_hard_delete {
         def_clone.make_hard_delete();
     }
 
     let input = DeleteBlockingInput {
-        pool,
-        runner,
-        slug: slug_owned,
+        infra: state.infra.clone(),
+        slug: slug.to_string(),
         def: def_clone,
-        user_doc,
-        invalidation_transport,
-        event_transport,
-        cache,
-        storage,
-        id: id_owned,
-        locale_config,
+        user_doc: get_user_doc(auth_user).cloned(),
+        id: id.to_string(),
     };
 
-    let result = task::spawn_blocking(move || delete_document_blocking(input)).await;
+    let result = task::spawn_blocking(move || delete_document_blocking(&input)).await;
 
     match result {
         Ok(Ok(_)) => {

@@ -20,7 +20,6 @@ use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Registry;
-use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::rate_limit::LoginRateLimiter;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -76,22 +75,35 @@ fn setup() -> (tempfile::TempDir, axum::Router) {
     let translations = Arc::new(Translations::load(tmp.path()));
     let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("handlebars");
-    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("email renderer"));
+
+    let storage = crap_cms::core::upload::create_storage(
+        tmp.path(),
+        &crap_cms::config::UploadConfig::default(),
+    )
+    .unwrap();
+    let token_provider: crap_cms::core::SharedTokenProvider = Arc::new(
+        crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+    );
+    let infra = crap_cms::admin::test_support::test_infra(
+        db_pool,
+        registry,
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
 
     let state = AdminState {
+        infra,
         config,
         config_dir: tmp.path().to_path_buf(),
-        pool: db_pool,
-        registry,
         handlebars,
-        hook_runner,
         jwt_secret: "test-jwt-secret".into(),
-        email_renderer,
         email_provider: crap_cms::core::email::create_email_provider(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_transport: None,
         login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
@@ -103,19 +115,8 @@ fn setup() -> (tempfile::TempDir, axum::Router) {
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        storage: crap_cms::core::upload::create_storage(
-            tmp.path(),
-            &crap_cms::config::UploadConfig::default(),
-        )
-        .unwrap(),
-        token_provider: Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-jwt-secret",
-        )),
         password_provider: Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        invalidation_transport: Arc::new(crap_cms::core::event::InProcessInvalidationBus::new()),
-        populate_singleflight: Arc::new(crap_cms::db::query::Singleflight::new()),
-        cache: None,
         custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 

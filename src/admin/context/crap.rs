@@ -63,6 +63,7 @@ impl CrapMeta {
 
 fn has_auth_collections(state: &AdminState) -> bool {
     state
+        .infra
         .registry
         .collections
         .values()

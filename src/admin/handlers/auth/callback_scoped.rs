@@ -42,6 +42,7 @@ pub async fn auth_callback_scoped(
     // (`validate_callback_user` re-checks the user exists in it, but rejecting an
     // unknown/non-auth collection up front avoids running a hook for nothing.)
     let is_auth = state
+        .infra
         .registry
         .get_collection(&collection)
         .is_some_and(CollectionDefinition::is_auth_collection);

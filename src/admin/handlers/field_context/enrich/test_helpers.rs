@@ -25,12 +25,11 @@ use crate::{
     core::{
         DocumentFields, FieldDefinition, FieldType, Registry,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
-        email::{EmailRenderer, create_email_provider},
-        event::InProcessInvalidationBus,
+        email::create_email_provider,
         rate_limit::LoginRateLimiter,
         upload::create_storage,
     },
-    db::{DbConnection, DbPool, query::LocaleContext, query::Singleflight},
+    db::{DbConnection, DbPool, query::LocaleContext},
     hooks::HookRunner,
 };
 
@@ -151,24 +150,31 @@ pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
         .build()
         .unwrap();
     let hbs = Arc::new(handlebars::Handlebars::new());
-    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
     let ip_login_limiter = Arc::new(LoginRateLimiter::new(20, 300));
     let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
     let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
     let translations = Arc::new(Translations::load(tmp.path()));
+    let storage = create_storage(tmp.path(), &UploadConfig::default()).unwrap();
+    let token_provider: crate::core::SharedTokenProvider =
+        Arc::new(JwtTokenProvider::new("test-secret"));
+    let infra = crate::admin::test_support::test_infra(
+        pool,
+        Arc::clone(&registry),
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
 
     AdminState {
+        infra,
         config,
         config_dir: tmp.path().to_path_buf(),
-        pool,
-        registry,
         handlebars: hbs,
-        hook_runner,
         jwt_secret: "test".into(),
-        email_renderer,
         email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
-        event_transport: None,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
@@ -180,13 +186,8 @@ pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        storage: create_storage(tmp.path(), &UploadConfig::default()).unwrap(),
-        token_provider: Arc::new(JwtTokenProvider::new("test-secret")),
         password_provider: Arc::new(Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        invalidation_transport: Arc::new(InProcessInvalidationBus::new()),
-        populate_singleflight: Arc::new(Singleflight::new()),
-        cache: None,
         custom_pages: CustomPageRegistry::default(),
     }
 }

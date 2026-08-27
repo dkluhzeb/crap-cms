@@ -44,6 +44,7 @@ pub fn check_access_or_forbid(
     let user_doc = get_user_doc(auth_user);
 
     let mut conn = state
+        .infra
         .pool
         .get()
         .map_err(|_| Box::new(forbidden(state, "Database error").into_response()))?;
@@ -53,6 +54,7 @@ pub fn check_access_or_forbid(
         .map_err(|_| Box::new(forbidden(state, "Database error").into_response()))?;
 
     let result = state
+        .infra
         .hook_runner
         .check_access(
             &AccessCheckInput::builder(operation, collection)
@@ -92,6 +94,7 @@ pub fn compute_denied_read_fields(
     let user_doc = get_user_doc(auth_user);
 
     let mut conn = state
+        .infra
         .pool
         .get()
         .inspect_err(|e| error!("Field access check pool error: {}", e))
@@ -103,6 +106,7 @@ pub fn compute_denied_read_fields(
         .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
     let denied = state
+        .infra
         .hook_runner
         .read_denied_names(fields, document, collection, user_doc, None, &tx);
 
@@ -227,7 +231,7 @@ pub fn has_access_with_conn(
         return !state.config.access.default_deny;
     }
 
-    let result = state.hook_runner.check_access(
+    let result = state.infra.hook_runner.check_access(
         &AccessCheckInput::builder(operation, collection)
             .access(access)
             .user(user_doc)
@@ -258,7 +262,7 @@ fn has_op_access(
         return !state.config.access.default_deny;
     }
 
-    let Ok(mut conn) = state.pool.get() else {
+    let Ok(mut conn) = state.infra.pool.get() else {
         return false;
     };
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
     Extension,
@@ -23,11 +24,9 @@ use crate::{
             },
         },
     },
-    config::PasswordPolicy,
-    core::{AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport, upload},
-    db::{DbPool, LocaleContext, LocaleMode},
-    hooks::HookRunner,
-    service::{self, EmailContext, ServiceError},
+    core::{AuthUser, CollectionDefinition, Document, upload},
+    db::{LocaleContext, LocaleMode},
+    service::{self, AppInfra, ServiceError},
 };
 
 /// Handle post-create success: commit upload and enqueue conversions.
@@ -41,7 +40,7 @@ fn handle_create_success(
         ur.guard.commit();
 
         if !ur.queued_conversions.is_empty()
-            && let Ok(conn) = state.pool.get()
+            && let Ok(conn) = state.infra.pool.get()
             && let Err(e) = upload::enqueue_conversions(
                 &conn,
                 slug,
@@ -89,19 +88,15 @@ struct CreateInput {
     draft: bool,
 }
 
-/// Owned bundle for the spawn-blocking create body.
+/// Owned bundle for the spawn-blocking create body. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct CreateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
-    email_ctx: Option<EmailContext>,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
     locale: Option<String>,
     ui_locale: Option<String>,
-    password_policy: PasswordPolicy,
     input: CreateInput,
 }
 
@@ -111,13 +106,8 @@ fn create_document_blocking(
     args: CreateBlockingInput,
 ) -> Result<service::WriteResult, ServiceError> {
     let ctx = service::ServiceContext::collection(&args.slug, &args.def)
-        .pool(&args.pool)
-        .runner(&args.runner)
+        .infra(&args.infra)
         .user(args.user_doc.as_ref())
-        .event_transport(args.event_transport)
-        .cache(args.cache)
-        .email_ctx(args.email_ctx)
-        .password_policy(Some(&args.password_policy))
         .build();
 
     service::create_document(
@@ -147,17 +137,12 @@ async fn spawn_create(
     let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
 
     let args = CreateBlockingInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        event_transport: state.event_transport.clone(),
-        cache: state.cache.clone(),
-        email_ctx: Some(state.email_context()),
+        infra: state.infra.clone(),
         slug: slug.to_string(),
         def: def.clone(),
         user_doc: get_user_doc(auth_user).cloned(),
         locale,
         ui_locale,
-        password_policy: state.config.auth.password_policy.clone(),
         input,
     };
 
@@ -171,7 +156,7 @@ pub async fn create_action(
     auth_user: Option<Extension<AuthUser>>,
     request: Request,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT);
     };
 

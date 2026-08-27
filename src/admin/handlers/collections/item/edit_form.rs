@@ -184,13 +184,13 @@ fn prepare_edit_fields(
         &mut fields,
         &def.fields,
         &form_data_json,
-        &state.hook_runner,
+        &state.infra.hook_runner,
         true,
         &cond_ctx,
     );
 
     if def.is_auth_collection() {
-        append_auth_fields(&mut fields, &state.pool, &def.slug, id);
+        append_auth_fields(&mut fields, &state.infra.pool, &def.slug, id);
     }
 
     split_sidebar_fields(fields)
@@ -375,8 +375,8 @@ async fn load_document(
     // (never rejects): an editor sees the latest draft, a read-only viewer falls
     // back to the published version. `CollectionPermissions` is a UI hint only.
     let read_params = ReadParams {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
         slug: slug.to_string(),
         id: id.to_string(),
         def: def.clone(),
@@ -413,10 +413,10 @@ fn fetch_versions_for_sidebar(
     if !def.has_versions() {
         return (vec![], 0);
     }
-    let Ok(vc) = state.pool.get() else {
+    let Ok(vc) = state.infra.pool.get() else {
         return (vec![], 0);
     };
-    let vh = RunnerReadHooks::new(&state.hook_runner, &vc, user, None);
+    let vh = RunnerReadHooks::new(&state.infra.hook_runner, &vc, user, None);
     let version_ctx = ServiceContext::collection(slug, def)
         .conn(&vc)
         .read_hooks(&vh)
@@ -503,7 +503,7 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
         restore_url_prefix: paths::collection_item(input.slug, input.id),
         versions_url: paths::collection_item_versions(input.slug, input.id),
         document_title: doc_title,
-        ref_count: lookup_ref_count(&input.state.pool, input.slug, input.id),
+        ref_count: lookup_ref_count(&input.state.infra.pool, input.slug, input.id),
         locale_data: input.locale_data,
         upload,
     }

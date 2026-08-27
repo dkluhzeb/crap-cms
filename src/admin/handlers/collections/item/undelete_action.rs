@@ -9,42 +9,32 @@ use axum::{
 use tokio::task;
 use tracing::{error, info};
 
+use std::sync::Arc;
+
 use crate::{
     admin::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::{
-        CollectionDefinition, Document, SharedCache, SharedEventTransport,
-        SharedInvalidationTransport, auth::AuthUser,
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError},
+    core::{CollectionDefinition, Document, auth::AuthUser},
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
-/// Owned inputs for the spawn-blocking undelete body.
+/// Owned inputs for the spawn-blocking undelete body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct UndeleteInput {
-    pool: DbPool,
-    runner: HookRunner,
+    infra: Arc<AppInfra>,
     slug: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: SharedInvalidationTransport,
-    cache: Option<SharedCache>,
     id: String,
 }
 
 /// Build the service context and run the undelete service call.
-fn undelete_document_blocking(input: UndeleteInput) -> Result<Document, ServiceError> {
+fn undelete_document_blocking(input: &UndeleteInput) -> Result<Document, ServiceError> {
     let ctx = ServiceContext::collection(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+        .infra(&input.infra)
         .user(input.user_doc.as_ref())
-        .event_transport(input.event_transport)
-        .invalidation_transport(Some(input.invalidation_transport))
-        .cache(input.cache)
         .build();
 
     service::undelete_document(&ctx, &input.id)
@@ -56,7 +46,7 @@ pub async fn undelete_action(
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return htmx_redirect(paths::COLLECTIONS_ROOT);
     };
 
@@ -65,18 +55,14 @@ pub async fn undelete_action(
     }
 
     let input = UndeleteInput {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        infra: state.infra.clone(),
         slug: slug.clone(),
         def,
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
-        event_transport: state.event_transport.clone(),
-        invalidation_transport: state.invalidation_transport.clone(),
-        cache: state.cache.clone(),
         id: id.clone(),
     };
 
-    let result = task::spawn_blocking(move || undelete_document_blocking(input)).await;
+    let result = task::spawn_blocking(move || undelete_document_blocking(&input)).await;
 
     match result {
         Ok(Ok(_doc)) => {

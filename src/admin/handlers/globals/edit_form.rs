@@ -127,7 +127,7 @@ fn prepare_edit_fields(
         &mut fields,
         &def.fields,
         &form_data_json,
-        &state.hook_runner,
+        &state.infra.hook_runner,
         false,
         &cond_ctx,
     );
@@ -147,12 +147,12 @@ fn fetch_global_version_sidebar(
     if !def.has_versions() {
         return (vec![], 0);
     }
-    let Ok(vc) = state.pool.get() else {
+    let Ok(vc) = state.infra.pool.get() else {
         return (vec![], 0);
     };
 
     let vh = RunnerReadHooks::new(
-        &state.hook_runner,
+        &state.infra.hook_runner,
         &vc,
         auth_user.map(|Extension(au)| &au.user_doc),
         None,
@@ -185,8 +185,8 @@ pub async fn edit_form(
     // (never rejects): an editor sees the latest draft, a read-only viewer falls
     // back to the published row. `GlobalPermissions` is a UI hint only.
     let read_params = ReadParams {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
+        pool: state.infra.pool.clone(),
+        runner: state.infra.hook_runner.clone(),
         slug: slug.clone(),
         def: def.clone(),
         locale_ctx,

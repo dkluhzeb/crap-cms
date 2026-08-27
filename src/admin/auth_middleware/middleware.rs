@@ -184,10 +184,10 @@ pub(in crate::admin) async fn auth_middleware(
 
     let headers_map = headers_to_map(request.headers());
 
-    let pool = state.pool.clone();
-    let registry = state.registry.clone();
-    let token_provider = state.token_provider.clone();
-    let hook_runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let registry = state.infra.registry.clone();
+    let token_provider = state.infra.token_provider.clone();
+    let hook_runner = state.infra.hook_runner.clone();
 
     let resolution = spawn_blocking(move || {
         let Ok(conn) = pool.get() else {

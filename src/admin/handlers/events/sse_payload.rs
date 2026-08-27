@@ -25,7 +25,7 @@ pub(super) type SseAccess = EventAccessMap;
 /// Field-level read denials are data-aware and resolved per event in
 /// [`build_event_payload`], not cached here.
 pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAccess {
-    let Ok(mut conn) = state.pool.get() else {
+    let Ok(mut conn) = state.infra.pool.get() else {
         return SseAccess::empty();
     };
 
@@ -34,12 +34,14 @@ pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document
     };
 
     let collection_slugs: Vec<String> = state
+        .infra
         .registry
         .collections
         .keys()
         .map(std::string::ToString::to_string)
         .collect();
     let global_slugs: Vec<String> = state
+        .infra
         .registry
         .globals
         .keys()
@@ -47,11 +49,11 @@ pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document
         .collect();
 
     let access = EventAccessMap::resolve(&EventAccessInput {
-        registry: &state.registry,
+        registry: &state.infra.registry,
         collection_slugs: &collection_slugs,
         global_slugs: &global_slugs,
         user_doc,
-        hook_runner: &state.hook_runner,
+        hook_runner: &state.infra.hook_runner,
         conn: &tx,
     });
 

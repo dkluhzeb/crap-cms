@@ -37,11 +37,11 @@ fn fetch_version_data(
     pg: &Pagination,
     user: Option<&Document>,
 ) -> Result<(String, Vec<Value>, PaginationResult), Box<Response>> {
-    let Ok(conn) = state.pool.get() else {
+    let Ok(conn) = state.infra.pool.get() else {
         return Err(Box::new(server_error(state, "Database error")));
     };
 
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user, None);
+    let hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user, None);
     let ctx = ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&hooks)

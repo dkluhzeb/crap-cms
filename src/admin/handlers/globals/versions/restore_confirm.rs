@@ -57,14 +57,14 @@ pub async fn restore_confirm(
         _ => {}
     }
 
-    let Ok(conn) = state.pool.get() else {
+    let Ok(conn) = state.infra.pool.get() else {
         return server_error(&state, "Database error");
     };
 
     // `find_version_by_id` (called by `load_version_with_missing_relations`)
     // runs an access check that requires `ServiceContext.read_hooks`.
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
-    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
+    let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
     let version_ctx = service::ServiceContext::global(&slug, &def)
         .conn(&conn)
         .read_hooks(&read_hooks)
@@ -74,7 +74,7 @@ pub async fn restore_confirm(
     let (version, missing) = match load_version_with_missing_relations(
         &version_ctx,
         &conn,
-        &state.registry,
+        &state.infra.registry,
         &version_id,
         &def.fields,
     ) {

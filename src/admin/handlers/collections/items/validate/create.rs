@@ -30,7 +30,7 @@ pub async fn validate_create(
     auth_user: Option<Extension<AuthUser>>,
     Json(payload): Json<ValidateRequest>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return validation_error_response_simple("Collection not found");
     };
 
@@ -54,8 +54,8 @@ pub async fn validate_create(
     let locale_ctx =
         LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
             .unwrap_or(None);
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
+    let pool = state.infra.pool.clone();
+    let runner = state.infra.hook_runner.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user.as_ref()).cloned();

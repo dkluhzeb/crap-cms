@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
     Extension,
@@ -25,28 +26,21 @@ use crate::{
             },
         },
     },
-    config::LocaleConfig,
-    core::{
-        AuthUser, Document, GlobalDefinition, ReqContext, SharedCache, SharedEventTransport,
-        ValidationError,
-    },
-    db::{DbPool, LocaleContext, LocaleMode},
-    hooks::{ConditionContext, HookRunner},
-    service::{self, ServiceContext, ServiceError},
+    core::{AuthUser, Document, GlobalDefinition, ReqContext, ValidationError},
+    db::{LocaleContext, LocaleMode},
+    hooks::ConditionContext,
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
-/// Parameters for the blocking global-update task.
+/// Parameters for the blocking global-update task. Process-stable dependencies
+/// come from the shared [`AppInfra`]; the rest is per-call.
 struct UpdateParams {
-    pool: DbPool,
-    runner: HookRunner,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
+    infra: Arc<AppInfra>,
     slug: String,
     def: GlobalDefinition,
     form: FormData,
     locale_ctx: Option<LocaleContext>,
     locale: Option<String>,
-    locale_config: LocaleConfig,
     draft: bool,
     user_doc: Option<Document>,
     ui_locale: Option<String>,
@@ -58,12 +52,8 @@ fn update_global_document_blocking(
     params: UpdateParams,
 ) -> Result<(Document, ReqContext), ServiceError> {
     let ctx = ServiceContext::global(&params.slug, &params.def)
-        .pool(&params.pool)
-        .runner(&params.runner)
+        .infra(&params.infra)
         .user(params.user_doc.as_ref())
-        .event_transport(params.event_transport)
-        .cache(params.cache)
-        .locale_config(Some(&params.locale_config))
         .build();
 
     if params.action == "unpublish" && params.def.has_versions() {
@@ -123,7 +113,7 @@ fn render_validation_error(
         &mut fields,
         &def.fields,
         &form_data_json,
-        &state.hook_runner,
+        &state.infra.hook_runner,
         false,
         &cond_ctx,
     );
@@ -157,7 +147,7 @@ pub async fn update_action(
     auth_user: Option<Extension<AuthUser>>,
     Form(form_data): Form<HashMap<String, String>>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
+    let def = match state.infra.registry.get_global(&slug) {
         Some(d) => d.clone(),
         None => return redirect_response(paths::DASHBOARD),
     };
@@ -178,16 +168,12 @@ pub async fn update_action(
     let form_for_error = form.clone();
 
     let params = UpdateParams {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        event_transport: state.event_transport.clone(),
-        cache: state.cache.clone(),
+        infra: state.infra.clone(),
         slug: slug.clone(),
         def: def.clone(),
         form,
         locale_ctx,
         locale,
-        locale_config: state.config.locale.clone(),
         draft: action == "save_draft",
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),

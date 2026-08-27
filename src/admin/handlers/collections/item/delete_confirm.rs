@@ -31,11 +31,11 @@ fn fetch_delete_title(
     id: &str,
     user_doc: Option<&crate::core::Document>,
 ) -> Result<Option<String>, ()> {
-    let conn = state.pool.get().map_err(|_| ())?;
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
+    let conn = state.infra.pool.get().map_err(|_| ())?;
+    let hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(slug, def)
-        .pool(&state.pool)
+        .pool(&state.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .user(user_doc)
@@ -116,7 +116,7 @@ pub async fn delete_confirm(
         return not_found(&state, &format!("Document '{id}' not found"));
     };
 
-    let ref_count = lookup_ref_count(&state.pool, &slug, &id);
+    let ref_count = lookup_ref_count(&state.infra.pool, &slug, &id);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);

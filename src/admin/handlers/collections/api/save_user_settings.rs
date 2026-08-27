@@ -81,12 +81,17 @@ pub async fn save_user_settings(
         return StatusCode::UNAUTHORIZED;
     };
 
-    let Some(def) = state.registry.get_collection(&collection_slug).cloned() else {
+    let Some(def) = state
+        .infra
+        .registry
+        .get_collection(&collection_slug)
+        .cloned()
+    else {
         return StatusCode::NOT_FOUND;
     };
 
     let valid_columns = parse_valid_columns(&form, &def);
-    let pool = state.pool.clone();
+    let pool = state.infra.pool.clone();
     let user_id = auth_user.claims.sub.clone();
 
     let result = task::spawn_blocking(move || {
