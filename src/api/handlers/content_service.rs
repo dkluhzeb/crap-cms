@@ -16,29 +16,22 @@ use crate::{
         content::{self, content_api_server::ContentApi},
         handlers::ContentServiceDeps,
     },
-    config::{LocaleConfig, PasswordPolicy, ServerConfig},
+    config::ServerConfig,
     core::{
         AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
-        SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
-        SharedTokenProvider, auth::TokenProvider, collection::Surface,
-        event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
+        SharedPasswordProvider, SharedTokenProvider, auth::TokenProvider, collection::Surface,
+        rate_limit::LoginRateLimiter,
     },
-    db::{
-        AccessResult, BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
-        Singleflight, query,
-    },
+    db::{AccessResult, BoxedConnection, DbConnection, DbPool, query},
     hooks::{AccessCheckInput, HookRunner},
     service::{
-        self, AppInfra, EmailContext,
+        self, AppInfra,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
     },
 };
 
 /// Implements the gRPC `ContentAPI` service (Find, Create, Update, Delete, Login, etc.).
 pub struct ContentService {
-    pub(in crate::api::handlers) pool: DbPool,
-    pub(in crate::api::handlers) registry: Arc<Registry>,
-    pub(in crate::api::handlers) hook_runner: HookRunner,
     pub(in crate::api::handlers) default_depth: i32,
     pub(in crate::api::handlers) max_depth: i32,
     pub(in crate::api::handlers) server_config: ServerConfig,
@@ -69,21 +62,13 @@ pub struct ContentService {
     /// only strategy is gated by `x-api-key` pay zero per-request
     /// allocation when no `x-api-key` is on the wire.
     pub(in crate::api::handlers) wanted_strategy_headers: std::collections::HashSet<String>,
-    pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
-    pub(in crate::api::handlers) locale_config: LocaleConfig,
     pub(in crate::api::handlers) login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) reset_token_expiry: u64,
-    pub(in crate::api::handlers) password_policy: PasswordPolicy,
     pub(in crate::api::handlers) forgot_password_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
-    /// The token provider for JWT creation and validation.
-    pub(in crate::api::handlers) token_provider: SharedTokenProvider,
     /// The password provider for hashing and verification.
     pub(in crate::api::handlers) password_provider: SharedPasswordProvider,
-    /// Shared cross-request cache for populated relationship documents.
-    /// Uses `NoneCache` when caching is disabled. Cleared on any write operation.
-    pub(in crate::api::handlers) cache: SharedCache,
     pub(in crate::api::handlers) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
     pub(in crate::api::handlers) db_kind: String,
@@ -93,14 +78,11 @@ pub struct ContentService {
     pub(in crate::api::handlers) max_subscribe_connections: usize,
     /// Per-subscriber outbound send timeout for live-update streams.
     pub(in crate::api::handlers) subscriber_send_timeout_ms: u64,
-    /// Transport for signalling that a user's live-update streams must be torn
-    /// down (e.g. after lock or hard delete). Always present — even when live
-    /// updates are disabled, publishing to it is a no-op.
-    pub(in crate::api::handlers) invalidation_transport: SharedInvalidationTransport,
-    /// Process-stable infrastructure bundle. Built once here from the same
-    /// dependencies as the individual fields above; handlers thread it into a
-    /// `ServiceContext` via `.infra(&self.infra)` so no op can forget a field.
-    /// (Migration in progress — individual fields remain for un-ported paths.)
+    /// Process-stable infrastructure bundle (pool, registry, hook runner, caches,
+    /// transports, providers, config-derived infra), assembled once at boot and
+    /// shared across surfaces. Handlers thread it into a `ServiceContext` via
+    /// `.infra(&self.infra)`, and read individual process-stable dependencies
+    /// (`self.infra.pool`, `self.infra.registry`, …) straight from it.
     pub(in crate::api::handlers) infra: Arc<AppInfra>,
 }
 
@@ -109,14 +91,15 @@ impl ContentService {
     /// Get a clone of the shared cache handle (for periodic clearing).
     #[must_use]
     pub fn cache_handle(&self) -> SharedCache {
-        self.cache.clone()
+        self.infra.cache.clone()
     }
 
     pub(in crate::api::handlers) fn get_collection_def(
         &self,
         slug: &str,
     ) -> Result<CollectionDefinition, Status> {
-        self.registry
+        self.infra
+            .registry
             .get_collection(slug)
             .cloned()
             .ok_or_else(|| Status::not_found(format!("Collection '{slug}' not found")))
@@ -126,7 +109,8 @@ impl ContentService {
         &self,
         slug: &str,
     ) -> Result<GlobalDefinition, Status> {
-        self.registry
+        self.infra
+            .registry
             .get_global(slug)
             .cloned()
             .ok_or_else(|| Status::not_found(format!("Global '{slug}' not found")))
@@ -229,23 +213,19 @@ impl ContentService {
         let max_depth = deps.config.depth.max_depth;
         let pagination_ctx = query::PaginationCtx::from_config(&deps.config.pagination);
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
-        let db_kind = deps.pool.kind().to_string();
+        let db_kind = deps.infra.pool.kind().to_string();
         let max_subscribe_connections = deps.config.live.max_subscribe_connections;
         let subscriber_send_timeout_ms = deps.config.live.subscriber_send_timeout_ms;
-        let invalidation_transport: SharedInvalidationTransport = deps
-            .invalidation_transport
-            .unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
-        let populate_singleflight: SharedPopulateSingleflight = deps
-            .populate_singleflight
-            .unwrap_or_else(|| Arc::new(Singleflight::new()));
 
-        let has_strategies = deps.registry.has_any_strategy();
+        let has_strategies = deps.infra.registry.has_any_strategy();
         let has_always_strategy = deps
+            .infra
             .registry
             .always_strategies
             .get(&Surface::Grpc)
             .is_some_and(|v| !v.is_empty());
         let wanted_strategy_headers: std::collections::HashSet<String> = deps
+            .infra
             .registry
             .header_strategies
             .keys()
@@ -253,64 +233,34 @@ impl ContentService {
             .map(|(header, _)| header.clone())
             .collect();
 
-        // Assemble the process-stable infrastructure bundle once. Clones are
-        // cheap (pools/caches/transports are all `Arc`-backed); the individual
-        // fields below still exist for handlers not yet ported to `.infra()`.
-        let infra = Arc::new(AppInfra {
-            pool: deps.pool.clone(),
-            registry: Arc::clone(&deps.registry),
-            hook_runner: deps.hook_runner.clone(),
-            cache: deps.cache.clone(),
-            storage: deps.storage,
-            event_transport: deps.event_transport.clone(),
-            invalidation_transport: invalidation_transport.clone(),
-            token_provider: deps.token_provider.clone(),
-            email: EmailContext {
-                email_config: deps.config.email.clone(),
-                email_renderer: Arc::clone(&deps.email_renderer),
-                server_config: deps.config.server.clone(),
-                email_max_attempts: deps.config.jobs.system_email_max_attempts(),
-            },
-            locale_config: deps.config.locale.clone(),
-            password_policy: deps.config.auth.password_policy.clone(),
-            populate_singleflight,
-        });
+        let queue_retries = deps
+            .config
+            .jobs
+            .queues
+            .iter()
+            .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+            .collect();
 
         Self {
-            infra,
+            default_depth,
+            max_depth,
+            server_config: deps.config.server,
+            queue_retries,
             has_strategies,
             has_always_strategy,
             wanted_strategy_headers,
-            pool: deps.pool,
-            registry: deps.registry,
-            hook_runner: deps.hook_runner,
-            default_depth,
-            max_depth,
-            queue_retries: deps
-                .config
-                .jobs
-                .queues
-                .iter()
-                .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
-                .collect(),
-            server_config: deps.config.server,
-            event_transport: deps.event_transport,
-            locale_config: deps.config.locale,
-            token_provider: deps.token_provider,
-            password_provider: deps.password_provider,
             login_limiter: deps.login_limiter,
             ip_login_limiter: deps.ip_login_limiter,
             reset_token_expiry,
-            password_policy: deps.config.auth.password_policy,
             forgot_password_limiter: deps.forgot_password_limiter,
             ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
-            cache: deps.cache,
+            password_provider: deps.password_provider,
             pagination_ctx,
             db_kind,
             subscribe_connections: Arc::new(AtomicUsize::new(0)),
             max_subscribe_connections,
             subscriber_send_timeout_ms,
-            invalidation_transport,
+            infra: deps.infra,
         }
     }
 
@@ -431,10 +381,10 @@ impl ContentService {
         let blocking_input = SchemaAuthBlockingInput {
             token: Self::extract_token(metadata),
             headers: self.metadata_headers(metadata),
-            pool: self.pool.clone(),
-            token_provider: self.token_provider.clone(),
-            hook_runner: self.hook_runner.clone(),
-            registry: Arc::clone(&self.registry),
+            pool: self.infra.pool.clone(),
+            token_provider: self.infra.token_provider.clone(),
+            hook_runner: self.infra.hook_runner.clone(),
+            registry: Arc::clone(&self.infra.registry),
         };
 
         let authed =

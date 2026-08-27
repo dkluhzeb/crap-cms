@@ -101,12 +101,12 @@ impl ContentService {
         let password = extract_auth_password(
             &mut data,
             def.is_auth_collection(),
-            &self.password_policy,
+            &self.infra.password_policy,
             false,
         )?;
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = CreateBlockingInput {

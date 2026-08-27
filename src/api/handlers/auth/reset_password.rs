@@ -93,7 +93,7 @@ impl ContentService {
             ));
         }
 
-        if let Err(e) = self.password_policy.validate(&req.new_password) {
+        if let Err(e) = self.infra.password_policy.validate(&req.new_password) {
             return Err(Status::invalid_argument(e.to_string()));
         }
 

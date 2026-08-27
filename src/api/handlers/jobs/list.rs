@@ -74,6 +74,7 @@ impl ContentService {
         .map_err(|_| Status::internal("Internal error"))??;
 
         let jobs: Vec<content::JobDefinitionInfo> = self
+            .infra
             .registry
             .jobs
             .iter()

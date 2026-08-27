@@ -12,6 +12,7 @@ impl ContentService {
         _request: Request<content::ListCollectionsRequest>,
     ) -> Response<content::ListCollectionsResponse> {
         let mut collections: Vec<content::CollectionInfo> = self
+            .infra
             .registry
             .collections
             .values()
@@ -36,6 +37,7 @@ impl ContentService {
         collections.sort_by(|a, b| a.slug.cmp(&b.slug));
 
         let mut globals: Vec<content::GlobalInfo> = self
+            .infra
             .registry
             .globals
             .values()

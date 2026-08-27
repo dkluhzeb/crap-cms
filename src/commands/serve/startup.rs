@@ -22,7 +22,7 @@ use crate::{
         SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::create_cache,
-        email::create_email_provider_with_lease,
+        email::{EmailRenderer, create_email_provider_with_lease},
         event::{create_event_transport, create_invalidation_transport},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
@@ -31,7 +31,9 @@ use crate::{
     },
     db::{DbConnection, DbPool, SharedPopulateSingleflight, Singleflight, migrate, pool},
     hooks::{self, HookRunner},
-    scheduler, typegen,
+    scheduler,
+    service::{AppInfra, EmailContext},
+    typegen,
 };
 
 #[cfg(unix)]
@@ -430,12 +432,14 @@ struct StartupResources {
     jwt_secret: String,
     event_transport: Option<SharedEventTransport>,
     invalidation_transport: SharedInvalidationTransport,
-    populate_singleflight: SharedPopulateSingleflight,
     storage: crate::core::SharedStorage,
     cache: crate::core::SharedCache,
     token_provider: SharedTokenProvider,
     password_provider: SharedPasswordProvider,
     rate_limiters: RateLimiters,
+    /// Process-stable infrastructure bundle, assembled once here and shared
+    /// (as `Arc<AppInfra>`) by every surface that has been ported to `.infra()`.
+    infra: Arc<AppInfra>,
 }
 
 /// Phase 1–3 of startup: load + validate config, init Lua/typegen, open
@@ -496,6 +500,34 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
     let password_provider: SharedPasswordProvider = Arc::new(Argon2PasswordProvider);
     let rate_limiters = create_rate_limiters(&config)?;
 
+    // Assemble the process-stable infrastructure bundle once, here at boot, so
+    // every surface shares a single `Arc<AppInfra>` (the email renderer, in
+    // particular, is compiled once instead of per-surface). Clones are cheap —
+    // every field is `Arc`-backed or a small config value — and the originals
+    // flow on into `StartupResources` for the not-yet-ported surfaces.
+    let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
+    let infra = Arc::new(
+        AppInfra::builder()
+            .pool(pool.clone())
+            .registry(Arc::clone(&registry))
+            .hook_runner(hook_runner.clone())
+            .cache(cache.clone())
+            .storage(storage.clone())
+            .event_transport(event_transport.clone())
+            .invalidation_transport(invalidation_transport.clone())
+            .token_provider(token_provider.clone())
+            .email(EmailContext {
+                email_config: config.email.clone(),
+                email_renderer,
+                server_config: config.server.clone(),
+                email_max_attempts: config.jobs.system_email_max_attempts(),
+            })
+            .locale_config(config.locale.clone())
+            .password_policy(config.auth.password_policy.clone())
+            .populate_singleflight(populate_singleflight.clone())
+            .build(),
+    );
+
     Ok(StartupResources {
         config,
         config_dir,
@@ -505,12 +537,12 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
         jwt_secret,
         event_transport,
         invalidation_transport,
-        populate_singleflight,
         storage,
         cache,
         token_provider,
         password_provider,
         rate_limiters,
+        infra,
     })
 }
 
@@ -543,23 +575,15 @@ fn build_admin_params(res: &StartupResources) -> admin::server::AdminStartParams
 #[cfg(not(tarpaulin_include))]
 fn build_grpc_params(res: &StartupResources) -> api::server::GrpcStartParams {
     api::server::GrpcStartParams::builder()
-        .pool(res.pool.clone())
-        .registry(Arc::clone(&res.registry))
-        .hook_runner(res.hook_runner.clone())
         .config(res.config.clone())
         .config_dir(res.config_dir.clone())
-        .event_transport(res.event_transport.clone())
         .login_limiter(res.rate_limiters.login.clone())
         .ip_login_limiter(res.rate_limiters.ip_login.clone())
         .forgot_password_limiter(res.rate_limiters.forgot_password.clone())
         .ip_forgot_password_limiter(res.rate_limiters.ip_forgot_password.clone())
-        .storage(res.storage.clone())
-        .cache(res.cache.clone())
-        .token_provider(res.token_provider.clone())
         .password_provider(res.password_provider.clone())
         .rate_limit_backend(res.rate_limiters.backend.clone())
-        .invalidation_transport(res.invalidation_transport.clone())
-        .populate_singleflight(res.populate_singleflight.clone())
+        .infra(Arc::clone(&res.infra))
         .build()
 }
 

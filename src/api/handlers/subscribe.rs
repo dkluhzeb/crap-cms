@@ -290,6 +290,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let event_transport = self
+            .infra
             .event_transport
             .as_ref()
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
@@ -319,7 +320,7 @@ impl ContentService {
         let my_user_id = access.user_doc.as_ref().map(|d| d.id.to_string());
 
         let event_rx = event_transport.subscribe();
-        let invalidation_rx = self.invalidation_transport.subscribe();
+        let invalidation_rx = self.infra.invalidation_transport.subscribe();
         let send_timeout_dur = Duration::from_millis(self.subscriber_send_timeout_ms);
 
         let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
@@ -327,8 +328,8 @@ impl ContentService {
         let subscriber = SubscriberCtx {
             access,
             requested_ops,
-            hook_runner: self.hook_runner.clone(),
-            registry: Arc::clone(&self.registry),
+            hook_runner: self.infra.hook_runner.clone(),
+            registry: Arc::clone(&self.infra.registry),
         };
 
         spawn_pump(
@@ -363,10 +364,10 @@ impl ContentService {
         globals_req: Vec<String>,
     ) -> Result<SubscribeAccess, Status> {
         let input = ResolveSubscribeAccessBlockingInput {
-            pool: self.pool.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
-            hook_runner: self.hook_runner.clone(),
+            pool: self.infra.pool.clone(),
+            token_provider: self.infra.token_provider.clone(),
+            registry: Arc::clone(&self.infra.registry),
+            hook_runner: self.infra.hook_runner.clone(),
             token,
             headers,
             collections_req,

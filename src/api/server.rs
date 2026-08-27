@@ -17,38 +17,31 @@ use crate::{
     },
     config::CrapConfig,
     core::{
-        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        SharedPasswordProvider, SharedRateLimitBackend, SharedStorage, SharedTokenProvider,
-        email::EmailRenderer,
+        SharedCache, SharedPasswordProvider, SharedRateLimitBackend,
         rate_limit::{GrpcRateLimiter, LoginRateLimiter},
     },
-    db::{DbPool, query::SharedPopulateSingleflight},
-    hooks::HookRunner,
+    service::AppInfra,
 };
 
 /// Parameters for starting the gRPC API server.
+///
+/// All process-stable infrastructure (pool, registry, hook runner, caches,
+/// transports, providers) lives in [`AppInfra`]; only the per-surface bits
+/// (config, rate limiters, password provider, rate-limit backend) sit alongside
+/// it.
 pub struct GrpcStartParams {
-    pub pool: DbPool,
-    pub registry: Arc<Registry>,
-    pub hook_runner: HookRunner,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
-    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
-    pub storage: SharedStorage,
-    pub cache: SharedCache,
-    pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
     pub rate_limit_backend: SharedRateLimitBackend,
-    /// Optional shared invalidation transport — when `None`, a fresh in-process
-    /// one is created.
-    pub invalidation_transport: Option<SharedInvalidationTransport>,
-    /// Optional process-wide populate singleflight — when `None`, the
-    /// `ContentService` creates a fresh one (dedup only within its own process).
-    pub populate_singleflight: Option<SharedPopulateSingleflight>,
+    /// Process-stable infrastructure bundle, assembled once at boot and shared
+    /// across surfaces. The service threads it into every `ServiceContext` via
+    /// `.infra(&self.infra)`.
+    pub infra: Arc<AppInfra>,
 }
 
 impl GrpcStartParams {
@@ -61,67 +54,30 @@ impl GrpcStartParams {
 
 /// Builder for [`GrpcStartParams`]. Created via [`GrpcStartParams::builder`].
 pub struct GrpcStartParamsBuilder {
-    pool: Option<DbPool>,
-    registry: Option<Arc<Registry>>,
-    hook_runner: Option<HookRunner>,
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
-    event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
-    storage: Option<SharedStorage>,
-    cache: Option<SharedCache>,
-    token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
     rate_limit_backend: Option<SharedRateLimitBackend>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-    populate_singleflight: Option<SharedPopulateSingleflight>,
+    infra: Option<Arc<AppInfra>>,
 }
 
 impl GrpcStartParamsBuilder {
     pub(crate) fn new() -> Self {
         Self {
-            pool: None,
-            registry: None,
-            hook_runner: None,
             config: None,
             config_dir: None,
-            event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
-            storage: None,
-            cache: None,
-            token_provider: None,
             password_provider: None,
             rate_limit_backend: None,
-            invalidation_transport: None,
-            populate_singleflight: None,
+            infra: None,
         }
-    }
-
-    #[must_use]
-    pub fn pool(mut self, pool: DbPool) -> Self {
-        self.pool = Some(pool);
-
-        self
-    }
-
-    #[must_use]
-    pub fn registry(mut self, registry: Arc<Registry>) -> Self {
-        self.registry = Some(registry);
-
-        self
-    }
-
-    #[must_use]
-    pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
-        self.hook_runner = Some(hook_runner);
-
-        self
     }
 
     #[must_use]
@@ -134,13 +90,6 @@ impl GrpcStartParamsBuilder {
     #[must_use]
     pub fn config_dir(mut self, config_dir: PathBuf) -> Self {
         self.config_dir = Some(config_dir);
-
-        self
-    }
-
-    #[must_use]
-    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
-        self.event_transport = transport;
 
         self
     }
@@ -174,27 +123,6 @@ impl GrpcStartParamsBuilder {
     }
 
     #[must_use]
-    pub fn storage(mut self, storage: SharedStorage) -> Self {
-        self.storage = Some(storage);
-
-        self
-    }
-
-    #[must_use]
-    pub fn cache(mut self, cache: SharedCache) -> Self {
-        self.cache = Some(cache);
-
-        self
-    }
-
-    #[must_use]
-    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
-        self.token_provider = Some(token_provider);
-
-        self
-    }
-
-    #[must_use]
     pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
         self.password_provider = Some(password_provider);
 
@@ -208,17 +136,10 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    /// Process-stable [`AppInfra`] assembled once at boot.
     #[must_use]
-    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
-        self.invalidation_transport = Some(transport);
-
-        self
-    }
-
-    /// Process-wide populate singleflight shared with the `HookRunner`.
-    #[must_use]
-    pub fn populate_singleflight(mut self, sf: SharedPopulateSingleflight) -> Self {
-        self.populate_singleflight = Some(sf);
+    pub fn infra(mut self, infra: Arc<AppInfra>) -> Self {
+        self.infra = Some(infra);
 
         self
     }
@@ -231,12 +152,8 @@ impl GrpcStartParamsBuilder {
     #[must_use]
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
-            pool: self.pool.expect("pool is required"),
-            registry: self.registry.expect("registry is required"),
-            hook_runner: self.hook_runner.expect("hook_runner is required"),
             config: self.config.expect("config is required"),
             config_dir: self.config_dir.expect("config_dir is required"),
-            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -245,17 +162,13 @@ impl GrpcStartParamsBuilder {
             ip_forgot_password_limiter: self
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
-            storage: self.storage.expect("storage is required"),
-            cache: self.cache.expect("cache is required"),
-            token_provider: self.token_provider.expect("token_provider is required"),
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
             rate_limit_backend: self
                 .rate_limit_backend
                 .expect("rate_limit_backend is required"),
-            invalidation_transport: self.invalidation_transport,
-            populate_singleflight: self.populate_singleflight,
+            infra: self.infra.expect("infra is required"),
         }
     }
 }
@@ -271,8 +184,6 @@ impl GrpcStartParamsBuilder {
 pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationToken) -> Result<()> {
     let addr = addr.parse()?;
 
-    let email_renderer = Arc::new(EmailRenderer::new(&params.config_dir)?);
-
     let cache_max_age = params.config.cache.max_age_secs;
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
@@ -284,30 +195,17 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         usize::try_from(params.config.server.grpc_max_message_size).unwrap_or(4 * 1024 * 1024);
     let cors_layer = params.config.cors.build_layer();
 
-    let mut deps_builder = ContentServiceDeps::builder()
-        .pool(params.pool)
-        .registry(params.registry)
-        .hook_runner(params.hook_runner)
+    // All process-stable infrastructure comes pre-assembled in `params.infra`;
+    // only the per-surface bits are threaded in alongside it.
+    let deps_builder = ContentServiceDeps::builder()
         .config(params.config)
         .config_dir(params.config_dir)
-        .email_renderer(email_renderer)
-        .event_transport(params.event_transport)
         .login_limiter(params.login_limiter)
         .ip_login_limiter(params.ip_login_limiter)
         .forgot_password_limiter(params.forgot_password_limiter)
         .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
-        .storage(params.storage)
-        .cache(params.cache)
-        .token_provider(params.token_provider)
-        .password_provider(params.password_provider);
-
-    if let Some(transport) = params.invalidation_transport {
-        deps_builder = deps_builder.invalidation_transport(transport);
-    }
-
-    if let Some(sf) = params.populate_singleflight {
-        deps_builder = deps_builder.populate_singleflight(sf);
-    }
+        .password_provider(params.password_provider)
+        .infra(params.infra);
 
     let content_service = ContentService::new(deps_builder.build());
 

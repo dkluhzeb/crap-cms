@@ -100,6 +100,7 @@ impl ContentService {
             .ok_or_else(|| Status::unauthenticated("Missing token"))?;
 
         let claims = self
+            .infra
             .token_provider
             .validate_token(&token)
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;

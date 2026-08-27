@@ -109,14 +109,14 @@ impl ContentService {
             .into();
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let input = ValidateGlobalBlockingInput {
-            pool: self.pool.clone(),
-            runner: self.hook_runner.clone(),
-            token_provider: self.token_provider.clone(),
-            registry: Arc::clone(&self.registry),
+            pool: self.infra.pool.clone(),
+            runner: self.infra.hook_runner.clone(),
+            token_provider: self.infra.token_provider.clone(),
+            registry: Arc::clone(&self.infra.registry),
             db_kind: self.db_kind.clone(),
             slug: req.slug.clone(),
             def,

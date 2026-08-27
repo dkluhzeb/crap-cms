@@ -8,35 +8,31 @@ use crate::{
     core::{
         Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         SharedPasswordProvider, SharedStorage, SharedTokenProvider, email::EmailRenderer,
-        rate_limit::LoginRateLimiter,
+        event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
     },
-    db::{DbPool, query::SharedPopulateSingleflight},
+    db::{DbPool, Singleflight, query::SharedPopulateSingleflight},
     hooks::HookRunner,
+    service::{AppInfra, EmailContext},
 };
 
 /// Dependencies for constructing a `ContentService`.
+///
+/// All process-stable infrastructure lives in [`AppInfra`]; only the genuinely
+/// per-surface bits (config, rate limiters, password provider) sit alongside it.
+/// The builder still accepts the individual infra dependencies as setters —
+/// [`ContentServiceDepsBuilder::build`] assembles them into an [`AppInfra`] when
+/// no pre-built one was supplied via [`ContentServiceDepsBuilder::infra`] — so
+/// test construction stays ergonomic while production threads in the shared
+/// boot-time bundle.
 pub struct ContentServiceDeps {
-    pub pool: DbPool,
-    pub registry: Arc<Registry>,
-    pub hook_runner: HookRunner,
+    pub infra: Arc<AppInfra>,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
-    pub email_renderer: Arc<EmailRenderer>,
-    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
-    pub storage: SharedStorage,
-    pub cache: SharedCache,
-    pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
-    /// Optional: shared invalidation transport. When `None`, a fresh
-    /// in-process one is created internally.
-    pub invalidation_transport: Option<SharedInvalidationTransport>,
-    /// Optional: shared populate singleflight. When `None`, a fresh
-    /// process-wide one is created internally for this service.
-    pub populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl ContentServiceDeps {
@@ -66,6 +62,7 @@ pub struct ContentServiceDepsBuilder {
     password_provider: Option<SharedPasswordProvider>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
+    infra: Option<Arc<AppInfra>>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -88,6 +85,7 @@ impl ContentServiceDepsBuilder {
             password_provider: None,
             invalidation_transport: None,
             populate_singleflight: None,
+            infra: None,
         }
     }
 
@@ -216,21 +214,65 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    /// Supply a pre-assembled process-stable [`AppInfra`] (the production boot
+    /// path). When set, the service uses it instead of assembling one from the
+    /// individual dependency fields.
+    #[must_use]
+    pub fn infra(mut self, infra: Arc<AppInfra>) -> Self {
+        self.infra = Some(infra);
+
+        self
+    }
+
     /// # Panics
     ///
-    /// Panics if any required field (`pool`, `registry`, `hook_runner`,
-    /// `config`, `config_dir`, `email_renderer`, `login_limiter`, etc.)
-    /// was not set on the builder.
+    /// Panics if a required field is missing. When no pre-built [`AppInfra`] was
+    /// supplied via [`Self::infra`], the individual infra setters (`pool`,
+    /// `registry`, `hook_runner`, `cache`, `storage`, `token_provider`,
+    /// `email_renderer`) are all required so one can be assembled. The
+    /// per-surface fields (`config`, `config_dir`, the rate limiters,
+    /// `password_provider`) are always required.
     #[must_use]
     pub fn build(self) -> ContentServiceDeps {
+        let config = self.config.expect("config is required");
+
+        // Use the pre-built infra (production boot path) or assemble one from the
+        // individual dependency setters (test construction).
+        let infra = self.infra.unwrap_or_else(|| {
+            let invalidation_transport = self
+                .invalidation_transport
+                .unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
+            let populate_singleflight = self
+                .populate_singleflight
+                .unwrap_or_else(|| Arc::new(Singleflight::new()));
+
+            Arc::new(
+                AppInfra::builder()
+                    .pool(self.pool.expect("pool is required"))
+                    .registry(self.registry.expect("registry is required"))
+                    .hook_runner(self.hook_runner.expect("hook_runner is required"))
+                    .cache(self.cache.expect("cache is required"))
+                    .storage(self.storage.expect("storage is required"))
+                    .event_transport(self.event_transport)
+                    .invalidation_transport(invalidation_transport)
+                    .token_provider(self.token_provider.expect("token_provider is required"))
+                    .email(EmailContext {
+                        email_config: config.email.clone(),
+                        email_renderer: self.email_renderer.expect("email_renderer is required"),
+                        server_config: config.server.clone(),
+                        email_max_attempts: config.jobs.system_email_max_attempts(),
+                    })
+                    .locale_config(config.locale.clone())
+                    .password_policy(config.auth.password_policy.clone())
+                    .populate_singleflight(populate_singleflight)
+                    .build(),
+            )
+        });
+
         ContentServiceDeps {
-            pool: self.pool.expect("pool is required"),
-            registry: self.registry.expect("registry is required"),
-            hook_runner: self.hook_runner.expect("hook_runner is required"),
-            config: self.config.expect("config is required"),
+            infra,
+            config,
             config_dir: self.config_dir.expect("config_dir is required"),
-            email_renderer: self.email_renderer.expect("email_renderer is required"),
-            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -239,14 +281,9 @@ impl ContentServiceDepsBuilder {
             ip_forgot_password_limiter: self
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
-            storage: self.storage.expect("storage is required"),
-            cache: self.cache.expect("cache is required"),
-            token_provider: self.token_provider.expect("token_provider is required"),
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
-            invalidation_transport: self.invalidation_transport,
-            populate_singleflight: self.populate_singleflight,
         }
     }
 }

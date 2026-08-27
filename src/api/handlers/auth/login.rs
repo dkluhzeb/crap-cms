@@ -215,6 +215,7 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))?;
 
         let token = self
+            .infra
             .token_provider
             .create_token(&claims)
             .inspect_err(|e| error!("Token creation error: {}", e))
