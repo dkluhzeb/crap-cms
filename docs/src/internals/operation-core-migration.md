@@ -1,9 +1,30 @@
 # Operation Core — Architecture & Migration Plan
 
-> **Status: proposal.** This is a forward-looking design, not a description of
-> the code as it stands. It plans the consolidation the ten chokepoint-audit
-> rounds have been pointing at. Nothing here is implemented yet; land it in the
-> staged order below, each stage green on its own.
+> **Status: Stage 0 landed (August 2026), in an extended form; later stages
+> remain future work.** What shipped:
+>
+> - **`AppInfra`** (`service::app_infra`) — the process-stable dependency
+>   bundle, assembled **once at boot** (`bootstrap_startup`) and shared as a
+>   single `Arc<AppInfra>` by every surface in `serve` (gRPC, admin, MCP-HTTP,
+>   scheduler). Standalone processes (`crap-cms work`, stdio MCP) assemble
+>   their own via `AppInfra::standalone`.
+> - **`ServiceContextBuilder::infra(&AppInfra)`** sets all eight infra fields
+>   of a `ServiceContext` in one call — the forgot-a-field bug class this
+>   document opens with is now structurally impossible on the pool-mode paths.
+> - The per-surface god-structs were **de-duplicated**: `ContentService`,
+>   `AdminState`, `McpServer`, and `ToolExecCtx` each hold the shared `infra`
+>   instead of 7–10 copied fields; the surface start-params
+>   (`GrpcStartParams`, `AdminStartParams`, `SchedulerParams`) carry
+>   `infra` + genuinely per-surface state only.
+> - The **Lua surface** deliberately does not hold `AppInfra` (the runner owns
+>   the VMs — a cycle) — its VM-stable app-data is consolidated as
+>   `LuaVmInfra`, fed from the same boot wiring; see the module docs on
+>   `service::app_infra` for the full rationale.
+>
+> **Not done (still this document's future work):** Stage 1's
+> `OpContext`/`ServiceContext` split, and Stages 2–4 (typed per-operation
+> inputs, the shared dispatch entry, per-surface codecs). The sections below
+> are kept as the design for those stages; read "Stage 0" as shipped.
 
 ## 1. The problem, stated from the evidence
 

@@ -2,6 +2,12 @@
 
 Crap CMS supports real-time event streaming for mutation notifications. When documents are created, updated, or deleted, events are broadcast to connected subscribers.
 
+Every write surface publishes: gRPC/REST, the admin UI, MCP, Lua CRUD in hooks,
+and [job handlers](../jobs/overview.md) (whose Lua CRUD writes emit events by
+default). With the Redis transport, writes performed by other processes — a
+standalone [`crap-cms work`](../deployment/multi-server.md) worker or a stdio
+MCP server — reach this server's subscribers too.
+
 ## Technology
 
 - **gRPC Server Streaming** (`Subscribe` RPC) for API consumers

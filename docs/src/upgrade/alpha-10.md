@@ -840,6 +840,18 @@ What changed:
 
 ## Behavior changes (likely no action)
 
+- **Job-handler writes now emit live-update events and invalidate the
+  populate cache.** Previously a job handler's `crap.collections.create` /
+  `update` / `delete` silently published nothing (despite the `events` option
+  defaulting to `true`) and never invalidated the populate cache. Live-update
+  subscribers (gRPC `Subscribe`, admin SSE) will now start receiving
+  job-driven events; pass `{ events = false }` in the handler for quiet
+  writes (e.g. bulk seeding). Relatedly, standalone processes — `crap-cms
+  work` workers and the stdio MCP server — now build the `[live]` transports
+  from config, so with `transport = "redis"` their writes reach the app
+  servers' subscribers and can tear down live sessions on auth-document
+  deletes/locks (previously they could not).
+
 - **Admin JSON/XHR endpoints use consistent error status codes.** The
   back-references, delete-dialog, and empty-trash endpoints previously
   disagreed on the status code for the same error; they now share one set of

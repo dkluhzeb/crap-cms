@@ -144,6 +144,11 @@ crap-cms work --detach --queues email
 crap-cms work --detach --queues heavy --concurrency 2
 ```
 
+Workers build the `[live]` transports from the same config as the app
+servers: with `transport = "redis"`, a job handler's writes publish
+live-update events and user-invalidation signals that reach every app
+server's subscribers, exactly as if the write happened in-process.
+
 Workers support the same lifecycle management as the server:
 
 ```bash

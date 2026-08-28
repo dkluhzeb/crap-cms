@@ -171,11 +171,16 @@ acceptance evidence — never merge a perf change without the number it bought.
 2. **A3 (elastic VM pool)** — ✅ **landed.** Internal; removes the hook-path
    acquire ceiling (grows to `max_vm_pool_size` instead of blocking at
    `vm_pool_size`) and unblocks the connection-injection hardening.
-3. **A1 (batch hook contract)** — the breaking change; do it while alpha allows.
-   Bundle A4 (hook plan) so the batch path also skips untouched work.
+3. **A1 (batch hook contract)** — ❌ **dropped** (August 2026 decision): the
+   VM-acquire is already batched (`read_write.rs`), so the remaining win didn't
+   justify breaking the per-document plain-table `ctx.data` hook contract that
+   the freeze commits to. A4 (hook plan) remains open as a non-breaking
+   follow-up.
 4. **B2 (JOIN population)** — targets the deep-read ceiling specifically.
-5. **A2 (lazy proxy)** and **B3 (single encode)** — larger refactors; land on top
-   of the batch contract and the Operation Core `Output` respectively.
+   Still open.
+5. **A2 (lazy proxy)** and **B3 (single encode)** — **deferred behind a
+   measured hook-bearing benchmark**; revisit only if profiling shows the
+   marshalling cost dominating after B2.
 
 ## 5. What **not** to change
 

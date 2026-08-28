@@ -111,6 +111,14 @@ writes. If you need multi-step atomicity (read-modify-write, multi-write
 all-or-nothing), wrap the block in
 [`crap.transaction(fn)`](../lua-api/jobs.md#craptransactionfn--explicit-multi-step-atomicity).
 
+Handler writes behave like writes on every other surface: they **publish
+[live-update events](../live-updates/overview.md)** (the `events` option
+defaults to `true` — pass `{ events = false }` for a quiet write, e.g. bulk
+seeding) and **invalidate the populate cache**. Events queued during the
+handler are dispatched after the handler returns — i.e. after every per-op
+transaction has committed — including for ops that completed before a later
+error.
+
 If the handler returns a table, it's stored as the job result (JSON).
 If it errors, the job is marked failed (and retried if attempts remain).
 

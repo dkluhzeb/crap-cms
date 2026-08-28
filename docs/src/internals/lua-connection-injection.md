@@ -1,11 +1,14 @@
 # Lua Connection Injection — Hardening Plan (optional)
 
-> **Status: proposal, lower priority.** The current design is correct,
-> guarded, and tested. This plan is about *shrinking the unsafe surface* and
-> the ambient-state complexity, not fixing a known bug. Land it only if/when
-> the seam is being touched anyway — ideally alongside the
-> [Operation Core](operation-core-migration.md) refactor, with which it
-> composes.
+> **Status: proposal, lower priority — still deferred.** The current design is
+> correct, guarded, and tested. This plan is about *shrinking the unsafe
+> surface* and the ambient-state complexity, not fixing a known bug. Land it
+> only if/when the seam is being touched anyway. The
+> [Operation Core](operation-core-migration.md) Stage 0 (`AppInfra`) landed in
+> August 2026 **without** touching this seam; the ambient app-data it describes
+> was partially consolidated along the way (the VM-stable pieces now live in
+> one `LuaVmInfra` bundle), but the `TxContext` fat-pointer mechanism is
+> unchanged.
 
 ## 1. What exists today
 
