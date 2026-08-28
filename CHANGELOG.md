@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Stricter load-time validation for auth email fields, custom pages, and
+  block types.** Three previously-silent config mistakes are load errors now:
+  an auth collection's `email` field must be `type = "email"` and
+  `unique = true` (see the Security entry on case-insensitive email
+  uniqueness); `crap.pages.register` rejects a slug that is already
+  registered (the last registration used to silently win) and no longer
+  accepts uppercase slugs; and two blocks sharing a `type` within one blocks
+  field are rejected (`_block_type` is the storage discriminator — rendering
+  and validation silently used whichever parsed first).
 - **Filter operator names use one grammar on every surface.** The comparison
   operators previously had per-surface spellings: the admin list-view URL used
   the terse `gt` / `gte` / `lt` / `lte`, MCP additionally accepted
@@ -570,6 +579,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The auth email identity is case-insensitively unique end to end.** Two
+  gaps allowed duplicate accounts that later collide as one at login (where
+  `find_by_email` compares `LOWER() = LOWER()`): a user-declared `email`
+  field of type `text` dodged the case-insensitive unique check (which is
+  scoped to the Email field *type*), and nothing at the DB level enforced
+  case-folded uniqueness — two concurrent registrations differing only in
+  case could both land. Auth collections now require their `email` field to
+  be `type = "email"` and `unique = true` (a load error otherwise), and every
+  auth collection gets a `UNIQUE INDEX ON (LOWER(email))` backstop (partial —
+  active rows only — on soft-delete collections). **Migration:** if an
+  existing database already contains case-variant duplicate emails, startup
+  fails creating the index; resolve the duplicates first.
 - **The storage key contract is now enforced on every upload backend, not just
   local.** `LocalStorage` rejected traversal (`..`), absolute, backslash, and
   null-byte keys at the storage trust boundary, but `S3Storage` and
@@ -1290,6 +1311,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The admin edit form fails closed when an auth account's lock state can't
+  be read.** A DB/pool error while reading `_locked` used to render the lock
+  checkbox unchecked; saving that form would then explicitly unlock the
+  account, since the update treats an unchecked box as an intentional unlock.
+  An unreadable lock state now errors the page render instead.
+- **An unknown locale in an admin form post or validate call is rejected with
+  an error instead of being silently dropped.** The create/update actions
+  (collections and globals) and all three validate endpoints swallowed the
+  locale parse error into "no locale context", which on a localized
+  collection reads and writes the bare columns (`title` instead of
+  `title__en`) — surfacing later as a confusing SQL error or a wrong-column
+  write. All six paths now return a 422 toast / validation error naming the
+  invalid locale, matching the gRPC, MCP, and Lua surfaces.
+- **A failed old-document read during an admin upload replacement no longer
+  orphans files.** The pre-upload read of the existing document (used to plan
+  old-file cleanup) swallowed DB errors into "no old files"; the new file was
+  then stored and the old one left behind with nothing referencing it. The
+  read now runs fail-closed before anything is stored.
+- **The retention purge skips a row whose upload fields can't be read instead
+  of deleting it blind.** A failed pre-delete read of an upload document's
+  field map was silently ignored, hard-deleting the row anyway and orphaning
+  its files on disk with nothing left to find them by. The row is now skipped
+  (with a warning) and retried on the next purge tick; the read also moved
+  ahead of the ref-count decrement so a skipped row can't double-decrement
+  its targets on retry.
+- **`update_many` rejects a `password` key of any value type on auth
+  collections.** The guard only checked the stringified scalar map, so a
+  table-valued `password` slipped past it via the composite-value merge. The
+  check now runs on the fully merged patch.
+- **Duplicate custom-page registrations and duplicate block types fail
+  loudly.** `crap.pages.register` silently kept only the last entry for a
+  slug (whichever definition file loaded later won), and two blocks sharing
+  a `type` were accepted even though `_block_type` is the storage
+  discriminator that routes rows back to their definition. Both are load
+  errors now. Custom-page slugs are also lowercase-only, matching the
+  documented charset (uppercase previously slipped through and could collide
+  case-insensitively with template file names).
 - **Job-handler writes now publish live-update events and invalidate the
   populate cache.** A Lua job handler's CRUD calls ran with no event transport
   and no cache attached, so a `crap.collections.create`/`update`/`delete`
@@ -2802,6 +2860,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Negative limit/offset floors added at the remaining raw-bind sites (no
+  behavior change).** The service-layer version listing already floors via
+  `floor_optional_limit`; the underlying `db::query::versions::list_versions`
+  now floors defensively too (it bound the values raw), and the Lua `find`
+  offset floors at intake — matching the main find runner's existing
+  db-level floor, so no future caller can reach a `LIMIT -1`.
+- **`spawn_blocking` bodies extracted into named functions** in the admin auth
+  middleware (`resolve_auth` + `ResolveAuthParams`) and the logout action
+  (`bump_session_version_blocking`, which now also logs a failed pool
+  acquisition instead of returning silently); the scheduler's
+  `write_job_failure` takes a `JobFailureWrite` param struct instead of five
+  loose parameters.
 - **Scattered duplicate logic pulled behind shared chokepoints (no behavior
   change).** These are refactors that give each concern a single source of
   truth so sibling call sites can't drift apart:

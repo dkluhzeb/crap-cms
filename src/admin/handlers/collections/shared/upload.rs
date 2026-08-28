@@ -36,6 +36,18 @@ pub(in crate::admin::handlers::collections) struct UploadParams<'a> {
     pub auth_user: Option<&'a Extension<AuthUser>>,
 }
 
+/// Load the old document's fields for post-write file cleanup.
+///
+/// A DB error here must surface instead of being swallowed into `None`:
+/// swallowing it would store the new file, skip old-file cleanup after the
+/// write, and silently orphan the previous upload.
+fn load_old_doc_fields(p: &UploadParams<'_>, id: &str) -> anyhow::Result<Option<DocumentFields>> {
+    let conn = p.state.infra.pool.get()?;
+    let doc = query::find_by_id(&conn, p.slug, p.def, id, p.locale_ctx)?;
+
+    Ok(doc.map(|d| d.fields))
+}
+
 /// Process a file upload in a blocking task, injecting metadata into `form_data`.
 ///
 /// For updates (`doc_id = Some`), also loads the old document's fields so the
@@ -52,17 +64,23 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
 
     // For updates, load old document to get old file paths for cleanup.
     // Internal lookup for file cleanup planning, not a user-facing read.
-    let old_doc_fields = if let Some(id) = p.doc_id {
-        p.state
-            .infra
-            .pool
-            .get()
-            .ok()
-            .and_then(|conn| query::find_by_id(&conn, p.slug, p.def, id, p.locale_ctx).ok())
-            .flatten()
-            .map(|doc| doc.fields.clone())
-    } else {
-        None
+    // Runs BEFORE the new file is stored so a failure cannot orphan it.
+    let old_doc_fields = match p.doc_id {
+        Some(id) => match load_old_doc_fields(p, id) {
+            Ok(fields) => fields,
+            Err(e) => {
+                error!("Failed to load existing document for upload cleanup: {e}");
+                return Err(render_error(
+                    p.state,
+                    p.def,
+                    form_data,
+                    p.doc_id,
+                    p.auth_user,
+                    "Could not load the existing document for file cleanup",
+                ));
+            }
+        },
+        None => None,
     };
 
     let storage = p.state.infra.storage.clone();

@@ -22,7 +22,8 @@ use crate::{
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
-                paths, redirect_response, split_sidebar_fields, translate_validation_errors,
+                parse_request_locale, paths, redirect_response, split_sidebar_fields,
+                toast_only_error, translate_validation_errors,
             },
         },
     },
@@ -156,9 +157,11 @@ pub async fn update_action(
 
     let mut form = FormData::from_raw(form_data, &def.fields);
     let action = form.take_action();
-    let locale_ctx =
-        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = match parse_request_locale(form.take_locale().as_deref(), &state.config.locale)
+    {
+        Ok(ctx) => ctx,
+        Err(msg) => return toast_only_error(&msg),
+    };
 
     let locale = locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),

@@ -392,6 +392,85 @@ async fn global_update_action() {
     );
 }
 
+/// Regression: an unknown `_locale` on a global update used to be silently
+/// swallowed (`from_locale_string(...).unwrap_or(None)`) into "no locale
+/// context" — bare-column writes on a localized global. Must 422 instead.
+#[tokio::test]
+async fn global_update_with_unknown_locale_is_rejected() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.locale = make_locale_config();
+    let app = setup_app_with_config(
+        vec![make_users_def()],
+        vec![make_localized_global_def()],
+        config,
+    );
+    let user_id = create_test_user(&app, "badlocale_global@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "badlocale_global@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/globals/l10n_settings")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("welcome_text=Nope&_locale=xx"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let toast = resp
+        .headers()
+        .get("X-Crap-Toast")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        toast.contains("Invalid locale"),
+        "toast should name the invalid locale, got: {toast}"
+    );
+}
+
+/// Regression twin for the globals validate endpoint.
+#[tokio::test]
+async fn global_validate_with_unknown_locale_is_rejected() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.locale = make_locale_config();
+    let app = setup_app_with_config(
+        vec![make_users_def()],
+        vec![make_localized_global_def()],
+        config,
+    );
+    let user_id = create_test_user(&app, "badlocale_gvalidate@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "badlocale_gvalidate@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/globals/l10n_settings/validate")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "data": { "welcome_text": "T" }, "locale": "xx" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("\"valid\":false") && body.contains("Invalid locale"),
+        "global validate must reject the unknown locale, got: {body}"
+    );
+}
+
 // ── Global Handler Gaps ───────────────────────────────────────────────────
 
 #[tokio::test]

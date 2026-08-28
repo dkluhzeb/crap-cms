@@ -9,7 +9,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            shared::{check_access_or_forbid, get_user_doc},
+            shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
             validate::{
                 RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
                 validation_error_response_simple,
@@ -17,7 +17,7 @@ use crate::{
         },
     },
     core::auth::AuthUser,
-    db::{AccessResult, query::LocaleContext},
+    db::AccessResult,
 };
 
 use super::helpers::prepare_form_for_validation;
@@ -51,9 +51,10 @@ pub async fn validate_update(
     let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update");
 
     let is_draft = payload.draft && def.has_drafts();
-    let locale_ctx =
-        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
+        Ok(ctx) => ctx,
+        Err(msg) => return validation_error_response_simple(&msg),
+    };
     let pool = state.infra.pool.clone();
     let runner = state.infra.hook_runner.clone();
     let slug_owned = slug.clone();

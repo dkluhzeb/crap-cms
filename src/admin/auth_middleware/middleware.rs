@@ -2,7 +2,7 @@
 //! [`service::auth::evaluate`] evaluator + the admin UI-locale
 //! lookup in a single `spawn_blocking`, route the outcome.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     body::Body,
@@ -26,8 +26,9 @@ use crate::admin::{
     },
     server::extract_cookie,
 };
-use crate::core::{AuthUser, auth::Claims, collection::Surface};
-use crate::db::{BoxedConnection, query};
+use crate::core::{AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface};
+use crate::db::{BoxedConnection, DbPool, query};
+use crate::hooks::HookRunner;
 use crate::service::{
     self,
     auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
@@ -148,6 +149,67 @@ fn load_ui_locale(conn: &BoxedConnection, user: &AuthUser) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Inputs for the blocking auth resolution — everything the evaluator and
+/// the UI-locale lookup need, cloned out of the request/state so the work
+/// can move onto a blocking thread.
+struct ResolveAuthParams {
+    pool: DbPool,
+    registry: Arc<Registry>,
+    token_provider: SharedTokenProvider,
+    hook_runner: HookRunner,
+    bearer_token: Option<String>,
+    session_token: Option<String>,
+    headers_map: HashMap<String, String>,
+}
+
+/// Resolve the request's principal on a blocking thread: run the unified
+/// evaluator, then fetch the admin UI-locale preference for an
+/// authenticated user while the connection is still held.
+#[cfg(not(tarpaulin_include))]
+fn resolve_auth(p: &ResolveAuthParams) -> AdminAuthOutcome {
+    let Ok(conn) = p.pool.get() else {
+        // Pool exhaustion is a server-side problem, not an
+        // auth problem — but the evaluator's contract returns
+        // either Authenticated / Anonymous / Invalid.
+        // Reporting it as a Lookup-class Invalid keeps the
+        // cookie path coherent (the user retries; we don't
+        // loop with cookie clear).
+        return AdminAuthOutcome {
+            resolution: Resolution::Invalid(AuthFailure::Lookup),
+            ui_locale: None,
+        };
+    };
+
+    let resolution = service::auth::evaluate(
+        &AuthRequest {
+            surface: Surface::Admin,
+            bearer_token: p.bearer_token.as_deref(),
+            session_cookie_token: p.session_token.as_deref(),
+            headers: &p.headers_map,
+        },
+        &EvaluateDeps {
+            registry: &p.registry,
+            token_provider: p.token_provider.as_ref(),
+            hook_runner: &p.hook_runner,
+            conn: &conn,
+        },
+    );
+
+    // While we still hold the connection, fetch the admin UI
+    // locale preference for an authenticated user. Skips the
+    // lookup entirely for Anonymous / Invalid — they won't
+    // reach a logged-in page.
+    let ui_locale = match &resolution {
+        Resolution::Authenticated(auth) => load_ui_locale(&conn, &auth.user),
+        _ => None,
+    };
+
+    AdminAuthOutcome {
+        resolution,
+        ui_locale,
+    }
+}
+
 /// Auth middleware — resolves the request to a principal via the
 /// unified evaluator, then enforces the two admin access gates:
 ///
@@ -182,56 +244,17 @@ pub(in crate::admin) async fn auth_middleware(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let headers_map = headers_to_map(request.headers());
+    let params = ResolveAuthParams {
+        pool: state.infra.pool.clone(),
+        registry: state.infra.registry.clone(),
+        token_provider: state.infra.token_provider.clone(),
+        hook_runner: state.infra.hook_runner.clone(),
+        bearer_token,
+        session_token,
+        headers_map: headers_to_map(request.headers()),
+    };
 
-    let pool = state.infra.pool.clone();
-    let registry = state.infra.registry.clone();
-    let token_provider = state.infra.token_provider.clone();
-    let hook_runner = state.infra.hook_runner.clone();
-
-    let resolution = spawn_blocking(move || {
-        let Ok(conn) = pool.get() else {
-            // Pool exhaustion is a server-side problem, not an
-            // auth problem — but the evaluator's contract returns
-            // either Authenticated / Anonymous / Invalid.
-            // Reporting it as a Lookup-class Invalid keeps the
-            // cookie path coherent (the user retries; we don't
-            // loop with cookie clear).
-            return AdminAuthOutcome {
-                resolution: Resolution::Invalid(AuthFailure::Lookup),
-                ui_locale: None,
-            };
-        };
-        let resolution = service::auth::evaluate(
-            &AuthRequest {
-                surface: Surface::Admin,
-                bearer_token: bearer_token.as_deref(),
-                session_cookie_token: session_token.as_deref(),
-                headers: &headers_map,
-            },
-            &EvaluateDeps {
-                registry: &registry,
-                token_provider: token_provider.as_ref(),
-                hook_runner: &hook_runner,
-                conn: &conn,
-            },
-        );
-
-        // While we still hold the connection, fetch the admin UI
-        // locale preference for an authenticated user. Skips the
-        // lookup entirely for Anonymous / Invalid — they won't
-        // reach a logged-in page.
-        let ui_locale = match &resolution {
-            Resolution::Authenticated(auth) => load_ui_locale(&conn, &auth.user),
-            _ => None,
-        };
-
-        AdminAuthOutcome {
-            resolution,
-            ui_locale,
-        }
-    })
-    .await;
+    let resolution = spawn_blocking(move || resolve_auth(&params)).await;
 
     let Ok(outcome) = resolution else {
         return login_redirect(&request);

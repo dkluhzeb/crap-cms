@@ -219,6 +219,13 @@ changing a representation is a breaking change to every consumer.
   `service::versions::list_versions` (via `floor_optional_limit`, which lives in
   `db::query` so every surface and the service share one helper), so the Lua,
   gRPC, and MCP version listings all inherit the floor at one point.
+- **An unknown locale string errors on every surface — it is never silently
+  dropped.** `LocaleContext::from_locale_string` rejects a locale outside the
+  configured set, and every intake (Lua / gRPC / MCP / admin forms + validate
+  endpoints, via the admin `parse_request_locale` helper) surfaces that as a
+  request error. Swallowing it into a `None` context is forbidden: a `None`
+  context on a localized collection reads/writes the bare columns (`title`
+  instead of `title__en`) — the classic wrong-column footgun.
 - **Live-mutation streams resolve access through one shared path.** The gRPC
   `Subscribe` and admin SSE streams build their per-subscriber view/mode maps via
   `EventAccessMap::resolve` and enforce them per event via `EventGate::evaluate`
@@ -309,7 +316,12 @@ changing a representation is a breaking change to every consumer.
   forgot-password rate-limit keys, and uniqueness on an `Email`-typed field all
   compare case-insensitively — one address is one account with one lockout bucket
   regardless of casing. Non-`Email` unique fields (slugs, codes) stay
-  case-sensitive.
+  case-sensitive. Two guarantees keep this closed: an auth collection's `email`
+  field **must** be `type = "email"` and `unique = true` (load error otherwise,
+  so the type-scoped case-insensitive check always applies to the identity
+  field), and every auth collection carries a `UNIQUE INDEX ON (LOWER(email))`
+  backstop (partial — active rows only — under soft delete) so even a race past
+  validation can't create case-variant duplicate accounts.
 - **The `token_use` claim** partitions signed tokens into `session` (accepted by
   every authenticated surface — admin cookie/bearer, gRPC, upload serve) and
   `mfa_pending` (accepted only by the MFA-completion endpoint). Session

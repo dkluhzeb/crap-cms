@@ -97,7 +97,7 @@ Each block definition has:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `type` | string | **Required.** Block type identifier. |
+| `type` | string | **Required.** Block type identifier. Follows the standard slug rules (lowercase letters, digits, underscores) and must be unique within the field — a duplicate `type` is a load error. |
 | `label` | string | Display label (defaults to type name). |
 | `label_field` | string | Sub-field name to use as row label for this block type. |
 | `group` | string | Group name for organizing blocks in the picker dropdown. |

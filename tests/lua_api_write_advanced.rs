@@ -115,6 +115,35 @@ fn lua_create_many_keeps_password_field_on_non_auth_collection() {
     );
 }
 
+/// Regression: `update_many` rejected `password` only when it arrived as a
+/// STRING — a table-valued password slipped past the stringified-map check
+/// and reached the write via the composite merge. The guard now inspects the
+/// fully merged patch, so any value type is rejected on auth collections.
+#[test]
+fn lua_update_many_rejects_password_of_any_type_on_auth_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+
+    for (label, patch) in [
+        ("string", r#"{ password = "newpass123" }"#),
+        ("table", r"{ password = { sneaky = true } }"),
+    ] {
+        let code = format!(
+            r#"
+            crap.collections.update_many("accounts", {{}}, {patch})
+            return "ok"
+            "#
+        );
+        let err = runner
+            .eval_lua_with_conn(&code, &conn, None)
+            .expect_err("password in update_many must be rejected");
+        assert!(
+            err.to_string().contains("Cannot set password"),
+            "{label}-valued password must hit the guard, got: {err}"
+        );
+    }
+}
+
 /// Regression: a `before_read` hook reading its own collection recursed
 /// without any depth cap — stack overflow, process abort. Reads must be
 /// depth-capped exactly like writes (cap 3, hooks silently skipped beyond).

@@ -139,11 +139,30 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
         .build())
 }
 
-/// If auth is enabled and no email field exists, inject one at index 0.
-fn inject_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition>) {
-    let Some(a) = auth else { return };
-    if !a.enabled || fields.iter().any(|f| f.name == "email") {
-        return;
+/// Ensure the auth identity field is sound: if auth is enabled and no email
+/// field exists, inject one at index 0; if the user declared their own, it
+/// must be `type = "email"` and `unique = true`. A `text`-typed email would
+/// dodge the case-insensitive unique check (scoped to the Email field type),
+/// and a non-unique one allows duplicate accounts — both collide as one
+/// account at login, where `find_by_email` is `LOWER() = LOWER()`.
+fn ensure_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition>) -> Result<()> {
+    let Some(a) = auth else { return Ok(()) };
+    if !a.enabled {
+        return Ok(());
+    }
+
+    if let Some(f) = fields.iter().find(|f| f.name == "email") {
+        if f.field_type != FieldType::Email {
+            bail!(
+                "Auth collection field 'email' must have type 'email' (got '{}') — the \
+                 case-insensitive uniqueness and login lookup depend on it",
+                f.field_type.as_str()
+            );
+        }
+        if !f.unique {
+            bail!("Auth collection field 'email' must be unique = true — it is the login identity");
+        }
+        return Ok(());
     }
 
     fields.insert(
@@ -158,6 +177,8 @@ fn inject_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition
             )
             .build(),
     );
+
+    Ok(())
 }
 
 /// Parse a Lua table into a `CollectionDefinition`, extracting fields, hooks, auth, upload, etc.
@@ -219,7 +240,7 @@ pub fn parse_collection_definition(
         None
     };
 
-    inject_auth_email_field(auth.as_ref(), &mut fields);
+    ensure_auth_email_field(auth.as_ref(), &mut fields)?;
 
     let mut def = CollectionDefinition::new(slug);
 
@@ -291,6 +312,65 @@ mod tests {
             def.admin.list_columns,
             vec!["title", "_status", "created_at"]
         );
+    }
+
+    fn auth_config_with_email_field(lua: &Lua, email_type: &str, unique: bool) -> Table {
+        let config = lua.create_table().unwrap();
+        config.set("auth", true).unwrap();
+
+        let fields = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "email").unwrap();
+        field.set("type", email_type).unwrap();
+        field.set("unique", unique).unwrap();
+        fields.set(1, field).unwrap();
+        config.set("fields", fields).unwrap();
+
+        config
+    }
+
+    /// Regression: a user-declared `email` field of type `text` on an auth
+    /// collection dodged the case-insensitive unique check (scoped to the
+    /// Email field *type*), so `Victim@x.com` and `victim@x.com` could both
+    /// register and then collide as one account at login.
+    #[test]
+    fn auth_collection_rejects_non_email_typed_email_field() {
+        let lua = Lua::new();
+        let config = auth_config_with_email_field(&lua, "text", true);
+
+        let err = parse_collection_definition(&lua, "users", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must have type 'email'"),
+            "expected email-type rejection, got: {err}"
+        );
+    }
+
+    /// Sibling of the type gate: the login identity must also be unique.
+    #[test]
+    fn auth_collection_rejects_non_unique_email_field() {
+        let lua = Lua::new();
+        let config = auth_config_with_email_field(&lua, "email", false);
+
+        let err = parse_collection_definition(&lua, "users", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must be unique"),
+            "expected unique rejection, got: {err}"
+        );
+    }
+
+    /// A correctly declared email field parses fine (no false positive).
+    #[test]
+    fn auth_collection_accepts_proper_email_field() {
+        let lua = Lua::new();
+        let config = auth_config_with_email_field(&lua, "email", true);
+
+        let def = parse_collection_definition(&lua, "users", &config).unwrap();
+        assert_eq!(def.fields[0].name, "email");
+        assert_eq!(def.fields[0].field_type, FieldType::Email);
     }
 
     /// Regression: a user field colliding with an auto-generated upload
@@ -481,6 +561,7 @@ mod tests {
         let field = lua.create_table().unwrap();
         field.set("name", "email").unwrap();
         field.set("type", "email").unwrap();
+        field.set("unique", true).unwrap();
         fields_tbl.set(1, field).unwrap();
         config.set("fields", fields_tbl).unwrap();
         let def = parse_collection_definition(&lua, "users", &config).unwrap();

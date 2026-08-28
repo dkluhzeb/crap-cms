@@ -19,32 +19,45 @@ use crate::{
     hooks::{HookRunner, LuaCrudInfra},
 };
 
-/// Write a job-failure outcome to the queue row and log it at the right level.
+/// Borrowed inputs for [`write_job_failure`], grouped per the >4-params rule
+/// (mirrors [`ExecuteJobParams`]: all-reference fields, `Copy`, literal-built
+/// by the two `record_*` wrappers).
 ///
 /// `label` is the human job identifier for log lines (e.g. `"Job abc (slug)"`);
-/// `error_msg` is the already-rendered failure text stored on the row. The
-/// single place the failure write + retry/permanent log-level split lives, so
-/// every job kind records failures identically.
-fn write_job_failure(
-    pool: &DbPool,
-    job_run: &JobRun,
-    label: &str,
-    error_msg: &str,
+/// `error_msg` is the already-rendered failure text stored on the row.
+#[derive(Clone, Copy)]
+struct JobFailureWrite<'a> {
+    pool: &'a DbPool,
+    job_run: &'a JobRun,
+    label: &'a str,
+    error_msg: &'a str,
     should_retry: bool,
-) -> Result<()> {
-    let c = pool
+}
+
+/// Write a job-failure outcome to the queue row and log it at the right level.
+/// The single place the failure write + retry/permanent log-level split lives,
+/// so every job kind records failures identically.
+fn write_job_failure(w: JobFailureWrite<'_>) -> Result<()> {
+    let c = w
+        .pool
         .get()
         .context("Failed to get DB connection to record job failure")?;
 
-    job_query::fail_job(&c, &job_run.id, error_msg, should_retry, job_run.attempt)?;
+    job_query::fail_job(
+        &c,
+        &w.job_run.id,
+        w.error_msg,
+        w.should_retry,
+        w.job_run.attempt,
+    )?;
 
-    if should_retry {
+    if w.should_retry {
         warn!(
-            "{label} failed (attempt {}/{}), will retry: {error_msg}",
-            job_run.attempt, job_run.max_attempts
+            "{} failed (attempt {}/{}), will retry: {}",
+            w.label, w.job_run.attempt, w.job_run.max_attempts, w.error_msg
         );
     } else {
-        error!("{label} failed permanently: {error_msg}");
+        error!("{} failed permanently: {}", w.label, w.error_msg);
     }
 
     Ok(())
@@ -60,8 +73,13 @@ fn record_job_failure(
     label: &str,
     err: &anyhow::Error,
 ) -> Result<()> {
-    let should_retry = job_run.attempt < job_run.max_attempts;
-    write_job_failure(pool, job_run, label, &format!("{err:#}"), should_retry)
+    write_job_failure(JobFailureWrite {
+        pool,
+        job_run,
+        label,
+        error_msg: &format!("{err:#}"),
+        should_retry: job_run.attempt < job_run.max_attempts,
+    })
 }
 
 /// Record a permanent (never-retried) job failure — e.g. a malformed system-job
@@ -72,7 +90,13 @@ fn record_permanent_job_failure(
     label: &str,
     error_msg: &str,
 ) -> Result<()> {
-    write_job_failure(pool, job_run, label, error_msg, false)
+    write_job_failure(JobFailureWrite {
+        pool,
+        job_run,
+        label,
+        error_msg,
+        should_retry: false,
+    })
 }
 
 /// Borrowed inputs for [`execute_job`], grouped per the >4-params rule.
@@ -576,16 +600,28 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
             continue;
         }
 
+        // Collect upload file field-maps BEFORE deleting from DB; the caller
+        // deletes the actual files after committing the transaction. A failed
+        // read must SKIP this row (not proceed): deleting anyway would orphan
+        // the files on disk with nothing left to find them by. This runs
+        // before `before_hard_delete` so a skipped row leaves the targets'
+        // ref counts untouched for the retry on the next purge tick.
+        if p.def.is_upload_collection() {
+            match query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None) {
+                Ok(Some(doc)) => upload_docs.push(doc.fields),
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(
+                        "Skipping purge of {}/{}: failed to read upload fields: {e}",
+                        p.slug, id
+                    );
+                    continue;
+                }
+            }
+        }
+
         // Decrement ref counts on targets before hard delete (CASCADE removes junction rows)
         query::ref_count::before_hard_delete(p.conn, p.slug, &id, &p.def.fields, p.locale_config)?;
-
-        // Collect upload file field-maps BEFORE deleting from DB; the caller
-        // deletes the actual files after committing the transaction.
-        if p.def.is_upload_collection()
-            && let Ok(Some(doc)) = query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None)
-        {
-            upload_docs.push(doc.fields);
-        }
 
         // Cancel pending image conversions — see
         // `core/upload/queue.rs::delete_image_jobs_for_document`. A failure
@@ -662,7 +698,9 @@ mod tests {
     use r2d2_sqlite::SqliteConnectionManager;
 
     use super::*;
-    use crate::core::{Registry, job::JobStatus};
+    use crate::core::{
+        FieldDefinition, FieldType, Registry, job::JobStatus, upload::CollectionUpload,
+    };
 
     // ── normalize_cron ────────────────────────────────────────────────────
 
@@ -1315,5 +1353,70 @@ mod tests {
         // retries=3 => max_attempts = retries + 1 = 4
         assert_eq!(jobs[0].max_attempts, 4);
         assert_eq!(jobs[0].queue, "special");
+    }
+
+    // ── purge_collection ──────────────────────────────────────────────────
+
+    /// Regression: a failed upload-fields read during purge was silently
+    /// swallowed (`let Ok(Some(doc)) = …`), so the row was hard-deleted
+    /// anyway and its files on disk were orphaned with nothing left to find
+    /// them by. A failed read must skip the row (retry on the next tick).
+    ///
+    /// The read is broken via a MISSING JOIN TABLE (the def declares an
+    /// array field but `pmedia_shots` doesn't exist) — a missing *column*
+    /// wouldn't work: `SQLite`'s double-quoted-string fallback turns
+    /// `SELECT "gone_col"` into a string literal instead of an error.
+    #[test]
+    fn purge_skips_row_when_upload_fields_unreadable() {
+        let pool = make_test_pool();
+
+        let mut def = CollectionDefinition::new("pmedia");
+        def.soft_delete = true;
+        def.fields = vec![
+            FieldDefinition::builder("alt", FieldType::Text).build(),
+            FieldDefinition::builder("shots", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("caption", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        def.upload = Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE pmedia (
+                id TEXT PRIMARY KEY,
+                alt TEXT,
+                _deleted_at TEXT,
+                _ref_count INTEGER DEFAULT 0
+            );
+            INSERT INTO pmedia (id, alt, _deleted_at)
+                VALUES ('m1', 'old', '2000-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        let (purged, files) = purge_collection(&PurgeCollectionInput {
+            conn: &conn,
+            slug: "pmedia",
+            def: &def,
+            retention_seconds: 60,
+            locale_config: &LocaleConfig::default(),
+        })
+        .unwrap();
+
+        assert_eq!(purged, 0, "unreadable row must be skipped, not deleted");
+        assert!(files.is_empty());
+
+        let rows = conn
+            .query_all("SELECT id FROM pmedia WHERE _deleted_at IS NOT NULL", &[])
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row must survive so the next purge tick can retry"
+        );
     }
 }

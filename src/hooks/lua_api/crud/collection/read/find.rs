@@ -119,10 +119,12 @@ impl FindQueryInput {
             .transpose()
             .map_err(|e| RuntimeError(format!("Invalid cursor: {e:#}")))?;
 
+        // Floored at intake (matching gRPC/MCP) so the raw value never leaks
+        // into pagination metadata; the DB runner floors again defensively.
         let offset = if self.page.is_some() {
             None
         } else {
-            self.offset
+            query::floor_optional_limit(self.offset)
         };
 
         let fq = FindQuery::builder()
@@ -374,6 +376,16 @@ mod tests {
         let (fq, page) = parse_find(json!({ "limit": 10, "offset": 20 }));
         assert_eq!(fq.limit, Some(10));
         assert_eq!(fq.offset, Some(20));
+        assert!(page.is_none());
+    }
+
+    /// Regression: an explicit negative `offset` from Lua flowed raw into the
+    /// query (the DB runner floors defensively, but pagination metadata saw
+    /// the raw value). It floors to 0 at intake, matching gRPC/MCP.
+    #[test]
+    fn find_query_negative_offset_floors_to_zero() {
+        let (fq, page) = parse_find(json!({ "limit": 10, "offset": -5 }));
+        assert_eq!(fq.offset, Some(0));
         assert!(page.is_none());
     }
 

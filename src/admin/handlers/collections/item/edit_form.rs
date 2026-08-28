@@ -100,28 +100,37 @@ fn auth_field_base(name: &str, label: &str, description: Option<&str>) -> BaseFi
 }
 
 /// Append auth-specific fields (password, locked checkbox) to the field list.
-fn append_auth_fields(fields: &mut Vec<FieldContext>, pool: &DbPool, slug: &str, id: &str) {
+///
+/// Fails closed: the update form treats an unchecked lock box as an explicit
+/// unlock, so when the lock state cannot be read the render must error
+/// instead of silently defaulting the checkbox to "unlocked".
+fn append_auth_fields(
+    fields: &mut Vec<FieldContext>,
+    pool: &DbPool,
+    slug: &str,
+    id: &str,
+) -> Result<(), ServiceError> {
     fields.push(FieldContext::Password(TextField {
         base: auth_field_base("password", "password", Some("leave_blank_keep_password")),
         has_many: None,
         tags: None,
     }));
 
-    let is_locked = pool
+    let conn = pool
         .get()
-        .ok()
-        .and_then(|conn| {
-            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-            is_locked(&ctx, id)
-                .inspect_err(|e| warn!("Failed to read lock status for user {id}: {e}"))
-                .ok()
-        })
-        .unwrap_or(false);
+        .inspect_err(|e| warn!("Failed to read lock status for user {id}: {e}"))
+        .map_err(ServiceError::Internal)?;
+
+    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+    let locked = is_locked(&ctx, id)
+        .inspect_err(|e| warn!("Failed to read lock status for user {id}: {e}"))?;
 
     fields.push(FieldContext::Checkbox(CheckboxField {
         base: auth_field_base("_locked", "account_locked", Some("prevent_login")),
-        checked: is_locked,
+        checked: locked,
     }));
+
+    Ok(())
 }
 
 /// Build, enrich, and split the field contexts for the edit form.
@@ -133,7 +142,7 @@ fn prepare_edit_fields(
     editor_locale: Option<&str>,
     denied_read_fields: &[FieldDenial],
     auth_user: Option<&Extension<AuthUser>>,
-) -> (Vec<FieldContext>, Vec<FieldContext>) {
+) -> Result<(Vec<FieldContext>, Vec<FieldContext>), ServiceError> {
     // The service read already stripped read-denied *values* (data-aware), so
     // this view of the data carries only readable values; `denied_read_fields`
     // is used below only to drop the denied fields' input contexts.
@@ -190,10 +199,10 @@ fn prepare_edit_fields(
     );
 
     if def.is_auth_collection() {
-        append_auth_fields(&mut fields, &state.infra.pool, &def.slug, id);
+        append_auth_fields(&mut fields, &state.infra.pool, &def.slug, id)?;
     }
 
-    split_sidebar_fields(fields)
+    Ok(split_sidebar_fields(fields))
 }
 
 /// Extract file metadata fields from a document for upload context.
@@ -332,7 +341,7 @@ pub async fn edit_form(
         Err(resp) => return *resp,
     };
 
-    let (main_fields, sidebar_fields) = prepare_edit_fields(
+    let (main_fields, sidebar_fields) = match prepare_edit_fields(
         &state,
         &def,
         &document,
@@ -340,7 +349,16 @@ pub async fn edit_form(
         editor_locale.as_deref(),
         &denied,
         auth_user.as_ref(),
-    );
+    ) {
+        Ok(fields) => fields,
+        Err(e) => {
+            return service_error_to_admin_response(
+                &state,
+                e,
+                "You don't have permission to view this item",
+            );
+        }
+    };
 
     let ctx = build_edit_page_context(EditPageContextInput {
         state: &state,
@@ -512,13 +530,37 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
 
+    use r2d2_sqlite::SqliteConnectionManager;
     use serde_json::{Value, json};
 
     use crate::core::document::DocumentBuilder;
     use crate::core::upload::CollectionUpload;
 
     use super::*;
+
+    #[test]
+    fn append_auth_fields_fails_closed_when_lock_state_unreadable() {
+        // Regression: a DB/pool error used to render the lock checkbox
+        // unchecked (fail-open); saving that form would then explicitly
+        // unlock the account. An unreadable lock state must error instead.
+        let manager = SqliteConnectionManager::file("/nonexistent-dir/no.db");
+        let pool = DbPool::from_pool(
+            r2d2::Pool::builder()
+                .max_size(1)
+                .connection_timeout(Duration::from_millis(100))
+                .build_unchecked(manager),
+        );
+
+        let mut fields = Vec::new();
+        let result = append_auth_fields(&mut fields, &pool, "users", "u1");
+
+        assert!(
+            result.is_err(),
+            "unreadable lock state must fail the render, not default to unlocked"
+        );
+    }
 
     fn media_def(thumb: Option<&str>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("media");

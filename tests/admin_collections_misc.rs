@@ -1624,3 +1624,84 @@ async fn delete_confirm_no_warning_when_unreferenced() {
         "Should NOT show warning when unreferenced"
     );
 }
+
+// ── Uploads: old-document read failure must not orphan the new file ────────
+
+/// Regression: a DB error while loading the OLD document during an upload
+/// update was silently swallowed (`pool.get().ok()… find_by_id(…).ok()`), so
+/// the new file was stored, the write went through with no old-file cleanup,
+/// and the OLD file was orphaned. The upload must now fail BEFORE storing.
+///
+/// The read is broken via a dropped JOIN TABLE (`media_gallery`) — dropping
+/// a column wouldn't error: `SQLite`'s double-quoted-string fallback turns
+/// `SELECT "gone_col"` into a string literal instead of a failure.
+#[tokio::test]
+async fn upload_update_fails_before_storing_when_old_doc_read_errors() {
+    fn count_files(dir: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .map(|e| {
+                let path = e.path();
+                if path.is_dir() { count_files(&path) } else { 1 }
+            })
+            .sum()
+    }
+
+    let mut media = make_media_def();
+    media.fields.push(
+        FieldDefinition::builder("gallery", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("caption", FieldType::Text).build(),
+            ])
+            .build(),
+    );
+    let app = setup_app(vec![media, make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "orphan@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "orphan@test.com");
+
+    // Seed a media document directly.
+    let conn = app.pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO media (id, filename, url) VALUES ('m1', 'old.png', '/uploads/media/old.png')",
+        &[],
+    )
+    .unwrap();
+
+    // Break the old-document read: drop the array join table the definition
+    // still expects, so `find_by_id`'s hydration errors while every other
+    // query in the flow keeps working.
+    conn.execute("DROP TABLE media_gallery", &[]).unwrap();
+    drop(conn);
+
+    let uploads_dir = app._tmp.path().join("uploads");
+    let before = count_files(&uploads_dir);
+
+    let (content_type, body) =
+        build_multipart_body("new.png", "image/png", &tiny_png(), &[("alt", "new")]);
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/media/m1")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !resp.status().is_redirection(),
+        "upload update must not report success when the old-doc read fails, got {}",
+        resp.status()
+    );
+    assert_eq!(
+        count_files(&uploads_dir),
+        before,
+        "upload must not store a file when the old-document read fails"
+    );
+}

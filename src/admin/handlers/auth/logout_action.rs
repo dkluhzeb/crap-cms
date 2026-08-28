@@ -9,7 +9,51 @@ use tracing::warn;
 use super::{append_cookies, clear_session_cookies, session_same_site};
 use crate::admin::{AdminState, handlers::shared::paths};
 use crate::core::AuthUser;
+use crate::core::event::SharedInvalidationTransport;
+use crate::db::DbPool;
 use crate::service::{self, ServiceContext};
+
+/// Blocking half of logout: bump the user's `_session_version` so the
+/// already-issued JWT dies server-side (see the handler doc for why).
+/// Failures are logged, never surfaced — the user still gets logged out
+/// client-side either way.
+fn bump_session_version_blocking(
+    pool: &DbPool,
+    transport: SharedInvalidationTransport,
+    collection: &str,
+    sub: &str,
+) {
+    let conn = match pool.get() {
+        Ok(conn) => conn,
+        Err(e) => {
+            warn!(
+                user = %sub,
+                collection = %collection,
+                error = ?e,
+                "logout could not get a connection to bump _session_version; the issued JWT remains valid until exp"
+            );
+            return;
+        }
+    };
+
+    let ctx = ServiceContext::slug_only(collection)
+        .conn(&conn)
+        .invalidation_transport(Some(transport))
+        .build();
+
+    if let Err(e) = service::auth::bump_session_version(&ctx, sub) {
+        // Don't surface to the user — they still get logged
+        // out client-side. But operators need visibility:
+        // a failed bump means future requests with the same
+        // JWT will still work, defeating the logout's intent.
+        warn!(
+            user = %sub,
+            collection = %collection,
+            error = ?e,
+            "logout could not bump _session_version; the issued JWT remains valid until exp"
+        );
+    }
+}
 
 /// POST /admin/logout — clear cookies, redirect to login.
 ///
@@ -33,23 +77,7 @@ pub async fn logout_action(
         let collection = user.claims.collection.clone();
         let sub = user.claims.sub.clone();
         let _ = spawn_blocking(move || {
-            let Ok(conn) = pool.get() else { return };
-            let ctx = ServiceContext::slug_only(&collection)
-                .conn(&conn)
-                .invalidation_transport(Some(transport))
-                .build();
-            if let Err(e) = service::auth::bump_session_version(&ctx, &sub) {
-                // Don't surface to the user — they still get logged
-                // out client-side. But operators need visibility:
-                // a failed bump means future requests with the same
-                // JWT will still work, defeating the logout's intent.
-                warn!(
-                    user = %sub,
-                    collection = %collection,
-                    error = ?e,
-                    "logout could not bump _session_version; the issued JWT remains valid until exp"
-                );
-            }
+            bump_session_version_blocking(&pool, transport, &collection, &sub);
         })
         .await;
     }

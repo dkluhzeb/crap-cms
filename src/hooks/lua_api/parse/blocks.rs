@@ -39,6 +39,17 @@ pub(super) fn parse_block_definitions(
         // identifier (field/node/collection/job names) rather than being the one
         // unvalidated identifier in the schema.
         validate_slug(&block_type).with_context(|| format!("Invalid block type '{block_type}'"))?;
+
+        // `_block_type` is the discriminator that routes a stored row back to
+        // its definition — two blocks sharing a type would make rendering and
+        // validation silently pick whichever parsed first.
+        if blocks
+            .iter()
+            .any(|b: &BlockDefinition| b.block_type == block_type)
+        {
+            return Err(anyhow!("Duplicate block type '{block_type}'"));
+        }
+
         let label = get_localized_string(&def, "label");
         let label_field = get_string(&def, "label_field");
         let group = get_string(&def, "group");
@@ -133,6 +144,28 @@ mod tests {
                 "unexpected error for '{bad}': {err}"
             );
         }
+    }
+
+    /// Regression: two blocks sharing a `type` were silently accepted —
+    /// `_block_type` is the storage discriminator, so rendering/validation
+    /// would arbitrarily use whichever definition parsed first.
+    #[test]
+    fn parse_block_definitions_rejects_duplicate_type() {
+        let lua = Lua::new();
+        let blocks_tbl = lua.create_table().unwrap();
+
+        for i in 1..=2 {
+            let block = lua.create_table().unwrap();
+            block.set("type", "hero").unwrap();
+            blocks_tbl.set(i, block).unwrap();
+        }
+
+        let err = parse_block_definitions(&lua, &blocks_tbl)
+            .expect_err("duplicate block type must be rejected");
+        assert!(
+            err.to_string().contains("Duplicate block type 'hero'"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

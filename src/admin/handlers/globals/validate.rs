@@ -15,7 +15,7 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{check_access_or_forbid, get_user_doc},
+            shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
             validate::{
                 RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
                 validation_error_response_simple, values_to_string_map,
@@ -23,7 +23,7 @@ use crate::{
         },
     },
     core::{DocumentFields, auth::AuthUser},
-    db::{AccessResult, LocaleContext, query::helpers::global_table},
+    db::{AccessResult, query::helpers::global_table},
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update
@@ -61,9 +61,10 @@ pub async fn validate_global(
     let data: DocumentFields = FormData::from_raw(form_data, &def.fields).into();
 
     let is_draft = payload.draft && def.has_drafts();
-    let locale_ctx =
-        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
+        Ok(ctx) => ctx,
+        Err(msg) => return validation_error_response_simple(&msg),
+    };
 
     let gtable = global_table(&slug);
     let pool = state.infra.pool.clone();

@@ -38,7 +38,9 @@ pub(crate) use document::{
 };
 
 // locale
-pub(crate) use locale::{build_locale_template_data, extract_editor_locale, is_non_default_locale};
+pub(crate) use locale::{
+    build_locale_template_data, extract_editor_locale, is_non_default_locale, parse_request_locale,
+};
 
 // pagination
 pub use pagination::{Pagination, PaginationParams};

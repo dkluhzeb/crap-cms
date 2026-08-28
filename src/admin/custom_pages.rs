@@ -104,12 +104,15 @@ impl CustomPageRegistry {
 /// Slug validation — restrict to safe characters to avoid path traversal
 /// or odd Handlebars template names. Used by both the registration
 /// (rejects bad slugs at register-time) and the route handler (rejects
-/// bad URLs).
+/// bad URLs). Lowercase only, matching the register error message and the
+/// (stricter) scaffold-side `validate_template_slug` — an uppercase slug
+/// would also collide case-insensitively on case-preserving filesystems
+/// when resolved to a template file.
 #[must_use]
 pub fn is_valid_slug(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 #[cfg(test)]
@@ -125,6 +128,10 @@ mod tests {
         assert!(!is_valid_slug("../etc/passwd"));
         assert!(!is_valid_slug("with space"));
         assert!(!is_valid_slug("with.dot"));
+        // Regression: uppercase used to pass, contradicting the register
+        // error message ("use a-z, 0-9, '-', '_'") and colliding
+        // case-insensitively with template file names.
+        assert!(!is_valid_slug("SystemStatus"));
     }
 
     #[test]

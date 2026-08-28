@@ -154,18 +154,21 @@ fn collections_update_many(
 
     let stringified = lua_table_to_hashmap(&data)?;
 
-    if def.is_auth_collection() && stringified.contains_key("password") {
-        return Err(RuntimeError(
-            "Cannot set password via update_many. Use single update instead.".into(),
-        ));
-    }
-
     let mut data_map = service::values_from_strings(stringified);
     let composite_data: DocumentFields = lua_table_to_json_map(&data)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, serde_json::Value::String(_)))
         .collect();
     data_map.extend(composite_data);
+
+    // Checked on the FULL merged map, not just the stringified scalars — a
+    // table-valued `password` would otherwise slip in via the composite
+    // merge above and bypass the guard.
+    if def.is_auth_collection() && data_map.contains_key("password") {
+        return Err(RuntimeError(
+            "Cannot set password via update_many. Use single update instead.".into(),
+        ));
+    }
 
     // Built before the access pre-flight so the update access fn sees the
     // incoming patch as `ctx.data` — same contract as the per-document check.

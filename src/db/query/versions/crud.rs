@@ -8,7 +8,7 @@ use crate::{
     core::document::VersionSnapshot,
     db::{
         DbConnection, DbRow, DbValue,
-        query::helpers::{quote_ident, versions_table},
+        query::helpers::{floor_optional_limit, quote_ident, versions_table},
     },
 };
 
@@ -205,7 +205,9 @@ pub fn list_versions(
     let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
     let mut idx = 2;
 
-    let limit_clause = match limit {
+    // Floor at the chokepoint so no surface can smuggle `LIMIT -1` (no limit
+    // in `SQLite` — a fail-open bypass) or a negative OFFSET past us.
+    let limit_clause = match floor_optional_limit(limit) {
         Some(l) => {
             let p = conn.placeholder(idx);
             params.push(DbValue::Integer(l));
@@ -215,7 +217,7 @@ pub fn list_versions(
         None => String::new(),
     };
 
-    let offset_clause = match offset {
+    let offset_clause = match floor_optional_limit(offset) {
         Some(o) => {
             let p = conn.placeholder(idx);
             params.push(DbValue::Integer(o));
@@ -460,6 +462,28 @@ mod tests {
         assert_eq!(offset.len(), 2);
         assert_eq!(offset[0].version, 3);
         assert_eq!(offset[1].version, 2);
+    }
+
+    /// Regression: a negative limit was bound raw, and `LIMIT -1` means *no
+    /// limit* in `SQLite` — a fail-open bypass of the caller's cap (the Lua
+    /// surface passed its `Option<i64>` unfloored). Both values floor to 0
+    /// at this chokepoint now, for every surface.
+    #[test]
+    fn list_versions_floors_negative_limit_and_offset() {
+        let (_dir, conn) = setup_versions_db();
+        for i in 0..3 {
+            create_version(&conn, "posts", "p1", "published", &json!({"v": i})).unwrap();
+        }
+
+        let neg_limit = list_versions(&conn, "posts", "p1", false, Some(-1), None).unwrap();
+        assert!(
+            neg_limit.is_empty(),
+            "LIMIT -1 must floor to 0, not disable the limit"
+        );
+
+        let neg_offset = list_versions(&conn, "posts", "p1", false, Some(2), Some(-3)).unwrap();
+        assert_eq!(neg_offset.len(), 2, "negative offset must floor to 0");
+        assert_eq!(neg_offset[0].version, 3);
     }
 
     #[test]

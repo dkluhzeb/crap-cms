@@ -16,7 +16,10 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error},
+            shared::{
+                get_user_doc, htmx_redirect, parse_request_locale, paths, redirect_response,
+                toast_only_error,
+            },
         },
     },
     core::{
@@ -204,9 +207,11 @@ pub(in crate::admin::handlers::collections) async fn do_update(
 
     let action = form.take_action();
     let draft = action == "save_draft";
-    let locale_ctx =
-        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = match parse_request_locale(form.take_locale().as_deref(), &state.config.locale)
+    {
+        Ok(ctx) => ctx,
+        Err(msg) => return toast_only_error(&msg),
+    };
 
     let mut upload_result = None;
 

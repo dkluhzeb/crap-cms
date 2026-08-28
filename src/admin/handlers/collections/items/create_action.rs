@@ -19,8 +19,8 @@ use crate::{
             },
             forms::{FormData, parse_form},
             shared::{
-                get_user_doc, htmx_inline_created, htmx_redirect_with_created, paths,
-                redirect_response, toast_only_error,
+                get_user_doc, htmx_inline_created, htmx_redirect_with_created,
+                parse_request_locale, paths, redirect_response, toast_only_error,
             },
         },
     },
@@ -216,9 +216,11 @@ pub async fn create_action(
     };
 
     let draft = form.take_action() == "save_draft";
-    let locale_ctx =
-        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = match parse_request_locale(form.take_locale().as_deref(), &state.config.locale)
+    {
+        Ok(ctx) => ctx,
+        Err(msg) => return toast_only_error(&msg),
+    };
 
     let form_for_error = form.clone();
 

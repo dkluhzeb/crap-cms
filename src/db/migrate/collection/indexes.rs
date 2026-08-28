@@ -167,6 +167,42 @@ fn collect_compound_indexes(
 /// Sync B-tree indexes for a collection table: field-level `index: true` and
 /// collection-level compound `indexes`. Idempotent — creates missing indexes,
 /// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
+/// Case-insensitive unique backstop for the auth identity column. The
+/// validation-layer unique check compares emails with `LOWER() = LOWER()`
+/// (matching `find_by_email`'s login lookup), but validation can be raced —
+/// two concurrent registrations differing only in case would both pass and
+/// then collide as one account at login. The expression index makes the
+/// database itself enforce one account per case-folded email. Partial
+/// (`WHERE _deleted_at IS NULL`) on soft-delete collections so deleted rows
+/// don't block re-registration.
+fn collect_auth_email_ci_index(
+    slug: &str,
+    def: &CollectionDefinition,
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
+) {
+    if !def.is_auth_collection() {
+        return;
+    }
+
+    // Injected for every auth collection when absent, so it's always present;
+    // guard anyway for hand-built definitions in tests.
+    if !def.fields.iter().any(|f| f.name == "email") {
+        return;
+    }
+
+    let idx_name = index_name(slug, &["email", "ci_unique"]);
+    let partial = if def.soft_delete {
+        " WHERE _deleted_at IS NULL"
+    } else {
+        ""
+    };
+    let sql =
+        format!("CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} (LOWER(email)){partial}");
+
+    add_index(desired, stmts, idx_name, sql);
+}
+
 /// Index the auth token columns. Reset / verification flows look a user up
 /// by `WHERE _reset_token = ?` / `WHERE _verification_token = ?`; without an
 /// index those are full table scans of the user table on every attempt.
@@ -208,6 +244,7 @@ pub(super) fn sync_indexes(
     collect_soft_delete_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_auth_token_indexes(slug, def, &mut desired, &mut stmts);
+    collect_auth_email_ci_index(slug, def, &mut desired, &mut stmts);
 
     // Drop stale indexes (in existing but not in desired)
     let prefix = index_prefix(slug);
@@ -286,6 +323,49 @@ mod tests {
         );
         // verify_email is off by default → no verification-token index.
         assert!(!indexes.contains("idx_users__verification_token"));
+    }
+
+    /// Regression (backstop): the app-level unique check compares emails
+    /// case-insensitively, but nothing at the DB level enforced it — two
+    /// concurrent registrations differing only in case could both land. The
+    /// `LOWER(email)` unique index makes the database reject the second.
+    #[test]
+    fn sync_indexes_auth_email_ci_unique_rejects_case_variant_duplicate() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let mut def = simple_collection(
+            "users",
+            vec![
+                FieldDefinition::builder("email", FieldType::Email)
+                    .required(true)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.auth = Some(Auth::new(true));
+        create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "users", &def, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "users");
+        assert!(
+            indexes.contains("idx_users_email_ci_unique"),
+            "auth collection should get the case-insensitive email backstop; got {indexes:?}"
+        );
+
+        conn.execute(
+            "INSERT INTO users (id, email) VALUES ('u1', 'Victim@x.com')",
+            &[],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO users (id, email) VALUES ('u2', 'victim@x.com')",
+            &[],
+        );
+        assert!(
+            dup.is_err(),
+            "case-variant duplicate email must be rejected by the DB backstop"
+        );
     }
 
     #[test]

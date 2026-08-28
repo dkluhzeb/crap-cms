@@ -35,6 +35,18 @@ pub fn extract_editor_locale(headers: &HeaderMap, config: &LocaleConfig) -> Opti
     }
 }
 
+/// Parse an explicitly requested locale (form `_locale` field / validate
+/// payload), rejecting unknown locales. Swallowing the parse error would
+/// drop the locale context entirely, and a `None` context on a localized
+/// collection reads/writes bare columns (`title` vs `title__en`) — so a bad
+/// locale string must 400 at the surface, matching the gRPC/MCP/Lua APIs.
+pub fn parse_request_locale(
+    locale: Option<&str>,
+    config: &LocaleConfig,
+) -> Result<Option<LocaleContext>, String> {
+    LocaleContext::from_locale_string(locale, config).map_err(|e| e.to_string())
+}
+
 /// Build locale template context (selector data) from config + current locale.
 /// Returns `(locale_ctx_for_db, locale_template_data)` — the second element
 /// is `None` when locale support is disabled, otherwise carries the typed

@@ -1032,6 +1032,113 @@ async fn create_under_non_default_locale_is_rejected() {
     );
 }
 
+/// Regression: an unknown `_locale` on a form post used to be silently
+/// swallowed (`from_locale_string(...).unwrap_or(None)`) into "no locale
+/// context", which on a localized collection reads/writes bare columns.
+/// It must be rejected with a 422 toast naming the invalid locale.
+#[tokio::test]
+async fn create_with_unknown_locale_is_rejected() {
+    let app = setup_localized_app();
+    let user_id = create_test_user(&app, "badlocale_create@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "badlocale_create@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/pages")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from("title=Bad+Locale&body=Content&_locale=xx"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let toast = resp
+        .headers()
+        .get("X-Crap-Toast")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        toast.contains("Invalid locale"),
+        "toast should name the invalid locale, got: {toast}"
+    );
+}
+
+/// Regression twin of `create_with_unknown_locale_is_rejected` for the
+/// update action.
+#[tokio::test]
+async fn update_with_unknown_locale_is_rejected() {
+    let app = setup_localized_app();
+    let user_id = create_test_user(&app, "badlocale_update@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "badlocale_update@test.com");
+
+    let def = app.registry.get_collection("pages").unwrap().clone();
+    let locale_ctx =
+        query::LocaleContext::from_locale_string(Some("en"), &make_locale_config()).unwrap();
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Original"))]).into();
+    let doc = query::create(&tx, "pages", &def, &data, locale_ctx.as_ref()).unwrap();
+    tx.commit().unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post(format!("/admin/collections/pages/{}", doc.id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from("title=Updated&_locale=xx"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let toast = resp
+        .headers()
+        .get("X-Crap-Toast")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        toast.contains("Invalid locale"),
+        "toast should name the invalid locale, got: {toast}"
+    );
+}
+
+/// Regression twin for the validate endpoint: unknown locale in the JSON
+/// payload must produce a validation error, not a silent bare-column run.
+#[tokio::test]
+async fn validate_with_unknown_locale_is_rejected() {
+    let app = setup_localized_app();
+    let user_id = create_test_user(&app, "badlocale_validate@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "badlocale_validate@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/pages/validate")
+                .header("content-type", "application/json")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(
+                    json!({ "data": { "title": "T" }, "locale": "xx" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("\"valid\":false") && body.contains("Invalid locale"),
+        "validate must reject the unknown locale, got: {body}"
+    );
+}
+
 #[tokio::test]
 async fn delete_action_returns_redirect() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);

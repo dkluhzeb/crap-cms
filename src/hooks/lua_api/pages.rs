@@ -112,6 +112,17 @@ fn page_register(
     }
 
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
+
+    // Duplicate registration is a config bug — the Lua table would silently
+    // keep only the last entry, so whichever definition file loads later
+    // would win without a trace. Fail loudly instead (parity with
+    // collections/globals/jobs, which reject duplicate slugs).
+    if pages.contains_key(slug.as_str())? {
+        return Err(RuntimeError(format!(
+            "crap.pages.register: page '{slug}' is already registered"
+        )));
+    }
+
     let entry = lua.create_table()?;
     if let Some(s) = &opts.section {
         entry.set("section", s.as_str())?;
@@ -232,6 +243,35 @@ mod tests {
 
         let result = lua.load(r#"crap.pages.register("../bad", {})"#).exec();
         assert!(result.is_err());
+
+        // Uppercase contradicts the documented charset and collides
+        // case-insensitively with template file names.
+        let result = lua
+            .load(r#"crap.pages.register("SystemStatus", {})"#)
+            .exec();
+        assert!(result.is_err(), "uppercase slug must be rejected");
+    }
+
+    /// Regression: registering the same slug twice silently kept only the
+    /// last entry (plain Lua table overwrite) — whichever definition file
+    /// loaded later won without a trace. Duplicates fail loudly now.
+    #[test]
+    fn duplicate_registration_is_rejected() {
+        let lua = lua_in_init_phase();
+
+        lua.load(r#"crap.pages.register("status", { label = "First" })"#)
+            .exec()
+            .unwrap();
+
+        let err = lua
+            .load(r#"crap.pages.register("status", { label = "Second" })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already registered"),
+            "expected duplicate-slug error, got: {err}"
+        );
     }
 
     /// Regression: `crap.pages.register` called outside the init phase must
