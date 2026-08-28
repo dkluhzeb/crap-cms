@@ -375,7 +375,10 @@ scenario_create() {
     fi
     header "Scenario: gRPC Create"
     # ghz template: {{.UUID}} generates a unique slug per request
-    local data="{\"collection\":\"posts\",\"data\":{\"title\":\"Loadtest ghz {{.UUID}}\",\"slug\":\"loadtest-ghz-{{.UUID}}\",\"post_type\":\"article\",\"author\":\"${USER_ID}\",\"content\":\"Load test document.\"}}"
+    # `data` is a crap.DataMap: { fields: map<string, FieldValue> } with a
+    # oneof per value (string_value / int_value / …) — flat JSON maps stopped
+    # working when the proto moved to typed FieldValue (alpha.10).
+    local data="{\"collection\":\"posts\",\"data\":{\"fields\":{\"title\":{\"string_value\":\"Loadtest ghz {{.UUID}}\"},\"slug\":{\"string_value\":\"loadtest-ghz-{{.UUID}}\"},\"post_type\":{\"string_value\":\"article\"},\"author\":{\"string_value\":\"${USER_ID}\"},\"content\":{\"string_value\":\"Load test document.\"}}}}"
     for c in $CONCURRENCY_LEVELS; do
         run_ghz "create" "$c" "Create" "$data" "$JWT_TOKEN"
     done
@@ -435,7 +438,7 @@ scenario_update() {
     fi
     header "Scenario: gRPC Update"
     # Idempotent update — same field value each time
-    local data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"content\":\"Updated by ghz loadtest.\"}}"
+    local data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"fields\":{\"content\":{\"string_value\":\"Updated by ghz loadtest.\"}}}}"
     for c in $CONCURRENCY_LEVELS; do
         run_ghz "update" "$c" "Update" "$data" "$JWT_TOKEN"
     done
@@ -473,7 +476,7 @@ scenario_mixed() {
     header "Scenario: Mixed read+write (Find readers + Update writers, concurrent)"
 
     local find_data='{"collection":"posts","limit":"10","depth":"0"}'
-    local update_data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"content\":\"Mixed loadtest update.\"}}"
+    local update_data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"fields\":{\"content\":{\"string_value\":\"Mixed loadtest update.\"}}}}"
 
     for c in $CONCURRENCY_LEVELS; do
         # Reads dominate; a small writer cohort holds the write lock. At
