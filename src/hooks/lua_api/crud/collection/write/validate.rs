@@ -100,8 +100,6 @@ fn collections_validate(
     let ExtractedData { data, password } = extract_data(&data, &def)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .build();
@@ -127,7 +125,6 @@ fn collections_validate(
     let input = WriteInput::builder(data)
         .password(password.as_deref())
         .locale_ctx(locale_ctx.as_ref())
-        .locale(opts.locale)
         .draft(opts.draft)
         .ui_locale(ui_locale.clone())
         .build();

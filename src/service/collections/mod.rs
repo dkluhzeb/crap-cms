@@ -2,6 +2,7 @@
 //!
 //! Each function wraps before-hooks -> DB operation -> after-hooks in a single transaction.
 
+mod bulk_access;
 mod create;
 mod create_many;
 mod delete;

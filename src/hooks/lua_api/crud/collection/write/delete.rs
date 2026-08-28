@@ -14,12 +14,15 @@ use crate::{
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                check_hook_depth, hook_invalidation_transport, hook_lua_infra, hook_user,
-                resolve_collection,
+                check_hook_depth, hook_invalidation_transport, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
             },
         },
     },
-    service::{LuaWriteHooks, ServiceContext, delete_document},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Delete, DeleteArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -96,14 +99,20 @@ fn collections_delete(
     let lua_infra = hook_lua_infra(lua);
     let mut def = resolve_collection(reg, &collection)?;
 
-    if opts.force_hard_delete && def.soft_delete {
-        def.make_hard_delete();
+    // Shared operation body + shared force-hard-delete definition adjustment.
+    let args = DeleteArgs::builder(id.as_str())
+        .force_hard_delete(opts.force_hard_delete)
+        .events(opts.events)
+        .build();
+    if let Some(adjusted) = Delete::adjust_collection_def(&args, &def) {
+        def = adjusted;
     }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete");
 
+    let ui_locale = hook_ui_locale(lua);
+
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -118,14 +127,16 @@ fn collections_delete(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .invalidation_transport(invalidation_transport)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .storage(storage)
+        .locale_config(Some(lc))
         .build();
 
-    delete_document(&ctx, &id, storage.as_deref(), Some(lc))
-        .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
+    Delete::run(&ctx, args).map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
 
     Ok(true)
 }

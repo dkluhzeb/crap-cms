@@ -11,7 +11,10 @@ use serde_json::{Value, to_string_pretty};
 
 use crate::{
     db::{LocaleContext, query},
-    mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
+    mcp::tools::{
+        ToolExecCtx,
+        collection::helpers::{doc_to_json, parse_select},
+    },
     service::op::{self, FindById, FindByIdArgs, Principal, TargetRef},
 };
 
@@ -64,13 +67,14 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .locale_ctx(locale_ctx)
         .use_draft(use_draft)
         .include_deleted(include_deleted)
+        .select(parse_select(args))
         .build();
 
     let doc = op::run::<FindById>(
         &ctx.infra,
         Principal::Override,
         &TargetRef::collection(slug),
-        &op_args,
+        op_args,
     )
     .map_err(|e| e.into_service_error().into_anyhow())?;
 

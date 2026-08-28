@@ -1,73 +1,20 @@
 //! `ListVersions` handler — list version history for a document.
+//!
+//! Codec over [`op::run_blocking`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::error;
 
 use crate::{
-    api::handlers::proto::{floor_optional_limit, pagination_result_to_proto},
+    api::handlers::proto::pagination_result_to_proto,
     api::{
         content,
         handlers::{ContentService, enum_mapping},
     },
-    core::{CollectionDefinition, document::VersionSnapshot},
-    service::{
-        AppInfra, ListVersionsInput, PaginatedResult, RunnerReadHooks, ServiceContext,
-        list_versions,
-    },
+    core::collection::Surface,
+    service::op::{self, Credentials, ListVersions, ListVersionsArgs, Principal, TargetRef},
 };
-
-/// Owned bundle for the `ListVersions` spawn-blocking body. Process-stable
-/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
-struct ListVersionsBlockingInput {
-    infra: Arc<AppInfra>,
-    headers: HashMap<String, String>,
-    collection: String,
-    id: String,
-    limit: Option<i64>,
-    def: CollectionDefinition,
-    token: Option<String>,
-}
-
-fn list_versions_blocking(
-    input: &ListVersionsBlockingInput,
-) -> Result<PaginatedResult<VersionSnapshot>, Status> {
-    let infra = &input.infra;
-
-    let conn = infra
-        .pool
-        .get()
-        .inspect_err(|e| error!("ListVersions pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
-
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-    )?;
-
-    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let hooks = RunnerReadHooks::new(&infra.hook_runner, &conn, user_doc, None);
-
-    let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .infra(infra)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(user_doc)
-        .build();
-
-    let list_input = ListVersionsInput::builder(&input.id)
-        .limit(input.limit)
-        .build();
-
-    list_versions(&ctx, &list_input).map_err(Status::from)
-}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -80,29 +27,26 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        let def = self.get_collection_def(&req.collection)?;
+        // Pure decode — the limit floor lives at the service chokepoint.
+        let args = ListVersionsArgs::builder(req.id.clone())
+            .limit(req.limit)
+            .build();
 
-        if !def.has_versions() {
-            return Err(Status::failed_precondition(format!(
-                "Collection '{}' does not have versioning enabled",
-                req.collection
-            )));
-        }
-
-        let input = ListVersionsBlockingInput {
-            infra: Arc::clone(&self.infra),
-            collection: req.collection.clone(),
-            id: req.id.clone(),
-            limit: floor_optional_limit(req.limit),
-            def,
-            token,
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
             headers,
-        };
+        });
 
-        let result = task::spawn_blocking(move || list_versions_blocking(&input))
-            .await
-            .inspect_err(|e| error!("ListVersions task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
+        let result = op::run_blocking::<ListVersions>(
+            Arc::clone(&self.infra),
+            principal,
+            TargetRef::collection(req.collection),
+            args,
+        )
+        .await
+        .map_err(|e| self.core_error_status(e))?;
 
         let proto_versions: Vec<content::VersionInfo> = result
             .docs

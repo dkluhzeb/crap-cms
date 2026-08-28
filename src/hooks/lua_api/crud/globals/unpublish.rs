@@ -15,7 +15,10 @@ use crate::hooks::lua_api::crud::{
     get_tx_conn,
     helpers::{check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_global},
 };
-use crate::service::{LuaWriteHooks, ServiceContext, unpublish_global_document};
+use crate::service::{
+    LuaWriteHooks, ServiceContext,
+    op::{Operation, UnpublishGlobal, UnpublishGlobalArgs},
+};
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Optional options for `crap.globals.unpublish`.
@@ -75,17 +78,9 @@ fn globals_unpublish(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_global(&state.registry, &slug)?;
 
-    if !def.has_versions() {
-        return Err(RuntimeError(format!(
-            "Global '{slug}' does not have versioning enabled"
-        )));
-    }
-
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &slug, "update");
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(state.registry.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -95,12 +90,14 @@ fn globals_unpublish(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .locale_config(Some(&state.locale_config))
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    let doc = unpublish_global_document(&ctx)
+    // Shared operation body — identical semantics on every surface.
+    let doc = UnpublishGlobal::run(&ctx, UnpublishGlobalArgs::default())
         .map_err(|e| RuntimeError(format!("unpublish global error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)

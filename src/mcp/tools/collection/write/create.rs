@@ -1,4 +1,9 @@
 //! Execute `create` — create a new document.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`]. Dispatching through
+//! the operation core also fixes the piecemeal context this tool used to
+//! build (it silently omitted the invalidation transport, email context, and
+//! locale config).
 
 use anyhow::{Context as _, Result};
 use serde_json::{Value, to_string_pretty};
@@ -13,7 +18,7 @@ use crate::{
             reserved_data_keys,
         },
     },
-    service::{ServiceContext, WriteInput, create_document},
+    service::op::{self, Create, CreateArgs, Principal, TargetRef},
 };
 
 /// Execute `create` — create a new document.
@@ -45,25 +50,20 @@ pub(in crate::mcp::tools) fn exec_create(
 
     let data = extract_data_from_args(args, &reserved_data_keys(def, false), &def.fields)?;
 
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
-        .password_policy(Some(&ctx.config.auth.password_policy))
+    let op_args = CreateArgs::builder(data)
+        .password(password)
+        .locale_ctx(locale_ctx)
+        .draft(draft)
+        .events(events)
         .build();
 
-    let (doc, _ctx) = create_document(
-        &svc_ctx,
-        WriteInput::builder(data)
-            .password(password.as_deref())
-            .locale_ctx(locale_ctx.as_ref())
-            .locale(locale.map(std::string::ToString::to_string))
-            .draft(draft)
-            .build(),
-    )?;
+    let (doc, _req_context) = op::run::<Create>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP create {}: {} [client={}]",

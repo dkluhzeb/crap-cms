@@ -462,7 +462,6 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
         .registry(Arc::clone(&registry))
         .config(&config)
         .invalidation_transport(invalidation_transport.clone())
-        .populate_singleflight(populate_singleflight.clone())
         .build()?;
 
     run_on_init_hooks(&config, &pool, &hook_runner)?;

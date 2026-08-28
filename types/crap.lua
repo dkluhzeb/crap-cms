@@ -1027,6 +1027,7 @@ function crap.collections.delete(collection, id, opts) end
 --- @class crap.UnpublishOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`).
+--- @field events? boolean Emit a live-update event for this change (default: `true`). Parity with `crap.collections.update{ unpublish = true, events = ... }`.
 
 --- Unpublish a document — sets `_status` to `"draft"` without modifying
 --- the underlying field data. Only available on collections with

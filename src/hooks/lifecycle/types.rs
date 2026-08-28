@@ -10,7 +10,7 @@ use crate::{
         ConditionExpr, Document, Registry, SharedCache, SharedEventTransport,
         SharedInvalidationTransport, SharedStorage,
     },
-    db::{DbConnection, DbPool, query::SharedPopulateSingleflight},
+    db::{DbConnection, DbPool},
     service::{EventQueue, ServiceContext, VerificationQueue},
     typegen::lua::LuaAlias,
 };
@@ -179,11 +179,6 @@ pub(crate) struct LuaVmInfra {
     /// live-stream tear-down signals from Lua-invoked service calls.
     /// `None` = no-op.
     pub(crate) invalidation_transport: Option<SharedInvalidationTransport>,
-    /// Process-wide populate singleflight so Lua-invoked finds can dedup
-    /// populate cache-miss fetches across concurrent requests. `None` falls
-    /// back to a fresh per-call singleflight. For override-access Lua calls
-    /// the service layer's guardrail discards it either way.
-    pub(crate) populate_singleflight: Option<SharedPopulateSingleflight>,
     /// Max allowed hook recursion depth, from `[hooks] max_depth`.
     pub(crate) max_hook_depth: u32,
     /// Whether the system is in default-deny mode for access control.
@@ -199,7 +194,6 @@ impl Default for LuaVmInfra {
             locale_config: LocaleConfig::default(),
             storage: None,
             invalidation_transport: None,
-            populate_singleflight: None,
             max_hook_depth: 3,
             default_deny: false,
         }

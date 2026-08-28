@@ -3,7 +3,6 @@
 //! Extracts duplicated patterns from the registration closures (opts parsing,
 //! user/locale extraction, registry lookup, hook depth checking, data extraction).
 
-use crate::hooks::lua_api::utils::lua_err;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use serde_json::Value;
 use tracing::warn;
@@ -11,17 +10,13 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, GlobalDefinition, HookRef, Registry,
+        CollectionDefinition, Document, DocumentFields, GlobalDefinition, Registry,
         SharedInvalidationTransport,
     },
-    db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        AccessCheckInput, HookDepth, HookDepthGuard, LuaCrudInfra, LuaVmInfra, UiLocaleContext,
-        UserContext,
-        access::check_access_with_lua,
+        HookDepth, HookDepthGuard, LuaCrudInfra, LuaVmInfra, UiLocaleContext, UserContext,
         converters::{lua_table_to_hashmap, lua_table_to_json_map},
     },
-    service::{validate_access_constraint_locales, validate_access_constraints},
 };
 
 /// Extract the authenticated user document from Lua `app_data` (if present).
@@ -34,16 +29,6 @@ pub(crate) fn hook_user(lua: &Lua) -> Option<Document> {
 pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
     lua.app_data_ref::<UiLocaleContext>()
         .and_then(|uc| uc.0.clone())
-}
-
-/// Extract the process-wide populate singleflight from the VM-stable
-/// [`LuaVmInfra`] (threaded in via `HookRunner::builder()`). Returns `None`
-/// when no singleflight was threaded in, so the service layer falls back to a
-/// fresh per-call singleflight. For override-access reads the service layer
-/// discards this Arc via its access-leak guardrail.
-pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSingleflight> {
-    lua.app_data_ref::<LuaVmInfra>()
-        .and_then(|i| i.populate_singleflight.clone())
 }
 
 /// Build a `LuaCrudInfra` from all available Lua `app_data` fields.
@@ -117,85 +102,6 @@ pub(crate) fn check_hook_depth<'a>(
     };
 
     (hooks_enabled, guard)
-}
-
-/// Parameters for [`enforce_access`].
-pub(crate) struct EnforceAccessParams<'a> {
-    pub slug: &'a str,
-    pub override_access: bool,
-    pub access_fn: Option<&'a HookRef>,
-    pub id: Option<&'a str>,
-    /// The incoming write data, surfaced to the access fn as `ctx.data` —
-    /// `update_many` passes the patch so data-gating access fns work on the
-    /// bulk pre-flight exactly like on the per-document check; `delete_many`
-    /// has no incoming data and passes `None`.
-    pub data: Option<&'a DocumentFields>,
-    pub deny_msg: &'a str,
-    /// The operation reported to the access function as `ctx.operation`
-    /// (e.g. `"update"` for `update_many`, `"delete"` for `delete_many`).
-    /// The access fn passed in is that operation's gate, so the operation
-    /// label must match it — not the `"find"` used to select candidate rows.
-    pub operation: &'a str,
-    /// Whether the caller is about to inject a `_status = 'published'` filter.
-    /// Controls whether access-hook `_status` constraints are accepted.
-    pub injecting_status: bool,
-}
-
-/// Enforce access control: check the given access function, merge constrained filters, deny if blocked.
-///
-/// Returns `Ok(())` if access is allowed (possibly after extending `filters` with constraints).
-/// Returns `Err` with a `RuntimeError` if access is denied or if an access hook
-/// returns a filter table that references a disallowed system column.
-/// When `override_access` is true, skips the check entirely.
-pub(crate) fn enforce_access(
-    lua: &Lua,
-    params: &EnforceAccessParams<'_>,
-    filters: &mut Vec<FilterClause>,
-) -> LuaResult<()> {
-    if params.override_access {
-        return Ok(());
-    }
-
-    let user_doc = hook_user(lua);
-    let result = check_access_with_lua(
-        lua,
-        &AccessCheckInput::builder(params.operation, params.slug)
-            .access(params.access_fn)
-            .user(user_doc.as_ref())
-            .id(params.id)
-            .data(params.data)
-            .build(),
-    )
-    .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
-
-    match result {
-        AccessResult::Denied => Err(RuntimeError(params.deny_msg.to_string())),
-        AccessResult::Constrained(extra) => {
-            validate_access_constraints(&extra, false, params.injecting_status, params.slug)
-                .map_err(lua_err)?;
-
-            // Reject locale-scoped-field constraints here too (Lua bulk
-            // update_many/delete_many): consume them as SQL only, so no leak,
-            // but keep operator feedback uniform with every other surface. The
-            // registry snapshot is in the VM-stable infra bundle.
-            if let Some(infra) = lua.app_data_ref::<LuaVmInfra>() {
-                let registry = &infra.registry;
-                let fields = registry
-                    .get_collection(params.slug)
-                    .map(|d| &d.fields)
-                    .or_else(|| registry.get_global(params.slug).map(|d| &d.fields));
-
-                if let Some(fields) = fields {
-                    validate_access_constraint_locales(&extra, fields, params.slug)
-                        .map_err(lua_err)?;
-                }
-            }
-
-            filters.extend(extra);
-            Ok(())
-        }
-        AccessResult::Allowed => Ok(()),
-    }
 }
 
 /// Extracted data from a Lua data table for create/update/validate operations.

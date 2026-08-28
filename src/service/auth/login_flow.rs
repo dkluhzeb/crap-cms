@@ -1,0 +1,212 @@
+//! The shared credential-verification flow behind login.
+//!
+//! The gRPC `Login` RPC and the admin login action used to each carry a
+//! near-copy of this sequence (local password auth → custom strategy
+//! fallback → locked/verified/session-version checks → timing
+//! equalization), and the copies had drifted: the admin twin drew its
+//! connection from the READ pool while `authenticate_local` writes lockout
+//! counters, the gRPC twin silently swallowed strategy errors the admin twin
+//! logged, and only the admin twin enforced MFA. One flow, one behavior.
+//!
+//! Surfaces stay codecs: rate limiting, wire decode, and the success shape
+//! (JWT response vs session cookie vs MFA challenge) remain per surface.
+
+use std::collections::HashMap;
+
+use tracing::error;
+
+use crate::{
+    core::{
+        CollectionDefinition, Document,
+        auth::PasswordProvider,
+        collection::{Auth, MfaMode},
+    },
+    db::BoxedConnection,
+    hooks::{HookRunner, lifecycle::AuthStrategyInput},
+    service::{AppInfra, ServiceContext, ServiceError, auth::authenticate_local},
+};
+
+/// Verified credentials: the user document and its current session version.
+pub struct LoginVerified {
+    pub user: Document,
+    pub session_version: u64,
+}
+
+/// Outcome of [`verify_login`].
+pub enum LoginOutcome {
+    /// Credentials verified and no MFA required — the surface may mint a
+    /// session.
+    Verified(LoginVerified),
+    /// Credentials verified but the collection requires email MFA. The
+    /// surface must run its MFA step; minting a full session here would
+    /// bypass the second factor.
+    MfaRequired(LoginVerified),
+    /// Recoverable failure (unknown user, wrong password, locked,
+    /// unverified) — deny uniformly, leaking nothing about which.
+    Denied,
+}
+
+/// Per-call inputs for [`verify_login`]. All fields required; constructed at
+/// the two login codecs — plain struct literal.
+pub struct LoginFlowRequest<'a> {
+    pub slug: &'a str,
+    pub def: &'a CollectionDefinition,
+    pub email: &'a str,
+    pub password: &'a str,
+    /// Transport headers, exposed to custom auth strategies.
+    pub headers: &'a HashMap<String, String>,
+    /// Client address, exposed to custom auth strategies.
+    pub remote_addr: Option<&'a str>,
+    pub password_provider: &'a dyn PasswordProvider,
+}
+
+/// Verify login credentials: local email+password first, then any configured
+/// custom strategies; strategy-authenticated users get the same
+/// locked/verified/session-version checks (fail closed). Draws a WRITE
+/// connection — local auth updates lockout counters on it.
+///
+/// Returns [`LoginOutcome::Denied`] for every recoverable failure; timing is
+/// equalized with a dummy password verification so "no such user" and
+/// "wrong password" are indistinguishable.
+///
+/// # Errors
+///
+/// Returns an error only for system failures (pool, DB, hook runtime).
+pub fn verify_login(
+    infra: &AppInfra,
+    req: &LoginFlowRequest<'_>,
+) -> Result<LoginOutcome, ServiceError> {
+    let conn = infra
+        .pool
+        .write()
+        .map_err(ServiceError::Internal)
+        .inspect_err(|e| error!("Login DB connection error: {e}"))?;
+
+    let allows_password = req
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(Auth::password_login_enabled);
+    let require_verified = req
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(Auth::requires_verify_email);
+
+    // Local email+password authentication via the service chokepoint.
+    if allows_password {
+        let ctx = ServiceContext::collection(req.slug, req.def)
+            .conn(&conn)
+            .build();
+
+        match authenticate_local(
+            &ctx,
+            req.email,
+            req.password,
+            req.password_provider,
+            require_verified,
+        ) {
+            Ok(result) => {
+                return Ok(mfa_gate(
+                    req.def,
+                    LoginVerified {
+                        user: result.user,
+                        session_version: result.session_version,
+                    },
+                ));
+            }
+            // Recoverable — fall through to strategies (whose results are
+            // re-checked for locked/verified below).
+            Err(
+                ServiceError::InvalidCredentials
+                | ServiceError::AccountLocked
+                | ServiceError::EmailNotVerified,
+            ) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Fallback: custom auth strategies (Lua). Credentials and the client
+    // address are exposed so a strategy can verify against an external system.
+    if let Some(user) = try_strategy_auth(&conn, req, &infra.hook_runner) {
+        let ctx = ServiceContext::slug_only(req.slug).conn(&conn).build();
+
+        // Strategy-authenticated users still need locked/verified checks. A
+        // lookup failure must fail CLOSED (deny) — letting a locked account
+        // in on a transient DB error is an auth bypass.
+        if crate::service::auth::is_locked(&ctx, &user.id)? {
+            return Ok(LoginOutcome::Denied);
+        }
+
+        if require_verified && !crate::service::auth::is_verified(&ctx, &user.id)? {
+            return Ok(LoginOutcome::Denied);
+        }
+
+        let session_version = crate::service::auth::get_session_version(&ctx, &user.id)?;
+
+        return Ok(mfa_gate(
+            req.def,
+            LoginVerified {
+                user,
+                session_version,
+            },
+        ));
+    }
+
+    // Equalize timing when all auth methods fail — prevents distinguishing
+    // "no valid user" (fast) from "wrong password" (Argon2-slow) via
+    // response time.
+    if allows_password {
+        req.password_provider.dummy_verify();
+    }
+
+    Ok(LoginOutcome::Denied)
+}
+
+/// Route a verified login through the collection's MFA requirement.
+fn mfa_gate(def: &CollectionDefinition, verified: LoginVerified) -> LoginOutcome {
+    let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Email);
+
+    if mfa_enabled {
+        LoginOutcome::MfaRequired(verified)
+    } else {
+        LoginOutcome::Verified(verified)
+    }
+}
+
+/// Try each configured auth strategy in order, returning the first match.
+/// Strategy errors are logged and skipped — operators need visibility into
+/// failures (DB errors, bad config, Lua panics) that would otherwise silence
+/// themselves as "authentication failed".
+fn try_strategy_auth(
+    conn: &BoxedConnection,
+    req: &LoginFlowRequest<'_>,
+    hook_runner: &HookRunner,
+) -> Option<Document> {
+    let auth = req.def.auth.as_ref()?;
+
+    let strategy_input = AuthStrategyInput {
+        collection: req.slug,
+        headers: req.headers,
+        email: Some(req.email),
+        password: Some(req.password),
+        remote_addr: req.remote_addr,
+    };
+
+    for strategy in auth.strategies() {
+        match hook_runner.run_auth_strategy(strategy.authenticate, &strategy_input, conn) {
+            Ok(Some(doc)) => return Some(doc),
+            Ok(None) => {}
+            Err(e) => {
+                error!(
+                    collection = req.slug,
+                    strategy = strategy.authenticate.reference(),
+                    error = ?e,
+                    "Custom auth strategy returned an error; continuing to next strategy"
+                );
+            }
+        }
+    }
+
+    None
+}

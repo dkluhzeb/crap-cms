@@ -98,8 +98,6 @@ fn globals_validate(
     data.extend(composite_data);
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .build();
@@ -119,7 +117,6 @@ fn globals_validate(
 
     let input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
-        .locale(opts.locale)
         .draft(opts.draft)
         .ui_locale(ui_locale.clone())
         .build();

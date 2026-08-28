@@ -42,7 +42,7 @@ fn resolve_live_by_id(
         id: Some(input.id),
         locale: input.locale_ctx.map(LocaleContext::access_locale),
         operation: "find_by_id",
-        ui_locale: None,
+        ui_locale: ctx.ui_locale.as_deref(),
     };
 
     let scope = resolve_view_scope(hooks, &read_ctx, requested_views(None, input.use_draft))?;
@@ -83,7 +83,7 @@ fn resolve_trash_by_id(
             id: Some(input.id),
             locale: input.locale_ctx.map(LocaleContext::access_locale),
             operation: "find_by_id",
-            ui_locale: None,
+            ui_locale: ctx.ui_locale.as_deref(),
         },
     )?;
 

@@ -39,7 +39,7 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
         id: None,
         locale: input.locale_ctx.map(LocaleContext::access_locale),
         operation: "count",
-        ui_locale: None,
+        ui_locale: ctx.ui_locale.as_deref(),
     };
 
     let mut merged = input.filters.to_vec();
@@ -107,7 +107,7 @@ pub fn collection_stats(ctx: &ServiceContext, include_drafts: bool) -> Result<Co
         id: None,
         locale: None,
         operation: "count",
-        ui_locale: None,
+        ui_locale: ctx.ui_locale.as_deref(),
     };
 
     let scope = resolve_view_scope(hooks, &read_ctx, requested_views(None, include_drafts))?;

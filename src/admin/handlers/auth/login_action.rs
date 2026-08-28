@@ -8,10 +8,9 @@ use axum::{
 use chrono::Utc;
 use rand::Rng;
 use tokio::task;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 use crate::core::collection::Auth;
-use crate::hooks::lifecycle::AuthStrategyInput;
 use crate::{
     admin::{
         AdminState, auth_middleware,
@@ -25,154 +24,52 @@ use crate::{
     },
     config::EmailConfig,
     core::{
-        CollectionDefinition, Document, DocumentId, SharedPasswordProvider, Slug, auth,
+        CollectionDefinition, Document, DocumentId, SharedPasswordProvider, Slug,
         auth::{ClaimsBuilder, TokenUse},
-        collection::MfaMode,
         email::{self, EmailRenderer, MfaCodeEmailContext},
         normalize_email,
     },
-    db::{BoxedConnection, DbPool},
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError, auth::authenticate_local},
+    db::DbPool,
+    service::{
+        AppInfra, ServiceContext, ServiceError,
+        auth::{self, LoginFlowRequest, LoginOutcome, verify_login},
+    },
 };
 
-/// Successful login result containing the user document and session version.
-struct LoginSuccess {
-    user: Document,
-    session_version: u64,
-}
-
+/// Owned bundle for the login spawn-blocking body. Process-stable
+/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct VerifyParams {
-    pool: DbPool,
+    infra: Arc<AppInfra>,
     password_provider: SharedPasswordProvider,
     slug: String,
     def: CollectionDefinition,
     email: String,
     password: String,
-    verify_email_flag: bool,
-    allows_password: bool,
-    hook_runner: Option<HookRunner>,
+    remote_addr: String,
     headers: HashMap<String, String>,
 }
 
-/// Try external auth strategies via Lua hooks. Returns the first successful
-/// match, or `None` if all strategies fail.
-fn try_strategy_auth(
-    conn: &BoxedConnection,
-    def: &CollectionDefinition,
-    hook_runner: &HookRunner,
-    strategy_input: &AuthStrategyInput,
-) -> Option<Document> {
-    let auth = def.auth.as_ref()?;
-
-    for strategy in auth.strategies() {
-        match hook_runner.run_auth_strategy(strategy.authenticate, strategy_input, conn) {
-            Ok(Some(doc)) => return Some(doc),
-            Ok(None) => {}
-            Err(e) => {
-                // Log and fall through to the next strategy. Operators need visibility
-                // into strategy failures (DB errors, bad config, Lua panics) that
-                // previously silenced themselves as "authentication failed".
-                error!(
-                    collection = strategy_input.collection,
-                    strategy = strategy.authenticate.reference(),
-                    error = ?e,
-                    "Custom auth strategy returned an error; continuing to next strategy"
-                );
-            }
-        }
-    }
-
-    None
-}
-
-/// Synchronous body of [`verify_credentials`], extracted so the
-/// `spawn_blocking` call is a single fn invocation (CLAUDE.md).
-fn verify_credentials_blocking(params: &VerifyParams) -> anyhow::Result<Option<LoginSuccess>> {
-    let conn = params.pool.get()?;
-    let slug = &params.slug;
-    let def = &params.def;
-
-    // Try local email+password authentication via service layer
-    if params.allows_password {
-        let ctx = ServiceContext::collection(slug, def).conn(&conn).build();
-
-        match authenticate_local(
-            &ctx,
-            &params.email,
-            &params.password,
-            &*params.password_provider,
-            params.verify_email_flag,
-        ) {
-            Ok(result) => {
-                return Ok(Some(LoginSuccess {
-                    user: result.user,
-                    session_version: result.session_version,
-                }));
-            }
-            Err(ServiceError::AccountLocked) => {
-                debug!("Login denied: account locked");
-                return Ok(None);
-            }
-            Err(ServiceError::EmailNotVerified) => {
-                debug!("Login denied: email not verified");
-                return Ok(None);
-            }
-            Err(ServiceError::InvalidCredentials) => {}
-            Err(e) => return Err(e.into_anyhow()),
-        }
-    }
-
-    // Fallback: try auth strategies if local auth failed/skipped. The submitted
-    // credentials are exposed so a strategy can verify them against an external
-    // system; the forwarded client IP rides in `headers` (X-Forwarded-For).
-    let strategy_input = AuthStrategyInput {
-        collection: slug,
-        headers: &params.headers,
-        email: Some(&params.email),
-        password: Some(&params.password),
-        remote_addr: None,
-    };
-    if let Some(runner) = &params.hook_runner
-        && let Some(user) = try_strategy_auth(&conn, def, runner, &strategy_input)
-    {
-        let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-
-        // Strategy-authenticated users still need locked/verified checks.
-        // A lookup failure must fail CLOSED (deny) — letting a locked
-        // account in on a transient DB error is an auth bypass. Matches
-        // the `get_session_version` call below.
-        if service::auth::is_locked(&ctx, &user.id).map_err(ServiceError::into_anyhow)? {
-            debug!("Login denied for {}: account locked", user.id);
-            return Ok(None);
-        }
-
-        if params.verify_email_flag
-            && !service::auth::is_verified(&ctx, &user.id).map_err(ServiceError::into_anyhow)?
-        {
-            debug!("Login denied for {}: email not verified", user.id);
-            return Ok(None);
-        }
-
-        let session_version = service::auth::get_session_version(&ctx, &user.id)
-            .map_err(crate::service::ServiceError::into_anyhow)?;
-        return Ok(Some(LoginSuccess {
-            user,
-            session_version,
-        }));
-    }
-
-    if params.allows_password {
-        auth::dummy_verify();
-    }
-
-    Ok(None)
-}
-
+/// Run the shared credential-verification flow
+/// ([`service::auth::verify_login`]) on the blocking pool — the same flow the
+/// gRPC login uses, so the two surfaces cannot drift.
 async fn verify_credentials(
     params: VerifyParams,
-) -> Result<anyhow::Result<Option<LoginSuccess>>, task::JoinError> {
-    task::spawn_blocking(move || verify_credentials_blocking(&params)).await
+) -> Result<Result<LoginOutcome, ServiceError>, task::JoinError> {
+    task::spawn_blocking(move || {
+        verify_login(
+            &params.infra,
+            &LoginFlowRequest {
+                slug: &params.slug,
+                def: &params.def,
+                email: &params.email,
+                password: &params.password,
+                headers: &params.headers,
+                remote_addr: Some(&params.remote_addr),
+                password_provider: &*params.password_provider,
+            },
+        )
+    })
+    .await
 }
 
 /// MFA pending token expiry in seconds (5 minutes).
@@ -208,7 +105,7 @@ fn send_mfa_code(params: &MfaCodeParams, code: &str) {
 
     let ctx = ServiceContext::slug_only(&params.slug).conn(&conn).build();
 
-    if let Err(e) = service::auth::set_mfa_code(&ctx, &params.user_id, code, exp) {
+    if let Err(e) = auth::set_mfa_code(&ctx, &params.user_id, code, exp) {
         error!("Failed to store MFA code: {}", e);
         return;
     }
@@ -400,27 +297,20 @@ pub async fn login_action(
         return login_error(&state, "error_invalid_collection", &form.email);
     }
 
-    let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
-
     let result = verify_credentials(VerifyParams {
-        pool: state.infra.pool.clone(),
+        infra: state.infra.clone(),
         password_provider: state.password_provider.clone(),
         slug: form.collection.clone(),
         def: def.clone(),
         email: form.email.clone(),
         password: form.password.clone(),
-        verify_email_flag: verify_email,
-        allows_password,
-        hook_runner: Some(state.infra.hook_runner.clone()),
+        remote_addr: ip.clone(),
         headers: headers_to_map(&headers),
     })
     .await;
 
-    let login = match result {
-        Ok(Ok(Some(success))) => success,
-        Ok(Ok(None)) => {
-            return login_error(&state, "error_invalid_credentials", &form.email);
-        }
+    let outcome = match result {
+        Ok(Ok(outcome)) => outcome,
         Ok(Err(e)) => {
             error!("Login error: {}", e);
 
@@ -430,6 +320,14 @@ pub async fn login_action(
             error!("Login task error: {}", e);
 
             return login_error(&state, "error_internal", &form.email);
+        }
+    };
+
+    let (login, mfa_required) = match outcome {
+        LoginOutcome::Verified(v) => (v, false),
+        LoginOutcome::MfaRequired(v) => (v, true),
+        LoginOutcome::Denied => {
+            return login_error(&state, "error_invalid_credentials", &form.email);
         }
     };
 
@@ -448,10 +346,8 @@ pub async fn login_action(
         return response;
     }
 
-    // Check if MFA is required
-    let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Email);
-
-    if mfa_enabled {
+    // MFA requirement is decided inside the shared flow.
+    if mfa_required {
         return handle_mfa_challenge(&state, &login.user, &form, login.session_version);
     }
 

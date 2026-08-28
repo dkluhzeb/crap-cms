@@ -28,9 +28,12 @@ use crate::{
         },
     },
     core::{AuthUser, Document, GlobalDefinition, ReqContext, ValidationError},
-    db::{LocaleContext, LocaleMode},
+    db::LocaleContext,
     hooks::ConditionContext,
-    service::{self, AppInfra, ServiceContext, ServiceError},
+    service::{
+        AppInfra, ServiceContext, ServiceError,
+        op::{Operation, UnpublishGlobal, UnpublishGlobalArgs, UpdateGlobal, UpdateGlobalArgs},
+    },
 };
 
 /// Parameters for the blocking global-update task. Process-stable dependencies
@@ -41,36 +44,38 @@ struct UpdateParams {
     def: GlobalDefinition,
     form: FormData,
     locale_ctx: Option<LocaleContext>,
-    locale: Option<String>,
     draft: bool,
     user_doc: Option<Document>,
     ui_locale: Option<String>,
     action: String,
 }
 
-/// Execute the global update (or unpublish) inside a blocking task.
+/// Execute the global update (or unpublish) inside a blocking task via the
+/// shared operation bodies.
 fn update_global_document_blocking(
     params: UpdateParams,
 ) -> Result<(Document, ReqContext), ServiceError> {
     let ctx = ServiceContext::global(&params.slug, &params.def)
         .infra(&params.infra)
         .user(params.user_doc.as_ref())
+        .ui_locale(params.ui_locale)
         .build();
 
-    if params.action == "unpublish" && params.def.has_versions() {
-        let doc = service::unpublish_global_document(&ctx)?;
+    // Route on the action alone — the capability gate (versioning required)
+    // lives in the shared operation body. Guarding here used to silently fall
+    // through to a full update on a non-versioned global, publishing the form
+    // data instead of erroring.
+    if params.action == "unpublish" {
+        let doc = UnpublishGlobal::run(&ctx, UnpublishGlobalArgs::default())?;
 
         Ok((doc, ReqContext::new()))
     } else {
-        service::update_global_document(
-            &ctx,
-            service::WriteInput::builder(params.form)
-                .locale_ctx(params.locale_ctx.as_ref())
-                .locale(params.locale)
-                .draft(params.draft)
-                .ui_locale(params.ui_locale)
-                .build(),
-        )
+        let args = UpdateGlobalArgs::builder(params.form.into())
+            .locale_ctx(params.locale_ctx)
+            .draft(params.draft)
+            .build();
+
+        UpdateGlobal::run(&ctx, args)
     }
 }
 
@@ -163,11 +168,6 @@ pub async fn update_action(
         Err(msg) => return toast_only_error(&msg),
     };
 
-    let locale = locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
-        LocaleMode::Single(l) => Some(l.clone()),
-        _ => None,
-    });
-
     let form_for_error = form.clone();
 
     let params = UpdateParams {
@@ -176,7 +176,6 @@ pub async fn update_action(
         def: def.clone(),
         form,
         locale_ctx,
-        locale,
         draft: action == "save_draft",
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),

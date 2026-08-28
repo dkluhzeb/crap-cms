@@ -116,6 +116,14 @@ fn create_many_pooled(
         wh = wh.with_hooks_enabled(false);
     }
 
+    // Mirror the update_many/delete_many siblings: a trusted caller (MCP's
+    // Principal::Override) must bypass the access hook and field-level
+    // stripping here too — this was the one bulk op missing the block, so MCP
+    // bulk creates were access-gated and silently field-stripped.
+    if ctx.override_access {
+        wh = wh.with_override_access();
+    }
+
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
@@ -132,6 +140,7 @@ fn create_many_pooled(
         let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
             .draft(opts.draft)
+            .ui_locale(ctx.ui_locale.clone())
             .build();
 
         // A failure here returns via `?`; `tx` drops without commit, rolling
@@ -175,6 +184,7 @@ fn create_many_on_conn(
         let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
             .draft(opts.draft)
+            .ui_locale(ctx.ui_locale.clone())
             .build();
 
         let (doc, _after_ctx) = create_document_in_conn(ctx, input)?;

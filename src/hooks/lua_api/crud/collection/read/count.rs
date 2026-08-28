@@ -11,13 +11,16 @@ use serde::Deserialize;
 use crate::{
     config::LocaleConfig,
     core::Registry,
-    db::{FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    db::{FindQuery, LocaleContext},
     hooks::lua_api::crud::{
         filter::convert_where_clause,
         get_tx_conn,
-        helpers::{check_hook_depth, hook_user, resolve_collection},
+        helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_collection},
     },
-    service::{CountDocumentsInput, LuaReadHooks, ServiceContext, count_documents},
+    service::{
+        LuaReadHooks, ServiceContext,
+        op::{Count, CountArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -147,17 +150,18 @@ fn count_inner(
     let def = resolve_collection(reg, collection)?;
 
     let find_query = query.into_find_query()?;
-    let mut filters = find_query.filters;
+    let filters = find_query.filters;
     let search = find_query.search;
-
-    normalize_filter_fields(&mut filters, &def.fields);
 
     // Depth guard: a before_read hook that counts the same collection
     // recurses — cap it like the write paths do.
     let (hooks_enabled, _guard) = check_hook_depth(lua, true, collection, "count");
 
+    let ui_locale = hook_ui_locale(lua);
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
         .hooks_enabled(hooks_enabled)
         .build();
@@ -169,12 +173,13 @@ fn count_inner(
         .override_access(override_access)
         .build();
 
-    let input = CountDocumentsInput::builder(&filters)
-        .locale_ctx(locale_ctx.as_ref())
-        .search(search.as_deref())
+    // Shared operation body — identical semantics on every surface.
+    let args = CountArgs::builder(filters)
+        .locale_ctx(locale_ctx)
+        .search(search)
         .include_drafts(draft)
         .trash(trash)
         .build();
 
-    count_documents(&ctx, &input).map_err(lua_err)
+    Count::run(&ctx, args).map_err(lua_err)
 }

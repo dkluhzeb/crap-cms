@@ -1,66 +1,21 @@
 //! Unpublish handler — revert a published document to draft status.
+//!
+//! Codec over [`op::run_blocking`], invoked from the update handler when
+//! `unpublish = true`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::task;
 use tonic::{Response, Status};
-use tracing::error;
 
 use crate::{
     api::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::CollectionDefinition,
-    service::{self, AppInfra, ServiceContext, ServiceError},
+    core::collection::Surface,
+    service::op::{self, Credentials, Principal, TargetRef, Unpublish, UnpublishArgs},
 };
-
-/// Owned bundle for the `Unpublish` spawn-blocking body. Process-stable
-/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
-struct UnpublishBlockingInput {
-    infra: Arc<AppInfra>,
-    headers: HashMap<String, String>,
-    db_kind: String,
-    collection: String,
-    id: String,
-    def: CollectionDefinition,
-    token: Option<String>,
-    events: bool,
-}
-
-fn unpublish_blocking(input: &UnpublishBlockingInput) -> Result<content::Document, Status> {
-    let infra = &input.infra;
-
-    let conn = infra
-        .pool
-        .get()
-        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
-
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-    )?;
-
-    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-
-    drop(conn);
-
-    let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .infra(infra)
-        .user(user_doc.as_ref())
-        .emit_events(input.events)
-        .build();
-
-    let doc = service::unpublish_document(&ctx, &input.id)
-        .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
-
-    Ok(document_to_proto(&doc, &input.collection))
-}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -70,26 +25,27 @@ impl ContentService {
         token: Option<String>,
         headers: HashMap<String, String>,
         req: &content::UpdateRequest,
-        def: &CollectionDefinition,
     ) -> Result<Response<content::UpdateResponse>, Status> {
-        let input = UnpublishBlockingInput {
-            infra: Arc::clone(&self.infra),
-            db_kind: self.db_kind.clone(),
-            collection: req.collection.clone(),
-            id: req.id.clone(),
-            def: def.clone(),
-            token,
-            headers,
-            events: req.events.unwrap_or(true),
-        };
+        let args = UnpublishArgs::new(req.id.clone()).events(req.events.unwrap_or(true));
 
-        let proto_doc = task::spawn_blocking(move || unpublish_blocking(&input))
-            .await
-            .inspect_err(|e| error!("Task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
+            headers,
+        });
+
+        let doc = op::run_blocking::<Unpublish>(
+            Arc::clone(&self.infra),
+            principal,
+            TargetRef::collection(req.collection.clone()),
+            args,
+        )
+        .await
+        .map_err(|e| self.core_error_status(e))?;
 
         Ok(Response::new(content::UpdateResponse {
-            document: Some(proto_doc),
+            document: Some(document_to_proto(&doc, &req.collection)),
         }))
     }
 }

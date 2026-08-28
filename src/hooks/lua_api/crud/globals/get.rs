@@ -15,7 +15,10 @@ use crate::hooks::lua_api::crud::{
     get_tx_conn,
     helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_global},
 };
-use crate::service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document};
+use crate::service::{
+    LuaReadHooks, ServiceContext,
+    op::{GetGlobal, GetGlobalArgs, Operation},
+};
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Optional options for `crap.globals.get`.
@@ -89,13 +92,17 @@ fn globals_get(
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .build();
 
-    let input =
-        GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref()).include_drafts(opts.draft);
+    // Shared operation body — identical semantics on every surface.
+    let args = GetGlobalArgs::builder()
+        .locale_ctx(locale_ctx)
+        .include_drafts(opts.draft)
+        .build();
 
-    let doc = get_global_document(&ctx, &input).map_err(lua_err)?;
+    let doc = GetGlobal::run(&ctx, args).map_err(lua_err)?;
 
     document_to_lua_table(lua, &doc)
 }

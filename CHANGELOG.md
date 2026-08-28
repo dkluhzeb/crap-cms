@@ -579,6 +579,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Lua CRUD reads inside hook transactions no longer share the process-wide
+  populate singleflight.** The shared populate *cache* was already excluded
+  from these in-transaction reads, but the singleflight has the same sharing
+  property: an in-tx populate fetch could become the "leader" and broadcast
+  uncommitted rows to concurrent requests on other connections (and receive
+  another connection's stale fetch in return). Lua-read populate now runs
+  un-deduplicated on the hook transaction's own connection; the singleflight
+  plumbing into the Lua VM infra was removed entirely.
+- **gRPC `create_many` rejects a non-string `password` on auth collections.**
+  The inline extraction silently dropped `{"password": 12345}` (removed the
+  key, kept no password), creating a passwordless auth account where single
+  `create` errors. Bulk create now uses the same shared extraction as single
+  create: a non-string coerces to `""` and fails the password policy with
+  `INVALID_ARGUMENT`.
+- **Unpublishing a non-versioned global no longer falls through to a full
+  update.** The capability gate lived only in two codecs; the admin handler's
+  guard, when versioning was off, silently ran a normal update instead —
+  publishing the submitted form data under an action labeled "unpublish". The
+  gate now lives in the service chokepoint (`unpublish_global_document`),
+  mirroring the collection sibling; every surface gets a typed error.
+
+- **gRPC `Login` fails closed on MFA-enabled collections.** The RPC had no
+  MFA step at all: on a collection with `mfa = "email"`, a correct password
+  alone minted a full session token over gRPC — silently bypassing the
+  second factor the admin login enforces. The shared login flow now reports
+  the MFA requirement and the RPC returns `FAILED_PRECONDITION` instead of a
+  token; MFA-enabled collections must log in via a surface with MFA support
+  (the admin UI) until a gRPC MFA completion RPC exists.
+- **gRPC login success no longer clears the shared per-IP rate limiter.**
+  One valid login from an IP wiped every other account's failed attempts
+  from that same IP — letting a valid account on a shared IP mask a
+  brute-force of others. It now *refunds* only its own attempt, matching
+  the admin login (which received this fix earlier; the gRPC twin had
+  drifted).
 - **The auth email identity is case-insensitively unique end to end.** Two
   gaps allowed duplicate accounts that later collide as one at login (where
   `find_by_email` compares `LOWER() = LOWER()`): a user-declared `email`
@@ -1311,6 +1345,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Write operations no longer hold an idle read-pool connection across their
+  write transaction.** The operation core acquired a connection for credential
+  resolution and kept it for the operation's whole lifetime; pool-mode writes
+  then opened a second, write-pool connection. On Postgres read and write share
+  one bounded pool, so at saturation every write held one connection while
+  waiting for a second — a deadlock; on SQLite it wasted read-pool capacity
+  under write load. Write ops now release the auth connection right after
+  credential resolution and skip the checkout entirely for pre-resolved
+  principals (admin, MCP).
+- **`list_versions` / `restore_version` on a non-versioned collection return a
+  typed error on every surface.** The `has_versions` gate existed only in the
+  gRPC codec; MCP and Lua hit the missing version table and surfaced a raw
+  database error. The gate now lives in the service chokepoint. (gRPC nuance:
+  these two RPCs now return `INVALID_ARGUMENT` instead of
+  `FAILED_PRECONDITION` for this case, matching unpublish/undelete.)
+- **Nested Lua creates inside non-create writes send their verification
+  emails.** Only the create orchestrators carried a verification queue; a hook
+  running inside an update/delete/undelete/unpublish/bulk/restore transaction
+  that created a verify-email auth document silently dropped the mail. Every
+  pool-mode write orchestrator now queues and flushes verification emails
+  post-commit. Version restore additionally gained the *event* queue it never
+  had — nested mutation events inside restore hooks were silently discarded.
+- **An access hook may constrain on `_status` for operations that inject it.**
+  The constraint-validation chokepoint hard-coded `injecting_status = false`,
+  so a bulk update's documented allowance for `_status` row constraints was
+  unreachable (and a Lua `access.update` hook returning `{ _status = ... }`
+  errored). The flag now flows through `AccessCheckInput` into the chokepoint,
+  and the second (weaker, unreachable) validation pass in the bulk scoping was
+  removed.
+- **MCP bulk create honors override access.** `create_many` was the one bulk
+  operation whose pool-mode write hooks missed the override block, so MCP
+  (trusted, `Principal::Override`) bulk creates were access-gated — a
+  `default_deny` install denied them outright — and field-level `access.create`
+  rules silently stripped fields. Now consistent with update_many/delete_many
+  and single create.
+- **The admin trash view respects an explicit column sort.** The handler
+  unconditionally replaced the user's sort with the newest-deleted-first
+  default; the default now applies (in the shared operation body) only when no
+  sort was chosen.
+- **`ui_locale` reaches collection read access hooks and `after_read`.** Every
+  surface hard-coded `None` into the read-access context and post-processing,
+  so an access hook branching on `ctx.ui_locale` saw `nil` on collection reads
+  (globals already worked). It now flows from the operation context uniformly —
+  including admin list/edit, Lua `count`/`list_versions` (which also dropped it
+  from before-read hooks), and delete/undelete principals.
+- **Bulk-created documents carry `ui_locale` in their hook contexts.** Single
+  create threads the editor's UI locale into hook contexts; `create_many`
+  items did not.
+- **`count` downgrades the `trash` flag on collections without soft delete**,
+  matching `find` — previously the raw flag reached the query layer.
+- **Lua `list_versions` is depth-guarded.** It was the one Lua CRUD read
+  without the hook-recursion cap, so an access/versions hook listing its own
+  collection's versions could recurse unbounded.
+
 - **The admin edit form fails closed when an auth account's lock state can't
   be read.** A DB/pool error while reading `_locked` used to render the lock
   checkbox unchecked; saving that form would then explicitly unlock the
@@ -1347,6 +1435,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   error-cause chain and both timeout spellings (unique-violation field
   extraction preserved behind context layers too). Found by the
   operation-core Stage 2 review's regression test.
+- **The admin login verifies credentials on the write pool.** Local
+  authentication updates lockout counters on its connection, but the admin
+  twin drew from the large read pool — sidestepping the read/write pool
+  split's single-writer discipline and risking `SQLITE_BUSY` contention
+  under load. The shared login flow always draws a write connection (as the
+  gRPC handler already did). Custom auth-strategy errors are now also
+  logged on the gRPC path (previously silently swallowed there, logged only
+  by the admin twin), and strategies receive the client address from the
+  admin login too.
 - **Lua and MCP `find_by_id` no longer force a miss when `trash = true` is
   passed on a collection without soft delete.** Both surfaces sent the flag
   raw into the trash branch (`_deleted_at EXISTS` — a guaranteed miss), while
@@ -2448,6 +2545,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **MCP read parity:** `find`/`find_by_id` accept `select` (field
+  projection), and `count` accepts `search` + `locale` — the same query on
+  MCP, gRPC, and Lua now means the same thing. MCP `unpublish`/`undelete` and
+  Lua `crap.collections.unpublish` accept the `events` flag their siblings
+  already had.
+
 - **Elastic Lua VM pool (`[hooks] max_vm_pool_size`).** The hook-runner VM pool
   was fixed-size: once concurrent hook execution exceeded `vm_pool_size`, further
   requests **blocked up to 5 seconds** waiting for a VM even when the machine had
@@ -2819,6 +2922,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **gRPC `delete_many` no longer restricts its match-set to published rows.**
+  The old codec-injected `_status = 'published'` filter (a gRPC-only quirk)
+  was dropped in the bulk-gating harmonization: delete_many on every surface
+  now matches drafts too, like Lua and MCP always did. `update_many` keeps the
+  published-only default (opt out with `draft = true`) uniformly.
+
 - **Admin JSON/XHR endpoints return consistent error status codes and a uniform
   `{"error": …}` envelope.** The back-references, delete-dialog, and
   empty-trash endpoints previously each hand-rolled their error responses and
@@ -2878,6 +2987,81 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Filter hygiene moved into the operation bodies.** Dot-path normalization
+  (`seo.title` → `seo__title`) and system-column rejection now run once in
+  `Find`/`Count`/`UpdateMany`/`DeleteMany` — previously gRPC and Lua each did
+  both in their codecs and MCP did neither, so the same `where` clause parsed
+  on two surfaces and failed on the third. The gRPC `FilterBuilder` collapsed
+  to a pure `decode_where_json`; the Lua bulk filter builders are pure decode.
+- **`DeleteMany` owns the trash purge.** A new `trash` arg carries the whole
+  empty-the-trash semantics (hard-delete definition adjustment, `_deleted_at`
+  restriction, `include_deleted`); the admin empty-trash handler became a thin
+  codec over `op::run_blocking::<DeleteMany>` (removing the fourth hand-rolled
+  copy of upload-file cleanup), and the Lua codec only gates the capability.
+- **Dead cross-layer plumbing removed:** `WriteInput.locale` (never read;
+  hook locale comes from the locale context), `LuaWriteHooks.user`/`ui_locale`
+  (never read; hooks get both from the service context), `CountArgs
+  .status_filter` (no producer), `GetGlobalArgs.ui_locale` (the op reads
+  `ctx.ui_locale` like every other op), and the populate-singleflight
+  threading into Lua VM infra (see Security).
+- **`delete_document_pool` / `delete_many_pool` inner contexts build via
+  `inherit_write_infra`** instead of hand-listed forwards — the drift class
+  the helper exists to close.
+- **The `surface_parity` invalidation-transport guard scans operation-body
+  call sites** (`Update::run(` etc.). After the op-core migration it matched
+  only the old service-function names, i.e. nothing — the guard was vacuous.
+- **Versions-list limit flooring lives once at the service chokepoint**; the
+  gRPC and MCP codec floors (and their stale comments) were removed.
+- **`ListVersionsArgs` uses the standard Args/Builder pair** like every other
+  operation.
+
+- **The login credential flow is shared between the gRPC and admin
+  surfaces.** `service::auth::verify_login` now owns the sequence both
+  logins had been copy-pasting (local password auth → custom-strategy
+  fallback → fail-closed locked/verified/session-version checks → timing
+  equalization → MFA gate); the two handlers are codecs over its
+  `Verified` / `MfaRequired` / `Denied` outcome. The drift this collapsed is
+  listed under Security/Fixed. Forgot/reset/verify flows already share
+  their service chokepoints (`generate_reset_token`, `consume_reset_token`,
+  `consume_verification_token`) on both surfaces.
+- **Operation-core Stages 3–4: every CRUD, bulk, global, and version
+  operation now runs through one shared operation body.** Sixteen operations
+  (`find`, `find_by_id`, `count`, `get_global`, `create`, `update`, `delete`,
+  `undelete`, `unpublish`, `update_global`, `unpublish_global`,
+  `create_many`, `update_many`, `delete_many`, `list_versions`,
+  `restore_version`) are declared once in `service::op`; the gRPC and MCP
+  handlers and the admin read/list/write/delete paths dispatch through
+  `op::run`/`run_blocking`, and the Lua CRUD functions call the same
+  operation bodies on their transaction contexts. The definition-dependent
+  semantics that used to be copy-pasted per surface — the trash/draft flag
+  downgrades, the trash default sort, the `force_hard_delete`
+  definition-clone, query-field validation, post-delete upload-file cleanup —
+  live in the operation bodies. Dead glue deleted: every ported gRPC
+  `*BlockingInput` bundle and `spawn_blocking` tail, `check_access_blocking`,
+  `build_bulk_filters`, the `FilterBuilder` access/draft machinery, the Lua
+  `enforce_access` pre-flight, and the admin `ReadParams`/delete/undelete
+  bundles. One observable nuance on gRPC (as with Stage 2's reference op):
+  credential errors now take precedence over "not found" for unknown slugs.
+- **Bulk operations are access-gated and scoped at the service chokepoint on
+  every surface.** `update_many` / `delete_many` used to each carry their own
+  (diverging) pre-flight: gRPC gated the match-set on `access.read` and added
+  the published-only filter itself, Lua gated on the operation's own access
+  function, and MCP had none. The service now gates once — `update_many` on
+  `access.update` (with the patch as `ctx.data`), `delete_many` on
+  `access.trash ?? update` or `access.delete` — appends the access hook's row
+  constraints (validated with the same system-column and locale hygiene as
+  before), and restricts `update_many` to published rows unless
+  `draft = true`. **Behavior notes:** on gRPC, bulk writes are now gated by
+  the write-side access rule rather than `access.read`; on Lua and MCP,
+  `update_many` without `draft = true` no longer modifies draft rows
+  (previously they were matched too — pass `draft = true` for the old
+  reach).
+- **MCP write tools now run with the full infrastructure bundle.** The
+  piecemeal contexts they built silently omitted the email context (an MCP
+  create of an auth user never sent the verification email), the
+  invalidation transport on `create`/`create_many`, and the locale config
+  (localized-column raw reads inside unpublish/restore could miss their
+  suffixes). Dispatching through the operation core attaches everything.
 - **Operation-core Stage 2: one dispatch entry, `find_by_id` ported as the
   reference operation.** New `service::op` module: an `Operation` trait
   (owned per-call `Args`, handler over the existing service fn), `Principal`

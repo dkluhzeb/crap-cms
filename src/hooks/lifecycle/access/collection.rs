@@ -117,7 +117,11 @@ pub(crate) fn check_collection_access(
 
     if let AccessResult::Constrained(filters) = &result {
         // Operator allowlist + system-column + dotted-path rules (context-free).
-        validate_access_constraints(filters, false, false, input.collection)
+        // `injecting_status` comes from the caller: an operation that itself
+        // injects `_status` (bulk update on a drafts collection) may accept a
+        // `_status` constraint from the hook — hard-coding `false` here made
+        // that allowance unreachable on every surface.
+        validate_access_constraints(filters, false, input.injecting_status, input.collection)
             .map_err(anyhow::Error::new)?;
 
         // Locale-scoped-field rule (needs the collection's field types). The
@@ -317,6 +321,40 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
+    }
+
+    /// Regression: the chokepoint used to hard-code `injecting_status = false`,
+    /// so a `_status` constraint from an access hook errored even for
+    /// operations that inject `_status` themselves (bulk update on a drafts
+    /// collection). The flag now flows from `AccessCheckInput`.
+    #[test]
+    fn access_constrained_status_honors_injecting_status() {
+        let lua = setup_lua();
+        let hook = HookRef::new("test_access.constrained_status");
+
+        let denied = check_collection_access(
+            &lua,
+            &AccessCheckInput::builder("update", "test")
+                .access(Some(&hook))
+                .build(),
+        );
+        assert!(
+            denied.is_err(),
+            "a `_status` constraint must be rejected without injecting_status"
+        );
+
+        let allowed = check_collection_access(
+            &lua,
+            &AccessCheckInput::builder("update", "test")
+                .access(Some(&hook))
+                .injecting_status(true)
+                .build(),
+        )
+        .unwrap();
+        assert!(
+            matches!(allowed, AccessResult::Constrained(_)),
+            "with injecting_status the `_status` constraint must pass validation"
+        );
     }
 
     #[test]

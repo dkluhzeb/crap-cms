@@ -1,4 +1,8 @@
 //! Execute `delete` — delete a document by ID.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`]. `force_hard_delete`
+//! is expressed by the operation body via `adjust_collection_def` — the
+//! definition-clone trick previously copy-pasted on every surface.
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
@@ -7,7 +11,7 @@ use tracing::info;
 
 use crate::{
     mcp::tools::{ToolExecCtx, collection::helpers::events_flag},
-    service::{ServiceContext, delete_document},
+    service::op::{self, Delete, DeleteArgs, Principal, TargetRef},
 };
 
 #[derive(Serialize)]
@@ -30,37 +34,18 @@ pub(in crate::mcp::tools) fn exec_delete(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
-
-    // Force-hard delete is expressed by disabling soft-delete on a local
-    // copy of the definition, mirroring the gRPC/Lua delete handlers.
-    let mut def = def.clone();
-    if force_hard_delete && def.soft_delete {
-        def.make_hard_delete();
-    }
-
-    let events = events_flag(args);
-
-    let svc_ctx = ServiceContext::collection(slug, &def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
+    let op_args = DeleteArgs::builder(id)
+        .force_hard_delete(force_hard_delete)
+        .events(events_flag(args))
         .build();
-    delete_document(
-        &svc_ctx,
-        id,
-        Some(ctx.infra.storage.as_ref()),
-        Some(&ctx.config.locale),
-    )?;
+
+    op::run::<Delete>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!("MCP delete {}: {} [client={}]", slug, id, ctx.client_label);
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
     Extension,
@@ -7,7 +8,6 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
-use tokio::task;
 
 use crate::{
     admin::{
@@ -22,53 +22,15 @@ use crate::{
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
             flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
             require_global, service_error_to_admin_response, split_sidebar_fields,
-            task_join_error_response,
         },
     },
-    core::{AuthUser, Claims, Document, DocumentFields, FieldDenial, collection::GlobalDefinition},
-    db::DbPool,
-    hooks::{ConditionContext, HookRunner},
-    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
+    core::{AuthUser, Claims, DocumentFields, FieldDenial, collection::GlobalDefinition},
+    hooks::ConditionContext,
+    service::{
+        RunnerReadHooks, ServiceContext,
+        op::{self, GetGlobal, GetGlobalArgs, Principal, TargetRef},
+    },
 };
-
-/// Parameters for the blocking global-read task.
-struct ReadParams {
-    pool: DbPool,
-    runner: HookRunner,
-    slug: String,
-    def: GlobalDefinition,
-    locale_ctx: Option<crate::db::LocaleContext>,
-    user_doc: Option<Document>,
-    user_ui_locale: Option<String>,
-    /// Whether to surface the global's draft — true only when the user can view
-    /// drafts (edit-level access). A read-only viewer sees published content.
-    include_drafts: bool,
-}
-
-/// Fetch the global document via the shared service layer read lifecycle.
-fn read_global_document_blocking(params: &ReadParams) -> Result<Document, ServiceError> {
-    let conn = params.pool.get().map_err(ServiceError::Internal)?;
-
-    let hooks = RunnerReadHooks::new(
-        &params.runner,
-        &conn,
-        params.user_doc.as_ref(),
-        params.user_ui_locale.as_deref(),
-    );
-    let ctx = ServiceContext::global(&params.slug, &params.def)
-        .pool(&params.pool)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(params.user_doc.as_ref())
-        .build();
-
-    // Surface the unpublished global only for a user who can view drafts
-    // (edit-level access); a read-only viewer sees the published content.
-    let input = GetGlobalInput::new(params.locale_ctx.as_ref(), params.user_ui_locale.as_deref())
-        .include_drafts(params.include_drafts);
-
-    get_global_document(&ctx, &input)
-}
 
 /// Build, enrich, and split the field contexts for the global edit form.
 fn prepare_edit_fields(
@@ -184,30 +146,32 @@ pub async fn edit_form(
     // Opt into the draft overlay unconditionally — the service read downgrades
     // (never rejects): an editor sees the latest draft, a read-only viewer falls
     // back to the published row. `GlobalPermissions` is a UI hint only.
-    let read_params = ReadParams {
-        pool: state.infra.pool.clone(),
-        runner: state.infra.hook_runner.clone(),
-        slug: slug.clone(),
-        def: def.clone(),
-        locale_ctx,
-        user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
-        user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
-        include_drafts: true,
-    };
+    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+    let args = GetGlobalArgs::builder()
+        .locale_ctx(locale_ctx)
+        .include_drafts(true)
+        .build();
 
-    let read_result =
-        task::spawn_blocking(move || read_global_document_blocking(&read_params)).await;
+    let read_result = op::run_blocking::<GetGlobal>(
+        Arc::clone(&state.infra),
+        Principal::Resolved {
+            user: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
+            ui_locale,
+        },
+        TargetRef::global(slug.as_str()),
+        args,
+    )
+    .await;
 
     let document = match read_result {
-        Ok(Ok(doc)) => doc,
-        Ok(Err(e)) => {
+        Ok(doc) => doc,
+        Err(e) => {
             return service_error_to_admin_response(
                 &state,
-                e,
+                e.into_service_error(),
                 "You don't have permission to view this global",
             );
         }
-        Err(e) => return task_join_error_response(&state, &e),
     };
 
     // The service read already stripped read-denied *values*; resolve the denied

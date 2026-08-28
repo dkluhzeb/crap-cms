@@ -28,6 +28,16 @@ pub fn list_versions(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
+    // Authoritative capability gate: a non-versioned target has no version
+    // table. Enforced at the one service chokepoint — previously only the
+    // gRPC codec checked, so MCP/Lua surfaced a raw missing-table DB error.
+    if !ctx.has_versions() {
+        return Err(ServiceError::HookError(format!(
+            "'{}' does not have versioning enabled",
+            ctx.slug
+        )));
+    }
+
     // The `access.versions` toggle gates history access at all (unset → follows
     // `access.update`); the read/draft composite below then scopes *which*
     // snapshots are visible.
@@ -278,6 +288,31 @@ mod tests {
         });
 
         (conn, def)
+    }
+
+    /// Regression: the `has_versions` gate lives in the service chokepoint —
+    /// previously only the gRPC codec checked, so MCP/Lua hit the missing
+    /// version table and surfaced a raw DB error instead of a typed one.
+    #[test]
+    fn list_versions_rejects_non_versioned_collection() {
+        let (conn, mut def) = setup_versioned_collection();
+        def.versions = None;
+
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = ListVersionsInput::builder("p1").build();
+
+        let Err(err) = list_versions(&ctx, &input) else {
+            panic!("expected the versioning gate to reject");
+        };
+        assert!(
+            matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
+            "expected typed versioning gate error, got {err:?}"
+        );
     }
 
     #[test]

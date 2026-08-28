@@ -110,19 +110,10 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
     let mut conn = p.pool.get()?;
     let tx = conn.transaction()?;
 
-    let locale = p.locale_ctx.and_then(|ctx| {
-        if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
-            Some(l.clone())
-        } else {
-            None
-        }
-    });
-
     let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
 
     let input = service::WriteInput::builder(p.data.clone())
         .locale_ctx(p.locale_ctx)
-        .locale(locale)
         .draft(p.is_draft)
         .build();
 

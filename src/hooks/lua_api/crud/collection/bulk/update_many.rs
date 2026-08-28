@@ -9,20 +9,24 @@ use serde::Deserialize;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, DocumentFields, Registry},
-    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    core::{DocumentFields, Registry},
+    db::{FilterClause, FindQuery, LocaleContext},
     hooks::{
         lifecycle::converters::{lua_table_to_hashmap, lua_table_to_json_map},
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
             helpers::{
-                EnforceAccessParams, check_hook_depth, enforce_access, hook_invalidation_transport,
-                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+                check_hook_depth, hook_invalidation_transport, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
             },
         },
     },
-    service::{self, LuaWriteHooks, ServiceContext, UpdateManyOptions, validate_user_filters},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, UpdateMany, UpdateManyArgs},
+        values_from_strings,
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -154,7 +158,7 @@ fn collections_update_many(
 
     let stringified = lua_table_to_hashmap(&data)?;
 
-    let mut data_map = service::values_from_strings(stringified);
+    let mut data_map = values_from_strings(stringified);
     let composite_data: DocumentFields = lua_table_to_json_map(&data)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, serde_json::Value::String(_)))
@@ -170,20 +174,9 @@ fn collections_update_many(
         ));
     }
 
-    // Built before the access pre-flight so the update access fn sees the
-    // incoming patch as `ctx.data` — same contract as the per-document check.
-    let filters = build_update_filters(
-        lua,
-        &def,
-        &collection,
-        opts.override_access,
-        query,
-        &data_map,
-    )?;
+    let filters = build_update_filters(query)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -195,21 +188,23 @@ fn collections_update_many(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .ui_locale(ui_locale.clone())
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
+        .locale_config(Some(lc))
         .build();
 
-    let update_opts = UpdateManyOptions {
-        locale_ctx: locale_ctx.as_ref(),
-        run_hooks: hooks_enabled,
-        draft: opts.draft,
-        ui_locale: ui_locale.clone(),
-        max_documents: state.bulk_max_documents,
-    };
+    // Shared operation body — identical semantics on every surface.
+    let op_args = UpdateManyArgs::builder(filters, data_map)
+        .locale_ctx(locale_ctx)
+        .run_hooks(hooks_enabled)
+        .draft(opts.draft)
+        .max_documents(state.bulk_max_documents)
+        .events(opts.events)
+        .build();
 
-    let svc_result =
-        service::update_many(&ctx, &filters, &data_map, lc, &update_opts).map_err(lua_err)?;
+    let svc_result = UpdateMany::run(&ctx, op_args).map_err(lua_err)?;
 
     let result = lua.create_table()?;
     result.set("modified", svc_result.modified)?;
@@ -245,34 +240,10 @@ pub(crate) fn register_update_many(
     Ok(())
 }
 
-/// Build filters for the bulk update query, enforcing access constraints.
-/// `data` is the incoming patch, surfaced to the access fn as `ctx.data`.
-fn build_update_filters(
-    lua: &Lua,
-    def: &CollectionDefinition,
-    collection: &str,
-    override_access: bool,
-    query: UpdateManyQueryInput,
-    data: &DocumentFields,
-) -> LuaResult<Vec<FilterClause>> {
-    let mut find_query = query.into_find_query()?;
-    normalize_filter_fields(&mut find_query.filters, &def.fields);
-    validate_user_filters(&find_query.filters).map_err(lua_err)?;
-
-    enforce_access(
-        lua,
-        &EnforceAccessParams {
-            slug: collection,
-            override_access,
-            access_fn: def.access.update.as_ref(),
-            id: None,
-            data: Some(data),
-            deny_msg: "Update access denied",
-            operation: "update",
-            injecting_status: false,
-        },
-        &mut find_query.filters,
-    )?;
-
-    Ok(find_query.filters)
+/// Decode the bulk update query into canonical filters. Pure decode — filter
+/// hygiene (system columns, dot paths) lives in the shared `UpdateMany` body,
+/// and access gating + constraint scoping at the service chokepoint
+/// (`service::collections::bulk_access`), shared by every surface.
+fn build_update_filters(query: UpdateManyQueryInput) -> LuaResult<Vec<FilterClause>> {
+    Ok(query.into_find_query()?.filters)
 }

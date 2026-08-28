@@ -5,7 +5,6 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use serde_json::json;
-use tokio::task;
 use tracing::error;
 
 use std::sync::Arc;
@@ -18,35 +17,12 @@ use crate::{
             json_server_error, paths,
         },
     },
-    core::ReqContext,
-    core::{AuthUser, CollectionDefinition, Document},
-    service::{self, AppInfra, ServiceError},
+    core::AuthUser,
+    service::{
+        ServiceError,
+        op::{self, Delete, DeleteArgs, Principal, TargetRef},
+    },
 };
-
-/// Owned inputs for the spawn-blocking delete body. Process-stable dependencies
-/// come from the shared [`AppInfra`]; the rest is per-call.
-struct DeleteBlockingInput {
-    infra: Arc<AppInfra>,
-    slug: String,
-    def: CollectionDefinition,
-    user_doc: Option<Document>,
-    id: String,
-}
-
-/// Build the service context and run the delete service call.
-fn delete_document_blocking(input: &DeleteBlockingInput) -> Result<ReqContext, ServiceError> {
-    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
-        .infra(&input.infra)
-        .user(input.user_doc.as_ref())
-        .build();
-
-    service::delete_document(
-        &ctx,
-        &input.id,
-        Some(input.infra.storage.as_ref()),
-        Some(&input.infra.locale_config),
-    )
-}
 
 /// Build a JSON `{"ok": true}` success response.
 fn json_ok_response() -> Response {
@@ -70,29 +46,31 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
         return Redirect::to(paths::COLLECTIONS_ROOT).into_response();
     };
 
-    let mut def_clone = def.clone();
+    // `force_hard_delete` is expressed by the operation body via
+    // `adjust_collection_def` — the definition-clone trick previously
+    // copy-pasted on every surface.
+    let args = DeleteArgs::builder(id)
+        .force_hard_delete(force_hard_delete)
+        .build();
 
-    if force_hard_delete {
-        def_clone.make_hard_delete();
-    }
-
-    let input = DeleteBlockingInput {
-        infra: state.infra.clone(),
-        slug: slug.to_string(),
-        def: def_clone,
-        user_doc: get_user_doc(auth_user).cloned(),
-        id: id.to_string(),
-    };
-
-    let result = task::spawn_blocking(move || delete_document_blocking(&input)).await;
+    let result = op::run_blocking::<Delete>(
+        Arc::clone(&state.infra),
+        Principal::Resolved {
+            user: get_user_doc(auth_user).cloned(),
+            ui_locale: auth_user.map(|Extension(au)| au.ui_locale.clone()),
+        },
+        TargetRef::collection(slug),
+        args,
+    )
+    .await;
 
     match result {
-        Ok(Ok(_)) => {
+        Ok(_) => {
             if json_response {
                 return json_ok_response();
             }
         }
-        Ok(Err(e)) => match &e {
+        Err(core_err) => match core_err.into_service_error() {
             ServiceError::AccessDenied(_) => {
                 let deny_msg = if def.soft_delete && !force_hard_delete {
                     "You don't have permission to trash this item"
@@ -114,7 +92,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
                     ));
                 }
             }
-            _ => {
+            e => {
                 error!("Delete error: {}", e);
 
                 if json_response {
@@ -122,13 +100,6 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
                 }
             }
         },
-        Err(e) => {
-            error!("Delete task error: {}", e);
-
-            if json_response {
-                return json_server_error("Failed to delete item");
-            }
-        }
     }
 
     htmx_redirect(&paths::collection(slug))

@@ -22,8 +22,8 @@ use crate::{
         SharedPasswordProvider, SharedTokenProvider, auth::TokenProvider, collection::Surface,
         rate_limit::LoginRateLimiter,
     },
-    db::{AccessResult, BoxedConnection, DbConnection, DbPool, query},
-    hooks::{AccessCheckInput, HookRunner},
+    db::{DbConnection, DbPool, query},
+    hooks::HookRunner,
     service::{
         self, AppInfra,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
@@ -328,29 +328,6 @@ impl ContentService {
         )
     }
 
-    /// Check collection-level access using an existing connection.
-    ///
-    /// Free-standing helper — safe to call inside `spawn_blocking`.
-    pub(in crate::api::handlers) fn check_access_blocking(
-        input: &AccessCheckInput<'_>,
-        hook_runner: &HookRunner,
-        conn: &mut BoxedConnection,
-    ) -> Result<AccessResult, Status> {
-        let tx = conn
-            .transaction()
-            .inspect_err(|e| error!("Access check tx error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
-        let result = hook_runner
-            .check_access(input, &tx)
-            .inspect_err(|e| error!("Access check error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
-
-        tx.commit()
-            .inspect_err(|e| error!("Access check commit error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
-        Ok(result)
-    }
-
     /// Gate the schema-introspection RPCs on authentication when
     /// `[server] public_schema_introspection = false`. Public (the default) is a
     /// no-op; otherwise an anonymous caller is rejected before the schema shape
@@ -399,7 +376,10 @@ impl ContentService {
                 TargetKind::Collection => format!("Collection '{slug}' not found"),
                 TargetKind::Global => format!("Global '{slug}' not found"),
             }),
-            CoreError::Service(e) => Status::from(e),
+            // `reclassify` re-runs backend-aware classification on `Internal`
+            // service errors (unique violations, busy/timeout) and passes the
+            // typed variants through unchanged.
+            CoreError::Service(e) => Status::from(e.reclassify(&self.db_kind)),
             CoreError::Internal(e) => {
                 Status::from(service::ServiceError::classify(e, &self.db_kind))
             }

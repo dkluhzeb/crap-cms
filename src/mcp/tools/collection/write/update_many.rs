@@ -11,7 +11,7 @@ use crate::{
         ToolExecCtx,
         collection::helpers::{extract_data_from_args, parse_where_filters},
     },
-    service::{self, ServiceContext, UpdateManyOptions},
+    service::op::{self, Principal, TargetRef, UpdateMany, UpdateManyArgs},
 };
 
 /// Shape returned to the MCP client for an `update_many` tool call.
@@ -69,25 +69,21 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
+    let op_args = UpdateManyArgs::builder(filters, data)
+        .locale_ctx(locale_ctx)
+        .run_hooks(run_hooks)
+        .draft(draft)
+        .max_documents(ctx.config.server.bulk_max_documents)
+        .events(events)
         .build();
 
-    let opts = UpdateManyOptions {
-        locale_ctx: locale_ctx.as_ref(),
-        run_hooks,
-        draft,
-        ui_locale: None,
-        max_documents: ctx.config.server.bulk_max_documents,
-    };
-
-    let result = service::update_many(&svc_ctx, &filters, &data, &ctx.config.locale, &opts)?;
+    let result = op::run::<UpdateMany>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP update_many {}: {} modified [client={}]",

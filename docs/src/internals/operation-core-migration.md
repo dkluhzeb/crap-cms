@@ -1,7 +1,55 @@
 # Operation Core — Architecture & Migration Plan
 
-> **Status: Stages 0–2 landed (August 2026), each in adapted form; Stages 3–4
-> remain future work.**
+> **Status: ALL STAGES (0–4) landed (August 2026), each in adapted form. The
+> program this document proposed is complete.**
+>
+> **Stages 3–4 (shipped):** all sixteen CRUD/bulk/global/version operations
+> are declared once in `service::op` and every surface dispatches through
+> them — gRPC/MCP via `run`/`run_blocking`; admin via `run_blocking` for
+> reads/delete/undelete/empty-trash but via the operation *bodies* (own
+> blocking task, request-time definition, pre-resolved actor) for its
+> form-driven create/update/global-update, so the registry-lookup-inside-
+> the-core invariant holds for the former group only (the admin form paths
+> trade it for their re-render-on-validation-error flow); Lua via the
+> operation bodies on its transaction context. The per-surface glue is deleted (gRPC
+> `*BlockingInput` bundles + `spawn_blocking` tails, `check_access_blocking`,
+> `build_bulk_filters`, the `FilterBuilder` access/draft machinery, Lua's
+> `enforce_access` pre-flight, admin's read/delete/undelete bundles), and the
+> bulk match-set gating moved into the service itself
+> (`service::collections::bulk_access`) so no surface can drift on it.
+> **Post-migration review (hardening pass, late August 2026):** the
+> operation entry releases the read-pool connection after credential
+> resolution for write ops (`Operation::READS_VIA_CONTEXT = false`) —
+> holding it across the write transaction was a same-pool double acquisition
+> on Postgres; capability gates (`has_versions` for list/restore/global-
+> unpublish) moved from codecs into the service chokepoints; wire-filter
+> hygiene (dot-path normalization + system-column rejection) moved into the
+> `Find`/`Count`/`UpdateMany`/`DeleteMany` bodies (codecs are pure decode);
+> `DeleteMany` gained the `trash` arg that owns the empty-the-trash
+> semantics (admin empty-trash is now a codec over it); every pool-mode
+> write orchestrator carries event + verification queues for nested Lua
+> CRUD; in-tx Lua reads no longer share the process-wide populate
+> singleflight (uncommitted-data leak); and the dead cross-layer fields the
+> port had exposed (`WriteInput.locale`, `LuaWriteHooks.user`/`ui_locale`,
+> `CountArgs.status_filter`, `GetGlobalArgs.ui_locale`) were removed.
+>
+> **Known residuals, by design:** the dry-run *validate* endpoints are not
+> ported (they are tied to the open MCP-validate access-mode decision and
+> keep their per-surface glue until it is made); the admin version-restore
+> actions and best-effort version-sidebar reads call the service functions
+> directly (same chokepoint, admin-specific response mapping);
+> `force_hard_delete` is expressed through the definition-clone hook
+> (`Operation::adjust_collection_def`) — this is the **intentional
+> permanent design**, not an interim: the delete path branches on
+> `def.soft_delete` at ~16 downstream sites (access gate, soft-vs-hard
+> routing, event flags, bulk counts), and the single up-front adjustment
+> keeps all of them consistent by construction, where a threaded
+> `force_hard` flag would reintroduce sixteen places to combine correctly.
+> Auth/session RPCs are not operations in this sense — but the login
+> credential flow is shared as `service::auth::verify_login`, with the gRPC
+> and admin logins as codecs over its outcome (rate limiting and response
+> shape stay per surface); forgot/reset/verify already share their service
+> chokepoints on both surfaces.
 >
 > **Stage 2 (shipped):** the single dispatch entry exists —
 > `service::op::{run, run_blocking}` with the `Operation` trait, `Principal`

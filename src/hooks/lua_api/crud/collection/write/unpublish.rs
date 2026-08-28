@@ -21,7 +21,10 @@ use crate::{
             },
         },
     },
-    service::{LuaWriteHooks, ServiceContext, unpublish_document},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, Unpublish, UnpublishArgs},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -36,6 +39,10 @@ pub(crate) struct UnpublishOptions {
     /// Run lifecycle hooks (default: `true`).
     #[lua(optional)]
     pub(crate) hooks: bool,
+    /// Emit a live-update event for this change (default: `true`). Parity
+    /// with `crap.collections.update{ unpublish = true, events = ... }`.
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for UnpublishOptions {
@@ -43,6 +50,7 @@ impl Default for UnpublishOptions {
         Self {
             override_access: false,
             hooks: true,
+            events: true,
         }
     }
 }
@@ -141,8 +149,6 @@ pub(super) fn unpublish_via_service(
     let (hooks_enabled, _guard) = check_hook_depth(lua, call.hooks, call.collection, "update");
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(call.override_access)
         .registry(Some(registry.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -154,6 +160,7 @@ pub(super) fn unpublish_via_service(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(call.override_access)
         .emit_events(call.events)
         .locale_config(locale_config.as_ref())
@@ -161,7 +168,8 @@ pub(super) fn unpublish_via_service(
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
-    let doc = unpublish_document(&ctx, call.id)
+    // Shared operation body — identical semantics on every surface.
+    let doc = Unpublish::run(&ctx, UnpublishArgs::new(call.id).events(call.events))
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
@@ -191,6 +199,7 @@ fn collections_unpublish(
         &UnpublishCall::builder(&collection, &id)
             .override_access(opts.override_access)
             .hooks(opts.hooks)
+            .events(opts.events)
             .build(),
     )
 }

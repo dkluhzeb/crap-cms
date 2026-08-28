@@ -1077,7 +1077,10 @@ async fn list_versions_no_versioning() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    // The versioning gate now lives in the service chokepoint (uniform on
+    // every surface) and maps like the unpublish/undelete gates: HookError →
+    // INVALID_ARGUMENT (was a gRPC-codec FAILED_PRECONDITION).
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(err.message().contains("versioning"));
 }
 
@@ -1095,7 +1098,7 @@ async fn restore_version_no_versioning() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

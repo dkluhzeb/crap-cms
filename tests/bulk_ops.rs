@@ -626,3 +626,63 @@ return M
         "update_many before_change hook must see resolved locale 'en', got: {result:?}"
     );
 }
+
+/// Regression: pool-mode `create_many` must honor `ctx.override_access` on
+/// its write hooks like its update/delete siblings. With `default_deny = true`
+/// and no access fn, the runner denies everything — an override context (MCP)
+/// must still create, and a non-override context must still be denied.
+#[test]
+fn create_many_override_access_bypasses_default_deny() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.access.default_deny = true;
+
+    let mut def = CollectionDefinition::new("posts");
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+
+    let pool = pool::create_pool(tmp.path(), &config).expect("pool");
+    let shared = Registry::shared();
+    shared.write().unwrap().register_collection(def.clone());
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("hook runner");
+
+    // Non-override context: default-deny blocks the bulk create.
+    let denied_ctx = ServiceContext::collection("posts", &def)
+        .pool(&pool)
+        .runner(&runner)
+        .build();
+    let one = |title: &str| {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        CreateManyItem {
+            data,
+            password: None,
+        }
+    };
+
+    let err = create_many(&denied_ctx, &[one("Denied")], &bulk_opts())
+        .expect_err("default-deny must block a non-override bulk create");
+    assert!(
+        matches!(err, ServiceError::AccessDenied(_)),
+        "expected AccessDenied, got {err:?}"
+    );
+
+    // Override context (MCP's Principal::Override): bypasses the gate. This
+    // was the one bulk op missing `with_override_access` on its write hooks.
+    let override_ctx = ServiceContext::collection("posts", &def)
+        .pool(&pool)
+        .runner(&runner)
+        .override_access(true)
+        .build();
+    let result = create_many(&override_ctx, &[one("Allowed")], &bulk_opts())
+        .expect("override_access must bypass default-deny on bulk create");
+    assert_eq!(result.created, 1);
+}

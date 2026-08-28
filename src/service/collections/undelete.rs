@@ -9,8 +9,8 @@ use crate::{
     db::{AccessResult, query},
     hooks::{AccessCheckInput, LuaCrudInfra},
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
-        invalidate_user_streams_if_auth,
+        RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, flush_verification_queue,
+        helpers, invalidate_user_streams_if_auth,
     },
 };
 
@@ -102,7 +102,13 @@ fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -129,6 +135,7 @@ fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
     invalidate_user_streams_if_auth(ctx, &doc.id);
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(doc)
 }

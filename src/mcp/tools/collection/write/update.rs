@@ -1,4 +1,6 @@
 //! Execute `update` — update an existing document.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`].
 
 use anyhow::{Context as _, Result};
 use serde_json::{Value, to_string_pretty};
@@ -13,7 +15,7 @@ use crate::{
             reserved_data_keys,
         },
     },
-    service::{ServiceContext, WriteInput, update_document},
+    service::op::{self, Principal, TargetRef, Update, UpdateArgs},
 };
 
 /// Execute `update` — update an existing document.
@@ -49,27 +51,20 @@ pub(in crate::mcp::tools) fn exec_update(
 
     let data = extract_data_from_args(args, &reserved_data_keys(def, true), &def.fields)?;
 
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
-        .password_policy(Some(&ctx.config.auth.password_policy))
+    let op_args = UpdateArgs::builder(id, data)
+        .password(password)
+        .locale_ctx(locale_ctx)
+        .draft(draft)
+        .events(events)
         .build();
 
-    let (doc, _ctx) = update_document(
-        &svc_ctx,
-        id,
-        WriteInput::builder(data)
-            .password(password.as_deref())
-            .locale_ctx(locale_ctx.as_ref())
-            .locale(locale.map(std::string::ToString::to_string))
-            .draft(draft)
-            .build(),
-    )?;
+    let (doc, _req_context) = op::run::<Update>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!("MCP update {}: {} [client={}]", slug, id, ctx.client_label);
 

@@ -26,10 +26,11 @@ use crate::{
         AuthUser, CollectionDefinition, Document, ReqContext,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
-    db::{LocaleContext, LocaleMode},
+    db::LocaleContext,
     service::{
         self, AppInfra, ServiceContext, ServiceError,
         auth::{AccountAction, perform_account_action},
+        op::{Operation, Unpublish, UnpublishArgs, Update, UpdateArgs},
     },
 };
 
@@ -88,7 +89,6 @@ struct UpdateBlockingInput {
     id: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
-    locale: Option<String>,
     ui_locale: Option<String>,
     input: UpdateInput,
 }
@@ -103,28 +103,25 @@ fn update_document_blocking(
     let ctx = service::ServiceContext::collection(&args.slug, &args.def)
         .infra(&args.infra)
         .user(args.user_doc.as_ref())
+        .ui_locale(args.ui_locale)
         .build();
 
     // Route an unpublish action to the unpublish path regardless of versioning:
     // the shared service gate rejects unpublish on a non-versioned collection
     // (an explicit error) rather than silently doing a normal update, matching
-    // the Lua surface.
+    // the Lua surface. Both branches run the shared operation bodies.
     let result = if args.input.action == "unpublish" {
-        let doc = service::unpublish_document(&ctx, &args.id)?;
+        let doc = Unpublish::run(&ctx, UnpublishArgs::new(args.id.as_str()))?;
 
         Ok((doc, ReqContext::new()))
     } else {
-        service::update_document(
-            &ctx,
-            &args.id,
-            service::WriteInput::builder(args.input.form)
-                .password(args.input.password.as_deref())
-                .locale_ctx(args.input.locale_ctx.as_ref())
-                .locale(args.locale)
-                .draft(args.input.draft)
-                .ui_locale(args.ui_locale)
-                .build(),
-        )
+        let op_args = UpdateArgs::builder(args.id.as_str(), args.input.form.into())
+            .password(args.input.password)
+            .locale_ctx(args.input.locale_ctx)
+            .draft(args.input.draft)
+            .build();
+
+        Update::run(&ctx, op_args)
     };
 
     if result.is_ok()
@@ -167,10 +164,6 @@ async fn spawn_update(
     auth_user: Option<&Extension<AuthUser>>,
     input: UpdateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
-    let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
-        LocaleMode::Single(l) => Some(l.clone()),
-        _ => None,
-    });
     let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
     // The unpublish branch reads the row via `find_by_id_raw`, which needs
     // a `LocaleContext` to emit `title__en`/`title__de` for localized
@@ -182,7 +175,6 @@ async fn spawn_update(
         id: id.to_string(),
         def: def.clone(),
         user_doc: get_user_doc(auth_user).cloned(),
-        locale,
         ui_locale,
         input,
     };

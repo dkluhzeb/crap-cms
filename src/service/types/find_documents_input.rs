@@ -152,9 +152,6 @@ impl PostProcessOpts for FindDocumentsInput<'_> {
     fn locale_ctx(&self) -> Option<&LocaleContext> {
         self.locale_ctx
     }
-    fn ui_locale(&self) -> Option<&str> {
-        None
-    }
 }
 
 #[cfg(test)]

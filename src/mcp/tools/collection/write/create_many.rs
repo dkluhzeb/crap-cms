@@ -10,7 +10,10 @@ use crate::{
         ToolExecCtx,
         collection::helpers::{doc_to_json, extract_auth_password, extract_data_from_args},
     },
-    service::{self, CreateManyItem, CreateManyOptions, ServiceContext},
+    service::{
+        CreateManyItem,
+        op::{self, CreateMany, CreateManyArgs, Principal, TargetRef},
+    },
 };
 
 /// Shape returned to the MCP client for a `create_many` tool call.
@@ -72,23 +75,20 @@ pub(in crate::mcp::tools) fn exec_create_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
-        .password_policy(Some(&ctx.config.auth.password_policy))
+    let op_args = CreateManyArgs::builder(items)
+        .run_hooks(run_hooks)
+        .draft(draft)
+        .max_documents(ctx.config.server.bulk_max_documents)
+        .events(events)
         .build();
 
-    let opts = CreateManyOptions {
-        run_hooks,
-        draft,
-        max_documents: ctx.config.server.bulk_max_documents,
-    };
-
-    let result = service::create_many(&svc_ctx, &items, &opts)?;
+    let result = op::run::<CreateMany>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP create_many {}: {} created [client={}]",

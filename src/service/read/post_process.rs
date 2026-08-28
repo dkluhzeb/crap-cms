@@ -31,7 +31,6 @@ pub(crate) trait PostProcessOpts {
     fn hydrate(&self) -> bool;
     fn select(&self) -> Option<&[String]>;
     fn locale_ctx(&self) -> Option<&LocaleContext>;
-    fn ui_locale(&self) -> Option<&str>;
 }
 
 /// Post-process a single document (skip hydration -- used by `find_by_id` where
@@ -152,7 +151,7 @@ pub(crate) fn post_process_single(
         // single locale — see the doc on `LocaleContext::hook_locale`.
         locale: opts.locale_ctx().and_then(LocaleContext::hook_locale),
         user,
-        ui_locale: opts.ui_locale(),
+        ui_locale: ctx.ui_locale.as_deref(),
         context: req_context,
     };
 
@@ -319,7 +318,7 @@ pub(crate) fn post_process_docs(
         // the single-doc path above and `LocaleContext::hook_locale`.
         locale: opts.locale_ctx().and_then(LocaleContext::hook_locale),
         user,
-        ui_locale: opts.ui_locale(),
+        ui_locale: ctx.ui_locale.as_deref(),
         context: req_context,
     };
 

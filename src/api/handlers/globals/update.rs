@@ -1,11 +1,10 @@
-//! `UpdateGlobal` handler — update a global's document.
+//! `UpdateGlobal` handler — update the single document for a global.
+//!
+//! Codec over [`op::run_blocking`] with a global [`TargetRef`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::error;
 
 use crate::{
     api::{
@@ -15,67 +14,10 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    core::{DocumentFields, GlobalDefinition},
+    core::{DocumentFields, collection::Surface},
     db::LocaleContext,
-    service::{self, AppInfra, ServiceContext, WriteInput},
+    service::op::{self, Credentials, Principal, TargetRef, UpdateGlobal, UpdateGlobalArgs},
 };
-
-/// Owned bundle for the `UpdateGlobal` spawn-blocking body. Process-stable
-/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
-struct UpdateGlobalBlockingInput {
-    infra: Arc<AppInfra>,
-    headers: HashMap<String, String>,
-    slug: String,
-    def: GlobalDefinition,
-    token: Option<String>,
-    data: DocumentFields,
-    locale_ctx: Option<LocaleContext>,
-    events: bool,
-}
-
-/// Resolve auth, build the context, and run `update_global_document`.
-fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::Document, Status> {
-    let conn = input
-        .infra
-        .pool
-        .get()
-        .inspect_err(|e| error!("UpdateGlobal pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
-
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*input.infra.token_provider,
-        &input.infra.hook_runner,
-        &input.infra.registry,
-        &conn,
-    )?;
-
-    // Access control (collection + field level) is checked inside
-    // service::update_global_document via WriteHooks.
-
-    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    drop(conn);
-
-    let ctx = ServiceContext::global(&input.slug, &input.def)
-        .infra(&input.infra)
-        .user(user_doc.as_ref())
-        .emit_events(input.events)
-        .build();
-
-    let (doc, _req_context) = service::update_global_document(
-        &ctx,
-        WriteInput::builder(input.data)
-            .locale_ctx(input.locale_ctx.as_ref())
-            .ui_locale(ui_locale)
-            .build(),
-    )
-    .inspect_err(|e| error!("UpdateGlobal error: {}", e))
-    .map_err(Status::from)?;
-
-    Ok(document_to_proto(&doc, &input.slug))
-}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -88,7 +30,6 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        let def = self.get_global_def(&req.slug)?;
 
         let data: DocumentFields = req
             .data
@@ -100,24 +41,29 @@ impl ContentService {
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let input = UpdateGlobalBlockingInput {
-            infra: Arc::clone(&self.infra),
-            slug: req.slug.clone(),
-            def,
-            token,
-            headers,
-            data,
-            locale_ctx,
-            events: req.events.unwrap_or(true),
-        };
+        let args = UpdateGlobalArgs::builder(data)
+            .locale_ctx(locale_ctx)
+            .events(req.events.unwrap_or(true))
+            .build();
 
-        let proto_doc = task::spawn_blocking(move || update_global_blocking(input))
-            .await
-            .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
+            headers,
+        });
+
+        let (doc, _req_context) = op::run_blocking::<UpdateGlobal>(
+            Arc::clone(&self.infra),
+            principal,
+            TargetRef::global(req.slug.clone()),
+            args,
+        )
+        .await
+        .map_err(|e| self.core_error_status(e))?;
 
         Ok(Response::new(content::UpdateGlobalResponse {
-            document: Some(proto_doc),
+            document: Some(document_to_proto(&doc, &req.slug)),
         }))
     }
 }

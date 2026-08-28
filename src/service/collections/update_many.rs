@@ -4,6 +4,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context as _;
 
+use super::bulk_access::{BulkScope, push_published_only_filter, scope_bulk_access};
+
 use crate::{
     config::LocaleConfig,
     core::{DocumentFields, event::EventOperation},
@@ -11,7 +13,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
-        invalidate_user_streams_if_auth, update_many_single_in_conn,
+        flush_verification_queue, invalidate_user_streams_if_auth, update_many_single_in_conn,
     },
     typegen::lua::LuaAnnotation,
 };
@@ -114,14 +116,14 @@ fn update_many_pool(
         .transaction_immediate()
         .context("Start bulk update transaction")?;
 
-    let find_query = FindQuery::builder().filters(filters.to_vec()).build();
-    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, opts.locale_ctx)
-        .context("Find matching IDs for update")?;
-
-    enforce_bulk_limit("update_many", doc_ids.len(), opts.max_documents)?;
-
     let queue = Rc::new(RefCell::new(Vec::new()));
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_hooks_enabled(opts.run_hooks)
@@ -131,6 +133,27 @@ fn update_many_pool(
     if ctx.override_access {
         wh = wh.with_override_access();
     }
+
+    // Gate + scope the match-set at the chokepoint (see `bulk_access`).
+    let mut scoped_filters = filters.to_vec();
+    scope_bulk_access(
+        ctx,
+        &wh,
+        &BulkScope {
+            operation: "update",
+            access_fn: def.access.update.as_ref(),
+            data: Some(data),
+            injecting_status: !opts.draft && def.has_drafts(),
+        },
+        &mut scoped_filters,
+    )?;
+    push_published_only_filter(def, opts.draft, &mut scoped_filters);
+
+    let find_query = FindQuery::builder().filters(scoped_filters).build();
+    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, opts.locale_ctx)
+        .context("Find matching IDs for update")?;
+
+    enforce_bulk_limit("update_many", doc_ids.len(), opts.max_documents)?;
 
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
@@ -182,6 +205,7 @@ fn update_many_pool(
     }
 
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(UpdateManyResult {
         modified,
@@ -199,7 +223,22 @@ fn update_many_conn(
 ) -> Result<UpdateManyResult> {
     let def = ctx.collection_def()?;
 
-    let find_query = FindQuery::builder().filters(filters.to_vec()).build();
+    // Gate + scope the match-set at the chokepoint (see `bulk_access`).
+    let mut scoped_filters = filters.to_vec();
+    scope_bulk_access(
+        ctx,
+        ctx.write_hooks()?,
+        &BulkScope {
+            operation: "update",
+            access_fn: def.access.update.as_ref(),
+            data: Some(data),
+            injecting_status: !opts.draft && def.has_drafts(),
+        },
+        &mut scoped_filters,
+    )?;
+    push_published_only_filter(def, opts.draft, &mut scoped_filters);
+
+    let find_query = FindQuery::builder().filters(scoped_filters).build();
 
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();

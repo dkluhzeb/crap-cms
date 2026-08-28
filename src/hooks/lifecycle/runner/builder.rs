@@ -9,7 +9,6 @@ use tracing::{debug, info};
 use crate::{
     config::{CrapConfig, UploadStorage},
     core::{LocalLease, Registry, SharedInvalidationTransport, upload},
-    db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,
         lifecycle::{
@@ -33,7 +32,6 @@ pub struct HookRunnerBuilder<'a> {
     registry: Option<Arc<Registry>>,
     config: Option<&'a CrapConfig>,
     invalidation_transport: Option<SharedInvalidationTransport>,
-    populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> HookRunnerBuilder<'a> {
@@ -43,7 +41,6 @@ impl<'a> HookRunnerBuilder<'a> {
             registry: None,
             config: None,
             invalidation_transport: None,
-            populate_singleflight: None,
         }
     }
 
@@ -73,18 +70,6 @@ impl<'a> HookRunnerBuilder<'a> {
         self
     }
 
-    /// Attach the process-wide populate singleflight to every VM in the pool
-    /// so Lua-driven `crap.collections.find` / `find_by_id` calls can dedup
-    /// populate cache-miss fetches across concurrent requests. For
-    /// override-access Lua calls the service layer's guardrail discards this
-    /// Arc, so the thread-through only pays off for ordinary (non-override)
-    /// Lua reads.
-    #[must_use]
-    pub fn populate_singleflight(mut self, singleflight: SharedPopulateSingleflight) -> Self {
-        self.populate_singleflight = Some(singleflight);
-        self
-    }
-
     /// Build the `HookRunner`, creating and initializing the Lua VM pool.
     ///
     /// # Errors
@@ -99,7 +84,6 @@ impl<'a> HookRunnerBuilder<'a> {
         let registry = self.registry.expect("registry is required");
         let config = self.config.expect("config is required");
         let invalidation_transport = self.invalidation_transport;
-        let populate_singleflight = self.populate_singleflight;
 
         let pool_size = config.hooks.vm_pool_size.max(1);
         let cap = config.hooks.max_vm_pool_size.max(pool_size);
@@ -117,7 +101,6 @@ impl<'a> HookRunnerBuilder<'a> {
             let registry = Arc::clone(&registry);
             let config = config.clone();
             let invalidation_transport = invalidation_transport.clone();
-            let populate_singleflight = populate_singleflight.clone();
             Box::new(move |idx| {
                 create_lua_vm(
                     &config_dir,
@@ -125,7 +108,6 @@ impl<'a> HookRunnerBuilder<'a> {
                     &config,
                     idx,
                     invalidation_transport.clone(),
-                    populate_singleflight.clone(),
                 )
             })
         };
@@ -170,7 +152,6 @@ fn create_lua_vm(
     config: &CrapConfig,
     vm_index: usize,
     invalidation_transport: Option<SharedInvalidationTransport>,
-    populate_singleflight: Option<SharedPopulateSingleflight>,
 ) -> Result<Lua> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
@@ -189,14 +170,7 @@ fn create_lua_vm(
 
     register_apis(&lua, registry, config)?;
 
-    init_app_data(
-        &lua,
-        config_dir,
-        config,
-        registry,
-        invalidation_transport,
-        populate_singleflight,
-    )?;
+    init_app_data(&lua, config_dir, config, registry, invalidation_transport)?;
 
     // Mark the init phase so register-only APIs (`crap.pages.register`,
     // `crap.template_data.register`, ...) accept calls. The marker is
@@ -275,7 +249,6 @@ fn init_app_data(
     config: &CrapConfig,
     registry: &Arc<Registry>,
     invalidation_transport: Option<SharedInvalidationTransport>,
-    populate_singleflight: Option<SharedPopulateSingleflight>,
 ) -> Result<()> {
     lua.set_app_data(HookDepth(0));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
@@ -298,7 +271,6 @@ fn init_app_data(
         locale_config: config.locale.clone(),
         storage: Some(storage),
         invalidation_transport,
-        populate_singleflight,
         max_hook_depth: config.hooks.max_depth,
         default_deny: config.access.default_deny,
     });

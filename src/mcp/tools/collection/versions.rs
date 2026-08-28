@@ -8,9 +8,9 @@ use tracing::info;
 use crate::{
     db::query::PaginationResult,
     mcp::tools::ToolExecCtx,
-    service::{
-        ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions,
-        restore_collection_version,
+    service::op::{
+        self, ListVersions, ListVersionsArgs, Principal, RestoreVersion, RestoreVersionArgs,
+        TargetRef,
     },
 };
 
@@ -33,41 +33,24 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
+    // Pure decode — negative limit/offset are floored at the service
+    // chokepoint (`service::versions::list_versions`), same for every surface.
+    let limit = args.get("limit").and_then(serde_json::Value::as_i64);
+    let offset = args.get("offset").and_then(serde_json::Value::as_i64);
 
-    // Floor at 0: a negative limit would bind as `LIMIT -1` (= unbounded) on
-    // SQLite, an unbounded read of the whole version history (mirrors the gRPC
-    // `floor_optional_limit` fix).
-    let limit = args
-        .get("limit")
-        .and_then(serde_json::Value::as_i64)
-        .map(|l| l.max(0));
-    let offset = args
-        .get("offset")
-        .and_then(serde_json::Value::as_i64)
-        .map(|o| o.max(0));
-
-    // MCP operates with full access — override access checks
-    let conn = ctx.infra.pool.get().context("DB connection")?;
-    let hooks =
-        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .override_access(true)
-        .build();
-
-    let input = ListVersionsInput::builder(id)
+    let op_args = ListVersionsArgs::builder(id)
         .limit(limit)
         .offset(offset)
         .build();
 
-    let result = list_versions(&svc_ctx, &input)?;
+    // MCP operates with full access — override access checks.
+    let result = op::run::<ListVersions>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     let versions: Vec<Value> = result
         .docs
@@ -97,23 +80,13 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .get("version_id")
         .and_then(|v| v.as_str())
         .context("Missing 'version_id' argument")?;
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
-
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .cache(Some(ctx.infra.cache.clone()))
-        .build();
-
-    let doc = restore_collection_version(&svc_ctx, id, version_id, &ctx.config.locale)?;
+    let doc = op::run::<RestoreVersion>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        RestoreVersionArgs::new(id, version_id),
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP restore_version {}: {} -> {} [client={}]",

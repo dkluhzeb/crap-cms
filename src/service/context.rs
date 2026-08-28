@@ -11,6 +11,7 @@ use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
         LiveMode, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        SharedStorage,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     db::{
@@ -54,6 +55,11 @@ pub struct ServiceContext<'a> {
     pub write_hooks: Option<&'a dyn WriteHooks>,
     /// Authenticated user document.
     pub user: Option<&'a Document>,
+    /// The acting user's UI-locale preference (admin editor locale / the
+    /// stored preference resolved by the auth evaluator). Write operations
+    /// thread it into `WriteInput.ui_locale`; hook contexts surface it as
+    /// `ctx.ui_locale`.
+    pub ui_locale: Option<String>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
     pub override_access: bool,
     /// Email configuration for verification emails on auth collection
@@ -73,6 +79,11 @@ pub struct ServiceContext<'a> {
     /// cache-miss fetches across requests. `None` falls back to a fresh
     /// per-call singleflight.
     pub populate_singleflight: Option<SharedPopulateSingleflight>,
+    /// Upload storage backend, used by delete operations to remove an upload
+    /// document's files. Infra — set by [`ServiceContextBuilder::infra`];
+    /// the Lua surface attaches its per-VM storage (custom backends run on
+    /// the VM's lease). `None` = file cleanup is skipped.
+    pub storage: Option<SharedStorage>,
     /// Transport for publishing mutation events to live-update subscribers.
     /// `None` = event publishing is a no-op.
     pub event_transport: Option<SharedEventTransport>,
@@ -253,6 +264,17 @@ impl<'a> ServiceContext<'a> {
         match &self.def {
             Def::Collection(_) | Def::None => Cow::Borrowed(self.slug),
             Def::Global(_) => Cow::Owned(global_table(self.slug)),
+        }
+    }
+
+    /// Whether the target has versioning enabled (collection or global).
+    /// `Def::None` counts as unversioned.
+    #[must_use]
+    pub fn has_versions(&self) -> bool {
+        match &self.def {
+            Def::Collection(d) => d.has_versions(),
+            Def::Global(d) => d.has_versions(),
+            Def::None => false,
         }
     }
 
@@ -523,11 +545,13 @@ pub struct ServiceContextBuilder<'a> {
     read_hooks: Option<&'a dyn ReadHooks>,
     write_hooks: Option<&'a dyn WriteHooks>,
     user: Option<&'a Document>,
+    ui_locale: Option<String>,
     override_access: bool,
     email_ctx: Option<EmailContext>,
     cache: Option<SharedCache>,
     registry: Option<&'a Registry>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
+    storage: Option<SharedStorage>,
     event_transport: Option<SharedEventTransport>,
     emit_events: bool,
     event_queue: Option<EventQueue>,
@@ -548,11 +572,13 @@ impl<'a> ServiceContextBuilder<'a> {
             read_hooks: None,
             write_hooks: None,
             user: None,
+            ui_locale: None,
             override_access: false,
             email_ctx: None,
             cache: None,
             registry: None,
             populate_singleflight: None,
+            storage: None,
             event_transport: None,
             emit_events: true,
             event_queue: None,
@@ -577,6 +603,7 @@ impl<'a> ServiceContextBuilder<'a> {
         self.registry = Some(&infra.registry);
         self.cache = Some(infra.cache.clone());
         self.populate_singleflight = Some(infra.populate_singleflight.clone());
+        self.storage = Some(infra.storage.clone());
         self.event_transport.clone_from(&infra.event_transport);
         self.invalidation_transport = Some(infra.invalidation_transport.clone());
         self.email_ctx = Some(infra.email.clone());
@@ -615,6 +642,13 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach the acting user's UI-locale preference. Optional shape so a
+    /// caller can forward another context's value without an `if let`.
+    pub fn ui_locale(mut self, ui_locale: Option<String>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
     pub fn override_access(mut self, override_access: bool) -> Self {
         self.override_access = override_access;
         self
@@ -650,6 +684,14 @@ impl<'a> ServiceContextBuilder<'a> {
         singleflight: Option<SharedPopulateSingleflight>,
     ) -> Self {
         self.populate_singleflight = singleflight;
+        self
+    }
+
+    /// Attach the upload storage backend for delete-time file cleanup.
+    /// Optional shape like the other attachments; the Lua surface passes its
+    /// per-VM storage here.
+    pub fn storage(mut self, storage: Option<SharedStorage>) -> Self {
+        self.storage = storage;
         self
     }
 
@@ -761,11 +803,13 @@ impl<'a> ServiceContextBuilder<'a> {
             read_hooks: self.read_hooks,
             write_hooks: self.write_hooks,
             user: self.user,
+            ui_locale: self.ui_locale,
             override_access: self.override_access,
             email_ctx: self.email_ctx,
             cache: self.cache,
             registry: self.registry,
             populate_singleflight: self.populate_singleflight,
+            storage: self.storage,
             event_transport: self.event_transport,
             emit_events: self.emit_events,
             event_queue: self.event_queue,

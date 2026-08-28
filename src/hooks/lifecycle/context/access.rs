@@ -111,6 +111,12 @@ pub struct AccessCheckInput<'a> {
     pub operation: &'a str,
     pub collection: &'a str,
     pub ui_locale: Option<&'a str>,
+    /// Whether the *operation itself* injects `_status` (a non-draft write on
+    /// a drafts-enabled collection). When set, a `Constrained` result may
+    /// filter on `_status` — the constraint validation chokepoint
+    /// (`check_collection_access`) reads this instead of hard-coding `false`,
+    /// so the allowance works on every surface that resolves access.
+    pub injecting_status: bool,
 }
 
 impl<'a> AccessCheckInput<'a> {
@@ -130,6 +136,7 @@ impl<'a> AccessCheckInput<'a> {
             operation,
             collection,
             ui_locale: None,
+            injecting_status: false,
         }
     }
 }
@@ -147,6 +154,7 @@ pub struct AccessCheckInputBuilder<'a> {
     operation: &'a str,
     collection: &'a str,
     ui_locale: Option<&'a str>,
+    injecting_status: bool,
 }
 
 impl<'a> AccessCheckInputBuilder<'a> {
@@ -200,6 +208,14 @@ impl<'a> AccessCheckInputBuilder<'a> {
         self
     }
 
+    /// Whether the operation itself injects `_status` (permits `_status`
+    /// constraints from the access hook). See [`AccessCheckInput::injecting_status`].
+    #[must_use]
+    pub fn injecting_status(mut self, injecting_status: bool) -> Self {
+        self.injecting_status = injecting_status;
+        self
+    }
+
     /// Finalize the [`AccessCheckInput`].
     #[must_use]
     pub fn build(self) -> AccessCheckInput<'a> {
@@ -213,6 +229,7 @@ impl<'a> AccessCheckInputBuilder<'a> {
             operation: self.operation,
             collection: self.collection,
             ui_locale: self.ui_locale,
+            injecting_status: self.injecting_status,
         }
     }
 }

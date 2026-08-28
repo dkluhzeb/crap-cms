@@ -139,6 +139,12 @@ pub(super) fn setup_lua() -> Lua {
             return false
         end
 
+        -- Constrains on the system `_status` column — only legal when the
+        -- operation itself injects `_status` (injecting_status = true).
+        function access.constrained_status(ctx)
+            return { _status = "published" }
+        end
+
         package.loaded["test_access"] = access
     "#,
     )

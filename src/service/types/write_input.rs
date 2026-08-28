@@ -31,7 +31,6 @@ pub struct WriteInput<'a> {
     pub data: DocumentFields,
     pub password: Option<&'a str>,
     pub locale_ctx: Option<&'a LocaleContext>,
-    pub locale: Option<String>,
     pub draft: bool,
     pub ui_locale: Option<String>,
 }
@@ -48,7 +47,6 @@ pub struct WriteInputBuilder<'a> {
     pub(in crate::service) data: DocumentFields,
     pub(in crate::service) password: Option<&'a str>,
     pub(in crate::service) locale_ctx: Option<&'a LocaleContext>,
-    pub(in crate::service) locale: Option<String>,
     pub(in crate::service) draft: bool,
     pub(in crate::service) ui_locale: Option<String>,
 }
@@ -59,7 +57,6 @@ impl<'a> WriteInputBuilder<'a> {
             data,
             password: None,
             locale_ctx: None,
-            locale: None,
             draft: false,
             ui_locale: None,
         }
@@ -73,12 +70,6 @@ impl<'a> WriteInputBuilder<'a> {
 
     pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
         self.locale_ctx = locale_ctx;
-
-        self
-    }
-
-    pub fn locale(mut self, locale: Option<String>) -> Self {
-        self.locale = locale;
 
         self
     }
@@ -100,7 +91,6 @@ impl<'a> WriteInputBuilder<'a> {
             data: self.data,
             password: self.password,
             locale_ctx: self.locale_ctx,
-            locale: self.locale,
             draft: self.draft,
             ui_locale: self.ui_locale,
         }
@@ -135,14 +125,12 @@ mod tests {
         data.insert("title".to_string(), json!("hi"));
         let wi = WriteInput::builder(data)
             .password(Some("pw"))
-            .locale(Some("de".to_string()))
             .draft(true)
             .ui_locale(Some("en".to_string()))
             .build();
 
         assert_eq!(wi.data.get("title"), Some(&json!("hi")));
         assert_eq!(wi.password, Some("pw"));
-        assert_eq!(wi.locale.as_deref(), Some("de"));
         assert!(wi.draft);
         assert_eq!(wi.ui_locale.as_deref(), Some("en"));
         assert!(wi.locale_ctx.is_none());

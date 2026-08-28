@@ -6,7 +6,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use tokio::task;
 use tracing::{error, info};
 
 use std::sync::Arc;
@@ -16,29 +15,12 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::{CollectionDefinition, Document, auth::AuthUser},
-    service::{self, AppInfra, ServiceContext, ServiceError},
+    core::auth::AuthUser,
+    service::{
+        ServiceError,
+        op::{self, Principal, TargetRef, Undelete, UndeleteArgs},
+    },
 };
-
-/// Owned inputs for the spawn-blocking undelete body. Process-stable
-/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
-struct UndeleteInput {
-    infra: Arc<AppInfra>,
-    slug: String,
-    def: CollectionDefinition,
-    user_doc: Option<Document>,
-    id: String,
-}
-
-/// Build the service context and run the undelete service call.
-fn undelete_document_blocking(input: &UndeleteInput) -> Result<Document, ServiceError> {
-    let ctx = ServiceContext::collection(&input.slug, &input.def)
-        .infra(&input.infra)
-        .user(input.user_doc.as_ref())
-        .build();
-
-    service::undelete_document(&ctx, &input.id)
-}
 
 /// POST /admin/collections/{slug}/{id}/undelete — undelete a soft-deleted item
 pub async fn undelete_action(
@@ -54,36 +36,28 @@ pub async fn undelete_action(
         return htmx_redirect(&paths::collection(&slug));
     }
 
-    let input = UndeleteInput {
-        infra: state.infra.clone(),
-        slug: slug.clone(),
-        def,
-        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
-        id: id.clone(),
-    };
+    let result = op::run_blocking::<Undelete>(
+        Arc::clone(&state.infra),
+        Principal::Resolved {
+            user: get_user_doc(auth_user.as_ref()).cloned(),
+            ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
+        },
+        TargetRef::collection(slug.as_str()),
+        UndeleteArgs::new(id.as_str()),
+    )
+    .await;
 
-    let result = task::spawn_blocking(move || undelete_document_blocking(&input)).await;
-
-    match result {
-        Ok(Ok(_doc)) => {
+    match result.map_err(op::CoreError::into_service_error) {
+        Ok(_doc) => {
             info!("Undeleted document {} in {}", id, slug);
 
             htmx_redirect(&paths::collection_trash(&slug))
         }
-        Ok(Err(ServiceError::AccessDenied(_))) => {
+        Err(ServiceError::AccessDenied(_)) => {
             forbidden(&state, "You don't have permission to undelete this item").into_response()
         }
-        Ok(Err(e)) => {
-            error!("Undelete error: {}", e);
-
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Undelete failed: {e}"),
-            )
-                .into_response()
-        }
         Err(e) => {
-            error!("Undelete task error: {}", e);
+            error!("Undelete error: {}", e);
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

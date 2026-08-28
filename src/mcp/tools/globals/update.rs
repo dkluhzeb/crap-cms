@@ -10,7 +10,7 @@ use crate::{
         ToolExecCtx,
         collection::helpers::{doc_to_json, events_flag, extract_data_from_args},
     },
-    service::{ServiceContext, WriteInput, update_global_document},
+    service::op::{self, Principal, TargetRef, UpdateGlobal, UpdateGlobalArgs},
 };
 
 /// Execute `update_global` — update a global document.
@@ -38,23 +38,19 @@ pub(in crate::mcp::tools) fn exec_update_global(
 
     let data = extract_data_from_args(args, &["locale", "draft", "events"], &def.fields)?;
 
-    let svc_ctx = ServiceContext::global(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
+    let op_args = UpdateGlobalArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(draft)
+        .events(events)
         .build();
 
-    let (doc, _ctx) = update_global_document(
-        &svc_ctx,
-        WriteInput::builder(data)
-            .locale_ctx(locale_ctx.as_ref())
-            .locale(locale.map(std::string::ToString::to_string))
-            .draft(draft)
-            .build(),
-    )?;
+    let (doc, _req_context) = op::run::<UpdateGlobal>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::global(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!("MCP update global: {} [client={}]", slug, ctx.client_label);
 

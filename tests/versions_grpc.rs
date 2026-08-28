@@ -635,7 +635,8 @@ async fn grpc_list_versions_nonversioned_fails() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    // Gate moved to the service chokepoint; maps HookError → INVALID_ARGUMENT.
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }
 
 #[tokio::test]
@@ -754,7 +755,8 @@ async fn grpc_restore_version_nonversioned_fails() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    // Gate moved to the service chokepoint; maps HookError → INVALID_ARGUMENT.
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }
 
 #[tokio::test]
@@ -1466,7 +1468,6 @@ fn service_update_draft_uses_locale_context() {
         &ctx,
         service::WriteInput::builder(data)
             .locale_ctx(Some(&en_ctx))
-            .locale(Some("en".to_string()))
             .build(),
     )
     .unwrap();
@@ -1489,7 +1490,6 @@ fn service_update_draft_uses_locale_context() {
         &doc.id,
         service::WriteInput::builder(draft_data)
             .locale_ctx(Some(&de_ctx))
-            .locale(Some("de".to_string()))
             .draft(true)
             .build(),
     )

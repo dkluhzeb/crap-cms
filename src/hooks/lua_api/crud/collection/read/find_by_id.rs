@@ -15,10 +15,7 @@ use crate::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             get_tx_conn,
-            helpers::{
-                check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
-                resolve_collection,
-            },
+            helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_collection},
         },
     },
     service::{
@@ -122,15 +119,14 @@ fn collections_find_by_id(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    // No `.cache(...)`: Lua CRUD reads run inside hook transactions — see the
-    // matching note in `find.rs`.
+    // No `.cache(...)` and no `.populate_singleflight(...)`: Lua CRUD reads
+    // run inside hook transactions — see the matching note in `find.rs`.
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
-        .populate_singleflight(hook_populate_singleflight(lua))
         .build();
 
     // Shared operation body (`FindById::run`): the definition-dependent flag
@@ -144,7 +140,7 @@ fn collections_find_by_id(
         .include_deleted(opts.trash)
         .build();
 
-    let doc = FindById::run(&ctx, &args).map_err(lua_err)?;
+    let doc = FindById::run(&ctx, args).map_err(lua_err)?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

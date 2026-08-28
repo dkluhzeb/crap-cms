@@ -12,9 +12,12 @@ use crate::{
     db::query::PaginationResult,
     hooks::lua_api::crud::{
         get_tx_conn,
-        helpers::{hook_user, resolve_collection},
+        helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_collection},
     },
-    service::{ListVersionsInput, LuaReadHooks, ServiceContext, list_versions},
+    service::{
+        LuaReadHooks, ServiceContext,
+        op::{ListVersions, ListVersionsArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -99,9 +102,17 @@ fn collections_list_versions(
     let def = resolve_collection(state, &collection)?;
 
     let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
+
+    // Depth guard: an access/versions hook that lists versions of its own
+    // collection recurses — cap it like every other Lua CRUD read.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, &collection, "list_versions");
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)
@@ -111,12 +122,13 @@ fn collections_list_versions(
         .override_access(opts.override_access)
         .build();
 
-    let input = ListVersionsInput::builder(&id)
+    // Shared operation body — identical semantics on every surface.
+    let args = ListVersionsArgs::builder(id)
         .limit(opts.limit)
         .offset(opts.offset)
         .build();
 
-    let paginated = list_versions(&ctx, &input).map_err(lua_err)?;
+    let paginated = ListVersions::run(&ctx, args).map_err(lua_err)?;
 
     let result = ListVersionsResult {
         documents: paginated

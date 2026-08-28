@@ -1,84 +1,26 @@
 //! Bulk `CreateMany` RPC handler.
+//!
+//! Codec over [`op::run_blocking`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::error;
 
 use crate::{
     api::{
         content,
         handlers::{
             ContentService,
+            collection::helpers::extract_auth_password,
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
-    core::CollectionDefinition,
-    service::{self, AppInfra, CreateManyItem, CreateManyOptions, ServiceContext, ServiceError},
+    core::{DocumentFields, collection::Surface},
+    service::{
+        CreateManyItem,
+        op::{self, CreateMany, CreateManyArgs, Credentials, Principal, TargetRef},
+    },
 };
-
-/// Owned bundle for the `CreateMany` spawn-blocking body. Process-stable
-/// dependencies come from the shared [`AppInfra`]; the rest is per-call.
-struct CreateManyBlockingInput {
-    infra: Arc<AppInfra>,
-    headers: HashMap<String, String>,
-    db_kind: String,
-    collection: String,
-    def: CollectionDefinition,
-    token: Option<String>,
-    items: Vec<CreateManyItem>,
-    run_hooks: bool,
-    draft: bool,
-    bulk_max_documents: i64,
-    events: bool,
-}
-
-fn create_many_blocking(
-    input: &CreateManyBlockingInput,
-) -> Result<(i64, Vec<content::Document>), Status> {
-    let infra = &input.infra;
-
-    let conn = infra
-        .pool
-        .get()
-        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
-
-    let auth_user = ContentService::resolve_auth_user(
-        input.token.as_deref(),
-        &input.headers,
-        &*infra.token_provider,
-        &infra.hook_runner,
-        &infra.registry,
-        &conn,
-    )?;
-
-    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-    let ctx = ServiceContext::collection(&input.collection, &input.def)
-        .infra(infra)
-        .user(user_doc)
-        .emit_events(input.events)
-        .build();
-
-    let opts = CreateManyOptions {
-        run_hooks: input.run_hooks,
-        draft: input.draft,
-        max_documents: input.bulk_max_documents,
-    };
-
-    let result = service::create_many(&ctx, &input.items, &opts)
-        .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
-
-    let proto_docs: Vec<content::Document> = result
-        .documents
-        .iter()
-        .map(|doc| document_to_proto(doc, &input.collection))
-        .collect();
-
-    Ok((result.created, proto_docs))
-}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -104,43 +46,50 @@ impl ContentService {
         let is_auth = def.is_auth_collection();
         let mut items: Vec<CreateManyItem> = Vec::with_capacity(req.documents.len());
         for s in &req.documents {
-            let mut map = data_map_to_json_map(s);
+            let mut data: DocumentFields = data_map_to_json_map(s).into();
 
-            let password = if is_auth {
-                map.remove("password")
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-            } else {
-                None
-            };
+            // Shared with single Create: a non-string password coerces to ""
+            // and fails the policy (InvalidArgument) instead of being silently
+            // dropped — the old inline `as_str()` extraction created a
+            // passwordless auth document from `{"password": 12345}`.
+            let password =
+                extract_auth_password(&mut data, is_auth, &self.infra.password_policy, false)?;
 
-            items.push(CreateManyItem {
-                data: map.into(),
-                password,
-            });
+            items.push(CreateManyItem { data, password });
         }
 
-        let input = CreateManyBlockingInput {
-            infra: Arc::clone(&self.infra),
-            db_kind: self.db_kind.clone(),
-            collection: req.collection.clone(),
-            def,
-            token,
-            headers,
-            items,
-            run_hooks: req.hooks.unwrap_or(true),
-            draft: req.draft.unwrap_or(false),
-            bulk_max_documents: self.server_config.bulk_max_documents,
-            events: req.events.unwrap_or(false),
-        };
+        let args = CreateManyArgs::builder(items)
+            .run_hooks(req.hooks.unwrap_or(true))
+            .draft(req.draft.unwrap_or(false))
+            .max_documents(self.server_config.bulk_max_documents)
+            .events(req.events.unwrap_or(false))
+            .build();
 
-        let result = task::spawn_blocking(move || create_many_blocking(&input))
-            .await
-            .inspect_err(|e| error!("Task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
+            headers,
+        });
+
+        let result = op::run_blocking::<CreateMany>(
+            Arc::clone(&self.infra),
+            principal,
+            TargetRef::collection(req.collection.clone()),
+            args,
+        )
+        .await
+        .map_err(|e| self.core_error_status(e))?;
+
+        let documents: Vec<content::Document> = result
+            .documents
+            .iter()
+            .map(|doc| document_to_proto(doc, &req.collection))
+            .collect();
 
         Ok(Response::new(content::CreateManyResponse {
-            created: result.0,
-            documents: result.1,
+            created: result.created,
+            documents,
         }))
     }
 }

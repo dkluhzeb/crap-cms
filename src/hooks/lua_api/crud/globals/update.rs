@@ -19,7 +19,9 @@ use crate::hooks::lua_api::crud::{
     helpers::{check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_global},
 };
 use crate::service::{
-    LuaWriteHooks, ServiceContext, WriteInput, update_global_document, values_from_strings,
+    LuaWriteHooks, ServiceContext,
+    op::{Operation, UpdateGlobal, UpdateGlobalArgs},
+    values_from_strings,
 };
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -112,30 +114,29 @@ fn globals_update(
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &slug, "update");
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
-        .build();
-
-    let write_input = WriteInput::builder(data)
-        .locale_ctx(locale_ctx.as_ref())
-        .locale(opts.locale)
-        .draft(opts.draft)
-        .ui_locale(ui_locale.clone())
         .build();
 
     let ctx = ServiceContext::global(&slug, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    let (doc, _) = update_global_document(&ctx, write_input)
+    // Shared operation body — identical semantics on every surface.
+    let args = UpdateGlobalArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(opts.draft)
+        .events(opts.events)
+        .build();
+
+    let (doc, _) = UpdateGlobal::run(&ctx, args)
         .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)

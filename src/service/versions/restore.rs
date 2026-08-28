@@ -1,6 +1,6 @@
 //! Version restore operations for collections and globals.
 
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use anyhow::Context as _;
 use serde_json::Value;
@@ -15,8 +15,9 @@ use crate::{
     },
     hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, helpers, hooks::WriteHooks,
-        invalidate_user_streams_if_auth, versions::gate::versions_gate_decision,
+        RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, flush_verification_queue,
+        helpers, hooks::WriteHooks, invalidate_user_streams_if_auth,
+        versions::gate::versions_gate_decision,
     },
 };
 
@@ -139,6 +140,17 @@ pub fn restore_collection_version(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
+    // Authoritative capability gate: a non-versioned collection has no version
+    // table to restore from. Enforced at the one service chokepoint —
+    // previously only the gRPC codec checked, so MCP/Lua surfaced a raw
+    // missing-table DB error.
+    if !ctx.has_versions() {
+        return Err(ServiceError::HookError(format!(
+            "'{}' does not have versioning enabled",
+            ctx.slug
+        )));
+    }
+
     if ctx.pool.is_some() {
         restore_collection_version_pool(ctx, document_id, version_id, locale_config)
     } else {
@@ -158,7 +170,13 @@ fn restore_collection_version_pool(
     let mut conn = pool.write().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let infra = LuaCrudInfra::from_ctx(ctx, None, None);
+    // Event + verification queues for NESTED Lua CRUD inside restore hooks —
+    // restore was the one pool orchestrator without them, so a hook's nested
+    // mutation events and verification mails were silently dropped.
+    let queue = Rc::new(RefCell::new(Vec::new()));
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -172,15 +190,19 @@ fn restore_collection_version_pool(
         .conn(&tx)
         .write_hooks(&wh)
         .inherit_write_infra(ctx)
+        .event_queue(queue.clone())
         .build();
 
     let doc = restore_collection_version_core(&inner_ctx, document_id, version_id, locale_config)?;
+    drop(inner_ctx);
 
     tx.commit().context("Commit")?;
 
     ctx.clear_cache();
     ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
     invalidate_user_streams_if_auth(ctx, document_id);
+    flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(doc)
 }
@@ -343,7 +365,11 @@ pub fn restore_global_version(
     let mut conn = pool.write().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let infra = LuaCrudInfra::from_ctx(ctx, None, None);
+    // Same nested-CRUD queues as the collection restore (see above).
+    let queue = Rc::new(RefCell::new(Vec::new()));
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -356,18 +382,19 @@ pub fn restore_global_version(
     let inner_ctx = ServiceContext::global(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .cache(ctx.cache.clone())
-        .event_transport(ctx.event_transport.clone())
+        .inherit_write_infra(ctx)
+        .event_queue(queue.clone())
         .build();
 
     let doc = restore_global_version_core(&inner_ctx, version_id, locale_config)?;
+    drop(inner_ctx);
 
     tx.commit().context("Commit")?;
 
     ctx.clear_cache();
     ctx.publish_mutation_event(EventOperation::Update, "default", &doc.fields);
+    flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(doc)
 }
@@ -451,8 +478,30 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{collect_known_keys, warn_on_snapshot_drift};
-    use crate::core::{FieldDefinition, FieldType};
+    use super::{collect_known_keys, restore_collection_version, warn_on_snapshot_drift};
+    use crate::{
+        config::LocaleConfig,
+        core::{CollectionDefinition, FieldDefinition, FieldType},
+        service::{ServiceContext, ServiceError},
+    };
+
+    /// Regression: the `has_versions` gate lives in the service chokepoint —
+    /// previously only the gRPC codec checked, so MCP/Lua hit the missing
+    /// version table and surfaced a raw DB error instead of a typed one. The
+    /// gate fires before mode dispatch, so no connection is needed.
+    #[test]
+    fn restore_rejects_non_versioned_collection() {
+        let def = CollectionDefinition::new("posts");
+        let ctx = ServiceContext::collection("posts", &def).build();
+
+        let err =
+            restore_collection_version(&ctx, "p1", "v1", &LocaleConfig::default()).unwrap_err();
+
+        assert!(
+            matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
+            "expected typed versioning gate error, got {err:?}"
+        );
+    }
 
     #[test]
     fn collect_known_keys_scalar_fields() {

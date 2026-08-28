@@ -364,7 +364,10 @@ async fn load_document(
 
     let read_result = op::run_blocking::<FindById>(
         Arc::clone(&state.infra),
-        Principal::Resolved(auth_user.map(|Extension(au)| au.user_doc.clone())),
+        Principal::Resolved {
+            user: auth_user.map(|Extension(au)| au.user_doc.clone()),
+            ui_locale: auth_user.map(|Extension(au)| au.ui_locale.clone()),
+        },
         TargetRef::collection(slug),
         args,
     )

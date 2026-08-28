@@ -1,14 +1,13 @@
 //! Execute `delete_many` — bulk delete multiple documents matching filters.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    core::upload,
     mcp::tools::{ToolExecCtx, collection::helpers::parse_where_filters},
-    service::{self, DeleteManyOptions, ServiceContext},
+    service::op::{self, DeleteMany, DeleteManyArgs, Principal, TargetRef},
 };
 
 /// Shape returned to the MCP client for a `delete_many` tool call.
@@ -31,14 +30,6 @@ pub(in crate::mcp::tools) fn exec_delete_many(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let mut def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?
-        .clone();
-
     let filters = parse_where_filters(args)?;
 
     let run_hooks = args
@@ -51,39 +42,27 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    if force_hard_delete && def.soft_delete {
-        def.make_hard_delete();
-    }
-
     let events = args
         .get("events")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let svc_ctx = ServiceContext::collection(slug, &def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .emit_events(events)
-        .cache(Some(ctx.infra.cache.clone()))
+    // The operation body handles `force_hard_delete` (definition adjustment)
+    // and the post-commit upload-file cleanup — identical on every surface.
+    let op_args = DeleteManyArgs::builder(filters)
+        .run_hooks(run_hooks)
+        .force_hard_delete(force_hard_delete)
+        .max_documents(ctx.config.server.bulk_max_documents)
+        .events(events)
         .build();
 
-    let opts = DeleteManyOptions {
-        run_hooks,
-        max_documents: ctx.config.server.bulk_max_documents,
-        ..Default::default()
-    };
-
-    let result = service::delete_many(&svc_ctx, &filters, &ctx.config.locale, &opts)?;
-
-    // Hard-deleted rows leave orphaned upload files — clean them post-commit
-    // (mirrors the gRPC/admin surfaces).
-    let storage = ctx.infra.storage.as_ref();
-    for fields in &result.upload_fields_to_clean {
-        upload::delete_upload_files(storage, fields);
-    }
+    let result = op::run::<DeleteMany>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP delete_many {}: {} hard, {} soft, {} skipped [client={}]",

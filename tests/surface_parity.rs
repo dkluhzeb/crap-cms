@@ -172,6 +172,7 @@ fn surfaces_do_not_bypass_the_service_layer() {
 /// they're guarded structurally by `auth_revoking_handlers_request_invalidation`
 /// below instead.
 const INVALIDATION_WRITE_OPS: &[&str] = &[
+    // Direct service calls (pre-op-core style; admin restore_action still).
     "update_document(",
     "update_many(",
     "unpublish_document(",
@@ -180,6 +181,17 @@ const INVALIDATION_WRITE_OPS: &[&str] = &[
     "delete_document(",
     "delete_many(",
     "consume_reset_token(",
+    // Operation-core bodies — post-migration, codecs invoke these instead of
+    // the service fns; without them this guard matched nothing and was
+    // vacuous. (`op::run`/`run_blocking` dispatchers attach infra themselves,
+    // so only direct `<Op>::run(` calls need scanning.)
+    "Update::run(",
+    "UpdateMany::run(",
+    "Unpublish::run(",
+    "Undelete::run(",
+    "RestoreVersion::run(",
+    "Delete::run(",
+    "DeleteMany::run(",
 ];
 
 /// Architectural guard: any surface handler that builds a `ServiceContext` and
@@ -535,8 +547,9 @@ fn all_canonical_ops_exist_on_every_programmatic_surface() {
 /// Surface files allowed to call `check_access` directly, each a reviewed
 /// non-CRUD touchpoint that delegates to the shared evaluator.
 const ACCESS_TOUCHPOINTS: &[&str] = &[
-    // gRPC adapter's access-check wrapper — delegates to `hook_runner.check_access`.
-    "api/handlers/content_service.rs",
+    // (The former gRPC `check_access_blocking` wrapper was deleted with the
+    // operation-core port — bulk match-set gating now lives in the service
+    // chokepoint `service::collections::bulk_access`, off-surface.)
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
     // REST upload helpers: file upload/serve is not a document-CRUD service op,

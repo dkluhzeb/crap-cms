@@ -25,8 +25,11 @@ use crate::{
         },
     },
     core::{AuthUser, CollectionDefinition, Document, upload},
-    db::{LocaleContext, LocaleMode},
-    service::{self, AppInfra, ServiceError},
+    db::LocaleContext,
+    service::{
+        self, AppInfra, ServiceError,
+        op::{Create, CreateArgs, Operation},
+    },
 };
 
 /// Handle post-create success: commit upload and enqueue conversions.
@@ -95,31 +98,29 @@ struct CreateBlockingInput {
     slug: String,
     def: CollectionDefinition,
     user_doc: Option<Document>,
-    locale: Option<String>,
     ui_locale: Option<String>,
     input: CreateInput,
 }
 
 /// Synchronous body of [`spawn_create`]. Builds the service context and runs
-/// `service::create_document` with the merged form + join-table data.
+/// the shared [`Create`] operation body with the merged form + join-table
+/// data.
 fn create_document_blocking(
     args: CreateBlockingInput,
 ) -> Result<service::WriteResult, ServiceError> {
     let ctx = service::ServiceContext::collection(&args.slug, &args.def)
         .infra(&args.infra)
         .user(args.user_doc.as_ref())
+        .ui_locale(args.ui_locale)
         .build();
 
-    service::create_document(
-        &ctx,
-        service::WriteInput::builder(args.input.form)
-            .password(args.input.password.as_deref())
-            .locale_ctx(args.input.locale_ctx.as_ref())
-            .locale(args.locale)
-            .draft(args.input.draft)
-            .ui_locale(args.ui_locale)
-            .build(),
-    )
+    let op_args = CreateArgs::builder(args.input.form.into())
+        .password(args.input.password)
+        .locale_ctx(args.input.locale_ctx)
+        .draft(args.input.draft)
+        .build();
+
+    Create::run(&ctx, op_args)
 }
 
 /// Clone state and run `service::create_document` in a blocking task.
@@ -130,10 +131,6 @@ async fn spawn_create(
     auth_user: Option<&Extension<AuthUser>>,
     input: CreateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
-    let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
-        LocaleMode::Single(l) => Some(l.clone()),
-        _ => None,
-    });
     let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
 
     let args = CreateBlockingInput {
@@ -141,7 +138,6 @@ async fn spawn_create(
         slug: slug.to_string(),
         def: def.clone(),
         user_doc: get_user_doc(auth_user).cloned(),
-        locale,
         ui_locale,
         input,
     };

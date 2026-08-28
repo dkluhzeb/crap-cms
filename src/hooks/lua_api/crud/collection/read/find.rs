@@ -10,23 +10,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{DepthConfig, LocaleConfig, PaginationConfig},
-    core::{CollectionDefinition, Document, Registry},
-    db::{
-        FindQuery, LocaleContext, PaginationResult,
-        query::{self, filter::normalize_filter_fields},
-    },
+    core::{Document, Registry},
+    db::{FindQuery, LocaleContext, PaginationResult, query},
     hooks::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
-            helpers::{
-                check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
-                resolve_collection,
-            },
+            helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_collection},
         },
     },
-    service::{FindDocumentsInput, LuaReadHooks, ServiceContext, find_documents},
+    service::{
+        LuaReadHooks, ServiceContext,
+        op::{Find, FindArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -236,12 +233,7 @@ pub(crate) fn register_find(
 /// the typed `FindQuery` produced by `FindQueryInput`. System filters
 /// (`_status`, `_deleted_at`) are injected by `service::find_documents`
 /// based on the typed flags.
-fn finalize_find_query(
-    params: &FindParams,
-    def: &CollectionDefinition,
-    mut fq: FindQuery,
-    lua_page: Option<i64>,
-) -> FindQuery {
+fn finalize_find_query(params: &FindParams, mut fq: FindQuery, lua_page: Option<i64>) -> FindQuery {
     fq.limit = Some(query::apply_pagination_limits(
         fq.limit,
         params.default,
@@ -260,7 +252,6 @@ fn finalize_find_query(
         fq.before_cursor = None;
     }
 
-    normalize_filter_fields(&mut fq.filters, &def.fields);
     fq
 }
 
@@ -286,14 +277,7 @@ fn find_inner(
     let def = resolve_collection(reg, collection)?;
 
     let (raw_fq, lua_page) = query.into_find_query()?;
-    let mut find_query = finalize_find_query(params, &def, raw_fq, lua_page);
-
-    let is_trash = trash && def.soft_delete;
-
-    // Default sort for trash listings is a presentation concern — keep here.
-    if is_trash && find_query.order_by.is_none() {
-        find_query.order_by = Some(query::TRASH_DEFAULT_ORDER.to_string());
-    }
+    let find_query = finalize_find_query(params, raw_fq, lua_page);
 
     // Depth guard: a before_read/after_read hook that finds in the same
     // collection recurses — cap it like the write paths do.
@@ -306,28 +290,32 @@ fn find_inner(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    // No `.cache(...)`: Lua CRUD reads run inside hook transactions, so they
-    // must not read through (or write into) the shared populate cache —
-    // mid-transaction state could leak into other requests' lookups.
+    // No `.cache(...)` and no `.populate_singleflight(...)`: Lua CRUD reads
+    // run inside hook transactions, so they must not read through (or write
+    // into) the shared populate cache — and the process-wide singleflight has
+    // the same sharing property: an in-tx fetch would broadcast uncommitted
+    // rows to concurrent waiters on other connections (and hand this
+    // transaction another connection's stale fetch). Populate here runs
+    // un-deduplicated on the hook transaction's own connection.
     let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(override_access)
         .registry(Some(reg))
-        .populate_singleflight(hook_populate_singleflight(lua))
         .build();
 
-    let input = FindDocumentsInput::builder(&find_query)
+    // Shared operation body: trash downgrade, trash default order, and
+    // query-field validation live in `Find::run`, identical on every surface.
+    let args = FindArgs::builder(find_query)
         .depth(depth)
-        .locale_ctx(locale_ctx.as_ref())
-        .select(find_query.select.as_deref())
+        .locale_ctx(locale_ctx)
         .cursor_enabled(params.cursor)
-        .trash(is_trash)
+        .trash(trash)
         .include_drafts(draft)
         .build();
 
-    let result = find_documents(&ctx, &input).map_err(lua_err)?;
+    let result = Find::run(&ctx, args).map_err(lua_err)?;
 
     let find_result = FindResult {
         documents: &result.docs,
@@ -404,8 +392,7 @@ mod tests {
             default_depth: 1,
             max_depth: 1,
         };
-        let def = crate::core::CollectionDefinition::new("x");
-        let out = finalize_find_query(&params, &def, fq, page);
+        let out = finalize_find_query(&params, fq, page);
         assert_eq!(
             out.offset,
             Some(i64::MAX),

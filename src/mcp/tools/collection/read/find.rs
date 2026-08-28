@@ -1,6 +1,11 @@
 //! Execute `find` — paginated query with filters, search, and population.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`]: decode the tool
+//! args into the canonical [`FindQuery`] + [`FindArgs`], dispatch, encode.
+//! The trash downgrade, trash default order, and query-field validation live
+//! in the operation body.
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
 
@@ -8,9 +13,9 @@ use crate::{
     db::{FindQuery, LocaleContext, query, query::PaginationResult},
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, parse_where_filters},
+        collection::helpers::{doc_to_json, parse_select, parse_where_filters},
     },
-    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
+    service::op::{self, Find, FindArgs, Principal, TargetRef},
 };
 
 /// Shape returned to the MCP client for a `find` tool call.
@@ -26,14 +31,6 @@ pub(in crate::mcp::tools) fn exec_find(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
-    let conn = ctx.infra.pool.get().context("DB connection")?;
-
     let limit = args.get("limit").and_then(serde_json::Value::as_i64);
     let page = args.get("page").and_then(serde_json::Value::as_i64);
     let after_cursor = args.get("after_cursor").and_then(|v| v.as_str());
@@ -55,6 +52,9 @@ pub(in crate::mcp::tools) fn exec_find(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
+    // Field projection, parity with gRPC/Lua `select`.
+    let select = parse_select(args);
+
     // MCP requests outside i32 range can't be valid populate depths; treat
     // them as 0 (no population) before applying max_depth.
     let requested = args
@@ -67,20 +67,14 @@ pub(in crate::mcp::tools) fn exec_find(
         ctx.config.depth.max_depth,
     );
 
-    let is_trash = args
+    let trash = args
         .get("trash")
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        && def.soft_delete;
+        .unwrap_or(false);
     let include_drafts = args
         .get("draft")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-
-    // Default sort for trash listings is a presentation concern.
-    let order_by = order_by
-        .clone()
-        .or_else(|| is_trash.then(|| query::TRASH_DEFAULT_ORDER.to_string()));
 
     let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 
@@ -91,30 +85,25 @@ pub(in crate::mcp::tools) fn exec_find(
         .offset(offset)
         .after_cursor(pagination.after_cursor.clone())
         .before_cursor(pagination.before_cursor.clone())
-        .search(search.clone())
+        .search(search)
+        .select(select)
         .build();
 
-    let hooks =
-        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
-    // No cache/singleflight: MCP runs override-access, where the populate
-    // guardrail zeroes both anyway.
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .override_access(true)
-        .registry(Some(ctx.infra.registry.as_ref()))
-        .build();
-
-    let input = FindDocumentsInput::builder(&fq)
+    let op_args = FindArgs::builder(fq)
         .depth(depth)
-        .locale_ctx(locale_ctx.as_ref())
+        .locale_ctx(locale_ctx)
         .cursor_enabled(ctx.config.pagination.is_cursor())
-        .trash(is_trash)
+        .trash(trash)
         .include_drafts(include_drafts)
         .build();
 
-    let result = find_documents(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;
+    let result = op::run::<Find>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     let docs: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
     let response = FindResponse {

@@ -442,10 +442,13 @@ impl WriteHooks for RunnerWriteHooks<'_> {
 }
 
 /// Inline Lua VM write hook execution for Lua CRUD hooks.
+///
+/// No `user`/`ui_locale` here: hook contexts get both from the service
+/// context (`ctx.user` / the write input), and access checks receive the user
+/// via [`AccessCheckInput`] — the fields existed once, were never read, and
+/// every codec dutifully filled them for no effect.
 pub struct LuaWriteHooks<'a> {
     pub lua: &'a mlua::Lua,
-    pub user: Option<&'a Document>,
-    pub ui_locale: Option<&'a str>,
     pub override_access: bool,
     pub registry: Option<&'a Registry>,
     /// Whether hooks are enabled (false when hook depth exceeded or `hooks: false` option).
@@ -465,8 +468,6 @@ impl<'a> LuaWriteHooks<'a> {
 /// Builder for [`LuaWriteHooks`]. Created via [`LuaWriteHooks::builder`].
 pub struct LuaWriteHooksBuilder<'a> {
     pub(in crate::service) lua: &'a mlua::Lua,
-    pub(in crate::service) user: Option<&'a Document>,
-    pub(in crate::service) ui_locale: Option<&'a str>,
     pub(in crate::service) override_access: bool,
     pub(in crate::service) registry: Option<&'a Registry>,
     pub(in crate::service) hooks_enabled: bool,
@@ -477,23 +478,11 @@ impl<'a> LuaWriteHooksBuilder<'a> {
     pub fn new(lua: &'a mlua::Lua) -> Self {
         Self {
             lua,
-            user: None,
-            ui_locale: None,
             override_access: false,
             registry: None,
             hooks_enabled: true,
             run_validation: true,
         }
-    }
-
-    pub fn user(mut self, user: Option<&'a Document>) -> Self {
-        self.user = user;
-        self
-    }
-
-    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
-        self.ui_locale = ui_locale;
-        self
     }
 
     pub fn override_access(mut self, override_access: bool) -> Self {
@@ -519,8 +508,6 @@ impl<'a> LuaWriteHooksBuilder<'a> {
     pub fn build(self) -> LuaWriteHooks<'a> {
         LuaWriteHooks {
             lua: self.lua,
-            user: self.user,
-            ui_locale: self.ui_locale,
             override_access: self.override_access,
             registry: self.registry,
             hooks_enabled: self.hooks_enabled,

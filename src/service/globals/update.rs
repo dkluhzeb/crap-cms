@@ -13,7 +13,8 @@ use crate::{
     hooks::{AccessCheckInput, HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
-        WriteResult, flush_queue, helpers as svc_helpers, run_after_change_hooks,
+        WriteResult, flush_queue, flush_verification_queue, helpers as svc_helpers,
+        run_after_change_hooks,
         versions::{self, VersionSnapshotCtx},
     },
 };
@@ -47,7 +48,13 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -73,6 +80,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 
     ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(result)
 }

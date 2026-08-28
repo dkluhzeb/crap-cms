@@ -1101,6 +1101,44 @@ async fn update_many_rejects_password_field() {
     );
 }
 
+/// Regression: a NON-STRING `password` on an auth-collection `create_many`
+/// item must be rejected (the shared extraction coerces it to `""`, which
+/// fails the password policy), not silently dropped — the old inline
+/// `as_str()` extraction removed the key and created a PASSWORDLESS auth
+/// document from `{"password": 12345}`, where single `create` errored.
+#[tokio::test]
+async fn create_many_rejects_non_string_password() {
+    let ts = setup_service(vec![make_auth_users_def()], vec![]);
+
+    let mut fields = HashMap::new();
+    for (k, v) in [("email", "bulk@example.com"), ("name", "Bulk User")] {
+        fields.insert(
+            k.to_string(),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
+            },
+        );
+    }
+    fields.insert(
+        "password".to_string(),
+        content::FieldValue {
+            kind: Some(content::field_value::Kind::IntValue(12345)),
+        },
+    );
+
+    let result = ts
+        .service
+        .create_many(Request::new(content::CreateManyRequest {
+            collection: "users".to_string(),
+            documents: vec![content::DataMap { fields }],
+            ..Default::default()
+        }))
+        .await;
+
+    assert!(result.is_err(), "non-string password must be rejected");
+    assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+}
+
 // ── DeleteMany Cleans Up Upload Files ───────────────────────────────────
 
 fn make_media_upload_def() -> CollectionDefinition {

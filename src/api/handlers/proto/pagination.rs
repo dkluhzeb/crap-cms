@@ -2,11 +2,6 @@
 
 use crate::{api::content, db::query};
 
-// `floor_optional_limit` (the optional-limit floor shared with the Lua/MCP
-// version surfaces and the service layer) lives in `db::query`; re-exported here
-// so gRPC callers keep the `proto::floor_optional_limit` path.
-pub use crate::db::query::floor_optional_limit;
-
 /// Convert a [`query::PaginationResult`] to a gRPC `PaginationInfo` message.
 pub fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::PaginationInfo {
     content::PaginationInfo {
@@ -27,6 +22,7 @@ pub fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::Pagi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::query::floor_optional_limit;
 
     /// `None` (no explicit limit) is preserved; a negative `Some` is floored.
     #[test]

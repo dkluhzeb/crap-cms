@@ -13,7 +13,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
-        invalidate_user_streams_if_auth,
+        flush_verification_queue, invalidate_user_streams_if_auth,
     },
 };
 
@@ -57,7 +57,13 @@ fn delete_document_pool(
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -70,10 +76,7 @@ fn delete_document_pool(
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .cache(ctx.cache.clone())
-        .event_transport(ctx.event_transport.clone())
+        .inherit_write_infra(ctx)
         .event_queue(queue.clone())
         .build();
 
@@ -93,6 +96,7 @@ fn delete_document_pool(
     // torn down too. No-op for non-auth collections.
     invalidate_user_streams_if_auth(ctx, id);
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
     if !def.soft_delete

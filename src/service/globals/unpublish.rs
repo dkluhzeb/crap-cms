@@ -11,8 +11,8 @@ use crate::{
     db::{AccessResult, LocaleContext, query, query::helpers::global_table},
     hooks::{AccessCheckInput, HookContext, HookEvent, LuaCrudInfra},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
-        run_after_change_hooks, unpublish_with_snapshot,
+        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue,
+        flush_verification_queue, helpers, run_after_change_hooks, unpublish_with_snapshot,
     },
 };
 
@@ -45,6 +45,18 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
+
+    // Authoritative capability gate, mirroring the collection sibling:
+    // unpublish sets `_status='draft'` and writes a version snapshot, both of
+    // which require versioning. Enforced here at the one service chokepoint so
+    // no surface can fall through to another action on a non-versioned global
+    // (the admin codec used to silently run a full update instead).
+    if !def.has_versions() {
+        return Err(ServiceError::HookError(format!(
+            "Global '{}' does not support unpublish: versioning is not enabled",
+            ctx.slug
+        )));
+    }
 
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("unpublish", ctx.slug)
@@ -149,7 +161,13 @@ fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -179,6 +197,90 @@ fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
     // events queued by nested hook CRUD.
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result as AnyResult;
+    use rusqlite::Connection;
+
+    use super::unpublish_global_document;
+    use crate::{
+        core::{DocumentFields, FieldDefinition, GlobalDefinition, Hooks, ValidationError},
+        db::{AccessResult, DbConnection},
+        hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
+        service::{ServiceContext, ServiceError, hooks::WriteHooks},
+    };
+
+    struct NoopWriteHooks;
+
+    impl WriteHooks for NoopWriteHooks {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    /// Regression: unpublishing a non-versioned global must fail with a typed
+    /// gate error at the service chokepoint. The admin codec used to guard
+    /// this itself and silently fall through to a full update instead.
+    #[test]
+    fn unpublish_global_rejects_non_versioned() {
+        let conn = Connection::open_in_memory().unwrap();
+        let def = GlobalDefinition::new("settings");
+
+        let wh = NoopWriteHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+
+        let err = unpublish_global_document(&ctx).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
+            "expected typed versioning gate error, got {err:?}"
+        );
+    }
 }

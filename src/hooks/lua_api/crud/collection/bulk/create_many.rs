@@ -20,7 +20,10 @@ use crate::{
             },
         },
     },
-    service::{self, CreateManyItem, CreateManyOptions, LuaWriteHooks, ServiceContext},
+    service::{
+        CreateManyItem, LuaWriteHooks, ServiceContext,
+        op::{CreateMany, CreateManyArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -113,8 +116,6 @@ fn collections_create_many(
     }
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(state.registry.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -125,19 +126,22 @@ fn collections_create_many(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .password_policy(Some(&state.password_policy))
         .build();
 
-    let create_opts = CreateManyOptions {
-        run_hooks: hooks_enabled,
-        draft: opts.draft,
-        max_documents: state.bulk_max_documents,
-    };
+    // Shared operation body — identical semantics on every surface.
+    let op_args = CreateManyArgs::builder(parsed_items)
+        .run_hooks(hooks_enabled)
+        .draft(opts.draft)
+        .max_documents(state.bulk_max_documents)
+        .events(opts.events)
+        .build();
 
-    let svc_result = service::create_many(&ctx, &parsed_items, &create_opts).map_err(lua_err)?;
+    let svc_result = CreateMany::run(&ctx, op_args).map_err(lua_err)?;
 
     let result = lua.create_table()?;
     result.set("created", svc_result.created)?;

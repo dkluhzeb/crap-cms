@@ -1,4 +1,9 @@
 //! Login handler — authenticate with email/password and return a JWT.
+//!
+//! Codec over [`service::auth::verify_login`] — the credential flow (local
+//! password auth, strategy fallback, locked/verified checks, timing
+//! equalization, MFA gate) is shared with the admin login. This surface owns
+//! rate limiting and the JWT response shape.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,14 +20,15 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{
-        CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder,
-        normalize_email,
+        CollectionDefinition, SharedPasswordProvider, Slug, auth::ClaimsBuilder, normalize_email,
     },
-    hooks::lifecycle::AuthStrategyInput,
-    service::{self, AppInfra, ServiceContext, ServiceError, auth::authenticate_local},
+    service::{
+        AppInfra,
+        auth::{LoginFlowRequest, LoginOutcome, verify_login},
+    },
 };
 
-/// Owned bundle for the `Login` spawn-blocking body. Process-stable
+/// Owned bundle for the login spawn-blocking body. Process-stable
 /// dependencies come from the shared [`AppInfra`]; the rest is per-call.
 struct LoginBlockingInput {
     infra: Arc<AppInfra>,
@@ -30,95 +36,25 @@ struct LoginBlockingInput {
     email: String,
     password: String,
     def: CollectionDefinition,
-    check_verify_email: bool,
-    allows_password: bool,
     password_provider: SharedPasswordProvider,
     headers: HashMap<String, String>,
     remote_addr: String,
 }
 
-/// Try local email+password auth first, then any configured custom strategies.
-/// Returns `Ok(Some((user, session_version)))` on success, `Ok(None)` for any
-/// recoverable failure (wrong password, locked, unverified). Errors propagate
-/// only for system failures.
-fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>, Status> {
-    // Local auth reads the user then writes lockout/attempt counters on this
-    // same connection, so it is write-capable and draws from the write pool.
-    let conn = input
-        .infra
-        .pool
-        .write()
-        .inspect_err(|e| error!("Login DB connection error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
-
-    // Try local email+password authentication via service layer
-    if input.allows_password {
-        let ctx = ServiceContext::collection(&input.slug, &input.def)
-            .conn(&conn)
-            .build();
-
-        match authenticate_local(
-            &ctx,
-            &input.email,
-            &input.password,
-            &*input.password_provider,
-            input.check_verify_email,
-        ) {
-            Ok(result) => return Ok(Some((result.user, result.session_version))),
-            Err(
-                ServiceError::InvalidCredentials
-                | ServiceError::AccountLocked
-                | ServiceError::EmailNotVerified,
-            ) => {}
-            Err(e) => return Err(Status::from(e)),
-        }
-    }
-
-    // Fallback: try custom auth strategies
-    if let Some(auth) = &input.def.auth {
-        let strategy_input = AuthStrategyInput {
-            collection: &input.slug,
+fn login_blocking(input: &LoginBlockingInput) -> Result<LoginOutcome, Status> {
+    verify_login(
+        &input.infra,
+        &LoginFlowRequest {
+            slug: &input.slug,
+            def: &input.def,
+            email: &input.email,
+            password: &input.password,
             headers: &input.headers,
-            email: Some(&input.email),
-            password: Some(&input.password),
             remote_addr: Some(&input.remote_addr),
-        };
-
-        for strategy in auth.strategies() {
-            if let Ok(Some(doc)) = input.infra.hook_runner.run_auth_strategy(
-                strategy.authenticate,
-                &strategy_input,
-                &conn,
-            ) {
-                let ctx = ServiceContext::slug_only(&input.slug).conn(&conn).build();
-
-                // Strategy-authenticated users still need locked/verified
-                // checks. A lookup failure must fail CLOSED (deny) — letting
-                // a locked account in on a transient DB error is an auth
-                // bypass. Matches the `get_session_version` call below.
-                if service::auth::is_locked(&ctx, &doc.id).map_err(Status::from)? {
-                    return Ok(None);
-                }
-
-                if input.check_verify_email
-                    && !service::auth::is_verified(&ctx, &doc.id).map_err(Status::from)?
-                {
-                    return Ok(None);
-                }
-
-                let sv = service::auth::get_session_version(&ctx, &doc.id).map_err(Status::from)?;
-                return Ok(Some((doc, sv)));
-            }
-        }
-    }
-
-    // Equalize timing when all auth methods fail — prevents distinguishing
-    // "no valid user" (fast) from "wrong password" (Argon2-slow) via response time.
-    if input.allows_password {
-        input.password_provider.dummy_verify();
-    }
-
-    Ok(None)
+            password_provider: &*input.password_provider,
+        },
+    )
+    .map_err(Status::from)
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -144,8 +80,7 @@ impl ContentService {
         // Atomically record this attempt against both limiters and reject if
         // either is now over threshold — one operation per limiter, closing the
         // burst race the old is_blocked + later record_failure split left open.
-        // Both are evaluated (not short-circuited) so each counter advances;
-        // a successful login clears both below.
+        // Both are evaluated (not short-circuited) so each counter advances.
         let email_blocked = self.login_limiter.check_and_block(&email_key);
         let ip_blocked = self.ip_login_limiter.check_and_block(&ip);
         if email_blocked || ip_blocked {
@@ -178,23 +113,35 @@ impl ContentService {
             email: req.email.clone(),
             password: req.password.clone(),
             def: def.clone(),
-            check_verify_email: def.auth.as_ref().is_some_and(Auth::requires_verify_email),
-            allows_password,
             password_provider: self.password_provider.clone(),
             headers,
             remote_addr: ip.clone(),
         };
 
-        let login_result = task::spawn_blocking(move || login_blocking(&input))
+        let outcome = task::spawn_blocking(move || login_blocking(&input))
             .await
             .inspect_err(|e| error!("Login task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        let Some((user, session_version)) = login_result else {
-            // Attempt already recorded up front by check_and_block.
-            return Err(Status::unauthenticated("Invalid email or password"));
+        let verified = match outcome {
+            LoginOutcome::Verified(v) => v,
+            // gRPC has no MFA completion step yet — minting a session on the
+            // password alone would silently bypass the collection's second
+            // factor, so this fails CLOSED. Use a surface with MFA support
+            // (the admin UI) for MFA-enabled collections.
+            LoginOutcome::MfaRequired(_) => {
+                return Err(Status::failed_precondition(
+                    "This collection requires multi-factor authentication, which the gRPC \
+                     Login RPC does not support — log in via a surface with MFA support",
+                ));
+            }
+            LoginOutcome::Denied => {
+                // Attempt already recorded up front by check_and_block.
+                return Err(Status::unauthenticated("Invalid email or password"));
+            }
         };
 
+        let user = verified.user;
         let user_email = user
             .fields
             .get("email")
@@ -209,7 +156,7 @@ impl ContentService {
             .email(user_email)
             .exp(now.saturating_add(expiry))
             .auth_time(now)
-            .session_version(session_version)
+            .session_version(verified.session_version)
             .build()
             .inspect_err(|e| error!("Claims build error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
@@ -221,8 +168,14 @@ impl ContentService {
             .inspect_err(|e| error!("Token creation error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
 
+        // Clear the per-email limiter (this account just proved its
+        // identity). For the SHARED per-IP limiter, only REFUND this one
+        // attempt: a success must not wipe other accounts' failures from the
+        // same IP — that would let one valid account on a shared IP mask a
+        // brute-force of others. Mirrors the admin login (which got this fix
+        // first; the gRPC twin had kept the full clear).
         self.login_limiter.clear(&email_key);
-        self.ip_login_limiter.clear(&ip);
+        self.ip_login_limiter.refund(&ip);
 
         Ok(Response::new(content::LoginResponse {
             token,

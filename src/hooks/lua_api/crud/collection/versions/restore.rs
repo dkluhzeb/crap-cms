@@ -17,7 +17,10 @@ use crate::{
             helpers::{hook_invalidation_transport, hook_lua_infra, hook_user, resolve_collection},
         },
     },
-    service::{LuaWriteHooks, ServiceContext, restore_collection_version},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, RestoreVersion, RestoreVersionArgs},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -78,7 +81,6 @@ fn collections_restore_version(
     let def = resolve_collection(reg, &collection)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
         .override_access(opts.override_access)
         .build();
 
@@ -89,9 +91,12 @@ fn collections_restore_version(
         .override_access(opts.override_access)
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
+        .locale_config(Some(lc))
         .build();
 
-    let doc = restore_collection_version(&ctx, &id, &version_id, lc).map_err(lua_err)?;
+    // Shared operation body — identical semantics on every surface.
+    let doc =
+        RestoreVersion::run(&ctx, RestoreVersionArgs::new(id, version_id)).map_err(lua_err)?;
 
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))
 }

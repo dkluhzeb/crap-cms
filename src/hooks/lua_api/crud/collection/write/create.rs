@@ -21,7 +21,10 @@ use crate::{
             },
         },
     },
-    service::{LuaWriteHooks, ServiceContext, WriteInput, create_document},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Create, CreateArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -112,33 +115,32 @@ fn collections_create(
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "create");
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
-        .build();
-
-    let write_input = WriteInput::builder(data)
-        .password(password.as_deref())
-        .locale_ctx(locale_ctx.as_ref())
-        .locale(opts.locale)
-        .draft(opts.draft)
-        .ui_locale(ui_locale.clone())
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .password_policy(Some(&state.password_policy))
         .build();
 
-    let (doc, _) = create_document(&ctx, write_input)
-        .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
+    // Shared operation body — identical write semantics on every surface.
+    let args = CreateArgs::builder(data)
+        .password(password)
+        .locale_ctx(locale_ctx)
+        .draft(opts.draft)
+        .events(opts.events)
+        .build();
+
+    let (doc, _) =
+        Create::run(&ctx, args).map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
 }

@@ -85,7 +85,7 @@ fn run_find_by_id_returns_document() {
         &infra,
         Principal::Override,
         &TargetRef::collection("posts"),
-        &args,
+        args,
     )
     .expect("dispatch succeeds")
     .expect("document found");
@@ -104,7 +104,7 @@ fn run_unknown_collection_is_typed_error() {
         &infra,
         Principal::Override,
         &TargetRef::collection("nope"),
-        &args,
+        args,
     )
     .expect_err("unknown collection must error");
 
@@ -134,7 +134,7 @@ fn trash_flag_downgraded_on_non_soft_delete_collection() {
         &infra,
         Principal::Override,
         &TargetRef::collection("posts"),
-        &args,
+        args,
     )
     .expect("dispatch succeeds");
 

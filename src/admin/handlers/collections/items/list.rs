@@ -30,8 +30,9 @@ use crate::{
     core::{AuthUser, Claims, CollectionDefinition, Document},
     db::query::{self, FilterClause, FindQuery, LocaleContext},
     service::{
-        FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, ServiceError,
-        find_documents, user_settings::get_user_settings,
+        PaginatedResult, ServiceError,
+        op::{self, CoreError, Find, FindArgs, Principal, TargetRef},
+        user_settings::get_user_settings,
     },
 };
 
@@ -48,7 +49,6 @@ use crate::{
 struct FetchListArgs<'a> {
     state: &'a AdminState,
     slug: &'a str,
-    def: &'a CollectionDefinition,
     find_query: &'a FindQuery,
     locale_ctx: Option<&'a query::LocaleContext>,
     auth_user: &'a Option<Extension<AuthUser>>,
@@ -60,45 +60,39 @@ struct FetchListArgs<'a> {
 fn fetch_list_documents(
     args: FetchListArgs<'_>,
 ) -> Result<PaginatedResult<Document>, ServiceError> {
-    let conn = args
-        .state
-        .infra
-        .pool
-        .get()
-        .map_err(ServiceError::Internal)?;
+    let ui_locale = args
+        .auth_user
+        .as_ref()
+        .map(|Extension(au)| au.ui_locale.clone());
     let user_doc = args
         .auth_user
         .as_ref()
         .map(|Extension(au)| au.user_doc.clone());
-
-    let hooks = RunnerReadHooks::new(
-        &args.state.infra.hook_runner,
-        &conn,
-        user_doc.as_ref(),
-        None,
-    );
-    let ctx = ServiceContext::collection(args.slug, args.def)
-        .pool(&args.state.infra.pool)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(user_doc.as_ref())
-        .build();
 
     // Request drafts unconditionally — the service read path returns the union
     // of the views the caller may see and downgrades (never rejects): an editor
     // gets published + drafts, a read-only admin gets published only. Draft
     // *visibility* is the service's job; `CollectionPermissions` survives only
     // as a UI hint (show/hide the Drafts tab), not a request gate.
-    let input = FindDocumentsInput::builder(args.find_query)
+    let op_args = FindArgs::builder(args.find_query.clone())
         .hydrate(false)
-        .locale_ctx(args.locale_ctx)
+        .locale_ctx(args.locale_ctx.cloned())
         .cursor_enabled(args.cursor_enabled)
         .trash(args.is_trash)
         .include_drafts(true)
         .status_filter(args.status_filter)
         .build();
 
-    find_documents(&ctx, &input)
+    op::run::<Find>(
+        &args.state.infra,
+        Principal::Resolved {
+            user: user_doc,
+            ui_locale,
+        },
+        &TargetRef::collection(args.slug),
+        op_args,
+    )
+    .map_err(CoreError::into_service_error)
 }
 
 /// Compute title column sort URL and sort direction indicators.
@@ -308,8 +302,11 @@ fn parse_list_inputs(
         }
     };
 
+    // Trash view: an explicit user sort wins; with none, the shared `Find`
+    // body applies the newest-deleted-first trash default. Hard-coding the
+    // default here used to discard the user's column sort entirely.
     let order_by = if is_trash {
-        Some(query::TRASH_DEFAULT_ORDER.to_string())
+        sort.clone()
     } else {
         sort.clone().or_else(|| def.admin.default_sort.clone())
     };
@@ -341,7 +338,6 @@ fn parse_list_inputs(
 async fn fetch_list_items(
     state: AdminState,
     slug: String,
-    def: CollectionDefinition,
     inputs: &ListInputs,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Result<PaginatedResult<Document>, Response> {
@@ -356,7 +352,6 @@ async fn fetch_list_items(
         fetch_list_documents(FetchListArgs {
             state: &state_for_blocking,
             slug: &slug,
-            def: &def,
             find_query: &find_query,
             locale_ctx: locale_ctx.as_ref(),
             auth_user: &auth_user,
@@ -508,18 +503,11 @@ pub async fn list_items(
         Err(resp) => return *resp,
     };
 
-    let fetched = match fetch_list_items(
-        state.clone(),
-        slug.clone(),
-        def.clone(),
-        &inputs,
-        auth_user.clone(),
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let fetched =
+        match fetch_list_items(state.clone(), slug.clone(), &inputs, auth_user.clone()).await {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let ctx = build_list_page(BuildListPageInput {

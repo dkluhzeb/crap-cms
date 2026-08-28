@@ -1,4 +1,6 @@
 //! Execute `undelete` — restore a soft-deleted document.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`].
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
@@ -6,8 +8,8 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    mcp::tools::ToolExecCtx,
-    service::{ServiceContext, undelete_document},
+    mcp::tools::{ToolExecCtx, collection::helpers::events_flag},
+    service::op::{self, Principal, TargetRef, Undelete, UndeleteArgs},
 };
 
 #[derive(Serialize)]
@@ -25,23 +27,14 @@ pub(in crate::mcp::tools) fn exec_undelete(
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
 
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .runner(&ctx.infra.hook_runner)
-        .override_access(true)
-        .event_transport(ctx.infra.event_transport.clone())
-        .invalidation_transport(Some(ctx.infra.invalidation_transport.clone()))
-        .cache(Some(ctx.infra.cache.clone()))
-        .build();
-
-    undelete_document(&svc_ctx, id)?;
+    op::run::<Undelete>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        UndeleteArgs::new(id).events(events_flag(args)),
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     info!(
         "MCP undelete {}: {} [client={}]",

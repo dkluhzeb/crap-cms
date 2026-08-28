@@ -10,23 +10,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, HookRef, Registry, upload},
-    db::{
-        Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
-        query::filter::normalize_filter_fields,
-    },
+    core::{Registry, upload},
+    db::{FilterClause, FindQuery, LocaleContext},
     hooks::{
         lifecycle::LuaVmInfra,
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
             helpers::{
-                EnforceAccessParams, check_hook_depth, enforce_access, hook_invalidation_transport,
-                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+                check_hook_depth, hook_invalidation_transport, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
             },
         },
     },
-    service::{self, DeleteManyOptions, LuaWriteHooks, ServiceContext, validate_user_filters},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{DeleteMany, DeleteManyArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -166,39 +166,25 @@ fn collections_delete_many(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, &collection)?;
 
-    // Emptying trash is a permanent (hard) delete of already-trashed rows,
-    // gated by `access.delete` — same as `forceHardDelete`. Mirrors the admin
-    // empty-trash path.
-    let soft_delete = def.soft_delete && !opts.force_hard_delete && !opts.trash;
-
     // Validate the requested locale up front. delete_many matches documents
     // across locales, so the locale isn't used for filtering — but an invalid
     // code should still surface as an error rather than be ignored.
     LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
 
-    let mut filters = build_delete_filters(
-        lua,
-        &def,
-        &collection,
-        soft_delete,
-        opts.override_access,
-        query,
-    )?;
+    let filters = build_delete_filters(query)?;
 
-    // `trash = true`: restrict to physically-trashed rows (`_deleted_at`
-    // set). Without this the include_deleted find would also match live rows.
-    if opts.trash {
-        filters.push(FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        }));
+    // The `_deleted_at EXISTS` trash restriction itself lives in the shared
+    // operation body; this codec only gates the capability — a collection
+    // without soft delete has no trash (or `_deleted_at` column) to purge.
+    if opts.trash && !def.soft_delete {
+        return Err(RuntimeError(format!(
+            "Collection '{collection}' does not have soft delete enabled; there is no trash to purge"
+        )));
     }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete_many");
 
     let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
@@ -219,20 +205,25 @@ fn collections_delete_many(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .invalidation_transport(invalidation_transport)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .locale_config(Some(lc))
         .build();
 
-    let delete_opts = DeleteManyOptions {
-        run_hooks: hooks_enabled,
-        max_documents: state.bulk_max_documents,
-        // Empty-trash needs the find to include soft-deleted rows.
-        include_deleted: opts.trash,
-    };
+    // Shared operation body. Conn mode: the definition was already adjusted
+    // above (Lua also purges trash via the same hard-delete rule) and file
+    // cleanup stays with this surface — see the pool-mode note in the op.
+    let op_args = DeleteManyArgs::builder(filters)
+        .run_hooks(hooks_enabled)
+        .max_documents(state.bulk_max_documents)
+        .trash(opts.trash)
+        .events(opts.events)
+        .build();
 
-    let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts).map_err(lua_err)?;
+    let svc_result = DeleteMany::run(&ctx, op_args).map_err(lua_err)?;
 
     if !service_def.soft_delete
         && let Some(storage) = lua
@@ -285,77 +276,11 @@ pub(crate) fn register_delete_many(
     Ok(())
 }
 
-/// Resolve the access function for delete operations.
-fn resolve_delete_access(def: &CollectionDefinition, soft_delete: bool) -> Option<&HookRef> {
-    if soft_delete {
-        def.access.resolve_trash()
-    } else {
-        def.access.delete.as_ref()
-    }
-}
-
-/// Build filters for the bulk delete query, enforcing access constraints.
-fn build_delete_filters(
-    lua: &Lua,
-    def: &CollectionDefinition,
-    collection: &str,
-    soft_delete: bool,
-    override_access: bool,
-    query: DeleteManyQueryInput,
-) -> LuaResult<Vec<FilterClause>> {
-    let mut find_query = query.into_find_query()?;
-    normalize_filter_fields(&mut find_query.filters, &def.fields);
-    validate_user_filters(&find_query.filters).map_err(lua_err)?;
-
-    let access_ref = resolve_delete_access(def, soft_delete);
-
-    enforce_access(
-        lua,
-        &EnforceAccessParams {
-            slug: collection,
-            override_access,
-            access_fn: access_ref,
-            id: None,
-            data: None,
-            // Soft delete → "trash" (trash access fn); hard delete → "delete".
-            deny_msg: if soft_delete {
-                "Trash access denied"
-            } else {
-                "Delete access denied"
-            },
-            operation: if soft_delete { "trash" } else { "delete" },
-            injecting_status: false,
-        },
-        &mut find_query.filters,
-    )?;
-
-    Ok(find_query.filters)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn picks_trash_access_when_soft_deleting_else_delete() {
-        let mut def = CollectionDefinition::new("posts");
-        def.access.delete = Some("can_delete".into());
-        def.access.trash = Some("can_trash".into());
-
-        assert_eq!(
-            resolve_delete_access(&def, false),
-            Some(&HookRef::new("can_delete"))
-        );
-        assert_eq!(
-            resolve_delete_access(&def, true),
-            Some(&HookRef::new("can_trash"))
-        );
-    }
-
-    #[test]
-    fn none_when_access_unset() {
-        let def = CollectionDefinition::new("posts");
-        assert_eq!(resolve_delete_access(&def, false), None);
-        assert_eq!(resolve_delete_access(&def, true), None);
-    }
+/// Decode the bulk delete query into canonical filters. Pure decode — filter
+/// hygiene (system columns, dot paths) lives in the shared `DeleteMany` body,
+/// and access gating + constraint scoping at the service chokepoint
+/// (`service::collections::bulk_access`) — the trash-vs-delete gate derives
+/// from the (possibly adjusted) definition.
+fn build_delete_filters(query: DeleteManyQueryInput) -> LuaResult<Vec<FilterClause>> {
+    Ok(query.into_find_query()?.filters)
 }

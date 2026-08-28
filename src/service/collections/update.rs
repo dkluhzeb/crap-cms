@@ -9,7 +9,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult, flush_queue,
-        invalidate_user_streams_if_auth, update_document_in_conn,
+        flush_verification_queue, invalidate_user_streams_if_auth, update_document_in_conn,
     },
 };
 
@@ -50,7 +50,13 @@ fn update_document_pool(
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -77,6 +83,7 @@ fn update_document_pool(
     ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
     invalidate_user_streams_if_auth(ctx, &result.0.id);
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(result)
 }

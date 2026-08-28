@@ -345,7 +345,13 @@ fn validate_schema(def: &CollectionDefinition) -> Value {
 fn id_only_schema() -> Value {
     json!({
         "type": "object",
-        "properties": { "id": { "type": "string" } },
+        "properties": {
+            "id": { "type": "string" },
+            "events": {
+                "type": "boolean",
+                "description": "Emit a live-update event for this change (default: true)"
+            }
+        },
         "required": ["id"]
     })
 }
@@ -517,7 +523,8 @@ fn find_by_id_schema() -> Value {
             "depth": { "type": "integer", "description": "Relationship population depth" },
             "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
             "draft": { "type": "boolean", "description": "When true, overlay the latest draft version (draft view)" },
-            "trash": { "type": "boolean", "description": "When true, look up among soft-deleted documents (trash view)" }
+            "trash": { "type": "boolean", "description": "When true, look up among soft-deleted documents (trash view)" },
+            "select": { "type": "array", "items": { "type": "string" }, "description": "Field names to return (projection); omit for all fields" }
         },
         "required": ["id"]
     })
@@ -540,7 +547,8 @@ fn find_schema() -> Value {
             "search": { "type": "string", "description": "Full-text search query" },
             "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
             "draft": { "type": "boolean", "description": "When true, include draft documents (published + draft union)" },
-            "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" }
+            "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" },
+            "select": { "type": "array", "items": { "type": "string" }, "description": "Field names to return (projection); omit for all fields" }
         }
     })
 }
@@ -553,6 +561,8 @@ fn count_schema() -> Value {
                 "type": "object",
                 "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
             },
+            "search": { "type": "string", "description": "Full-text search query" },
+            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
             "draft": { "type": "boolean", "description": "When true, include draft documents in the count (published + draft union)" },
             "trash": { "type": "boolean", "description": "When true, count only soft-deleted documents (trash view)" }
         }

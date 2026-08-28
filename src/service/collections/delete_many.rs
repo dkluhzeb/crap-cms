@@ -11,10 +11,11 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
-        invalidate_user_streams_if_auth,
+        flush_verification_queue, invalidate_user_streams_if_auth,
     },
 };
 
+use super::bulk_access::{delete_scope, scope_bulk_access};
 use super::update_many::enforce_bulk_limit;
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -99,21 +100,14 @@ fn delete_many_pool(
         .transaction_immediate()
         .context("Start bulk delete transaction")?;
 
-    // Collect the whole match-set up front (IDs only) so the entire delete
-    // runs in ONE transaction and is atomic — a per-document failure rolls
-    // everything back. Referenced documents are skipped individually
-    // (best-effort, counted in `skipped`), not errored.
-    let find_query = FindQuery::builder()
-        .filters(filters.to_vec())
-        .include_deleted(opts.include_deleted)
-        .build();
-    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, None)
-        .context("Find matching IDs for delete")?;
-
-    enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
-
     let queue = Rc::new(RefCell::new(Vec::new()));
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+    // The verification queue exists for NESTED Lua creates: a hook running
+    // inside this transaction that creates a verify-email auth document must
+    // get its verification mail sent after commit — without the queue it was
+    // silently dropped (only the create orchestrators used to carry one).
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_hooks_enabled(opts.run_hooks)
@@ -124,13 +118,27 @@ fn delete_many_pool(
         wh = wh.with_override_access();
     }
 
+    // Gate + scope the match-set at the chokepoint (see `bulk_access`).
+    let mut scoped_filters = filters.to_vec();
+    scope_bulk_access(ctx, &wh, &delete_scope(def), &mut scoped_filters)?;
+
+    // Collect the whole match-set up front (IDs only) so the entire delete
+    // runs in ONE transaction and is atomic — a per-document failure rolls
+    // everything back. Referenced documents are skipped individually
+    // (best-effort, counted in `skipped`), not errored.
+    let find_query = FindQuery::builder()
+        .filters(scoped_filters)
+        .include_deleted(opts.include_deleted)
+        .build();
+    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, None)
+        .context("Find matching IDs for delete")?;
+
+    enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
+
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .event_transport(ctx.event_transport.clone())
-        .cache(ctx.cache.clone())
+        .inherit_write_infra(ctx)
         .event_queue(queue.clone())
         .build();
 
@@ -188,6 +196,7 @@ fn delete_many_pool(
         invalidate_user_streams_if_auth(ctx, id);
     }
     flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(DeleteManyResult {
         hard_deleted: hard_count,
@@ -207,8 +216,17 @@ fn delete_many_conn(
 ) -> Result<DeleteManyResult> {
     let def = ctx.collection_def()?;
 
+    // Gate + scope the match-set at the chokepoint (see `bulk_access`).
+    let mut scoped_filters = filters.to_vec();
+    scope_bulk_access(
+        ctx,
+        ctx.write_hooks()?,
+        &delete_scope(def),
+        &mut scoped_filters,
+    )?;
+
     let find_query = FindQuery::builder()
-        .filters(filters.to_vec())
+        .filters(scoped_filters)
         .include_deleted(opts.include_deleted)
         .build();
 

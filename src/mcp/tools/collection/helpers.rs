@@ -12,6 +12,21 @@ use crate::{
     db::query,
 };
 
+/// Read the optional `select` field projection from tool args: an array of
+/// field-name strings. Non-string entries are ignored; absent or empty means
+/// no projection. Parity with the gRPC/Lua `select` option.
+pub(in crate::mcp::tools) fn parse_select(args: &Value) -> Option<Vec<String>> {
+    let arr = args.get("select")?.as_array()?;
+
+    let fields: Vec<String> = arr
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect();
+
+    (!fields.is_empty()).then_some(fields)
+}
+
 /// Read the `events` write-tool flag from tool args, defaulting to `true`
 /// (events are emitted unless the caller opts out). One source so every write
 /// tool — collection and global — shares the same default and can't drift.

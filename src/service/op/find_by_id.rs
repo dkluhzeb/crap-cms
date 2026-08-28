@@ -107,7 +107,7 @@ impl Operation for FindById {
 
     const NAME: &'static str = "find_by_id";
 
-    fn run(ctx: &ServiceContext<'_>, args: &Self::Args) -> Result<Self::Output, ServiceError> {
+    fn run(ctx: &ServiceContext<'_>, args: Self::Args) -> Result<Self::Output, ServiceError> {
         let def = ctx.collection_def()?;
 
         // Definition-dependent flag downgrades, harmonized here: a draft

@@ -34,7 +34,7 @@ fn scoped_read_filters(
         id: None,
         locale: input.locale_ctx.map(LocaleContext::access_locale),
         operation: "find",
-        ui_locale: None,
+        ui_locale: ctx.ui_locale.as_deref(),
     };
 
     if input.trash && def.soft_delete {

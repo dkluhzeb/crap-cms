@@ -11,9 +11,15 @@ use crate::{
     core::Registry,
     hooks::lua_api::crud::{
         get_tx_conn,
-        helpers::{hook_invalidation_transport, hook_lua_infra, hook_user, resolve_collection},
+        helpers::{
+            hook_invalidation_transport, hook_lua_infra, hook_ui_locale, hook_user,
+            resolve_collection,
+        },
     },
-    service::{LuaWriteHooks, ServiceContext, undelete_document},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, Undelete, UndeleteArgs},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -55,6 +61,7 @@ fn collections_undelete(
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(state, &collection)?;
 
@@ -62,7 +69,6 @@ fn collections_undelete(
     // chokepoint `service::undelete_document`, so every surface agrees.
 
     let wh = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
         .override_access(opts.override_access)
         .hooks_enabled(false)
         .run_validation(false)
@@ -72,12 +78,14 @@ fn collections_undelete(
         .conn(conn)
         .write_hooks(&wh)
         .user(user.as_ref())
+        .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
-    undelete_document(&ctx, &id).map_err(lua_err)?;
+    // Shared operation body — identical semantics on every surface.
+    Undelete::run(&ctx, UndeleteArgs::new(id.as_str())).map_err(lua_err)?;
 
     Ok(true)
 }
