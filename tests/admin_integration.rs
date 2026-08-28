@@ -277,3 +277,52 @@ async fn static_css_returns_200() {
         "Content-Type should be CSS, got {ct:?}"
     );
 }
+
+// ── Op Core Stage 1: infra() carries the read infrastructure ───────────────
+
+/// Regression (Op Core Stage 1): `ServiceContextBuilder::infra` must set the
+/// read-infra fields that used to travel on the Input structs — registry,
+/// cache, populate singleflight — so a pool-mode surface cannot forget them
+/// and silently lose relationship populate / cache dedup.
+#[test]
+fn service_context_infra_sets_read_infrastructure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = CrapConfig::test_default();
+    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
+    let registry: Arc<Registry> = Arc::new(Registry::default());
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let storage = crap_cms::core::upload::create_storage(
+        tmp.path(),
+        &crap_cms::config::UploadConfig::default(),
+    )
+    .unwrap();
+    let token_provider: crap_cms::core::SharedTokenProvider = std::sync::Arc::new(
+        crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
+    );
+
+    let infra = crap_cms::admin::test_support::test_infra(
+        db_pool,
+        registry,
+        hook_runner,
+        storage,
+        token_provider,
+        &config,
+        tmp.path(),
+    );
+
+    let ctx = crap_cms::service::ServiceContext::slug_only("posts")
+        .infra(&infra)
+        .build();
+
+    assert!(ctx.registry.is_some(), "infra() must set the registry");
+    assert!(ctx.cache.is_some(), "infra() must set the populate cache");
+    assert!(
+        ctx.populate_singleflight.is_some(),
+        "infra() must set the populate singleflight"
+    );
+}

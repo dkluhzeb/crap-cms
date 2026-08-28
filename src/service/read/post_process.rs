@@ -19,7 +19,9 @@ use crate::{
     },
 };
 
-/// Fields needed by post-processing. Implemented by all read input structs.
+/// Per-call fields needed by post-processing. Implemented by all read input
+/// structs. Infrastructure (registry, populate cache, singleflight) is read
+/// from the `ServiceContext` instead — inputs carry only per-call data.
 pub(crate) trait PostProcessOpts {
     fn depth(&self) -> i32;
     /// Whether this read is allowed to see draft documents. When false,
@@ -29,13 +31,7 @@ pub(crate) trait PostProcessOpts {
     fn hydrate(&self) -> bool;
     fn select(&self) -> Option<&[String]>;
     fn locale_ctx(&self) -> Option<&LocaleContext>;
-    fn registry(&self) -> Option<&Registry>;
     fn ui_locale(&self) -> Option<&str>;
-    fn cache(&self) -> Option<&dyn CacheBackend>;
-    /// Process-wide singleflight for deduplicating concurrent populate
-    /// cache-miss DB fetches across requests. `None` falls back to a
-    /// fresh per-call singleflight.
-    fn singleflight(&self) -> Option<&SharedPopulateSingleflight>;
 }
 
 /// Post-process a single document (skip hydration -- used by `find_by_id` where
@@ -58,7 +54,7 @@ pub(crate) fn post_process_single(
     let user = ctx.user;
 
     if opts.depth() > 0
-        && let Some(registry) = opts.registry()
+        && let Some(registry) = ctx.registry
     {
         let mut visited = HashSet::new();
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
@@ -79,7 +75,7 @@ pub(crate) fn post_process_single(
         // under override-access could leak into another user's populate cache
         // lookup even when their access evaluation differs. See
         // `validate_filters.rs` for the full rationale.
-        let (effective_cache, effective_singleflight) = effective_populate_state(ctx, opts);
+        let (effective_cache, effective_singleflight) = effective_populate_state(ctx);
 
         // Thread through the shared process-wide singleflight when the caller
         // provided one so concurrent populates across requests dedup cache
@@ -136,7 +132,7 @@ pub(crate) fn post_process_single(
 
     // Strip field-read-denied fields from populated relationship targets — each
     // embedded doc belongs to another collection with its own field access.
-    if let Some(registry) = opts.registry() {
+    if let Some(registry) = ctx.registry {
         EmbeddedDocStripper::new(
             registry,
             hooks,
@@ -238,7 +234,7 @@ pub(crate) fn post_process_docs(
     }
 
     if opts.depth() > 0
-        && let Some(registry) = opts.registry()
+        && let Some(registry) = ctx.registry
     {
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
         let mut pop_opts =
@@ -257,7 +253,7 @@ pub(crate) fn post_process_docs(
 
         // Access-leak guardrail — see the matching comment in
         // `post_process_single` and `validate_filters.rs` for the rationale.
-        let (effective_cache, effective_singleflight) = effective_populate_state(ctx, opts);
+        let (effective_cache, effective_singleflight) = effective_populate_state(ctx);
 
         let fallback_sf;
         let singleflight: &Singleflight<CachedDoc> = if let Some(arc) = effective_singleflight {
@@ -311,7 +307,7 @@ pub(crate) fn post_process_docs(
         slug,
         user,
         opts.locale_ctx().map(LocaleContext::access_locale),
-        opts.registry(),
+        ctx.registry,
     );
 
     let ar_ctx = AfterReadCtx {
@@ -331,11 +327,11 @@ pub(crate) fn post_process_docs(
     *docs = processed;
 }
 
-/// Resolve the effective populate cache + singleflight, applying the
-/// access-leak guardrail: when the calling `ServiceContext` is in
+/// Resolve the effective populate cache + singleflight from the context,
+/// applying the access-leak guardrail: when the calling `ServiceContext` is in
 /// `override_access` mode (MCP, Lua `opts.overrideAccess = true`), neither the
 /// shared populate cache nor the process-wide singleflight may be used —
-/// regardless of what the caller's input struct carries.
+/// regardless of what the context carries.
 ///
 /// Rationale (see `validate_filters.rs` header for the full note): override
 /// callers bypass collection-level access hooks. Sharing the populate cache
@@ -347,17 +343,16 @@ pub(crate) fn post_process_docs(
 ///
 /// Override-access fetches are still deduplicated *within* their own call via
 /// the fresh per-call singleflight created by `populate_relationships_*`.
-fn effective_populate_state<'o, O: PostProcessOpts>(
-    ctx: &ServiceContext,
-    opts: &'o O,
+fn effective_populate_state<'c>(
+    ctx: &'c ServiceContext,
 ) -> (
-    Option<&'o dyn CacheBackend>,
-    Option<&'o SharedPopulateSingleflight>,
+    Option<&'c dyn CacheBackend>,
+    Option<&'c SharedPopulateSingleflight>,
 ) {
     if ctx.override_access {
         return (None, None);
     }
-    (opts.cache(), opts.singleflight())
+    (ctx.cache.as_deref(), ctx.populate_singleflight.as_ref())
 }
 
 #[cfg(test)]
@@ -367,69 +362,26 @@ mod tests {
     use super::*;
 
     use crate::{
-        core::{
-            CollectionDefinition, Registry,
-            cache::{CacheBackend, MemoryCache},
-        },
-        db::{LocaleContext, query::Singleflight},
+        core::{CollectionDefinition, SharedCache, cache::MemoryCache},
+        db::query::Singleflight,
         service::ServiceContext,
     };
 
-    /// Test harness implementing `PostProcessOpts` with a real cache and
-    /// singleflight we can inspect.
-    struct FakeOpts<'a> {
-        cache: Option<&'a dyn CacheBackend>,
-        singleflight: Option<SharedPopulateSingleflight>,
-    }
-
-    impl PostProcessOpts for FakeOpts<'_> {
-        fn depth(&self) -> i32 {
-            1
-        }
-        fn include_drafts(&self) -> bool {
-            true
-        }
-        fn hydrate(&self) -> bool {
-            false
-        }
-        fn select(&self) -> Option<&[String]> {
-            None
-        }
-        fn locale_ctx(&self) -> Option<&LocaleContext> {
-            None
-        }
-        fn registry(&self) -> Option<&Registry> {
-            None
-        }
-        fn ui_locale(&self) -> Option<&str> {
-            None
-        }
-        fn cache(&self) -> Option<&dyn CacheBackend> {
-            self.cache
-        }
-        fn singleflight(&self) -> Option<&SharedPopulateSingleflight> {
-            self.singleflight.as_ref()
-        }
-    }
-
     /// Guardrail: when `override_access = true`, the effective cache and
-    /// singleflight are forced to `None`, even if the opts carry a
+    /// singleflight are forced to `None`, even if the context carries a
     /// shared cache + singleflight. This prevents cache-leak across users.
     #[test]
     fn override_access_forces_no_shared_cache_or_singleflight() {
         let def = CollectionDefinition::new("posts");
+        let cache: SharedCache = Arc::new(MemoryCache::new(0));
+        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
         let ctx = ServiceContext::collection("posts", &def)
             .override_access(true)
+            .cache(Some(cache))
+            .populate_singleflight(Some(sf))
             .build();
 
-        let cache = MemoryCache::new(0);
-        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
-        let opts = FakeOpts {
-            cache: Some(&cache),
-            singleflight: Some(sf.clone()),
-        };
-
-        let (effective_cache, effective_sf) = effective_populate_state(&ctx, &opts);
+        let (effective_cache, effective_sf) = effective_populate_state(&ctx);
         assert!(
             effective_cache.is_none(),
             "cache must be zeroed under override_access"
@@ -440,46 +392,39 @@ mod tests {
         );
     }
 
-    /// Without `override_access`, the caller's cache + singleflight are passed
+    /// Without `override_access`, the context's cache + singleflight are passed
     /// through unchanged so normal requests still benefit from cross-request
     /// dedup and the shared populate cache.
     #[test]
     fn no_override_access_passes_through_cache_and_singleflight() {
         let def = CollectionDefinition::new("posts");
-        let ctx = ServiceContext::collection("posts", &def).build();
+        let cache: SharedCache = Arc::new(MemoryCache::new(0));
+        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
+        let ctx = ServiceContext::collection("posts", &def)
+            .cache(Some(cache))
+            .populate_singleflight(Some(sf.clone()))
+            .build();
         assert!(!ctx.override_access);
 
-        let cache = MemoryCache::new(0);
-        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
-        let opts = FakeOpts {
-            cache: Some(&cache),
-            singleflight: Some(sf.clone()),
-        };
-
-        let (effective_cache, effective_sf) = effective_populate_state(&ctx, &opts);
+        let (effective_cache, effective_sf) = effective_populate_state(&ctx);
         assert!(
             effective_cache.is_some(),
             "cache should be threaded through"
         );
         assert!(
             effective_sf.is_some_and(|s| Arc::ptr_eq(s, &sf)),
-            "singleflight should be the caller's Arc"
+            "singleflight should be the context's Arc"
         );
     }
 
-    /// When the caller doesn't provide a cache/singleflight at all, the
-    /// effective state is `None` regardless of `override_access`.
+    /// When the context carries no cache/singleflight at all, the effective
+    /// state is `None` regardless of `override_access`.
     #[test]
     fn no_cache_and_no_singleflight_stays_none() {
         let def = CollectionDefinition::new("posts");
         let ctx = ServiceContext::collection("posts", &def).build();
 
-        let opts = FakeOpts {
-            cache: None,
-            singleflight: None,
-        };
-
-        let (effective_cache, effective_sf) = effective_populate_state(&ctx, &opts);
+        let (effective_cache, effective_sf) = effective_populate_state(&ctx);
         assert!(effective_cache.is_none());
         assert!(effective_sf.is_none());
     }

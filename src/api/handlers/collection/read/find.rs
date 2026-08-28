@@ -77,12 +77,9 @@ fn find_blocking(
         .depth(input.depth)
         .select(input.select.as_deref())
         .locale_ctx(input.locale_ctx.as_ref())
-        .registry(Some(&infra.registry))
-        .cache(Some(&*infra.cache))
         .cursor_enabled(input.cursor_enabled)
         .trash(input.is_trash)
         .include_drafts(input.include_drafts)
-        .singleflight(Some(infra.populate_singleflight.clone()))
         .build();
 
     let result = find_documents(&ctx, &find_input).map_err(Status::from)?;

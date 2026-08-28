@@ -21,7 +21,10 @@ use crate::{
             },
         },
     },
-    service::{FindByIdInput, LuaReadHooks, ServiceContext, find_document_by_id},
+    service::{
+        LuaReadHooks, ServiceContext,
+        op::{FindById, FindByIdArgs, Operation},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -119,24 +122,29 @@ fn collections_find_by_id(
         .hooks_enabled(hooks_enabled)
         .build();
 
+    // No `.cache(...)`: Lua CRUD reads run inside hook transactions — see the
+    // matching note in `find.rs`.
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .registry(Some(reg.as_ref()))
+        .populate_singleflight(hook_populate_singleflight(lua))
         .build();
 
-    let input = FindByIdInput::builder(&id)
+    // Shared operation body (`FindById::run`): the definition-dependent flag
+    // downgrades (draft needs versions, trash needs soft delete) happen there,
+    // identically on every surface.
+    let args = FindByIdArgs::builder(id)
         .depth(depth)
-        .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(reg.as_ref()))
-        .select(opts.select.as_deref())
+        .locale_ctx(locale_ctx)
+        .select(opts.select)
         .use_draft(opts.draft)
         .include_deleted(opts.trash)
-        .singleflight(hook_populate_singleflight(lua))
         .build();
 
-    let doc = find_document_by_id(&ctx, &input).map_err(lua_err)?;
+    let doc = FindById::run(&ctx, &args).map_err(lua_err)?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

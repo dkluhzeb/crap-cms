@@ -1,7 +1,40 @@
 # Operation Core — Architecture & Migration Plan
 
-> **Status: Stage 0 landed (August 2026), in an extended form; later stages
-> remain future work.** What shipped:
+> **Status: Stages 0–2 landed (August 2026), each in adapted form; Stages 3–4
+> remain future work.**
+>
+> **Stage 2 (shipped):** the single dispatch entry exists —
+> `service::op::{run, run_blocking}` with the `Operation` trait, `Principal`
+> (wire `Credentials` / pre-`Resolved` / `Override`), `TargetRef`, and
+> `CoreError` — and `find_by_id` is ported as the reference operation on all
+> four surfaces (gRPC codec via `run_blocking`, MCP via `run` +
+> `Principal::Override`, admin via `Principal::Resolved`, Lua calling the
+> shared `FindById::run` body on its transaction context). The
+> definition-dependent flag downgrades (draft ⇒ versions, trash ⇒ soft
+> delete) moved into the operation body, closing a real Lua/gRPC drift.
+> **Adaptations:** the "one auth resolution" was already a fact —
+> `service::auth::evaluate` — so `Principal::Credentials` simply routes to
+> it, and the admin surface passes its middleware-resolved actor instead of
+> re-running the evaluator per operation; the Lua surface stays outside the
+> `run` entry by design (hook transaction, per-VM infra) but shares the
+> operation body, which is where the semantics live.
+>
+> **Stage 1 (shipped):** the `Input` structs no longer leak infrastructure.
+> `FindByIdInput` / `FindDocumentsInput` dropped their `registry` / `cache` /
+> `singleflight` fields; `ServiceContext` gained `registry` and
+> `populate_singleflight` (both set by `ServiceContextBuilder::infra`, so a
+> pool-mode surface cannot forget them), and read post-processing sources all
+> three from the context. The override-access populate guardrail now zeroes
+> the *context's* cache/singleflight at one point. **Adaptation:** the
+> `OpContext` rename was deliberately dropped — after Stage 0's extended
+> landing, `ServiceContext` *is* the per-call envelope (`infra()` sets the ten
+> process-stable fields in one call; per-call state is set individually), so a
+> parallel `OpContext` + compatibility shim would have been pure churn that
+> Stage 4 then deletes. Stage 2's `run::<O>()` will construct `ServiceContext`
+> internally; if a rename is still wanted, it is a mechanical follow-up at
+> that point.
+>
+> **Stage 0 (shipped earlier, extended):**
 >
 > - **`AppInfra`** (`service::app_infra`) — the process-stable dependency
 >   bundle, assembled **once at boot** (`bootstrap_startup`) and shared as a
@@ -21,10 +54,10 @@
 >   `LuaVmInfra`, fed from the same boot wiring; see the module docs on
 >   `service::app_infra` for the full rationale.
 >
-> **Not done (still this document's future work):** Stage 1's
-> `OpContext`/`ServiceContext` split, and Stages 2–4 (typed per-operation
-> inputs, the shared dispatch entry, per-surface codecs). The sections below
-> are kept as the design for those stages; read "Stage 0" as shipped.
+> **Not done (still this document's future work):** Stages 2–4 (the shared
+> auth resolution + dispatch entry, op-by-op porting, glue deletion). The
+> sections below are kept as the design for those stages; read "Stage 0" and
+> "Stage 1" as shipped in the forms described above.
 
 ## 1. The problem, stated from the evidence
 

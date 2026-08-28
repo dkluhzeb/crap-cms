@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
     Extension,
@@ -8,7 +9,6 @@ use axum::{
 };
 
 use serde_json::{Value, json};
-use tokio::task;
 use tracing::warn;
 
 use crate::admin::context::field::{
@@ -30,52 +30,17 @@ use crate::{
             fetch_version_sidebar_data, flatten_document_values, get_user_doc,
             is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
             require_collection, service_error_to_admin_response, split_sidebar_fields,
-            task_join_error_response,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
     db::{DbPool, query::LocaleContext},
-    hooks::{ConditionContext, HookRunner},
+    hooks::ConditionContext,
     service::{
-        FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, auth::is_locked,
-        find_document_by_id,
+        RunnerReadHooks, ServiceContext, ServiceError,
+        auth::is_locked,
+        op::{self, FindById, FindByIdArgs, Principal, TargetRef},
     },
 };
-
-/// Parameters for the blocking document-read task.
-struct ReadParams {
-    pool: DbPool,
-    runner: HookRunner,
-    slug: String,
-    id: String,
-    def: CollectionDefinition,
-    locale_ctx: Option<LocaleContext>,
-    /// Whether to opt into the draft overlay. The admin edit form always
-    /// requests it; the service read downgrades (never rejects), so a viewer
-    /// without draft access transparently gets the published doc.
-    use_draft: bool,
-    user_doc: Option<Document>,
-}
-
-/// Fetch the document via the shared service layer read lifecycle.
-fn read_document_blocking(params: &ReadParams) -> Result<Option<Document>, ServiceError> {
-    let conn = params.pool.get().map_err(ServiceError::Internal)?;
-
-    let hooks = RunnerReadHooks::new(&params.runner, &conn, params.user_doc.as_ref(), None);
-    let ctx = ServiceContext::collection(&params.slug, &params.def)
-        .pool(&params.pool)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(params.user_doc.as_ref())
-        .build();
-
-    let input = FindByIdInput::builder(&params.id)
-        .use_draft(params.use_draft)
-        .locale_ctx(params.locale_ctx.as_ref())
-        .build();
-
-    find_document_by_id(&ctx, &input)
-}
 
 /// Build a synthetic [`BaseFieldData`] for an auth-only injected field.
 fn auth_field_base(name: &str, label: &str, description: Option<&str>) -> BaseFieldData {
@@ -321,11 +286,10 @@ pub async fn edit_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
-    let document =
-        match load_document(&state, &slug, &id, &def, locale_ctx, auth_user.as_ref()).await {
-            Ok(doc) => doc,
-            Err(resp) => return resp,
-        };
+    let document = match load_document(&state, &slug, &id, locale_ctx, auth_user.as_ref()).await {
+        Ok(doc) => doc,
+        Err(resp) => return resp,
+    };
 
     // The service read already stripped read-denied *values* (data-aware). Here
     // we resolve the denied field *names* for this document so the form can drop
@@ -385,35 +349,35 @@ async fn load_document(
     state: &AdminState,
     slug: &str,
     id: &str,
-    def: &CollectionDefinition,
     locale_ctx: Option<LocaleContext>,
     auth_user: Option<&Extension<AuthUser>>,
 ) -> Result<Document, Response> {
     // Opt into the draft overlay unconditionally — the service read downgrades
     // (never rejects): an editor sees the latest draft, a read-only viewer falls
     // back to the published version. `CollectionPermissions` is a UI hint only.
-    let read_params = ReadParams {
-        pool: state.infra.pool.clone(),
-        runner: state.infra.hook_runner.clone(),
-        slug: slug.to_string(),
-        id: id.to_string(),
-        def: def.clone(),
-        locale_ctx,
-        use_draft: true,
-        user_doc: auth_user.map(|Extension(au)| au.user_doc.clone()),
-    };
+    // The middleware already resolved the session, so the principal is
+    // pre-resolved rather than re-running the evaluator per operation.
+    let args = FindByIdArgs::builder(id)
+        .locale_ctx(locale_ctx)
+        .use_draft(true)
+        .build();
 
-    let read_result = task::spawn_blocking(move || read_document_blocking(&read_params)).await;
+    let read_result = op::run_blocking::<FindById>(
+        Arc::clone(&state.infra),
+        Principal::Resolved(auth_user.map(|Extension(au)| au.user_doc.clone())),
+        TargetRef::collection(slug),
+        args,
+    )
+    .await;
 
     match read_result {
-        Ok(Ok(Some(doc))) => Ok(doc),
-        Ok(Ok(None)) => Err(not_found(state, &format!("Document '{id}' not found"))),
-        Ok(Err(e)) => Err(service_error_to_admin_response(
+        Ok(Some(doc)) => Ok(doc),
+        Ok(None) => Err(not_found(state, &format!("Document '{id}' not found"))),
+        Err(e) => Err(service_error_to_admin_response(
             state,
-            e,
+            e.into_service_error(),
             "You don't have permission to view this item",
         )),
-        Err(e) => Err(task_join_error_response(state, &e)),
     }
 }
 

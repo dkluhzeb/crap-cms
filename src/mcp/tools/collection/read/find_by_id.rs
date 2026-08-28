@@ -1,4 +1,9 @@
 //! Execute `find_by_id` — single document lookup with population.
+//!
+//! Stage-2 codec: decode the tool args into [`FindByIdArgs`], dispatch
+//! through [`op::run`] with [`Principal::Override`] (MCP is a trusted local
+//! transport), encode the result. Connection acquisition, hook wiring, and
+//! the definition-dependent flag downgrades live in the operation core.
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
@@ -7,7 +12,7 @@ use serde_json::{Value, to_string_pretty};
 use crate::{
     db::{LocaleContext, query},
     mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
-    service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
+    service::op::{self, FindById, FindByIdArgs, Principal, TargetRef},
 };
 
 /// Soft "not found" reply for `find_by_id` — distinct from a tool error.
@@ -26,13 +31,6 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = ctx
-        .infra
-        .registry
-        .collections
-        .get(slug)
-        .context("Collection not found")?;
-    let conn = ctx.infra.pool.get().context("DB connection")?;
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
@@ -50,17 +48,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         ctx.config.depth.max_depth,
     );
 
-    let hooks =
-        RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
-    let svc_ctx = ServiceContext::collection(slug, def)
-        .pool(&ctx.infra.pool)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .override_access(true)
-        .build();
-
-    // Mirror `find`: thread the draft/trash view selectors so a single-document
-    // lookup can reach the same views the list endpoint exposes. MCP runs with
+    // Draft/trash view selectors, mirrored from `find`. MCP runs with
     // override_access, so these are view selectors, not a gate.
     let use_draft = args
         .get("draft")
@@ -71,15 +59,20 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let input = FindByIdInput::builder(id)
+    let op_args = FindByIdArgs::builder(id)
         .depth(depth)
-        .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(ctx.infra.registry.as_ref()))
+        .locale_ctx(locale_ctx)
         .use_draft(use_draft)
         .include_deleted(include_deleted)
         .build();
 
-    let doc = find_document_by_id(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;
+    let doc = op::run::<FindById>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::collection(slug),
+        &op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
 
     match doc {
         Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),

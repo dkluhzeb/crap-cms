@@ -306,22 +306,25 @@ fn find_inner(
         .hooks_enabled(hooks_enabled)
         .build();
 
+    // No `.cache(...)`: Lua CRUD reads run inside hook transactions, so they
+    // must not read through (or write into) the shared populate cache —
+    // mid-transaction state could leak into other requests' lookups.
     let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(override_access)
+        .registry(Some(reg))
+        .populate_singleflight(hook_populate_singleflight(lua))
         .build();
 
     let input = FindDocumentsInput::builder(&find_query)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(reg))
         .select(find_query.select.as_deref())
         .cursor_enabled(params.cursor)
         .trash(is_trash)
         .include_drafts(draft)
-        .singleflight(hook_populate_singleflight(lua))
         .build();
 
     let result = find_documents(&ctx, &input).map_err(lua_err)?;

@@ -27,6 +27,7 @@ use crate::{
     service::{
         self, AppInfra,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
+        op::{CoreError, TargetKind},
     },
 };
 
@@ -301,23 +302,7 @@ impl ContentService {
         match service::auth::evaluate(&request, &deps) {
             Resolution::Authenticated(auth) => Ok(Some(auth.user)),
             Resolution::Anonymous => Ok(None),
-            // Precise per-failure messages so callers see why their
-            // token was rejected. None expose user-existence — `Locked`
-            // and `StaleSession` only surface when the bearer already
-            // proved knowledge of a valid signed token for that user.
-            Resolution::Invalid(failure) => Err(match failure {
-                AuthFailure::Locked => Status::permission_denied("Account locked"),
-                AuthFailure::StaleSession => Status::unauthenticated("Session invalidated"),
-                AuthFailure::UserMissing => Status::unauthenticated("User no longer exists"),
-                AuthFailure::UnknownCollection => {
-                    Status::unauthenticated("Auth collection no longer exists")
-                }
-                AuthFailure::Lookup => Status::unavailable("User lookup failed"),
-                AuthFailure::BadToken => Status::unauthenticated("Invalid or expired token"),
-                AuthFailure::Unaccepted => {
-                    Status::unauthenticated("Credential not accepted on this surface")
-                }
-            }),
+            Resolution::Invalid(failure) => Err(auth_failure_status(failure)),
         }
     }
 
@@ -400,6 +385,44 @@ impl ContentService {
         }
 
         Ok(())
+    }
+
+    /// Map a core-dispatch error onto the gRPC wire. The single translation
+    /// point for every handler ported to `service::op::run_blocking` — auth
+    /// failures keep their precise statuses, service errors reuse the
+    /// existing `Status` conversion, and infra failures go through
+    /// `ServiceError::classify` for backend-aware busy/timeout mapping.
+    pub(in crate::api::handlers) fn core_error_status(&self, e: CoreError) -> Status {
+        match e {
+            CoreError::Auth(failure) => auth_failure_status(failure),
+            CoreError::UnknownTarget { slug, kind } => Status::not_found(match kind {
+                TargetKind::Collection => format!("Collection '{slug}' not found"),
+                TargetKind::Global => format!("Global '{slug}' not found"),
+            }),
+            CoreError::Service(e) => Status::from(e),
+            CoreError::Internal(e) => {
+                Status::from(service::ServiceError::classify(e, &self.db_kind))
+            }
+        }
+    }
+}
+
+/// Precise per-failure gRPC statuses for credential rejection. None expose
+/// user-existence — `Locked` and `StaleSession` only surface when the bearer
+/// already proved knowledge of a valid signed token for that user.
+pub(in crate::api::handlers) fn auth_failure_status(failure: AuthFailure) -> Status {
+    match failure {
+        AuthFailure::Locked => Status::permission_denied("Account locked"),
+        AuthFailure::StaleSession => Status::unauthenticated("Session invalidated"),
+        AuthFailure::UserMissing => Status::unauthenticated("User no longer exists"),
+        AuthFailure::UnknownCollection => {
+            Status::unauthenticated("Auth collection no longer exists")
+        }
+        AuthFailure::Lookup => Status::unavailable("User lookup failed"),
+        AuthFailure::BadToken => Status::unauthenticated("Invalid or expired token"),
+        AuthFailure::Unaccepted => {
+            Status::unauthenticated("Credential not accepted on this surface")
+        }
     }
 }
 

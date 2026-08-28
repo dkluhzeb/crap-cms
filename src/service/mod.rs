@@ -59,6 +59,7 @@ mod globals;
 pub(crate) mod helpers;
 pub(crate) mod hooks;
 pub mod jobs;
+pub mod op;
 mod persist;
 pub(crate) mod read;
 mod types;

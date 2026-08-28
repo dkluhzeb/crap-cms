@@ -1336,6 +1336,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (with a warning) and retried on the next purge tick; the read also moved
   ahead of the ref-count decrement so a skipped row can't double-decrement
   its targets on retry.
+- **Pool timeouts and other wrapped transient DB errors now classify as
+  transient (unavailable/503-class) instead of internal (500).** Two
+  stacked bugs: error classification matched only the outermost message,
+  and `DbPool::get` wraps its failures in "Failed to get DB connection" —
+  so a wrapped `SQLITE_BUSY` surfaced as internal; and the pool-timeout
+  pattern was capitalized ("Timed out waiting") while r2d2's actual wording
+  is lowercase, so pool exhaustion under load *never* classified as
+  transient on any surface. Classification now matches the full
+  error-cause chain and both timeout spellings (unique-violation field
+  extraction preserved behind context layers too). Found by the
+  operation-core Stage 2 review's regression test.
+- **Lua and MCP `find_by_id` no longer force a miss when `trash = true` is
+  passed on a collection without soft delete.** Both surfaces sent the flag
+  raw into the trash branch (`_deleted_at EXISTS` — a guaranteed miss), while
+  gRPC and every `find` list path downgraded it. All four surfaces now share
+  one `FindById` operation body, which ignores `trash` without soft delete
+  (and `draft` without versions) — the downgrade can no longer drift per
+  surface.
 - **`update_many` rejects a `password` key of any value type on auth
   collections.** The guard only checked the stringified scalar map, so a
   table-valued `password` slipped past it via the composite-value merge. The
@@ -2860,6 +2878,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Operation-core Stage 2: one dispatch entry, `find_by_id` ported as the
+  reference operation.** New `service::op` module: an `Operation` trait
+  (owned per-call `Args`, handler over the existing service fn), `Principal`
+  (wire `Credentials` resolved via the unified evaluator / pre-`Resolved`
+  admin actor / MCP `Override`), `TargetRef`, `CoreError`, and
+  `run`/`run_blocking` which acquire the connection, resolve the principal,
+  look up the target definition, and assemble the context via
+  `ServiceContextBuilder::infra` — once, for every ported handler. The gRPC,
+  MCP, and admin `find_by_id` handlers are now thin codecs (the gRPC
+  `FindByIdBlockingInput` glue is deleted; the per-failure auth status map is
+  extracted as `auth_failure_status` and shared); the Lua surface keeps its
+  transaction context but calls the same `FindById` operation body. One
+  observable nuance on gRPC: credential errors now take precedence over
+  "collection not found" (auth resolves before target lookup), which reveals
+  strictly less to unauthenticated callers. Remaining operations follow in
+  Stage 3.
+- **Operation-core Stage 1: read inputs no longer leak infrastructure (no
+  behavior change).** `FindByIdInput` / `FindDocumentsInput` dropped their
+  `registry` / `cache` / `singleflight` fields; `ServiceContext` now carries
+  `registry` and `populate_singleflight` (set in one shot by
+  `ServiceContextBuilder::infra`, alongside the existing cache), and read
+  post-processing sources all three from the context. The override-access
+  populate guardrail (cache/singleflight zeroed) now applies at the context
+  level. Inputs carry only genuine per-call data, so a surface can no longer
+  smuggle a stale or missing infra dependency past the context.
 - **Negative limit/offset floors added at the remaining raw-bind sites (no
   behavior change).** The service-layer version listing already floors via
   `floor_optional_limit`; the underlying `db::query::versions::list_versions`

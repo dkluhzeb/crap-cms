@@ -1,10 +1,11 @@
 //! Input for `find_document_by_id` — single document lookup.
+//!
+//! Carries only genuine per-call data. Infrastructure (registry, populate
+//! cache, singleflight) lives on the `ServiceContext` — set in one shot by
+//! `ServiceContextBuilder::infra` — so an input can never smuggle a stale or
+//! missing infra dependency past the context.
 
-use crate::{
-    core::{Registry, cache::CacheBackend},
-    db::{LocaleContext, query::SharedPopulateSingleflight},
-    service::read::post_process::PostProcessOpts,
-};
+use crate::{db::LocaleContext, service::read::post_process::PostProcessOpts};
 
 /// Input for [`find_document_by_id`](crate::service::find_document_by_id).
 pub struct FindByIdInput<'a> {
@@ -12,15 +13,9 @@ pub struct FindByIdInput<'a> {
     pub depth: i32,
     pub select: Option<&'a [String]>,
     pub locale_ctx: Option<&'a LocaleContext>,
-    pub registry: Option<&'a Registry>,
-    pub cache: Option<&'a dyn CacheBackend>,
     pub use_draft: bool,
     /// When true, include soft-deleted documents (trash view).
     pub include_deleted: bool,
-    /// Optional process-wide singleflight for deduplicating concurrent
-    /// populate cache-miss fetches across requests. When `None`, the service
-    /// layer falls back to a fresh per-call singleflight.
-    pub singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindByIdInput<'a> {
@@ -36,11 +31,8 @@ pub struct FindByIdInputBuilder<'a> {
     depth: i32,
     select: Option<&'a [String]>,
     locale_ctx: Option<&'a LocaleContext>,
-    registry: Option<&'a Registry>,
-    cache: Option<&'a dyn CacheBackend>,
     use_draft: bool,
     include_deleted: bool,
-    singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindByIdInputBuilder<'a> {
@@ -50,11 +42,8 @@ impl<'a> FindByIdInputBuilder<'a> {
             depth: 0,
             select: None,
             locale_ctx: None,
-            registry: None,
-            cache: None,
             use_draft: false,
             include_deleted: false,
-            singleflight: None,
         }
     }
 
@@ -73,16 +62,6 @@ impl<'a> FindByIdInputBuilder<'a> {
         self
     }
 
-    pub fn registry(mut self, registry: Option<&'a Registry>) -> Self {
-        self.registry = registry;
-        self
-    }
-
-    pub fn cache(mut self, cache: Option<&'a dyn CacheBackend>) -> Self {
-        self.cache = cache;
-        self
-    }
-
     pub fn use_draft(mut self, use_draft: bool) -> Self {
         self.use_draft = use_draft;
         self
@@ -93,24 +72,14 @@ impl<'a> FindByIdInputBuilder<'a> {
         self
     }
 
-    /// Attach a process-wide singleflight so populate cache-miss fetches
-    /// dedup across concurrent requests.
-    pub fn singleflight(mut self, singleflight: Option<SharedPopulateSingleflight>) -> Self {
-        self.singleflight = singleflight;
-        self
-    }
-
     pub fn build(self) -> FindByIdInput<'a> {
         FindByIdInput {
             id: self.id,
             depth: self.depth,
             select: self.select,
             locale_ctx: self.locale_ctx,
-            registry: self.registry,
-            cache: self.cache,
             use_draft: self.use_draft,
             include_deleted: self.include_deleted,
-            singleflight: self.singleflight,
         }
     }
 }
@@ -134,53 +103,14 @@ impl PostProcessOpts for FindByIdInput<'_> {
     fn locale_ctx(&self) -> Option<&LocaleContext> {
         self.locale_ctx
     }
-    fn registry(&self) -> Option<&Registry> {
-        self.registry
-    }
     fn ui_locale(&self) -> Option<&str> {
         None
-    }
-    fn cache(&self) -> Option<&dyn CacheBackend> {
-        self.cache
-    }
-    fn singleflight(&self) -> Option<&SharedPopulateSingleflight> {
-        self.singleflight.as_ref()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-
-    use crate::db::Singleflight;
-
-    /// Regression: `FindByIdInput::builder().singleflight(..)` must plumb the
-    /// Arc through to the built input so post-processing can share one
-    /// singleflight across concurrent populates.
-    #[test]
-    fn builder_threads_singleflight_through() {
-        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
-        let before = Arc::strong_count(&sf);
-
-        let input = FindByIdInput::builder("id")
-            .singleflight(Some(sf.clone()))
-            .build();
-
-        assert!(input.singleflight.is_some());
-        assert_eq!(Arc::strong_count(&sf), before + 1);
-
-        let via_trait = PostProcessOpts::singleflight(&input).expect("singleflight present");
-        assert!(Arc::ptr_eq(via_trait, &sf));
-    }
-
-    #[test]
-    fn builder_singleflight_defaults_to_none() {
-        let input = FindByIdInput::builder("id").build();
-        assert!(input.singleflight.is_none());
-        assert!(PostProcessOpts::singleflight(&input).is_none());
-    }
 
     /// SAFE-DEFAULT GUARD: by default a by-id read must not surface a draft
     /// overlay or a soft-deleted row. Flipping these defaults would leak

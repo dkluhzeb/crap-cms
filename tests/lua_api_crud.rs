@@ -1024,3 +1024,27 @@ fn lua_create_accepts_valid_nested_array() {
         "Lua create should accept valid nested array data"
     );
 }
+
+/// Regression (cross-surface harmonization, Op Core Stage 2): `find_by_id`
+/// with `trash = true` on a NON-soft-delete collection used to pass the flag
+/// raw into the trash branch (`_deleted_at EXISTS`) — a guaranteed nil, while
+/// gRPC and every `find` list path downgraded the flag. All surfaces now share
+/// the `FindById` operation body, which ignores `trash` without soft delete.
+#[test]
+fn lua_find_by_id_trash_flag_ignored_without_soft_delete() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local doc = crap.collections.create("articles", { title = "Live" })
+        local found = crap.collections.find_by_id("articles", doc.id, { trash = true })
+        if found == nil then return "NIL" end
+        return "FOUND"
+    "#,
+    );
+    assert_eq!(
+        result, "FOUND",
+        "trash flag must be ignored on a non-soft-delete collection, not force a miss"
+    );
+}

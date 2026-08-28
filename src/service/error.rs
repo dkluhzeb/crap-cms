@@ -118,15 +118,27 @@ impl ServiceError {
     /// `db_kind` selects backend-specific patterns (`"sqlite"`, `"postgres"`).
     #[must_use]
     pub fn classify(e: anyhow::Error, db_kind: &str) -> Self {
+        const UNIQUE_PREFIX: &str = "UNIQUE constraint failed: ";
+
         // Structured validation errors — preserve the typed variant.
         if let Some(ve) = e.downcast_ref::<ValidationError>() {
             return Self::Validation(ve.clone());
         }
 
-        let msg = e.to_string();
+        // Match against the FULL cause chain (`{:#}`), not just the top
+        // message: helpers routinely wrap errors in an anyhow context
+        // (`DbPool::get` adds "Failed to get DB connection"), and matching
+        // `to_string()` alone made every wrapped transient cause — pool
+        // timeout, SQLITE_BUSY — classify as internal (500) instead of
+        // transient (unavailable/503) on every surface.
+        let msg = format!("{e:#}");
 
-        // Transient / retryable DB errors.
+        // Transient / retryable DB errors. Both timeout spellings are needed:
+        // r2d2's pool timeout is lowercase ("timed out waiting for
+        // connection"), the capitalized form covers other wait-timeout
+        // sources.
         let is_transient = msg.contains("Timed out waiting")
+            || msg.contains("timed out waiting for connection")
             || msg.contains("connection pool")
             || match db_kind {
                 "sqlite" => {
@@ -146,11 +158,14 @@ impl ServiceError {
             return Self::Transient(e);
         }
 
-        // Unique constraint violations — extract the field name.
-        if let Some(rest) = msg.strip_prefix("UNIQUE constraint failed: ") {
+        // Unique constraint violations — extract the field name. `find` (not
+        // `strip_prefix`): the SQLite message may sit behind context layers in
+        // the `{:#}` chain rather than at the start.
+        if let Some(pos) = msg.find(UNIQUE_PREFIX) {
+            let rest = &msg[pos + UNIQUE_PREFIX.len()..];
             let field = rest
                 .find('.')
-                .map_or_else(|| rest.to_string(), |pos| rest[pos + 1..].to_string());
+                .map_or_else(|| rest.to_string(), |dot| rest[dot + 1..].to_string());
             return Self::UniqueViolation(field);
         }
         if msg.contains("duplicate key value violates unique constraint") {
@@ -203,6 +218,49 @@ mod tests {
     use crate::core::{FieldError, ValidationError};
 
     // ── classify ────────────────────────────────────────────────────
+
+    /// Regression: a transient cause hidden behind an anyhow context layer
+    /// (the shape `DbPool::get` produces — "Failed to get DB connection:
+    /// Timed out waiting…") must still classify as `Transient`. `classify`
+    /// used to match only `to_string()` (the outermost context), so every
+    /// wrapped pool timeout / `SQLITE_BUSY` landed as `Internal` (500) instead
+    /// of `Transient` (unavailable/503) on every surface.
+    #[test]
+    fn classify_matches_transient_cause_behind_context() {
+        use anyhow::Context as _;
+
+        // r2d2's actual (lowercase) pool-timeout wording.
+        let e = Err::<(), _>(anyhow!("timed out waiting for connection"))
+            .context("Failed to get DB connection")
+            .unwrap_err();
+        assert!(matches!(
+            ServiceError::classify(e, "sqlite"),
+            ServiceError::Transient(_)
+        ));
+
+        let e = Err::<(), _>(anyhow!("database is locked"))
+            .context("Failed to update document x in 'posts'")
+            .unwrap_err();
+        assert!(matches!(
+            ServiceError::classify(e, "sqlite"),
+            ServiceError::Transient(_)
+        ));
+    }
+
+    /// The unique-violation field extraction still works when the `SQLite`
+    /// message sits behind a context layer in the `{:#}` chain.
+    #[test]
+    fn classify_unique_violation_behind_context() {
+        use anyhow::Context as _;
+
+        let e = Err::<(), _>(anyhow!("UNIQUE constraint failed: users.email"))
+            .context("Failed to create document in 'users'")
+            .unwrap_err();
+        let ServiceError::UniqueViolation(field) = ServiceError::classify(e, "sqlite") else {
+            panic!("expected UniqueViolation");
+        };
+        assert_eq!(field, "email");
+    }
 
     #[test]
     fn classify_validation_error_preserved() {

@@ -10,10 +10,13 @@ use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
-        LiveMode, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        LiveMode, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
-    db::{BoxedConnection, DbConnection, DbPool, query::helpers::global_table},
+    db::{
+        BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
+        query::helpers::global_table,
+    },
     hooks::HookRunner,
     hooks::lifecycle::PublishEventInput,
     service::{
@@ -57,8 +60,19 @@ pub struct ServiceContext<'a> {
     /// creates. `None` = verification emails are skipped.
     pub email_ctx: Option<EmailContext>,
     /// Populate cache. When set, service-layer write operations clear
-    /// the cache after commit to prevent stale relationship data.
+    /// the cache after commit to prevent stale relationship data, and read
+    /// operations use it for populate lookups (unless `override_access`
+    /// zeroes it — see `effective_populate_state`).
     pub cache: Option<SharedCache>,
+    /// Collection registry, used by read post-processing to populate
+    /// relationships (`depth > 0`) and strip field-denied data from
+    /// populated targets. `None` = populate is skipped. Infra — set by
+    /// [`ServiceContextBuilder::infra`]; Lua CRUD sets it from its VM infra.
+    pub registry: Option<&'a Registry>,
+    /// Process-wide singleflight deduplicating concurrent populate
+    /// cache-miss fetches across requests. `None` falls back to a fresh
+    /// per-call singleflight.
+    pub populate_singleflight: Option<SharedPopulateSingleflight>,
     /// Transport for publishing mutation events to live-update subscribers.
     /// `None` = event publishing is a no-op.
     pub event_transport: Option<SharedEventTransport>,
@@ -512,6 +526,8 @@ pub struct ServiceContextBuilder<'a> {
     override_access: bool,
     email_ctx: Option<EmailContext>,
     cache: Option<SharedCache>,
+    registry: Option<&'a Registry>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
     event_transport: Option<SharedEventTransport>,
     emit_events: bool,
     event_queue: Option<EventQueue>,
@@ -535,6 +551,8 @@ impl<'a> ServiceContextBuilder<'a> {
             override_access: false,
             email_ctx: None,
             cache: None,
+            registry: None,
+            populate_singleflight: None,
             event_transport: None,
             emit_events: true,
             event_queue: None,
@@ -546,16 +564,19 @@ impl<'a> ServiceContextBuilder<'a> {
     }
 
     /// Attach all process-stable infrastructure from [`AppInfra`] in one call
-    /// — pool, hook runner, cache, event + invalidation transports, email
-    /// context, locale config, and password policy. A surface that builds its
-    /// context this way cannot silently omit an infra field (the recurring
-    /// "forgot to thread a dependency" bug class). Per-call state (user,
-    /// `override_access`, conn, hooks, queues) is still set separately.
+    /// — pool, hook runner, registry, cache, populate singleflight, event +
+    /// invalidation transports, email context, locale config, and password
+    /// policy. A surface that builds its context this way cannot silently omit
+    /// an infra field (the recurring "forgot to thread a dependency" bug
+    /// class). Per-call state (user, `override_access`, conn, hooks, queues)
+    /// is still set separately.
     #[must_use]
     pub fn infra(mut self, infra: &'a AppInfra) -> Self {
         self.pool = Some(&infra.pool);
         self.runner = Some(&infra.hook_runner);
+        self.registry = Some(&infra.registry);
         self.cache = Some(infra.cache.clone());
+        self.populate_singleflight = Some(infra.populate_singleflight.clone());
         self.event_transport.clone_from(&infra.event_transport);
         self.invalidation_transport = Some(infra.invalidation_transport.clone());
         self.email_ctx = Some(infra.email.clone());
@@ -609,6 +630,26 @@ impl<'a> ServiceContextBuilder<'a> {
     /// clear the cache after commit to prevent stale relationship data.
     pub fn cache(mut self, cache: Option<SharedCache>) -> Self {
         self.cache = cache;
+        self
+    }
+
+    /// Attach the collection registry for read post-processing (relationship
+    /// populate + populated-target field stripping). Optional shape so a
+    /// caller can forward `ctx.registry` / a Lua VM's registry without an
+    /// `if let`.
+    pub fn registry(mut self, registry: Option<&'a Registry>) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    /// Attach the process-wide populate singleflight so cache-miss fetches
+    /// dedup across concurrent requests. Optional shape like the other
+    /// attachments.
+    pub fn populate_singleflight(
+        mut self,
+        singleflight: Option<SharedPopulateSingleflight>,
+    ) -> Self {
+        self.populate_singleflight = singleflight;
         self
     }
 
@@ -706,6 +747,8 @@ impl<'a> ServiceContextBuilder<'a> {
         self.user(parent.user)
             .override_access(parent.override_access)
             .cache(parent.cache.clone())
+            .registry(parent.registry)
+            .populate_singleflight(parent.populate_singleflight.clone())
             .event_transport(parent.event_transport.clone())
             .password_policy(parent.password_policy)
     }
@@ -721,6 +764,8 @@ impl<'a> ServiceContextBuilder<'a> {
             override_access: self.override_access,
             email_ctx: self.email_ctx,
             cache: self.cache,
+            registry: self.registry,
+            populate_singleflight: self.populate_singleflight,
             event_transport: self.event_transport,
             emit_events: self.emit_events,
             event_queue: self.event_queue,

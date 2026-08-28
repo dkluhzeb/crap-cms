@@ -96,17 +96,19 @@ pub(in crate::mcp::tools) fn exec_find(
 
     let hooks =
         RunnerReadHooks::new(&ctx.infra.hook_runner, &conn, None, None).with_override_access();
+    // No cache/singleflight: MCP runs override-access, where the populate
+    // guardrail zeroes both anyway.
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(&ctx.infra.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
+        .registry(Some(ctx.infra.registry.as_ref()))
         .build();
 
     let input = FindDocumentsInput::builder(&fq)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(ctx.infra.registry.as_ref()))
         .cursor_enabled(ctx.config.pagination.is_cursor())
         .trash(is_trash)
         .include_drafts(include_drafts)
