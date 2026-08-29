@@ -3052,6 +3052,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **`#[derive(Builder)]`** (crap-cms-macros): generates the house builder
+  convention — positional required fields in `builder()` (with
+  `impl Into<String>` coercion), chained `#[must_use]` setters that keep
+  `Option` symmetry, infallible `build()` (a forgotten required field is a
+  compile error, never a runtime panic). All 13 operation `Args` structs now
+  derive it; ~1,000 lines of hand-written builder ceremony deleted with zero
+  call-site changes. Defaults are inferred only for bool/Option/integers/
+  floats/Vec — anything else must state `#[builder(default = …)]`
+  explicitly.
+- **Pool failures are classified at the operation entry.** `op::run` now
+  runs `ServiceError::classify` on pool-acquisition errors itself, so a
+  transient pool timeout reaches every codec as the typed 503-class
+  `Transient` — previously only the gRPC codec re-classified; admin and MCP
+  reported an opaque internal error.
 - **One pool-mode write envelope.** Every pool-mode write operation
   (create/update/delete/undelete/unpublish, the three bulk ops, both global
   writes, both version restores) now runs through a single

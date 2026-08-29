@@ -188,8 +188,8 @@ pub enum CoreError {
     UnknownTarget { slug: String, kind: TargetKind },
     /// The operation itself failed.
     Service(ServiceError),
-    /// Infrastructure failure outside the service layer (pool acquisition,
-    /// task join).
+    /// Infrastructure failure outside the service layer (task join; pool
+    /// errors are classified into `Service` at the entry).
     Internal(anyhow::Error),
 }
 
@@ -252,25 +252,28 @@ pub fn run<O: Operation>(
     target: &TargetRef,
     args: O::Args,
 ) -> Result<O::Output, CoreError> {
-    // The pool error stays UNWRAPPED: codecs push `CoreError::Internal`
-    // through `ServiceError::classify`, which matches on `to_string()` — an
-    // anyhow context layer would hide the cause ("Timed out waiting…",
-    // SQLITE_BUSY) and misclassify a transient error as internal.
-    //
+    // Pool errors are CLASSIFIED here, at the one entry — `classify` matches
+    // the raw error text ("Timed out waiting…", SQLITE_BUSY), so a transient
+    // pool failure reaches every codec as `ServiceError::Transient`
+    // (503-class) instead of an opaque internal error. Previously only the
+    // gRPC codec re-classified; admin and MCP reported a plain 500.
+    let classify_pool =
+        |e: anyhow::Error| CoreError::Service(ServiceError::classify(e, infra.pool.kind()));
+
     // The read-pool connection exists only as long as something needs it:
     // credential resolution (the evaluator's DB lookups) and, for read ops,
     // the context's connection + read hooks. A write op with a pre-resolved
     // principal never checks one out at all.
     let (actor, ctx_conn) = match principal {
         Principal::Credentials(_) => {
-            let conn = infra.pool.get().map_err(CoreError::Internal)?;
+            let conn = infra.pool.get().map_err(classify_pool)?;
             let actor = resolve_principal(infra, principal, Some(&conn))?;
             (actor, O::READS_VIA_CONTEXT.then_some(conn))
         }
         resolved => {
             let actor = resolve_principal(infra, resolved, None)?;
             let conn = if O::READS_VIA_CONTEXT {
-                Some(infra.pool.get().map_err(CoreError::Internal)?)
+                Some(infra.pool.get().map_err(classify_pool)?)
             } else {
                 None
             };
@@ -425,13 +428,13 @@ mod tests {
         hooks::HookRunner,
     };
 
-    /// Regression: a pool failure surfaced through `run` must classify as
-    /// TRANSIENT at the codec (gRPC unavailable/503), not internal (500).
-    /// This held two bugs: `DbPool::get` wraps the cause in an anyhow context
-    /// ("Failed to get DB connection"), and `ServiceError::classify` used to
-    /// match `to_string()` — which shows only the outermost context — so the
-    /// r2d2 timeout text never matched. `classify` now matches the full
-    /// `{:#}` chain.
+    /// Regression: a pool failure surfaced through `run` must arrive as
+    /// TRANSIENT (503-class on every codec), not internal (500). This held
+    /// two bugs historically: `DbPool::get` wraps the cause in an anyhow
+    /// context ("Failed to get DB connection"), and `ServiceError::classify`
+    /// used to match `to_string()` — which shows only the outermost context —
+    /// so the r2d2 timeout text never matched. `classify` matches the full
+    /// `{:#}` chain and now runs at the op entry itself.
     #[test]
     fn pool_error_stays_classifiable() {
         let tmp = tempfile::tempdir().unwrap();
@@ -475,15 +478,11 @@ mod tests {
         )
         .expect_err("broken pool must error");
 
-        let CoreError::Internal(e) = err else {
-            panic!("expected CoreError::Internal for a pool failure");
-        };
+        // The entry classifies pool failures itself now — every codec
+        // (admin/MCP included, not just gRPC) receives the typed Transient.
         assert!(
-            matches!(
-                ServiceError::classify(e, "sqlite"),
-                ServiceError::Transient(_)
-            ),
-            "a pool timeout must classify as Transient (503-class), not Internal"
+            matches!(err, CoreError::Service(ServiceError::Transient(_))),
+            "a pool timeout must arrive pre-classified as Transient (503-class), got {err:?}"
         );
 
         // Regression for the write-path connection lifecycle: a write op with
