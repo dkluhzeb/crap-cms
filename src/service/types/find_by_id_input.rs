@@ -5,10 +5,12 @@
 //! `ServiceContextBuilder::infra` — so an input can never smuggle a stale or
 //! missing infra dependency past the context.
 
-use crate::{db::LocaleContext, service::read::post_process::PostProcessOpts};
+use crate::{core::Builder, db::LocaleContext, service::read::post_process::PostProcessOpts};
 
 /// Input for [`find_document_by_id`](crate::service::find_document_by_id).
+#[derive(Builder)]
 pub struct FindByIdInput<'a> {
+    #[builder(required)]
     pub id: &'a str,
     pub depth: i32,
     pub select: Option<&'a [String]>,
@@ -16,72 +18,6 @@ pub struct FindByIdInput<'a> {
     pub use_draft: bool,
     /// When true, include soft-deleted documents (trash view).
     pub include_deleted: bool,
-}
-
-impl<'a> FindByIdInput<'a> {
-    #[must_use]
-    pub fn builder(id: &'a str) -> FindByIdInputBuilder<'a> {
-        FindByIdInputBuilder::new(id)
-    }
-}
-
-/// Builder for [`FindByIdInput`].
-pub struct FindByIdInputBuilder<'a> {
-    id: &'a str,
-    depth: i32,
-    select: Option<&'a [String]>,
-    locale_ctx: Option<&'a LocaleContext>,
-    use_draft: bool,
-    include_deleted: bool,
-}
-
-impl<'a> FindByIdInputBuilder<'a> {
-    pub fn new(id: &'a str) -> Self {
-        Self {
-            id,
-            depth: 0,
-            select: None,
-            locale_ctx: None,
-            use_draft: false,
-            include_deleted: false,
-        }
-    }
-
-    pub fn depth(mut self, depth: i32) -> Self {
-        self.depth = depth;
-        self
-    }
-
-    pub fn select(mut self, select: Option<&'a [String]>) -> Self {
-        self.select = select;
-        self
-    }
-
-    pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    pub fn use_draft(mut self, use_draft: bool) -> Self {
-        self.use_draft = use_draft;
-        self
-    }
-
-    pub fn include_deleted(mut self, include_deleted: bool) -> Self {
-        self.include_deleted = include_deleted;
-        self
-    }
-
-    pub fn build(self) -> FindByIdInput<'a> {
-        FindByIdInput {
-            id: self.id,
-            depth: self.depth,
-            select: self.select,
-            locale_ctx: self.locale_ctx,
-            use_draft: self.use_draft,
-            include_deleted: self.include_deleted,
-        }
-    }
 }
 
 impl PostProcessOpts for FindByIdInput<'_> {

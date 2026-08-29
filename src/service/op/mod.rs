@@ -44,6 +44,9 @@ mod update_global;
 mod update_many;
 mod validate;
 mod versions;
+pub mod wire;
+pub mod wire_doc;
+pub mod wire_proto;
 
 pub use count::{Count, CountArgs};
 pub use create::{Create, CreateArgs};

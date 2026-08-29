@@ -10,7 +10,7 @@ use serde::Deserialize;
 use anyhow::Result;
 
 use crate::{
-    core::Registry,
+    core::{Builder, Registry},
     hooks::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
@@ -65,65 +65,17 @@ impl FromLua for UnpublishOptions {
 }
 
 /// Parameters for the shared unpublish routing.
+#[derive(Builder)]
 pub(super) struct UnpublishCall<'a> {
+    #[builder(required)]
     collection: &'a str,
+    #[builder(required)]
     id: &'a str,
     override_access: bool,
+    #[builder(default = true)]
     hooks: bool,
+    #[builder(default = true)]
     events: bool,
-}
-
-impl<'a> UnpublishCall<'a> {
-    /// Create a builder with the required fields.
-    pub(super) fn builder(collection: &'a str, id: &'a str) -> UnpublishCallBuilder<'a> {
-        UnpublishCallBuilder::new(collection, id)
-    }
-}
-
-/// Builder for [`UnpublishCall`].
-pub(super) struct UnpublishCallBuilder<'a> {
-    collection: &'a str,
-    id: &'a str,
-    override_access: bool,
-    hooks: bool,
-    events: bool,
-}
-
-impl<'a> UnpublishCallBuilder<'a> {
-    fn new(collection: &'a str, id: &'a str) -> Self {
-        Self {
-            collection,
-            id,
-            override_access: false,
-            hooks: true,
-            events: true,
-        }
-    }
-
-    pub(super) fn override_access(mut self, v: bool) -> Self {
-        self.override_access = v;
-        self
-    }
-
-    pub(super) fn hooks(mut self, v: bool) -> Self {
-        self.hooks = v;
-        self
-    }
-
-    pub(super) fn events(mut self, v: bool) -> Self {
-        self.events = v;
-        self
-    }
-
-    pub(super) fn build(self) -> UnpublishCall<'a> {
-        UnpublishCall {
-            collection: self.collection,
-            id: self.id,
-            override_access: self.override_access,
-            hooks: self.hooks,
-            events: self.events,
-        }
-    }
 }
 
 /// Route an unpublish through the full service path — access check (incl.

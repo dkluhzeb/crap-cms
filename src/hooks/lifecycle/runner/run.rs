@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, HookRef, collection::Hooks},
+    core::{Builder, Document, DocumentFields, FieldDefinition, HookRef, collection::Hooks},
     db::DbConnection,
     hooks::{
         HookContext, HookEvent, HookRunner,
@@ -19,7 +19,9 @@ use crate::{
 };
 
 /// Bundled transaction context for field-level write hooks.
+#[derive(Builder)]
 pub struct FieldWriteCtx<'a> {
+    #[builder(required)]
     pub conn: &'a dyn DbConnection,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
@@ -27,56 +29,6 @@ pub struct FieldWriteCtx<'a> {
     /// transport, queues). `None` skips infra plumbing — used by tests and
     /// system hooks that don't publish events from inside the hook.
     pub infra: Option<LuaCrudInfra>,
-}
-
-impl<'a> FieldWriteCtx<'a> {
-    /// Create a builder with the required connection reference.
-    pub fn builder(conn: &'a dyn DbConnection) -> FieldWriteCtxBuilder<'a> {
-        FieldWriteCtxBuilder::new(conn)
-    }
-}
-
-/// Builder for [`FieldWriteCtx`].
-pub struct FieldWriteCtxBuilder<'a> {
-    conn: &'a dyn DbConnection,
-    user: Option<&'a Document>,
-    ui_locale: Option<&'a str>,
-    infra: Option<LuaCrudInfra>,
-}
-
-impl<'a> FieldWriteCtxBuilder<'a> {
-    pub(crate) fn new(conn: &'a dyn DbConnection) -> Self {
-        Self {
-            conn,
-            user: None,
-            ui_locale: None,
-            infra: None,
-        }
-    }
-
-    pub fn user(mut self, user: Option<&'a Document>) -> Self {
-        self.user = user;
-        self
-    }
-
-    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
-        self.ui_locale = ui_locale;
-        self
-    }
-
-    pub fn infra(mut self, infra: Option<LuaCrudInfra>) -> Self {
-        self.infra = infra;
-        self
-    }
-
-    pub fn build(self) -> FieldWriteCtx<'a> {
-        FieldWriteCtx {
-            conn: self.conn,
-            user: self.user,
-            ui_locale: self.ui_locale,
-            infra: self.infra,
-        }
-    }
 }
 
 /// Per-call descriptor for field-level hook execution.

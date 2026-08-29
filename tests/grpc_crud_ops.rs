@@ -1139,6 +1139,89 @@ async fn create_many_rejects_non_string_password() {
     assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
 }
 
+// ── CreateMany honors the write locale ──────────────────────────────────
+
+/// Localized collection without a required localized field, so this test
+/// isolates the locale-column write from the completeness publish-gate.
+fn make_localized_notes_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("notes");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Note".to_string())),
+        plural: Some(LocalizedString::Plain("Notes".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("slug", FieldType::Text).build(),
+        FieldDefinition::builder("body", FieldType::Textarea)
+            .localized(true)
+            .build(),
+    ];
+    def
+}
+
+/// Regression (single-source wire model): `CreateManyRequest.locale` was a
+/// dead proto field — the handler ignored it, so a bulk create with
+/// `locale: "de"` silently wrote the DEFAULT locale's columns. The locale
+/// now routes into the shared create chokepoint per item, which gives bulk
+/// create single-create parity: an explicit DEFAULT locale is accepted, and
+/// a NON-default locale is rejected loudly (create in the default locale
+/// first, then translate via update) instead of silently mis-writing.
+#[tokio::test]
+async fn grpc_create_many_honors_locale() {
+    let ts = setup_service_with_locale(vec![make_localized_notes_def()], vec![], vec!["en", "de"]);
+
+    // Non-default locale: rejected exactly like single create. Before the
+    // fix this silently succeeded, writing the default locale's columns.
+    let err = ts
+        .service
+        .create_many(Request::new(content::CreateManyRequest {
+            collection: "notes".to_string(),
+            documents: vec![make_struct(&[("slug", "a"), ("body", "Deutsch A")])],
+            locale: Some("de".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("non-default-locale bulk create must be rejected like single create");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("non-default locale"),
+        "unexpected message: {}",
+        err.message()
+    );
+
+    // Explicit default locale: accepted, values land in the default columns.
+    let resp = ts
+        .service
+        .create_many(Request::new(content::CreateManyRequest {
+            collection: "notes".to_string(),
+            documents: vec![
+                make_struct(&[("slug", "a"), ("body", "English A")]),
+                make_struct(&[("slug", "b"), ("body", "English B")]),
+            ],
+            locale: Some("en".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.created, 2);
+
+    let doc = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "notes".to_string(),
+            id: resp.documents[0].id.clone(),
+            locale: Some("en".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+    assert_eq!(get_proto_field(&doc, "body").as_deref(), Some("English A"));
+}
+
 // ── DeleteMany Cleans Up Upload Files ───────────────────────────────────
 
 fn make_media_upload_def() -> CollectionDefinition {

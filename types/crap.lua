@@ -806,7 +806,7 @@ function crap.fields.join(config) end
 --- @field order_by? string Sort field (prefix with `"-"` for descending).
 --- @field limit? integer Max results to return.
 --- @field page? integer Page number (1-based). Converted to offset internally.
---- @field offset? integer Number of results to skip (alias for `page`).
+--- @field offset? integer Number of results to skip (raw row offset, for batch iteration). Ignored when `page` is set — `page` takes precedence.
 --- @field depth? integer Population depth for relationship fields (default: `0`).
 --- @field locale? string Locale code for localized fields (`"en"`, `"de"`, `"all"`).
 --- @field select? string[] Fields to return. Nil/empty = all fields.
@@ -1066,6 +1066,7 @@ function crap.collections.unpublish(collection, id, opts) end
 --- Optional options for `crap.collections.undelete`.
 --- @class crap.UndeleteOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
+--- @field events? boolean Emit a live-update event for the restored document (default: `true`). Set `false` for a quiet restore. Parity with the gRPC/MCP undelete.
 
 --- Restore a soft-deleted document. Only available on collections with
 --- `soft_delete` enabled.
@@ -1129,6 +1130,7 @@ function crap.collections.count(collection, query) end
 --- @class crap.CreateManyOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Create documents as drafts (default: `false`).
+--- @field locale? string Locale code for localized field writes (default: default locale).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
 --- @field events? boolean Emit a live-update event per created document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
 

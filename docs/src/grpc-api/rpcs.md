@@ -2,6 +2,12 @@
 
 All RPCs with request/response shapes and grpcurl examples.
 
+> The CRUD request messages in `proto/content.proto` are generated from the
+> single-source wire model (`cargo xtask gen-proto`); their field tags are
+> append-only. See the
+> [operation options reference](../reference/operation-options.md) for every
+> operation's options across gRPC, MCP, and Lua.
+
 ## Find
 
 Find documents in a collection with filtering, sorting, and pagination.
@@ -717,6 +723,7 @@ message ListVersionsRequest {
   string collection = 1;
   string id = 2;
   optional int64 limit = 3;
+  optional int64 offset = 4;
 }
 
 message ListVersionsResponse {

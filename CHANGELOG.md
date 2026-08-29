@@ -1365,6 +1365,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **gRPC `CreateManyRequest.locale` was a dead field — bulk create now
+  routes the locale through the shared create chokepoint.** The proto
+  documented "BCP-47 locale for localized field writes" but the handler
+  ignored it, so a bulk create with `locale: "de"` silently wrote the
+  DEFAULT locale's columns. `create_many` now takes the locale exactly like
+  single `create` — on gRPC (the existing proto field, now honored), MCP
+  (new `locale` argument, advertised in the tool schema), and Lua (new
+  `locale` key on `crap.CreateManyOptions`) — which means an explicit
+  default locale is accepted and a NON-default locale is rejected loudly
+  (documents are created in the default locale, then translated via
+  update), instead of silently mis-writing.
+- **MCP `update_global` tool schema now advertises `draft`.** The codec
+  accepted the argument but the hand-written schema never listed it, so MCP
+  clients couldn't discover draft saves on globals. Found by moving the
+  schemas onto the single-source wire model.
+- **Lua `crap.collections.undelete` accepts an `events` option.** The
+  options table rejected `events` (strict unknown-key check) while gRPC and
+  MCP both offer the flag — a Lua caller couldn't do a quiet restore.
+  Default stays `true`; parity with every other single-document write.
+
 - **Write operations no longer hold an idle read-pool connection across their
   write transaction.** The operation core acquired a connection for credential
   resolution and kept it for the operation's whole lifetime; pool-mode writes
@@ -2565,6 +2585,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **gRPC `ListVersionsRequest.offset`** — pagination offset for version
+  listings, closing the last `list_versions` parity gap (MCP and Lua already
+  took an offset; the service chokepoint floors it).
+
 - **`mfa_when` — a Lua gate for WHEN MFA applies.** New optional key on the
   `password_login` auth method: a hook called after credential verification
   with `{ collection, user, surface, headers }`; return `false`/`nil` to
@@ -3052,12 +3076,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Single-source wire model** (`service::op::wire`): every operation's wire
+  option fields (name, kind, requiredness, per-surface exposure, description)
+  are declared once. Four consumers: the MCP input schemas are RENDERED from
+  the model instead of hand-written per op; the proto CRUD request messages
+  are GENERATED (`cargo xtask gen-proto [--check]`) from a pinned per-field
+  spec (name, type, tag, comment — tags are append-only: a shipped tag can
+  never be renumbered or retyped silently); the operation-options reference
+  page is generated (`cargo xtask gen-wire-doc [--check]`,
+  `docs/src/reference/operation-options.md`); and a wire-parity test diffs
+  the remaining hand source — the generated `types/crap.lua` option classes,
+  i.e. the Lua opts structs in code — against it. A field added on one
+  surface and forgotten on a sibling fails CI naming the op, surface, and
+  field.
+
 - **`#[derive(Builder)]`** (crap-cms-macros): generates the house builder
   convention — positional required fields in `builder()` (with
   `impl Into<String>` coercion), chained `#[must_use]` setters that keep
   `Option` symmetry, infallible `build()` (a forgotten required field is a
-  compile error, never a runtime panic). All 13 operation `Args` structs now
-  derive it; ~1,000 lines of hand-written builder ceremony deleted with zero
+  compile error, never a runtime panic). All 13 operation `Args` structs
+  derive it, and a follow-up sweep ported the 19 remaining purely mechanical
+  hand-written builders across core/db/service/hooks/admin (`Access`,
+  `Hooks`, `AdminConfig`, `FindQuery`, the service `*Input` structs,
+  `AccessCheckInput`, `LuaWriteHooks`/`LuaReadHooks`, enrich options, and
+  more) — ~2,100 lines of hand-written builder ceremony deleted with zero
   call-site changes. Defaults are inferred only for bool/Option/integers/
   floats/Vec — anything else must state `#[builder(default = …)]`
   explicitly.

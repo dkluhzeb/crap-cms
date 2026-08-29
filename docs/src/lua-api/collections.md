@@ -246,11 +246,13 @@ crap.collections.posts.delete("abc123", { override_access = true })
 | `force_hard_delete` | boolean | `false` | Skip `soft_delete` and remove the row permanently. Still requires `access.delete` when `override_access = false`. |
 | `events` | boolean | `true` | Emit a live-update event for the deleted document. Set `false` for a quiet delete. |
 
-### `crap.collections.<slug>.undelete(id)` (and others)
+### `crap.collections.<slug>.undelete(id, opts?)` (and others)
 
 Restore a soft-deleted document from trash. Returns `true` on
 success. Only available on collections with `soft_delete = true`.
-Re-syncs the FTS index after undelete.
+Re-syncs the FTS index after undelete. Accepts `override_access`
+and `events` options (`events = false` for a quiet restore, matching
+the gRPC/MCP undelete flag).
 
 ```lua
 crap.collections.posts.undelete("abc123")
@@ -270,6 +272,11 @@ trusted internal dry-runs.
 `unpublish` accepts `override_access`, `hooks`, and `events` options
 (`events = false` for a quiet unpublish, matching
 `update{ unpublish = true, events = false }`).
+
+`create_many` accepts a `locale` option with single-`create` semantics:
+an explicit default locale is accepted; a non-default locale is rejected
+(documents are created in the default locale, then translated via
+`update`).
 
 `delete_many` accepts a `trash = true` option that permanently removes
 **already-soft-deleted** rows (empty the trash) — a hard delete of

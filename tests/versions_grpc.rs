@@ -543,6 +543,7 @@ async fn grpc_list_versions() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -598,12 +599,33 @@ async fn grpc_list_versions_with_limit() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: Some(3),
+            offset: None,
         }))
         .await
         .unwrap()
         .into_inner();
 
     assert_eq!(resp.versions.len(), 3);
+
+    // Regression (wire-parity): `offset` was missing from ListVersionsRequest
+    // while MCP and Lua both took one. limit 3 + offset 2 skips the two
+    // newest versions and returns the next three (of 6 total).
+    let resp = ts
+        .service
+        .list_versions(Request::new(content::ListVersionsRequest {
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            limit: Some(3),
+            offset: Some(2),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.versions.len(), 3);
+    assert_eq!(resp.versions[0].version, 4, "offset must skip newest-first");
+    assert_eq!(resp.versions[1].version, 3);
+    assert_eq!(resp.versions[2].version, 2);
 }
 
 #[tokio::test]
@@ -631,6 +653,7 @@ async fn grpc_list_versions_nonversioned_fails() {
             collection: "notes".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap_err();
@@ -666,6 +689,7 @@ async fn grpc_restore_version() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -734,6 +758,7 @@ async fn grpc_restore_version() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -901,6 +926,7 @@ async fn grpc_versioned_no_drafts_still_creates_versions() {
             collection: "docs".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -952,6 +978,7 @@ async fn grpc_max_versions_prunes_old() {
             collection: "docs".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -1075,6 +1102,7 @@ async fn grpc_full_draft_publish_workflow() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -1188,6 +1216,7 @@ async fn grpc_update_unpublish() {
             collection: "articles".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()

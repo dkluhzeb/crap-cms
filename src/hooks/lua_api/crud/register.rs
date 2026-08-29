@@ -141,6 +141,7 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         Arc::clone(registry),
         bulk_max_documents,
         password_policy,
+        locale_config,
     )?;
     collection::bulk::update_many::register_update_many(
         lua,

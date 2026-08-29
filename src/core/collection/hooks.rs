@@ -2,13 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{core::HookRef, typegen::lua::LuaAnnotation};
+use crate::{
+    core::{Builder, HookRef},
+    typegen::lua::LuaAnnotation,
+};
 
 /// Lua function references for lifecycle hooks.
 ///
 /// Each entry is a [`HookRef`]: a bare ref string or a `{ ref, options }` table
 /// carrying per-config options exposed to the hook as `ctx.options`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Builder, LuaAnnotation)]
 #[lua(class = "crap.Hooks")]
 pub struct Hooks {
     /// Hook refs to run before field validation.
@@ -50,101 +53,6 @@ impl Hooks {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Create a builder for hooks configuration.
-    #[must_use]
-    pub fn builder() -> HooksBuilder {
-        HooksBuilder::new()
-    }
-}
-
-/// Builder for [`Hooks`]. Created via [`Hooks::builder`].
-#[derive(Default)]
-pub struct HooksBuilder {
-    before_validate: Vec<HookRef>,
-    before_change: Vec<HookRef>,
-    after_change: Vec<HookRef>,
-    before_read: Vec<HookRef>,
-    after_read: Vec<HookRef>,
-    before_delete: Vec<HookRef>,
-    after_delete: Vec<HookRef>,
-    before_broadcast: Vec<HookRef>,
-}
-
-impl HooksBuilder {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    #[must_use]
-    pub fn before_validate(mut self, v: Vec<HookRef>) -> Self {
-        self.before_validate = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn before_change(mut self, v: Vec<HookRef>) -> Self {
-        self.before_change = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn after_change(mut self, v: Vec<HookRef>) -> Self {
-        self.after_change = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn before_read(mut self, v: Vec<HookRef>) -> Self {
-        self.before_read = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn after_read(mut self, v: Vec<HookRef>) -> Self {
-        self.after_read = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn before_delete(mut self, v: Vec<HookRef>) -> Self {
-        self.before_delete = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn after_delete(mut self, v: Vec<HookRef>) -> Self {
-        self.after_delete = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn before_broadcast(mut self, v: Vec<HookRef>) -> Self {
-        self.before_broadcast = v;
-
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> Hooks {
-        Hooks {
-            before_validate: self.before_validate,
-            before_change: self.before_change,
-            after_change: self.after_change,
-            before_read: self.before_read,
-            after_read: self.after_read,
-            before_delete: self.before_delete,
-            after_delete: self.after_delete,
-            before_broadcast: self.before_broadcast,
-        }
     }
 }
 

@@ -27,9 +27,10 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        // Pure decode — the limit floor lives at the service chokepoint.
+        // Pure decode — the limit/offset floor lives at the service chokepoint.
         let args = ListVersionsArgs::builder(req.id.clone())
             .limit(req.limit)
+            .offset(req.offset)
             .build();
 
         let principal = Principal::Credentials(Credentials {

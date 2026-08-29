@@ -2,13 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{core::HookRef, typegen::lua::LuaAnnotation};
+use crate::{
+    core::{Builder, HookRef},
+    typegen::lua::LuaAnnotation,
+};
 
 /// Lua function references for access control (read/create/update/delete).
 ///
 /// Each rule is a [`HookRef`]: a bare ref string or a `{ ref, options }` table
 /// whose options reach the access function as `ctx.options`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Builder, LuaAnnotation)]
 #[lua(class = "crap.Access")]
 pub struct Access {
     /// Hook ref for read access control.
@@ -137,12 +140,6 @@ impl Access {
         Self::default()
     }
 
-    /// Create a builder for access control configuration.
-    #[must_use]
-    pub fn builder() -> AccessBuilder {
-        AccessBuilder::new()
-    }
-
     /// Resolve the access function for trash operations (soft delete + restore).
     /// Returns `access.trash` when set, otherwise falls back to `access.update`.
     #[must_use]
@@ -183,113 +180,6 @@ impl Access {
     #[must_use]
     pub fn resolve_versions(&self) -> Option<&HookRef> {
         self.versions.as_ref().or(self.update.as_ref())
-    }
-}
-
-/// Builder for [`Access`]. Created via [`Access::builder`].
-#[derive(Default)]
-pub struct AccessBuilder {
-    read: Option<HookRef>,
-    create: Option<HookRef>,
-    update: Option<HookRef>,
-    delete: Option<HookRef>,
-    trash: Option<HookRef>,
-    draft: Option<HookRef>,
-    versions: Option<HookRef>,
-    unlock: Option<HookRef>,
-    admin: Option<HookRef>,
-    mcp: Option<HookRef>,
-}
-
-impl AccessBuilder {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    #[must_use]
-    pub fn read(mut self, read: Option<HookRef>) -> Self {
-        self.read = read;
-
-        self
-    }
-
-    #[must_use]
-    pub fn create(mut self, create: Option<HookRef>) -> Self {
-        self.create = create;
-
-        self
-    }
-
-    #[must_use]
-    pub fn update(mut self, update: Option<HookRef>) -> Self {
-        self.update = update;
-
-        self
-    }
-
-    #[must_use]
-    pub fn delete(mut self, delete: Option<HookRef>) -> Self {
-        self.delete = delete;
-
-        self
-    }
-
-    #[must_use]
-    pub fn trash(mut self, trash: Option<HookRef>) -> Self {
-        self.trash = trash;
-
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: Option<HookRef>) -> Self {
-        self.draft = draft;
-
-        self
-    }
-
-    #[must_use]
-    pub fn versions(mut self, versions: Option<HookRef>) -> Self {
-        self.versions = versions;
-
-        self
-    }
-
-    #[must_use]
-    pub fn unlock(mut self, unlock: Option<HookRef>) -> Self {
-        self.unlock = unlock;
-
-        self
-    }
-
-    #[must_use]
-    pub fn admin(mut self, admin: Option<HookRef>) -> Self {
-        self.admin = admin;
-
-        self
-    }
-
-    #[must_use]
-    pub fn mcp(mut self, mcp: Option<HookRef>) -> Self {
-        self.mcp = mcp;
-
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> Access {
-        Access {
-            read: self.read,
-            create: self.create,
-            update: self.update,
-            delete: self.delete,
-            trash: self.trash,
-            draft: self.draft,
-            versions: self.versions,
-            unlock: self.unlock,
-            admin: self.admin,
-            mcp: self.mcp,
-        }
     }
 }
 

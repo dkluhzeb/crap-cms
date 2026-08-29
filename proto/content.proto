@@ -1375,6 +1375,9 @@ message ListVersionsRequest {
 
   // Maximum number of versions to return. Defaults to all versions when absent.
   optional int64 limit = 3;
+
+  // Number of versions to skip (pagination offset). Defaults to 0.
+  optional int64 offset = 4;
 }
 
 // ListVersionsResponse contains the version list in reverse-chronological order.

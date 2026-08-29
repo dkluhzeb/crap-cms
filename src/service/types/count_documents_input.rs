@@ -1,13 +1,18 @@
 //! Input for `count_documents` — document counting with filters.
 
-use crate::db::{FilterClause, LocaleContext};
+use crate::{
+    core::Builder,
+    db::{FilterClause, LocaleContext},
+};
 
 /// Input for [`count_documents`](crate::service::count_documents).
 ///
 /// Mirrors [`FindDocumentsInput`](crate::service::FindDocumentsInput) — callers
 /// supply user filters plus the typed flags (`trash`, `include_drafts`) and the
 /// service injects the matching system filters post-validation.
+#[derive(Builder)]
 pub struct CountDocumentsInput<'a> {
+    #[builder(required)]
     pub filters: &'a [FilterClause],
     pub locale_ctx: Option<&'a LocaleContext>,
     pub search: Option<&'a str>,
@@ -23,72 +28,6 @@ pub struct CountDocumentsInput<'a> {
     /// status-filtered count scopes to the same views as the matching `find`
     /// — otherwise the reported total would not match the filtered rows.
     pub status_filter: Option<Vec<String>>,
-}
-
-impl<'a> CountDocumentsInput<'a> {
-    #[must_use]
-    pub fn builder(filters: &'a [FilterClause]) -> CountDocumentsInputBuilder<'a> {
-        CountDocumentsInputBuilder::new(filters)
-    }
-}
-
-/// Builder for [`CountDocumentsInput`].
-pub struct CountDocumentsInputBuilder<'a> {
-    filters: &'a [FilterClause],
-    locale_ctx: Option<&'a LocaleContext>,
-    search: Option<&'a str>,
-    trash: bool,
-    include_drafts: bool,
-    status_filter: Option<Vec<String>>,
-}
-
-impl<'a> CountDocumentsInputBuilder<'a> {
-    pub fn new(filters: &'a [FilterClause]) -> Self {
-        Self {
-            filters,
-            locale_ctx: None,
-            search: None,
-            trash: false,
-            include_drafts: false,
-            status_filter: None,
-        }
-    }
-
-    pub fn status_filter(mut self, status_filter: Option<Vec<String>>) -> Self {
-        self.status_filter = status_filter;
-        self
-    }
-
-    pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    pub fn search(mut self, search: Option<&'a str>) -> Self {
-        self.search = search;
-        self
-    }
-
-    pub fn trash(mut self, trash: bool) -> Self {
-        self.trash = trash;
-        self
-    }
-
-    pub fn include_drafts(mut self, include_drafts: bool) -> Self {
-        self.include_drafts = include_drafts;
-        self
-    }
-
-    pub fn build(self) -> CountDocumentsInput<'a> {
-        CountDocumentsInput {
-            filters: self.filters,
-            locale_ctx: self.locale_ctx,
-            search: self.search,
-            trash: self.trash,
-            include_drafts: self.include_drafts,
-            status_filter: self.status_filter,
-        }
-    }
 }
 
 #[cfg(test)]

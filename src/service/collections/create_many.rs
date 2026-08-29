@@ -10,6 +10,7 @@
 
 use crate::{
     core::{DocumentFields, event::EventOperation},
+    db::LocaleContext,
     service::{ServiceContext, ServiceError, WriteInput, create_document_in_conn, run_pool_write},
     typegen::lua::LuaAnnotation,
 };
@@ -33,6 +34,9 @@ pub struct CreateManyOptions {
     /// Maximum number of documents the operation may create before it is
     /// rejected (from `server.bulk_max_documents`). `0` = no limit.
     pub max_documents: i64,
+    /// Locale for localized field writes — every item writes this locale's
+    /// columns, exactly like single create. `None` = default locale.
+    pub locale_ctx: Option<LocaleContext>,
 }
 
 impl Default for CreateManyOptions {
@@ -41,6 +45,7 @@ impl Default for CreateManyOptions {
             run_hooks: true,
             draft: false,
             max_documents: 0,
+            locale_ctx: None,
         }
     }
 }
@@ -97,6 +102,7 @@ fn create_many_pooled(
             for item in items {
                 let input = WriteInput::builder(item.data.clone())
                     .password(item.password.as_deref())
+                    .locale_ctx(opts.locale_ctx.as_ref())
                     .draft(opts.draft)
                     .ui_locale(ctx.ui_locale.clone())
                     .build();
@@ -135,6 +141,7 @@ fn create_many_on_conn(
     for item in items {
         let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
+            .locale_ctx(opts.locale_ctx.as_ref())
             .draft(opts.draft)
             .ui_locale(ctx.ui_locale.clone())
             .build();

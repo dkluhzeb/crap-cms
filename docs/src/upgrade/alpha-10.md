@@ -1010,6 +1010,14 @@ and the gRPC `Login`/`VerifyMfa` flow, and composes with `mfa_when`.
   unpublished draft — parity with MCP/Lua/admin).
 - `UndeleteRequest` gained optional `events` (quiet restore — parity with
   every other write RPC).
+- `ListVersionsRequest` gained optional `offset` (version-list pagination —
+  parity with MCP/Lua, which already took one).
+- `CreateManyRequest.locale` is now **honored**: it existed in the proto but
+  the handler silently ignored it. Bulk create now routes the locale through
+  the same chokepoint as single `Create` — an explicit default locale is
+  accepted, and a NON-default locale is rejected with `INVALID_ARGUMENT`
+  (create in the default locale first, then translate via update), exactly
+  like single create, instead of silently writing the default columns.
 
 ### One `where` grammar on every surface
 
@@ -1053,6 +1061,12 @@ unchanged.
   and Lua.
 - Lua `crap.collections.unpublish(id, opts?)` accepts `events = false` for a
   quiet unpublish, matching `crap.collections.update{ unpublish = true }`.
+- Lua `crap.collections.undelete(id, opts?)` accepts `events = false` for a
+  quiet restore (previously rejected as an unknown key).
+- `create_many` accepts `locale` on every surface (MCP argument, Lua option,
+  honored gRPC field) — bulk create in a non-default locale.
+- MCP `global_update_*` tool schemas now advertise the `draft` argument the
+  codec already accepted.
 
 ### `[server] public_schema_introspection` — gate schema discovery
 

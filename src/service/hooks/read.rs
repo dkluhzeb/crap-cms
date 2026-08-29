@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks,
+        Builder, Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks,
         nest_group_fields,
     },
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
@@ -282,73 +282,17 @@ impl ReadHooks for RunnerReadHooks<'_> {
 
 /// Inline Lua VM hook execution for Lua CRUD hooks.
 /// Uses the current Lua VM directly (already inside a hook context).
+#[derive(Builder)]
 pub struct LuaReadHooks<'a> {
+    #[builder(required)]
     pub lua: &'a mlua::Lua,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
     pub override_access: bool,
     /// `false` when the hook-depth guard tripped — lifecycle hooks
     /// (`before_read`/`after_read`) are skipped, access checks still run.
+    #[builder(default = true)]
     pub hooks_enabled: bool,
-}
-
-impl<'a> LuaReadHooks<'a> {
-    /// Create a builder with the required Lua VM reference.
-    #[must_use]
-    pub fn builder(lua: &'a mlua::Lua) -> LuaReadHooksBuilder<'a> {
-        LuaReadHooksBuilder::new(lua)
-    }
-}
-
-/// Builder for [`LuaReadHooks`]. Created via [`LuaReadHooks::builder`].
-pub struct LuaReadHooksBuilder<'a> {
-    pub(in crate::service) lua: &'a mlua::Lua,
-    pub(in crate::service) user: Option<&'a Document>,
-    pub(in crate::service) ui_locale: Option<&'a str>,
-    pub(in crate::service) override_access: bool,
-    pub(in crate::service) hooks_enabled: bool,
-}
-
-impl<'a> LuaReadHooksBuilder<'a> {
-    pub fn new(lua: &'a mlua::Lua) -> Self {
-        Self {
-            lua,
-            user: None,
-            ui_locale: None,
-            override_access: false,
-            hooks_enabled: true,
-        }
-    }
-
-    pub fn user(mut self, user: Option<&'a Document>) -> Self {
-        self.user = user;
-        self
-    }
-
-    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
-        self.ui_locale = ui_locale;
-        self
-    }
-
-    pub fn override_access(mut self, override_access: bool) -> Self {
-        self.override_access = override_access;
-        self
-    }
-
-    pub fn hooks_enabled(mut self, hooks_enabled: bool) -> Self {
-        self.hooks_enabled = hooks_enabled;
-        self
-    }
-
-    pub fn build(self) -> LuaReadHooks<'a> {
-        LuaReadHooks {
-            lua: self.lua,
-            user: self.user,
-            ui_locale: self.ui_locale,
-            override_access: self.override_access,
-            hooks_enabled: self.hooks_enabled,
-        }
-    }
 }
 
 /// Adapter that lets `populate` invoke a `ReadHooks` as a [`JoinAccessCheck`]

@@ -160,6 +160,14 @@ changing a representation is a breaking change to every consumer.
   pre-freeze (alpha), a removed field's tag is reclaimed by renumbering the
   survivors so the message stays gap-free. After the freeze, removed tags must
   instead be `reserved`.
+- **The CRUD request messages are GENERATED — never hand-edit them.** Their
+  field names, types, tags, and comments are pinned in the single-source wire
+  spec (`service::op::wire_proto::PROTO_MESSAGES`, layered on the wire model
+  `service::op::wire`); `cargo xtask gen-proto` renders them and `--check`
+  gates CI. Tags are append-only by construction: renumbering or retyping a
+  shipped field means editing the pinned spec, which the wire-parity tests
+  and the regenerated diff both surface. Everything outside those messages
+  (responses, auth, jobs, subscribe, the service block) stays hand-written.
 
 ## MCP (Model Context Protocol)
 

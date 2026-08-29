@@ -1,7 +1,11 @@
 //! The `create_many` bulk operation.
 
-use crate::service::{
-    CreateManyItem, CreateManyOptions, CreateManyResult, ServiceContext, ServiceError, create_many,
+use crate::{
+    db::LocaleContext,
+    service::{
+        CreateManyItem, CreateManyOptions, CreateManyResult, ServiceContext, ServiceError,
+        create_many,
+    },
 };
 
 use crate::core::Builder;
@@ -17,6 +21,9 @@ pub struct CreateManyArgs {
     #[builder(default = true)]
     pub run_hooks: bool,
     pub draft: bool,
+    /// Locale for localized field writes — every item writes this locale's
+    /// columns, exactly like single create. `None` = default locale.
+    pub locale_ctx: Option<LocaleContext>,
     /// `server.bulk_max_documents` cap. `0` = no limit.
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
@@ -43,6 +50,7 @@ impl Operation for CreateMany {
             run_hooks: args.run_hooks,
             draft: args.draft,
             max_documents: args.max_documents,
+            locale_ctx: args.locale_ctx,
         };
 
         create_many(ctx, &args.items, &opts)

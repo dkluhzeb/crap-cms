@@ -8,8 +8,9 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::Deserialize;
 
 use crate::{
-    config::PasswordPolicy,
+    config::{LocaleConfig, PasswordPolicy},
     core::{CollectionDefinition, Registry},
+    db::LocaleContext,
     hooks::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
@@ -40,6 +41,9 @@ pub(crate) struct CreateManyOpts {
     /// Create documents as drafts (default: `false`).
     #[lua(optional)]
     pub(crate) draft: bool,
+    /// Locale code for localized field writes (default: default locale).
+    #[lua(optional)]
+    pub(crate) locale: Option<String>,
     /// Run lifecycle hooks (default: `true`). Set `false` to bypass.
     #[lua(optional)]
     pub(crate) hooks: bool,
@@ -54,6 +58,7 @@ impl Default for CreateManyOpts {
         Self {
             override_access: false,
             draft: false,
+            locale: None,
             hooks: true,
             events: false,
         }
@@ -133,10 +138,17 @@ fn collections_create_many(
         .password_policy(Some(&state.password_policy))
         .build();
 
+    // Honor the write locale exactly like single create — parity across
+    // gRPC/MCP/Lua via the wire model.
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), &state.locale_config)
+            .map_err(lua_err)?;
+
     // Shared operation body — identical semantics on every surface.
     let op_args = CreateManyArgs::builder(parsed_items)
         .run_hooks(hooks_enabled)
         .draft(opts.draft)
+        .locale_ctx(locale_ctx)
         .max_documents(state.bulk_max_documents)
         .events(opts.events)
         .build();
@@ -162,6 +174,7 @@ pub(crate) struct CollectionsCreateManyState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) bulk_max_documents: i64,
     pub(crate) password_policy: PasswordPolicy,
+    pub(crate) locale_config: LocaleConfig,
 }
 
 lua_table! {
@@ -180,6 +193,7 @@ pub(crate) fn register_create_many(
     registry: Arc<Registry>,
     bulk_max_documents: i64,
     password_policy: &PasswordPolicy,
+    locale_config: &LocaleConfig,
 ) -> Result<()> {
     register_crap_collections_create_many(
         lua,
@@ -187,6 +201,7 @@ pub(crate) fn register_create_many(
             registry,
             bulk_max_documents,
             password_policy: password_policy.clone(),
+            locale_config: locale_config.clone(),
         },
     )?;
     Ok(())

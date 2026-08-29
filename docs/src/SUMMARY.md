@@ -127,6 +127,7 @@
 - [Where Clause](grpc-api/where-clause.md)
 - [Authentication](grpc-api/authentication.md)
 - [Type Safety](grpc-api/type-safety.md)
+- [Operation Options Reference](reference/operation-options.md)
 
 # Live Updates
 

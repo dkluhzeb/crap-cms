@@ -28,4 +28,5 @@ pub mod typegen;
 /// Consumed by `cargo xtask gen-*` subcommands.
 pub mod docgen {
     pub use crate::admin::context::page::schema_doc::generate_template_context_md;
+    pub use crate::service::op::wire_doc::generate_wire_reference_md;
 }

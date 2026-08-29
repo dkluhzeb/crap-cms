@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::core::CollectionDefinition;
+use crate::core::{Builder, CollectionDefinition};
 use crate::db::{
     DbConnection, DbValue, FilterClause, LocaleContext,
     query::{
@@ -156,79 +156,22 @@ pub fn max_updated_at(
 
 /// Parameters for [`count_where_field_eq`] — a unique-constraint count query.
 ///
-/// Built via [`FieldEqCount::builder`]; `exclude_id`/`soft_delete`/
-/// `case_insensitive` default off.
+/// Built via [`FieldEqCount::builder`]; `exclude_id` excludes the document
+/// being updated, `soft_delete` skips trashed rows (`_deleted_at IS NULL`),
+/// and `case_insensitive` compares `LOWER(col) = LOWER(?)` — used for email
+/// identity fields so uniqueness matches the case-insensitive login lookup
+/// (`find_by_email`); all three default off.
+#[derive(Builder)]
 pub struct FieldEqCount<'a> {
+    #[builder(required)]
     table: &'a str,
+    #[builder(required)]
     field: &'a str,
+    #[builder(required)]
     value: &'a str,
     exclude_id: Option<&'a str>,
     soft_delete: bool,
     case_insensitive: bool,
-}
-
-impl<'a> FieldEqCount<'a> {
-    /// Start a query for `table.field == value`.
-    #[must_use]
-    pub fn builder(table: &'a str, field: &'a str, value: &'a str) -> FieldEqCountBuilder<'a> {
-        FieldEqCountBuilder {
-            table,
-            field,
-            value,
-            exclude_id: None,
-            soft_delete: false,
-            case_insensitive: false,
-        }
-    }
-}
-
-/// Builder for [`FieldEqCount`].
-pub struct FieldEqCountBuilder<'a> {
-    table: &'a str,
-    field: &'a str,
-    value: &'a str,
-    exclude_id: Option<&'a str>,
-    soft_delete: bool,
-    case_insensitive: bool,
-}
-
-impl<'a> FieldEqCountBuilder<'a> {
-    /// Exclude a row id (the document being updated) from the count.
-    #[must_use]
-    pub fn exclude_id(mut self, exclude_id: Option<&'a str>) -> Self {
-        self.exclude_id = exclude_id;
-        self
-    }
-
-    /// Skip soft-deleted rows (`_deleted_at IS NULL`).
-    #[must_use]
-    pub fn soft_delete(mut self, soft_delete: bool) -> Self {
-        self.soft_delete = soft_delete;
-        self
-    }
-
-    /// Compare case-insensitively (`LOWER(col) = LOWER(?)`). Used for email
-    /// identity fields so uniqueness matches the case-insensitive login lookup
-    /// (`find_by_email` = `LOWER(email) = LOWER(?)`) — otherwise `Victim@x.com`
-    /// and `victim@x.com` both pass and then collide at login.
-    #[must_use]
-    pub fn case_insensitive(mut self, case_insensitive: bool) -> Self {
-        self.case_insensitive = case_insensitive;
-        self
-    }
-
-    /// Finalize the parameters.
-    #[must_use]
-    pub fn build(self) -> FieldEqCount<'a> {
-        FieldEqCount {
-            table: self.table,
-            field: self.field,
-            value: self.value,
-            exclude_id: self.exclude_id,
-            soft_delete: self.soft_delete,
-            case_insensitive: self.case_insensitive,
-        }
-    }
 }
 
 /// Count rows where a field equals a value, optionally excluding an ID.

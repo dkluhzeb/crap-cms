@@ -52,7 +52,8 @@ pub(crate) struct FindQueryInput {
     /// Page number (1-based). Converted to offset internally.
     #[lua(optional)]
     pub(crate) page: Option<i64>,
-    /// Number of results to skip (alias for `page`).
+    /// Number of results to skip (raw row offset, for batch iteration).
+    /// Ignored when `page` is set — `page` takes precedence.
     #[lua(optional)]
     pub(crate) offset: Option<i64>,
     /// Population depth for relationship fields (default: `0`).

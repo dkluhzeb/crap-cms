@@ -16,6 +16,7 @@ use crate::{
         },
     },
     core::{DocumentFields, collection::Surface},
+    db::LocaleContext,
     service::{
         CreateManyItem,
         op::{self, CreateMany, CreateManyArgs, Credentials, Principal, TargetRef},
@@ -58,9 +59,16 @@ impl ContentService {
             items.push(CreateManyItem { data, password });
         }
 
+        // Honor the request's write locale exactly like single Create — the
+        // proto field existed but was silently ignored before the wire model.
+        let locale_ctx =
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
         let args = CreateManyArgs::builder(items)
             .run_hooks(req.hooks.unwrap_or(true))
             .draft(req.draft.unwrap_or(false))
+            .locale_ctx(locale_ctx)
             .max_documents(self.server_config.bulk_max_documents)
             .events(req.events.unwrap_or(false))
             .build();

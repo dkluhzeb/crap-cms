@@ -6,6 +6,7 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
+    db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{doc_to_json, extract_auth_password, extract_data_from_args},
@@ -75,9 +76,15 @@ pub(in crate::mcp::tools) fn exec_create_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
+    // Honor the write locale exactly like single create — parity across
+    // gRPC/MCP/Lua via the wire model.
+    let locale = args.get("locale").and_then(Value::as_str);
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
     let op_args = CreateManyArgs::builder(items)
         .run_hooks(run_hooks)
         .draft(draft)
+        .locale_ctx(locale_ctx)
         .max_documents(ctx.config.server.bulk_max_documents)
         .events(events)
         .build();

@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::{Document, DocumentFields, HookRef};
+use crate::core::{Builder, Document, DocumentFields, HookRef};
 use crate::typegen::lua::LuaAnnotation;
 
 /// Context passed to collection- and field-level access functions.
@@ -94,6 +94,10 @@ pub struct AccessContext<'a> {
 /// are always required; every other field defaults to `None` and is set only
 /// when relevant. The builder is the single construction path so adding a new
 /// optional input is a one-line change here, not an edit at every call site.
+/// Optional setters take `Option<&T>` so a caller's already-optional value
+/// (`ctx.user`, `input.ui_locale.as_deref()`, …) flows straight through
+/// without an `if let`.
+#[derive(Builder)]
 pub struct AccessCheckInput<'a> {
     /// The access hook ref (a bare ref or a `{ ref, options }` table), or `None`
     /// when no access function is configured (default-allow / default-deny
@@ -108,7 +112,9 @@ pub struct AccessCheckInput<'a> {
     /// Field-access only: the full document. See [`AccessContext::document`].
     pub document: Option<&'a DocumentFields>,
     pub locale: Option<&'a str>,
+    #[builder(required)]
     pub operation: &'a str,
+    #[builder(required)]
     pub collection: &'a str,
     pub ui_locale: Option<&'a str>,
     /// Whether the *operation itself* injects `_status` (a non-draft write on
@@ -117,119 +123,4 @@ pub struct AccessCheckInput<'a> {
     /// (`check_collection_access`) reads this instead of hard-coding `false`,
     /// so the allowance works on every surface that resolves access.
     pub injecting_status: bool,
-}
-
-impl<'a> AccessCheckInput<'a> {
-    /// Start building an access-check input for the given `operation` and
-    /// `collection` (the only required fields). All other fields default to
-    /// `None`; chain the setters for the ones the call site cares about, then
-    /// [`build`](AccessCheckInputBuilder::build).
-    #[must_use]
-    pub fn builder(operation: &'a str, collection: &'a str) -> AccessCheckInputBuilder<'a> {
-        AccessCheckInputBuilder {
-            access: None,
-            user: None,
-            id: None,
-            data: None,
-            document: None,
-            locale: None,
-            operation,
-            collection,
-            ui_locale: None,
-            injecting_status: false,
-        }
-    }
-}
-
-/// Builder for [`AccessCheckInput`]. Optional setters take `Option<&T>` so a
-/// caller's already-optional value (`ctx.user`, `input.ui_locale.as_deref()`,
-/// …) flows straight through without an `if let`.
-pub struct AccessCheckInputBuilder<'a> {
-    access: Option<&'a HookRef>,
-    user: Option<&'a Document>,
-    id: Option<&'a str>,
-    data: Option<&'a DocumentFields>,
-    document: Option<&'a DocumentFields>,
-    locale: Option<&'a str>,
-    operation: &'a str,
-    collection: &'a str,
-    ui_locale: Option<&'a str>,
-    injecting_status: bool,
-}
-
-impl<'a> AccessCheckInputBuilder<'a> {
-    /// The access hook ref to evaluate (`None` ⇒ default-allow / default-deny).
-    #[must_use]
-    pub fn access(mut self, access: Option<&'a HookRef>) -> Self {
-        self.access = access;
-        self
-    }
-
-    /// The acting user document (`None` ⇒ anonymous).
-    #[must_use]
-    pub fn user(mut self, user: Option<&'a Document>) -> Self {
-        self.user = user;
-        self
-    }
-
-    /// The target document id (`update` / `delete` / `find_by_id`).
-    #[must_use]
-    pub fn id(mut self, id: Option<&'a str>) -> Self {
-        self.id = id;
-        self
-    }
-
-    /// Collection access: incoming write data. Field access: the field's
-    /// immediate level. See [`AccessContext::data`].
-    #[must_use]
-    pub fn data(mut self, data: Option<&'a DocumentFields>) -> Self {
-        self.data = data;
-        self
-    }
-
-    /// Field-access only: the full document. See [`AccessContext::document`].
-    #[must_use]
-    pub fn document(mut self, document: Option<&'a DocumentFields>) -> Self {
-        self.document = document;
-        self
-    }
-
-    /// The content locale this operation targets (`None` ⇒ localization off).
-    #[must_use]
-    pub fn locale(mut self, locale: Option<&'a str>) -> Self {
-        self.locale = locale;
-        self
-    }
-
-    /// The operator's admin UI locale (`None` ⇒ non-admin origin).
-    #[must_use]
-    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
-        self.ui_locale = ui_locale;
-        self
-    }
-
-    /// Whether the operation itself injects `_status` (permits `_status`
-    /// constraints from the access hook). See [`AccessCheckInput::injecting_status`].
-    #[must_use]
-    pub fn injecting_status(mut self, injecting_status: bool) -> Self {
-        self.injecting_status = injecting_status;
-        self
-    }
-
-    /// Finalize the [`AccessCheckInput`].
-    #[must_use]
-    pub fn build(self) -> AccessCheckInput<'a> {
-        AccessCheckInput {
-            access: self.access,
-            user: self.user,
-            id: self.id,
-            data: self.data,
-            document: self.document,
-            locale: self.locale,
-            operation: self.operation,
-            collection: self.collection,
-            ui_locale: self.ui_locale,
-            injecting_status: self.injecting_status,
-        }
-    }
 }

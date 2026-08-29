@@ -6,14 +6,18 @@
 //! missing infra dependency past the context.
 
 use crate::{
+    core::Builder,
     db::{FindQuery, LocaleContext},
     service::read::post_process::PostProcessOpts,
 };
 
 /// Input for [`find_documents`](crate::service::find_documents).
+#[derive(Builder)]
 pub struct FindDocumentsInput<'a> {
+    #[builder(required)]
     pub query: &'a FindQuery,
     pub depth: i32,
+    #[builder(default = true)]
     pub hydrate: bool,
     pub select: Option<&'a [String]>,
     pub locale_ctx: Option<&'a LocaleContext>,
@@ -44,96 +48,6 @@ pub struct FindDocumentsInput<'a> {
     /// post-validation, and routes the access check through `access.trash`.
     /// Callers never push `_deleted_at` into `query.filters` themselves.
     pub trash: bool,
-}
-
-impl<'a> FindDocumentsInput<'a> {
-    #[must_use]
-    pub fn builder(query: &'a FindQuery) -> FindDocumentsInputBuilder<'a> {
-        FindDocumentsInputBuilder::new(query)
-    }
-}
-
-/// Builder for [`FindDocumentsInput`].
-pub struct FindDocumentsInputBuilder<'a> {
-    query: &'a FindQuery,
-    depth: i32,
-    hydrate: bool,
-    select: Option<&'a [String]>,
-    locale_ctx: Option<&'a LocaleContext>,
-    include_drafts: bool,
-    status_filter: Option<Vec<String>>,
-    cursor_enabled: bool,
-    trash: bool,
-}
-
-impl<'a> FindDocumentsInputBuilder<'a> {
-    pub fn new(query: &'a FindQuery) -> Self {
-        Self {
-            query,
-            depth: 0,
-            hydrate: true,
-            select: None,
-            locale_ctx: None,
-            include_drafts: false,
-            status_filter: None,
-            cursor_enabled: false,
-            trash: false,
-        }
-    }
-
-    pub fn depth(mut self, depth: i32) -> Self {
-        self.depth = depth;
-        self
-    }
-
-    pub fn hydrate(mut self, hydrate: bool) -> Self {
-        self.hydrate = hydrate;
-        self
-    }
-
-    pub fn select(mut self, select: Option<&'a [String]>) -> Self {
-        self.select = select;
-        self
-    }
-
-    pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    pub fn include_drafts(mut self, include_drafts: bool) -> Self {
-        self.include_drafts = include_drafts;
-        self
-    }
-
-    pub fn status_filter(mut self, status_filter: Option<Vec<String>>) -> Self {
-        self.status_filter = status_filter;
-        self
-    }
-
-    pub fn cursor_enabled(mut self, cursor_enabled: bool) -> Self {
-        self.cursor_enabled = cursor_enabled;
-        self
-    }
-
-    pub fn trash(mut self, trash: bool) -> Self {
-        self.trash = trash;
-        self
-    }
-
-    pub fn build(self) -> FindDocumentsInput<'a> {
-        FindDocumentsInput {
-            query: self.query,
-            depth: self.depth,
-            hydrate: self.hydrate,
-            select: self.select,
-            locale_ctx: self.locale_ctx,
-            include_drafts: self.include_drafts,
-            status_filter: self.status_filter,
-            cursor_enabled: self.cursor_enabled,
-            trash: self.trash,
-        }
-    }
 }
 
 impl PostProcessOpts for FindDocumentsInput<'_> {

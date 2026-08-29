@@ -24,13 +24,26 @@ use crate::{
 };
 
 /// Optional options for `crap.collections.undelete`.
-#[derive(Default, Deserialize, LuaAnnotation)]
+#[derive(Deserialize, LuaAnnotation)]
 #[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.UndeleteOptions")]
 pub(crate) struct UndeleteOptions {
     /// Skip access control checks (default: `false`).
     #[lua(optional)]
     pub(crate) override_access: bool,
+    /// Emit a live-update event for the restored document (default: `true`).
+    /// Set `false` for a quiet restore. Parity with the gRPC/MCP undelete.
+    #[lua(optional)]
+    pub(crate) events: bool,
+}
+
+impl Default for UndeleteOptions {
+    fn default() -> Self {
+        Self {
+            override_access: false,
+            events: true,
+        }
+    }
 }
 
 impl FromLua for UndeleteOptions {
@@ -80,12 +93,13 @@ fn collections_undelete(
         .user(user.as_ref())
         .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
     // Shared operation body — identical semantics on every surface.
-    Undelete::run(&ctx, UndeleteArgs::new(id.as_str())).map_err(lua_err)?;
+    Undelete::run(&ctx, UndeleteArgs::new(id.as_str()).events(opts.events)).map_err(lua_err)?;
 
     Ok(true)
 }
@@ -103,4 +117,29 @@ lua_table! {
 pub(crate) fn register_undelete(lua: &Lua, _table: &Table, registry: Arc<Registry>) -> Result<()> {
     register_crap_collections_undelete(lua, registry)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression (wire-parity): `crap.collections.undelete` rejected an
+    /// `events` option (`deny_unknown_fields`) while gRPC and MCP both offer
+    /// one — a Lua caller could not do a quiet restore. The option now parses
+    /// and defaults to `true` like every single-document write.
+    #[test]
+    fn undelete_options_accept_events_flag() {
+        let lua = Lua::new();
+
+        let opts: UndeleteOptions = lua
+            .from_value(
+                lua.to_value(&serde_json::json!({ "events": false }))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(!opts.events);
+        assert!(!opts.override_access);
+
+        assert!(UndeleteOptions::default().events, "quiet must be opt-in");
+    }
 }

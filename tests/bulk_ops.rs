@@ -169,6 +169,7 @@ fn bulk_opts() -> CreateManyOptions {
         run_hooks: false,
         draft: false,
         max_documents: 0,
+        locale_ctx: None,
     }
 }
 
@@ -333,6 +334,7 @@ fn create_many_over_cap_is_rejected_and_creates_nothing() {
         run_hooks: false,
         draft: false,
         max_documents: 2,
+        locale_ctx: None,
     };
 
     let err = create_many(&ctx(&s), &items, &opts).expect_err("should exceed the cap");
@@ -353,6 +355,7 @@ fn create_many_is_atomic_on_mid_operation_failure() {
         run_hooks: false,
         draft: false,
         max_documents: 0,
+        locale_ctx: None,
     };
 
     let err =

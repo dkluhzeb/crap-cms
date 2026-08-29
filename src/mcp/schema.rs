@@ -3,6 +3,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition};
+use crate::service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -230,179 +231,100 @@ fn get_props(schema: &mut Value) -> Option<&mut Map<String, Value>> {
         .as_object_mut()
 }
 
-/// Insert the reserved write meta-keys (`locale`, `draft`) shared by the
-/// create and update tool schemas. They sit alongside field values as
-/// top-level args and are excluded from the document's field data.
-fn insert_write_meta_keys(props: &mut Map<String, Value>) {
-    props.insert(
-        "locale".to_string(),
-        json!({
-            "type": "string",
-            "description": "Locale code (e.g. 'en', 'de') for localized fields"
-        }),
-    );
-    props.insert(
-        "draft".to_string(),
-        json!({
-            "type": "boolean",
-            "description": "Write as a draft version (default: false)"
-        }),
-    );
-}
-
-/// Insert the single-op `events` meta-key (default `true`). Kept separate from
-/// `insert_write_meta_keys` because `create_schema` is reused as the per-item
-/// schema for `create_many`, where a per-item `events` key would be wrong (bulk
-/// ops declare one `events` flag at the operation level, defaulting to false).
-fn insert_single_events_key(props: &mut Map<String, Value>) {
-    props.insert(
-        "events".to_string(),
-        json!({
-            "type": "boolean",
-            "description": "Emit a live-update event for this document (default: true)"
-        }),
-    );
-}
-
-/// Input schema for collection create — includes required password for auth collections.
-fn create_schema(def: &CollectionDefinition) -> Value {
-    let mut schema = fields_to_object_schema(&def.fields);
-
-    if let Some(props) = get_props(&mut schema) {
-        insert_write_meta_keys(props);
-    }
-
-    if !def.is_auth_collection() {
-        return schema;
-    }
-
-    let Some(props) = get_props(&mut schema) else {
-        return schema;
-    };
-    props.insert("password".to_string(), json!({ "type": "string" }));
-
+/// Append `name` to the schema's `required` array (creating it if absent).
+fn push_required(schema: &mut Value, name: &str) {
     let obj = schema.as_object_mut().expect("schema is object");
     let req = obj
         .entry("required")
         .or_insert_with(|| Value::Array(Vec::new()));
 
     if let Some(arr) = req.as_array_mut() {
-        arr.push(Value::String("password".to_string()));
+        arr.push(Value::String(name.to_string()));
     }
-
-    schema
 }
 
-/// Input schema for collection update — requires id, optional password for auth collections.
-fn update_schema(def: &CollectionDefinition) -> Value {
-    let mut schema = fields_to_object_schema(&def.fields);
-
-    let Some(props) = get_props(&mut schema) else {
-        return schema;
-    };
-    props.insert("id".to_string(), json!({ "type": "string" }));
-    insert_write_meta_keys(props);
-    insert_single_events_key(props);
-
-    if def.is_auth_collection() {
-        props.insert(
-            "password".to_string(),
-            json!({
-                "type": "string",
-                "description": "Leave empty to keep current password"
-            }),
-        );
-    }
-
-    let obj = schema.as_object_mut().expect("schema is object");
-    obj.insert("required".to_string(), json!(["id"]));
-
-    schema
-}
-
-/// Input schema for collection validate — field data plus an optional
-/// `id`. When `id` is set, validation runs in update mode (the row is
-/// excluded from unique checks); otherwise it runs in create mode.
-/// Only field-level `required` constraints apply — `id` stays optional.
-fn validate_schema(def: &CollectionDefinition) -> Value {
-    let mut schema = fields_to_object_schema(&def.fields);
-
-    if let Some(props) = get_props(&mut schema) {
-        props.insert(
-            "id".to_string(),
-            json!({
-                "type": "string",
-                "description": "Document ID — when set, validates as an update (excludes this row from unique checks)"
-            }),
-        );
-        insert_write_meta_keys(props);
-    }
-
-    schema
-}
-
-/// Schema requiring only an `id` field.
-fn id_only_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": { "type": "string" },
-            "events": {
-                "type": "boolean",
-                "description": "Emit a live-update event for this change (default: true)"
-            }
-        },
-        "required": ["id"]
-    })
-}
-
-/// Schema for delete — `id` plus an optional `force_hard_delete` flag that
-/// bypasses soft-delete and removes the row permanently.
-fn delete_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": { "type": "string" },
-            "force_hard_delete": {
-                "type": "boolean",
-                "description": "Bypass soft-delete and remove the row permanently (default: false)"
-            },
-            "events": {
-                "type": "boolean",
-                "description": "Emit a live-update event for this document (default: true)"
-            }
-        },
-        "required": ["id"]
-    })
-}
-
-/// Generate the input schema for a collection CRUD tool. Each match arm
-/// delegates to a per-op schema builder so the table-of-contents shape of
-/// this fn matches the `CrudOp` enum 1:1.
-pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
-    match op {
-        CrudOp::Create => {
-            // `create_schema` is shared with `create_many` items, so add the
-            // single-op `events` key only here, not inside `create_schema`.
-            let mut schema = create_schema(def);
-            if let Some(props) = get_props(&mut schema) {
-                insert_single_events_key(props);
-            }
-            schema
+/// JSON-schema property for one scalar wire field.
+fn wire_prop(field: &WireField) -> Value {
+    let mut prop = match field.kind {
+        WireKind::Bool => json!({ "type": "boolean" }),
+        WireKind::Int => json!({ "type": "integer" }),
+        WireKind::Str | WireKind::Id | WireKind::Locale => json!({ "type": "string" }),
+        WireKind::FilterMap => json!({ "type": "object" }),
+        WireKind::Select => json!({ "type": "array", "items": { "type": "string" } }),
+        WireKind::DataFields | WireKind::DataObject | WireKind::DocumentsArray => {
+            unreachable!("def-dependent kinds are rendered by add_wire_props")
         }
-        CrudOp::CreateMany => create_many_schema(def),
-        CrudOp::Update => update_schema(def),
-        CrudOp::UpdateMany => update_many_schema(def),
-        CrudOp::Validate => validate_schema(def),
-        CrudOp::Delete => delete_schema(),
-        CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
-        CrudOp::DeleteMany => delete_many_schema(),
-        CrudOp::FindById => find_by_id_schema(),
-        CrudOp::Find => find_schema(),
-        CrudOp::Count => count_schema(),
-        CrudOp::ListVersions => list_versions_schema(),
-        CrudOp::RestoreVersion => restore_version_schema(),
+    };
+
+    if !field.doc.is_empty() {
+        let obj = prop.as_object_mut().expect("json! object");
+        obj.insert(
+            "description".to_string(),
+            Value::String(field.doc.to_string()),
+        );
     }
+
+    prop
+}
+
+/// Render an op's MCP-visible wire fields into `schema`. The
+/// [`WireKind::DataFields`] spread is the caller's *starting* schema
+/// (`fields_to_object_schema`), so it is skipped here; the other
+/// def-dependent kinds pull the collection fields from `def`.
+fn add_wire_props(schema: &mut Value, wire: &OpWire, def: Option<&CollectionDefinition>) {
+    for field in wire.fields {
+        if !field.surfaces.contains(WireSurfaces::MCP) {
+            continue;
+        }
+
+        let prop = match field.kind {
+            WireKind::DataFields => continue,
+            WireKind::DataObject => {
+                let def = def.expect("DataObject op carries a collection definition");
+                json!({
+                    "allOf": [fields_to_object_schema(&def.fields)],
+                    "description": field.doc
+                })
+            }
+            WireKind::DocumentsArray => {
+                let def = def.expect("DocumentsArray op carries a collection definition");
+                json!({
+                    "type": "array",
+                    "items": create_many_item_schema(def),
+                    "description": field.doc
+                })
+            }
+            _ => wire_prop(field),
+        };
+
+        if let Some(props) = get_props(schema) {
+            props.insert(field.name.to_string(), prop);
+        }
+
+        if field.required {
+            push_required(schema, field.name);
+        }
+    }
+}
+
+/// Schema for an op with no top-level field-data spread — an object holding
+/// exactly the wire model's option fields.
+fn options_schema(wire: &OpWire, def: Option<&CollectionDefinition>) -> Value {
+    let mut schema = json!({ "type": "object", "properties": {} });
+
+    add_wire_props(&mut schema, wire, def);
+
+    schema
+}
+
+/// Schema for an op whose field data spreads at the top level (create /
+/// update / validate): the definition's field schema plus the wire options.
+fn data_spread_schema(fields: &[FieldDefinition], wire: &OpWire) -> Value {
+    let mut schema = fields_to_object_schema(fields);
+
+    add_wire_props(&mut schema, wire, None);
+
+    schema
 }
 
 /// Per-item schema for `create_many` — field data plus, for auth collections,
@@ -429,212 +351,88 @@ fn create_many_item_schema(def: &CollectionDefinition) -> Value {
     schema
 }
 
-fn create_many_schema(def: &CollectionDefinition) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            // Per-item schema is field data plus an optional `password` for auth
-            // collections. Unlike single `create`, items carry no `locale`/
-            // `draft`/`events` (those are operation-level or ignored).
-            "documents": {
-                "type": "array",
-                "items": create_many_item_schema(def),
-                "description": "Array of documents to create"
-            },
-            "hooks": {
-                "type": "boolean",
-                "description": "Run per-document lifecycle hooks (default: true)"
-            },
-            "draft": {
-                "type": "boolean",
-                "description": "Create documents as drafts (default: false)"
-            },
-            "events": {
-                "type": "boolean",
-                "description": "Emit a live-update event per created document (default: false — bulk ops are quiet)"
-            }
-        },
-        "required": ["documents"]
-    })
+impl CrudOp {
+    /// The op's wire-model entry — the single source for its option fields.
+    fn wire(self) -> &'static OpWire {
+        wire::collection_op(self.name())
+            .unwrap_or_else(|| panic!("wire model missing collection op `{}`", self.name()))
+    }
 }
 
-fn update_many_schema(def: &CollectionDefinition) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "where": {
-                "type": "object",
-                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"})"
-            },
-            "data": {
-                "allOf": [fields_to_object_schema(&def.fields)],
-                "description": "Field values to set on all matching documents"
-            },
-            "hooks": {
-                "type": "boolean",
-                "description": "Run per-document lifecycle hooks (default: true)"
-            },
-            "draft": {
-                "type": "boolean",
-                "description": "Target draft versions (default: false)"
-            },
-            "locale": {
-                "type": "string",
-                "description": "Locale code (e.g. 'en', 'de') for localized fields"
-            },
-            "events": {
-                "type": "boolean",
-                "description": "Emit a live-update event per modified document (default: false — bulk ops are quiet)"
-            }
-        },
-        "required": ["data"]
-    })
-}
-
-fn delete_many_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "where": {
-                "type": "object",
-                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}). Omit to match all documents."
-            },
-            "hooks": {
-                "type": "boolean",
-                "description": "Run per-document lifecycle hooks (default: true)"
-            },
-            "force_hard_delete": {
-                "type": "boolean",
-                "description": "Force hard delete even on soft-delete collections (default: false)"
-            },
-            "events": {
-                "type": "boolean",
-                "description": "Emit a live-update event per deleted document (default: false — bulk ops are quiet)"
-            }
-        }
-    })
-}
-
-fn find_by_id_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": { "type": "string" },
-            "depth": { "type": "integer", "description": "Relationship population depth" },
-            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
-            "draft": { "type": "boolean", "description": "When true, overlay the latest draft version (draft view)" },
-            "trash": { "type": "boolean", "description": "When true, look up among soft-deleted documents (trash view)" },
-            "select": { "type": "array", "items": { "type": "string" }, "description": "Field names to return (projection); omit for all fields" }
-        },
-        "required": ["id"]
-    })
-}
-
-fn find_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "where": {
-                "type": "object",
-                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
-            },
-            "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
-            "limit": { "type": "integer", "description": "Max results per page" },
-            "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
-            "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
-            "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
-            "depth": { "type": "integer", "description": "Relationship population depth" },
-            "search": { "type": "string", "description": "Full-text search query" },
-            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
-            "draft": { "type": "boolean", "description": "When true, include draft documents (published + draft union)" },
-            "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" },
-            "select": { "type": "array", "items": { "type": "string" }, "description": "Field names to return (projection); omit for all fields" }
-        }
-    })
-}
-
-fn count_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "where": {
-                "type": "object",
-                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
-            },
-            "search": { "type": "string", "description": "Full-text search query" },
-            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
-            "draft": { "type": "boolean", "description": "When true, include draft documents in the count (published + draft union)" },
-            "trash": { "type": "boolean", "description": "When true, count only soft-deleted documents (trash view)" }
-        }
-    })
-}
-
-fn list_versions_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": { "type": "string", "description": "Document ID to list versions for" },
-            "limit": { "type": "integer", "description": "Max versions to return" },
-            "offset": { "type": "integer", "description": "Number of versions to skip" }
-        },
-        "required": ["id"]
-    })
-}
-
-fn restore_version_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": { "type": "string", "description": "Document ID to restore" },
-            "version_id": { "type": "string", "description": "Version snapshot ID to restore from" }
-        },
-        "required": ["id", "version_id"]
-    })
-}
-
-/// Generate the input schema for a global CRUD tool.
-pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
-    let locale_prop = json!({
-        "type": "string",
-        "description": "Locale code (e.g. 'en', 'de') for localized fields"
-    });
+/// Generate the input schema for a collection CRUD tool. The option fields
+/// come from the wire model ([`crate::service::op::wire`]); only the
+/// def-dependent parts (field-data spread, auth `password` rules, the
+/// partial-update required policy) remain per-op code here.
+pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
+    let wire = op.wire();
 
     match op {
-        CrudOp::Find => {
-            json!({
-                "type": "object",
-                "properties": {
-                    "locale": locale_prop,
-                    "draft": {
-                        "type": "boolean",
-                        "description": "Read unpublished (draft) content (default: false)"
-                    }
+        CrudOp::Create => {
+            let mut schema = data_spread_schema(&def.fields, wire);
+
+            // Auth collections take a required top-level `password` (hashed by
+            // the service create chokepoint, never stored as field data).
+            if def.is_auth_collection() {
+                if let Some(props) = get_props(&mut schema) {
+                    props.insert("password".to_string(), json!({ "type": "string" }));
                 }
-            })
-        }
-        CrudOp::Update => {
-            let mut schema = fields_to_object_schema(&def.fields);
-            if let Some(props) = get_props(&mut schema) {
-                props.insert("locale".to_string(), locale_prop);
-                insert_single_events_key(props);
+                push_required(&mut schema, "password");
             }
+
             schema
         }
-        CrudOp::Validate => {
-            let mut schema = fields_to_object_schema(&def.fields);
-            if let Some(props) = get_props(&mut schema) {
-                props.insert("locale".to_string(), locale_prop);
+        CrudOp::Update => {
+            let mut schema = data_spread_schema(&def.fields, wire);
+
+            if def.is_auth_collection()
+                && let Some(props) = get_props(&mut schema)
+            {
                 props.insert(
-                    "draft".to_string(),
+                    "password".to_string(),
                     json!({
-                        "type": "boolean",
-                        "description": "Validate as a draft version (default: false)"
+                        "type": "string",
+                        "description": "Leave empty to keep current password"
                     }),
                 );
             }
+
+            // Partial update: field-level `required` constraints don't apply —
+            // only the wire model's required options (`id`) do.
+            let obj = schema.as_object_mut().expect("schema is object");
+            obj.insert("required".to_string(), json!(["id"]));
+
             schema
         }
-        _ => json!({ "type": "object", "properties": {} }),
+        CrudOp::Validate => data_spread_schema(&def.fields, wire),
+        CrudOp::CreateMany | CrudOp::UpdateMany => options_schema(wire, Some(def)),
+        CrudOp::Find
+        | CrudOp::FindById
+        | CrudOp::Count
+        | CrudOp::Delete
+        | CrudOp::DeleteMany
+        | CrudOp::Undelete
+        | CrudOp::Unpublish
+        | CrudOp::ListVersions
+        | CrudOp::RestoreVersion => options_schema(wire, None),
+    }
+}
+
+/// Generate the input schema for a global CRUD tool — same wire-model
+/// rendering, keyed by the global op names.
+pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
+    let name = match op {
+        CrudOp::Find => "get_global",
+        CrudOp::Update => "update_global",
+        CrudOp::Validate => "validate_global",
+        _ => return json!({ "type": "object", "properties": {} }),
+    };
+
+    let wire =
+        wire::global_op(name).unwrap_or_else(|| panic!("wire model missing global op `{name}`"));
+
+    match op {
+        CrudOp::Find => options_schema(wire, None),
+        _ => data_spread_schema(&def.fields, wire),
     }
 }
 
@@ -1221,6 +1019,41 @@ mod tests {
         let req = s["items"]["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("key".to_string())));
         assert!(!req.contains(&Value::String("value".to_string())));
+    }
+
+    /// Regression (single-source wire model): the MCP `update_global` schema
+    /// never advertised `draft` even though the codec accepts it — one of the
+    /// hand-written-schema drift bugs the wire model exists to end. The model
+    /// declares it once; the schema now renders it.
+    #[test]
+    fn global_update_schema_advertises_draft() {
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![text_field("site_name")];
+        let s = global_input_schema(&def, CrudOp::Update);
+        assert!(s["properties"]["draft"].is_object());
+        assert!(s["properties"]["locale"].is_object());
+        assert!(s["properties"]["events"].is_object());
+    }
+
+    /// `delete_many`'s `trash` flag (empty-the-trash) is declared Lua-only in
+    /// the wire model — the MCP schema must not render it.
+    #[test]
+    fn delete_many_schema_omits_lua_only_trash() {
+        let def = CollectionDefinition::new("posts");
+        let s = collection_input_schema(&def, CrudOp::DeleteMany);
+        assert!(s["properties"]["trash"].is_null());
+        assert!(s["properties"]["where"].is_object());
+        assert!(s["properties"]["force_hard_delete"].is_object());
+        assert!(s["properties"]["events"].is_object());
+    }
+
+    /// Every collection `CrudOp` resolves to a wire-model entry — a new op
+    /// can't be added to the enum without declaring its wire fields.
+    #[test]
+    fn every_crud_op_has_a_wire_entry() {
+        for op in CrudOp::ALL {
+            let _ = op.wire();
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
+        Builder, Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
         nest_group_fields,
     },
     db::{AccessResult, DbConnection, LocaleContext},
@@ -447,73 +447,18 @@ impl WriteHooks for RunnerWriteHooks<'_> {
 /// context (`ctx.user` / the write input), and access checks receive the user
 /// via [`AccessCheckInput`] — the fields existed once, were never read, and
 /// every codec dutifully filled them for no effect.
+#[derive(Builder)]
 pub struct LuaWriteHooks<'a> {
+    #[builder(required)]
     pub lua: &'a mlua::Lua,
     pub override_access: bool,
     pub registry: Option<&'a Registry>,
     /// Whether hooks are enabled (false when hook depth exceeded or `hooks: false` option).
+    #[builder(default = true)]
     pub hooks_enabled: bool,
     /// Whether validation should run (`hooks` option from Lua API).
+    #[builder(default = true)]
     pub run_validation: bool,
-}
-
-impl<'a> LuaWriteHooks<'a> {
-    /// Create a builder with the required Lua VM reference.
-    #[must_use]
-    pub fn builder(lua: &'a mlua::Lua) -> LuaWriteHooksBuilder<'a> {
-        LuaWriteHooksBuilder::new(lua)
-    }
-}
-
-/// Builder for [`LuaWriteHooks`]. Created via [`LuaWriteHooks::builder`].
-pub struct LuaWriteHooksBuilder<'a> {
-    pub(in crate::service) lua: &'a mlua::Lua,
-    pub(in crate::service) override_access: bool,
-    pub(in crate::service) registry: Option<&'a Registry>,
-    pub(in crate::service) hooks_enabled: bool,
-    pub(in crate::service) run_validation: bool,
-}
-
-impl<'a> LuaWriteHooksBuilder<'a> {
-    pub fn new(lua: &'a mlua::Lua) -> Self {
-        Self {
-            lua,
-            override_access: false,
-            registry: None,
-            hooks_enabled: true,
-            run_validation: true,
-        }
-    }
-
-    pub fn override_access(mut self, override_access: bool) -> Self {
-        self.override_access = override_access;
-        self
-    }
-
-    pub fn registry(mut self, registry: Option<&'a Registry>) -> Self {
-        self.registry = registry;
-        self
-    }
-
-    pub fn hooks_enabled(mut self, hooks_enabled: bool) -> Self {
-        self.hooks_enabled = hooks_enabled;
-        self
-    }
-
-    pub fn run_validation(mut self, run_validation: bool) -> Self {
-        self.run_validation = run_validation;
-        self
-    }
-
-    pub fn build(self) -> LuaWriteHooks<'a> {
-        LuaWriteHooks {
-            lua: self.lua,
-            override_access: self.override_access,
-            registry: self.registry,
-            hooks_enabled: self.hooks_enabled,
-            run_validation: self.run_validation,
-        }
-    }
 }
 
 impl WriteHooks for LuaWriteHooks<'_> {

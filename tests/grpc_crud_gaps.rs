@@ -264,6 +264,7 @@ async fn list_and_restore_versions() {
             collection: "posts".to_string(),
             id: doc.id.clone(),
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap()
@@ -1074,6 +1075,7 @@ async fn list_versions_no_versioning() {
             collection: "posts".to_string(),
             id: doc.id,
             limit: None,
+            offset: None,
         }))
         .await
         .unwrap_err();

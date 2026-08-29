@@ -121,6 +121,7 @@ async fn list_versions_returns_snapshots_for_each_update() {
             collection: "posts".to_string(),
             id: id.clone(),
             limit: None,
+            offset: None,
         })
         .await
         .expect("list_versions")
@@ -179,6 +180,7 @@ async fn restore_version_reverts_document_fields() {
             collection: "posts".to_string(),
             id: id.clone(),
             limit: None,
+            offset: None,
         })
         .await
         .expect("list_versions")

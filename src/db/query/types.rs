@@ -1,6 +1,6 @@
 //! Query types: filters, find query, access result.
 
-use crate::core::EventViewMeta;
+use crate::core::{Builder, EventViewMeta};
 use crate::db::query::cursor;
 
 /// Result of an access control check.
@@ -187,7 +187,12 @@ impl EventViewGate {
 }
 
 /// Parameters for a find query: filters, ordering, pagination, and field selection.
-#[derive(Debug, Default, Clone)]
+///
+/// Constructed via `FindQuery::builder()` (derived) — `FindQuery` also derives
+/// `Default`, so tests that need an "empty" query use `FindQuery::default()`
+/// or struct literals with `..Default::default()`. Production code must route
+/// through the builder.
+#[derive(Debug, Default, Clone, Builder)]
 pub struct FindQuery {
     pub filters: Vec<FilterClause>,
     pub order_by: Option<String>,
@@ -206,104 +211,6 @@ pub struct FindQuery {
     /// When true, include soft-deleted documents in results.
     /// Default false — soft-deleted docs are excluded from normal queries.
     pub include_deleted: bool,
-}
-
-impl FindQuery {
-    /// Create a builder for constructing a `FindQuery` with named parameters.
-    ///
-    /// This is the only public construction path — `FindQuery` derives
-    /// `Default`, so tests that need an "empty" query use `FindQuery::default()`
-    /// or struct literals with `..Default::default()`. Production code must
-    /// route through the builder.
-    #[must_use]
-    pub fn builder() -> FindQueryBuilder {
-        FindQueryBuilder::default()
-    }
-}
-
-/// Builder for [`FindQuery`]. Created via [`FindQuery::builder()`].
-#[derive(Default)]
-pub struct FindQueryBuilder {
-    filters: Vec<FilterClause>,
-    order_by: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-    select: Option<Vec<String>>,
-    after_cursor: Option<cursor::CursorData>,
-    before_cursor: Option<cursor::CursorData>,
-    search: Option<String>,
-    include_deleted: bool,
-}
-
-impl FindQueryBuilder {
-    #[must_use]
-    pub fn filters(mut self, filters: Vec<FilterClause>) -> Self {
-        self.filters = filters;
-        self
-    }
-
-    #[must_use]
-    pub fn order_by(mut self, order_by: Option<String>) -> Self {
-        self.order_by = order_by;
-        self
-    }
-
-    #[must_use]
-    pub fn limit(mut self, limit: Option<i64>) -> Self {
-        self.limit = limit;
-        self
-    }
-
-    #[must_use]
-    pub fn offset(mut self, offset: Option<i64>) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    #[must_use]
-    pub fn select(mut self, select: Option<Vec<String>>) -> Self {
-        self.select = select;
-        self
-    }
-
-    #[must_use]
-    pub fn after_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
-        self.after_cursor = cursor;
-        self
-    }
-
-    #[must_use]
-    pub fn before_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
-        self.before_cursor = cursor;
-        self
-    }
-
-    #[must_use]
-    pub fn search(mut self, search: Option<String>) -> Self {
-        self.search = search;
-        self
-    }
-
-    #[must_use]
-    pub fn include_deleted(mut self, include: bool) -> Self {
-        self.include_deleted = include;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> FindQuery {
-        FindQuery {
-            filters: self.filters,
-            order_by: self.order_by,
-            limit: self.limit,
-            offset: self.offset,
-            select: self.select,
-            after_cursor: self.after_cursor,
-            before_cursor: self.before_cursor,
-            search: self.search,
-            include_deleted: self.include_deleted,
-        }
-    }
 }
 
 #[cfg(test)]

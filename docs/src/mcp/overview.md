@@ -141,7 +141,7 @@ arguments** (excluded from the document's field data, like `id` and
 
 | Argument | Tools | Description |
 |----------|-------|-------------|
-| `locale` | `create_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
+| `locale` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
 | `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_update_*`, `global_validate_*` | Write as a draft version. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 
