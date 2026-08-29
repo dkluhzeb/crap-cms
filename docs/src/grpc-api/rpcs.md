@@ -216,6 +216,7 @@ Undelete a soft-deleted document from trash. Only works on collections with `sof
 message UndeleteRequest {
   string collection = 1;
   string id = 2;
+  optional bool events = 3;             // default: true. false = quiet restore (no live-update event)
 }
 
 message UndeleteResponse {
@@ -349,6 +350,7 @@ message UpdateGlobalRequest {
   DataMap data = 2;
   optional string locale = 3;           // locale code for localized fields
   optional bool events = 4;             // default: true. false = quiet write (no live-update event)
+  optional bool draft = 5;              // default: false. true = save as unpublished draft (drafts-enabled globals)
 }
 
 message UpdateGlobalResponse {
@@ -365,7 +367,7 @@ grpcurl -plaintext -d '{
 
 ## Login
 
-Authenticate with email and password. Returns a JWT token and user document.
+Authenticate with email and password. Returns a JWT token and user document — or, on an MFA-enabled collection, an MFA challenge (see below).
 
 ```protobuf
 message LoginRequest {
@@ -377,6 +379,8 @@ message LoginRequest {
 message LoginResponse {
   string token = 1;
   Document user = 2;
+  optional bool mfa_required = 3;       // true = password verified, complete with VerifyMfa
+  optional string mfa_challenge = 4;    // short-lived challenge token (present when mfa_required)
 }
 ```
 
@@ -387,6 +391,41 @@ grpcurl -plaintext -d '{
     "password": "secret123"
 }' localhost:50051 crap.ContentAPI/Login
 ```
+
+On a collection with `mfa = "email"` (unless an `mfa_when` hook skips it for
+this login), the password is verified, a 6-digit code is emailed to the user,
+and the response carries `mfa_required = true` plus a `mfa_challenge` token
+instead of `token`/`user`. Complete the login with `VerifyMfa`.
+
+## VerifyMfa
+
+Complete an MFA-gated login: redeem the challenge token from `Login` together
+with the emailed 6-digit code for the JWT a plain login would have issued.
+The challenge token is single-purpose (it cannot be used as a session token,
+and a session token cannot be replayed here) and expires after 5 minutes;
+codes are single-use. Code guessing is rate-limited per identity and per IP
+with the same budget as the admin MFA page.
+
+```protobuf
+message VerifyMfaRequest {
+  string collection = 1;
+  string mfa_challenge = 2;             // from LoginResponse.mfa_challenge
+  string code = 3;                      // the emailed 6-digit code
+}
+```
+
+Returns `LoginResponse` (token + user).
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "mfa_challenge": "eyJhbGciOi...",
+    "code": "123456"
+}' localhost:50051 crap.ContentAPI/VerifyMfa
+```
+
+Errors: `UNAUTHENTICATED` (challenge invalid/expired, or wrong code),
+`RESOURCE_EXHAUSTED` (rate limited).
 
 ## Me
 
@@ -478,7 +517,7 @@ Only relevant for auth collections with `verify_email: true`.
 
 ## Validate
 
-Check field data against collection rules without persisting. Runs field validation (required, unique, type checks, custom validators) but does not open a write transaction. Use this to preview validation errors before a `Create` or `Update` call.
+Check field data against collection rules without persisting. Runs the full before-write pipeline (field validation — required, unique, type checks, custom validators — plus `before_validate` hooks) inside a transaction that is **always rolled back**, so nothing a hook does during the dry-run persists. Use this to preview validation errors before a `Create` or `Update` call.
 
 ```protobuf
 message ValidateRequest {
@@ -502,7 +541,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Validate
 ```
 
-**Access:** optional. If a Bearer token is present, the collection's `create`/`update` access function is evaluated (`update` when `id` is set). Field-level write-denied fields are stripped before validation runs.
+**Access:** optional. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation runs — the dry-run mirrors exactly what the real write would strip.
 
 ## ValidateGlobal
 
@@ -524,7 +563,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ValidateGlobal
 ```
 
-**Access:** optional. If a Bearer token is present, the global's `update` access function is evaluated. Field-level write-denied fields are stripped before validation runs.
+**Access:** optional. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation runs — the dry-run mirrors exactly what the real write would strip.
 
 ## LockAccount
 

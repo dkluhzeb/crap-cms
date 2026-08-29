@@ -21,6 +21,7 @@ service ContentAPI {
   rpc GetGlobal (GetGlobalRequest) returns (GetGlobalResponse);
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
+  rpc VerifyMfa (VerifyMfaRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
   rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
   rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);

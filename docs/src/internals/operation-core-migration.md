@@ -33,9 +33,12 @@
 > port had exposed (`WriteInput.locale`, `LuaWriteHooks.user`/`ui_locale`,
 > `CountArgs.status_filter`, `GetGlobalArgs.ui_locale`) were removed.
 >
-> **Known residuals, by design:** the dry-run *validate* endpoints are not
-> ported (they are tied to the open MCP-validate access-mode decision and
-> keep their per-surface glue until it is made); the admin version-restore
+> **Known residuals, by design:** ~~the dry-run *validate* endpoints are not
+> ported~~ — RESOLVED: the MCP-validate access-mode decision was made
+> (override, like MCP's real writes) and all eight validate endpoints now run
+> `op::Validate` / `op::ValidateGlobal` (typed `Option<ValidationError>`
+> output so the admin codec keeps i18n; pool-mode dry-runs in a rolled-back
+> transaction on every surface). The remaining residual: the admin version-restore
 > actions and best-effort version-sidebar reads call the service functions
 > directly (same chokepoint, admin-specific response mapping);
 > `force_hard_delete` is expressed through the definition-clone hook

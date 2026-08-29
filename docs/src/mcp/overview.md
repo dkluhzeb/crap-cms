@@ -117,8 +117,11 @@ add `unpublish_posts`, `list_versions_posts`, and `restore_version_posts`.
 
 `validate_*` runs the full before-write pipeline (field coercion, validators,
 unique checks, `before_validate` hooks) and reports per-field errors without
-writing a row. Pass an `id` to validate in update mode (the row is excluded from
-unique checks); omit it to validate in create mode.
+writing a row — the dry-run runs inside a transaction that is always rolled
+back, and with the same trusted override as MCP's real writes, so its outcome
+predicts exactly what the actual `create_*`/`update_*` call would do. Pass an
+`id` to validate in update mode (the row is excluded from unique checks); omit
+it to validate in create mode.
 
 Input schemas are generated from your field definitions. Required fields, select
 options, and relationship types are all reflected in the JSON Schema.
