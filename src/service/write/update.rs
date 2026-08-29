@@ -14,8 +14,47 @@ use crate::core::nest_group_fields;
 use crate::service::helpers::{
     collect_api_hidden_field_names, enforce_access_constraints, validate_password_policy,
 };
+use crate::service::hooks::WriteHooks;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// The collection-level `update` access gate — ONE chokepoint shared by the
+/// real update and the update-mode dry-run ([`op::Validate`]), so the two can
+/// never drift. Callers pass canonicalized (group-nested) data — the access
+/// function sees it as `ctx.data` with the target `id`. A `Constrained`
+/// return (e.g. "only rows where `author_id` = me") is enforced against the
+/// target row.
+///
+/// [`op::Validate`]: crate::service::op::Validate
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_update_access(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    def: &crate::core::CollectionDefinition,
+    id: &str,
+    data: &crate::core::DocumentFields,
+    locale: Option<&str>,
+    ui_locale: Option<&str>,
+) -> Result<()> {
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("update", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .id(Some(id))
+            .data(Some(data))
+            .locale(locale)
+            .ui_locale(ui_locale)
+            .build(),
+    )?;
+
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Update access denied".into()));
+    }
+
+    enforce_access_constraints(ctx, id, &access, "Update", false)?;
+
+    Ok(())
+}
 
 /// Update a document on an existing connection/transaction.
 ///
@@ -36,26 +75,15 @@ pub(crate) fn update_document_in_conn(
     // whole pipeline sees one shape, the DB edge flattens to columns.
     input.data = nest_group_fields(&input.data, &def.fields);
 
-    // Collection-level access check. The incoming data is exposed to the
-    // access function as `ctx.data` so it can gate on what is being written.
-    let access = write_hooks.check_access(
-        &AccessCheckInput::builder("update", ctx.slug)
-            .access(def.access.update.as_ref())
-            .user(ctx.user)
-            .id(Some(id))
-            .data(Some(&input.data))
-            .locale(input.locale_ctx.map(LocaleContext::access_locale))
-            .ui_locale(input.ui_locale.as_deref())
-            .build(),
+    check_update_access(
+        ctx,
+        write_hooks,
+        def,
+        id,
+        &input.data,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        input.ui_locale.as_deref(),
     )?;
-
-    if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Update access denied".into()));
-    }
-
-    // When the hook returned Constrained filters (e.g. "only rows where
-    // author_id = me"), enforce the row-level match before writing.
-    enforce_access_constraints(ctx, id, &access, "Update", false)?;
 
     // Authoritative password-policy enforcement (all surfaces): a weak password
     // on an auth-collection update is rejected here as a `password` field error.

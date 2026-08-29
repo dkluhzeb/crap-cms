@@ -5,19 +5,23 @@
 //! returns the typed outcome (`None` = valid, `Some(ValidationError)` = the
 //! per-field failures).
 //!
-//! Access semantics match the surface's REAL write: the acting user (or MCP's
-//! override) drives field-level write-access stripping, so a dry-run predicts
-//! exactly what the corresponding create/update would do. (MCP validate
+//! Access semantics match the surface's REAL write: the target operation's
+//! collection-level access rule (`access.create` / `access.update`) gates the
+//! dry-run exactly like the write it previews — an anonymous caller denied
+//! the write is denied the dry-run too, closing the unique-collision
+//! enumeration channel an ungated validate offered — and the acting user (or
+//! MCP's override) drives field-level write-access stripping. (MCP validate
 //! previously ran as anonymous WITHOUT override, so its dry-run could report
 //! field strips the actual override write would never apply.)
 
 use anyhow::Context as _;
 
 use crate::{
-    core::{DocumentFields, ValidationError},
+    core::{DocumentFields, ValidationError, nest_group_fields},
     db::{LocaleContext, query::helpers::global_table},
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext, WriteInput,
+        Def, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext, WriteInput,
+        check_create_access, check_global_update_access, check_update_access, hooks::WriteHooks,
         validate_document,
     },
 };
@@ -108,13 +112,28 @@ fn run_validate(
     vctx: &ValidateContext<'_>,
     args: ValidateArgs,
 ) -> Result<ValidateOutput, ServiceError> {
-    let input = WriteInput::builder(args.data)
-        .locale_ctx(args.locale_ctx.as_ref())
-        .draft(args.draft)
-        .ui_locale(ctx.ui_locale.clone())
-        .build();
+    let ValidateArgs {
+        data,
+        locale_ctx,
+        draft,
+        exclude_id: _,
+    } = args;
+
+    // Canonicalize to nested groups BEFORE the access check — the real write
+    // bodies nest first too, so an access hook reading `ctx.data.seo.title`
+    // sees the same shape on the dry-run as on the write.
+    // (`validate_document` nests again internally; the operation is
+    // idempotent.)
+    let data = nest_group_fields(&data, vctx.fields);
 
     if let Some(wh) = ctx.write_hooks {
+        check_validate_access(ctx, wh, vctx, &data, locale_ctx.as_ref())?;
+
+        let input = WriteInput::builder(data)
+            .locale_ctx(locale_ctx.as_ref())
+            .draft(draft)
+            .ui_locale(ctx.ui_locale.clone())
+            .build();
         let conn = ctx.resolve_conn()?;
 
         return as_outcome(validate_document(conn.as_ref(), wh, vctx, input, ctx.user));
@@ -129,12 +148,47 @@ fn run_validate(
         wh = wh.with_override_access();
     }
 
+    check_validate_access(ctx, &wh, vctx, &data, locale_ctx.as_ref())?;
+
+    let input = WriteInput::builder(data)
+        .locale_ctx(locale_ctx.as_ref())
+        .draft(draft)
+        .ui_locale(ctx.ui_locale.clone())
+        .build();
     let out = as_outcome(validate_document(&tx, &wh, vctx, input, ctx.user));
 
     // Always roll back — this is validation only.
     drop(tx);
 
     out
+}
+
+/// Enforce the target operation's collection-level access rule on the
+/// dry-run — by calling the SAME gate functions the real writes call
+/// (`check_create_access` / `check_update_access` /
+/// `check_global_update_access`), so validate and write cannot drift on who
+/// may do what. `Denied` rejects before any validator (or unique-collision
+/// probe) runs.
+fn check_validate_access(
+    ctx: &ServiceContext<'_>,
+    wh: &dyn WriteHooks,
+    vctx: &ValidateContext<'_>,
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(), ServiceError> {
+    let locale = locale_ctx.map(LocaleContext::access_locale);
+    let ui_locale = ctx.ui_locale.as_deref();
+
+    if let Def::Global(def) = &ctx.def {
+        return check_global_update_access(ctx, wh, def, Some(data), locale, ui_locale);
+    }
+
+    let def = ctx.collection_def()?;
+
+    match vctx.exclude_id {
+        Some(id) => check_update_access(ctx, wh, def, id, data, locale, ui_locale),
+        None => check_create_access(ctx, wh, def, data, locale, ui_locale),
+    }
 }
 
 /// Split the dry-run result: a validation failure is a NORMAL outcome (the
@@ -217,5 +271,132 @@ impl Operation for ValidateGlobal {
         };
 
         run_validate(ctx, &vctx, args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result as AnyResult;
+    use rusqlite::Connection;
+
+    use super::*;
+    use crate::{
+        core::{CollectionDefinition, FieldDefinition, FieldType, Hooks},
+        db::{AccessResult, DbConnection},
+        hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
+        service::ServiceContext,
+    };
+
+    /// Write hooks whose access check returns a fixed result.
+    struct FixedAccessHooks(AccessResult);
+
+    impl WriteHooks for FixedAccessHooks {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            Ok(self.0.clone())
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), crate::core::ValidationError> {
+            Ok(())
+        }
+    }
+
+    fn posts_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.access.create = Some("acc.gate".into());
+        def.access.update = Some("acc.gate".into());
+        def
+    }
+
+    fn run_with(
+        access: AccessResult,
+        exclude_id: Option<&str>,
+    ) -> Result<ValidateOutput, ServiceError> {
+        let conn = Connection::open_in_memory().unwrap();
+        let def = posts_def();
+        let wh = FixedAccessHooks(access);
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), serde_json::json!("x"));
+
+        let args = ValidateArgs::builder(data)
+            .exclude_id(exclude_id.map(ToString::to_string))
+            .build();
+
+        Validate::run(&ctx, args)
+    }
+
+    /// Regression: the dry-run is gated by the target op's collection access
+    /// rule — a denied caller must not reach the validators (whose unique
+    /// checks are an enumeration probe).
+    #[test]
+    fn validate_denied_by_access_rule() {
+        let err = run_with(AccessResult::Denied, None).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::AccessDenied(msg) if msg.contains("Create")),
+            "create-mode denial, got {err:?}"
+        );
+
+        let err = run_with(AccessResult::Denied, Some("abc")).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::AccessDenied(msg) if msg.contains("Update")),
+            "update-mode denial, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_allowed_runs_pipeline() {
+        let out = run_with(AccessResult::Allowed, None).expect("allowed validate runs");
+        assert!(out.is_none(), "trivial data validates clean");
+    }
+
+    /// Constrained mirrors the write: rejected in create mode (no target row).
+    #[test]
+    fn validate_create_mode_rejects_constrained() {
+        let err = run_with(AccessResult::Constrained(Vec::new()), None).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::HookError(msg) if msg.contains("filter table")),
+            "got {err:?}"
+        );
     }
 }

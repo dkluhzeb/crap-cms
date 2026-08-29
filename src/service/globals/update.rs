@@ -178,7 +178,7 @@ pub fn update_global_in_conn(
 /// Enforce the global-update access check. Globals don't support
 /// filter-based access — the `Constrained` variant is rejected so
 /// access hooks have to be boolean (true/false on `ctx.user`).
-fn check_global_update_access(
+pub(crate) fn check_global_update_access(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
     def: &GlobalDefinition,

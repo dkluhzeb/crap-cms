@@ -89,6 +89,11 @@ pub fn handle_validation_outcome(
 
             validation_error_response(&ve, &state.translations, locale)
         }
+        // The shared body gates the dry-run by the target op's access rule —
+        // the same check this endpoint used to duplicate at the codec.
+        Err(op::CoreError::Service(crate::service::ServiceError::AccessDenied(_))) => {
+            validation_error_response_simple("Access denied")
+        }
         Err(e) => {
             error!("Validation error: {:#?}", e);
             validation_error_response_simple("Validation failed")

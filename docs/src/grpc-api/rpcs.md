@@ -541,7 +541,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Validate
 ```
 
-**Access:** optional. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation runs — the dry-run mirrors exactly what the real write would strip.
+**Access:** the target operation's collection access rule is enforced exactly like the write it previews — `access.create` in create mode, `access.update` when `id` is set. A denied caller gets `PERMISSION_DENIED` before any validator (or unique check) runs. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation — the dry-run mirrors exactly what the real write would do.
 
 ## ValidateGlobal
 
@@ -563,7 +563,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ValidateGlobal
 ```
 
-**Access:** optional. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation runs — the dry-run mirrors exactly what the real write would strip.
+**Access:** the global's `access.update` rule is enforced exactly like a real global update — a denied caller gets `PERMISSION_DENIED` before any validator runs. Field-level write access is evaluated as the authenticated user, and write-denied fields are stripped before validation.
 
 ## LockAccount
 

@@ -16,7 +16,7 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
+            shared::{get_user_doc, parse_request_locale},
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
                 values_to_string_map,
@@ -24,7 +24,6 @@ use crate::{
         },
     },
     core::{DocumentFields, auth::AuthUser},
-    db::AccessResult,
     service::op::{self, Principal, TargetRef, ValidateArgs, ValidateGlobal},
 };
 
@@ -41,19 +40,8 @@ pub async fn validate_global(
         None => return validation_error_response_simple("Global not found"),
     };
 
-    match check_access_or_forbid(
-        &state,
-        def.access.update.as_ref(),
-        auth_user.as_ref(),
-        None,
-        None,
-        "update",
-        &slug,
-    ) {
-        Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
-        Err(_) => return validation_error_response_simple("Access check failed"),
-        _ => {}
-    }
+    // Collection-level access is enforced in the shared operation body —
+    // same rule, same user as the real write.
 
     let form_data = values_to_string_map(&payload.data);
 

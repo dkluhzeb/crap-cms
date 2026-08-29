@@ -10,14 +10,13 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
+            shared::{get_user_doc, parse_request_locale},
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
             },
         },
     },
     core::auth::AuthUser,
-    db::AccessResult,
     service::op::{self, Principal, TargetRef, Validate, ValidateArgs},
 };
 
@@ -35,19 +34,8 @@ pub async fn validate_update(
         return validation_error_response_simple("Collection not found");
     };
 
-    match check_access_or_forbid(
-        &state,
-        def.access.update.as_ref(),
-        auth_user.as_ref(),
-        None,
-        None,
-        "update",
-        &slug,
-    ) {
-        Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
-        Err(_) => return validation_error_response_simple("Access check failed"),
-        _ => {}
-    }
+    // Collection-level access is enforced in the shared operation body —
+    // same rule, same user as the real write.
 
     let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update");
 

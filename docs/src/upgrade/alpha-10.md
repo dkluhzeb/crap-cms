@@ -1023,6 +1023,18 @@ now run inside a rolled-back transaction** like the admin endpoint always
 did — side effects of `before_validate` hooks during a dry-run are
 discarded instead of persisting.
 
+Additionally, **validate now follows the target operation's access rules**:
+the dry-run evaluates `access.create` (create mode) / `access.update`
+(update mode and globals) exactly like the write it previews — an anonymous
+or unauthorized caller gets `PERMISSION_DENIED` instead of validation
+results (previously an ungated dry-run let anyone probe `unique` collisions,
+e.g. registered emails). This applies to gRPC, admin (unchanged — it already
+gated at the endpoint), and Lua (`crap.collections.validate` now runs the
+access check for the hook user; pass `override_access = true` for trusted
+internal dry-runs, same as the other Lua CRUD calls). MCP is unaffected
+(trusted override). Collections without an access rule on the target op are
+unchanged.
+
 ### MCP + Lua option parity
 
 - MCP `find_*` / `find_by_id_*` accept `select` (field-name projection);

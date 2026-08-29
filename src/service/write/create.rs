@@ -12,8 +12,52 @@ use crate::{
 use super::ServiceError;
 use crate::core::nest_group_fields;
 use crate::service::helpers::{collect_api_hidden_field_names, validate_password_policy};
+use crate::service::hooks::WriteHooks;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// The collection-level `create` access gate — ONE chokepoint shared by the
+/// real create and the create-mode dry-run ([`op::Validate`]), so the two can
+/// never drift. Callers pass canonicalized (group-nested) data — the access
+/// function sees it as `ctx.data`.
+///
+/// `Constrained` returns make no sense for create: there is no target row to
+/// match against, and evaluating the filter against the incoming data would
+/// conflate access control with validation — operators should return
+/// true/false based on `ctx.data` instead.
+///
+/// [`op::Validate`]: crate::service::op::Validate
+pub(crate) fn check_create_access(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    def: &crate::core::CollectionDefinition,
+    data: &crate::core::DocumentFields,
+    locale: Option<&str>,
+    ui_locale: Option<&str>,
+) -> Result<()> {
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("create", ctx.slug)
+            .access(def.access.create.as_ref())
+            .user(ctx.user)
+            .data(Some(data))
+            .locale(locale)
+            .ui_locale(ui_locale)
+            .build(),
+    )?;
+
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Create access denied".into()));
+    }
+
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for '{}.create' returned a filter table; filter-table returns are only valid for update/delete/undelete/unpublish (where a target row exists). Return true/false based on the incoming 'data' in ctx.",
+            ctx.slug
+        )));
+    }
+
+    Ok(())
+}
 
 /// Create a document on an existing connection/transaction.
 ///
@@ -52,31 +96,14 @@ pub fn create_document_in_conn(
         ));
     }
 
-    // Collection-level access check. The incoming data is exposed to the
-    // access function as `ctx.data` so it can gate on what is being written.
-    let access = write_hooks.check_access(
-        &AccessCheckInput::builder("create", ctx.slug)
-            .access(def.access.create.as_ref())
-            .user(ctx.user)
-            .data(Some(&input.data))
-            .locale(input.locale_ctx.map(LocaleContext::access_locale))
-            .ui_locale(input.ui_locale.as_deref())
-            .build(),
+    check_create_access(
+        ctx,
+        write_hooks,
+        def,
+        &input.data,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        input.ui_locale.as_deref(),
     )?;
-    if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Create access denied".into()));
-    }
-
-    // `Constrained` returns make no sense for create: there is no target row
-    // to match against, and evaluating the filter against the incoming data
-    // would conflate access control with validation. Operators should return
-    // true/false based on `ctx.data` instead.
-    if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for '{}.create' returned a filter table; filter-table returns are only valid for update/delete/undelete/unpublish (where a target row exists). Return true/false based on the incoming 'data' in ctx.",
-            ctx.slug
-        )));
-    }
 
     // Authoritative password-policy enforcement — one chokepoint for every
     // surface and every create path (single AND `create_many`); falls back to

@@ -1437,3 +1437,83 @@ async fn login_mfa_when_gate_controls_challenge_per_user() {
     assert_eq!(resp.mfa_required, Some(true), "flagged user must get MFA");
     assert!(resp.token.is_empty());
 }
+
+/// Regression (enumeration gap): `Validate` follows the target operation's
+/// collection access rule, exactly like the write it previews. An anonymous
+/// dry-run against a gated op is `PERMISSION_DENIED` before any validator (or
+/// unique-collision probe) runs; the authenticated caller validates fine —
+/// and an op with no access rule stays open (the pre-existing default).
+#[tokio::test]
+async fn validate_follows_collection_access_rules() {
+    let init_lua = r#"
+        local M = {}
+        function M.need_user(ctx)
+            return ctx.user ~= nil
+        end
+        package.loaded["acc"] = M
+    "#;
+
+    // `update` is gated (authenticated only); `create` has no rule, so the
+    // first user can be created anonymously (and create-mode validate stays
+    // open — the control for default behavior).
+    let mut def = make_users_def();
+    def.access.update = Some(crap_cms::core::HookRef::new("acc.need_user"));
+
+    let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
+    let user_id = create_login_user(&ts, "val@example.com").await;
+
+    // Create-mode validate, anonymous: no create rule → allowed (control).
+    let resp = ts
+        .service
+        .validate(Request::new(content::ValidateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[("email", "new@example.com")])),
+            draft: None,
+            locale: None,
+            id: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(resp.valid);
+
+    // Update-mode validate, anonymous: gated → PERMISSION_DENIED.
+    let err = ts
+        .service
+        .validate(Request::new(content::ValidateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[("name", "New Name")])),
+            draft: None,
+            locale: None,
+            id: Some(user_id.clone()),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+    // Same dry-run with the authenticated user: allowed.
+    let token = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "val@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token;
+
+    let mut req = Request::new(content::ValidateRequest {
+        collection: "users".to_string(),
+        data: Some(make_struct(&[("name", "New Name")])),
+        draft: None,
+        locale: None,
+        id: Some(user_id),
+    });
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+
+    let resp = ts.service.validate(req).await.unwrap().into_inner();
+    assert!(resp.valid, "authenticated update-mode validate passes");
+}

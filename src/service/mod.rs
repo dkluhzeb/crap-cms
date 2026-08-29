@@ -90,6 +90,7 @@ pub use collections::{
 };
 pub(crate) use email::{VerificationEmailInput, send_verification_email};
 pub(crate) use events::{EventAccessInput, EventAccessMap, EventGate, event_op_str};
+pub(crate) use globals::check_global_update_access;
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
@@ -108,7 +109,8 @@ pub use versions::{
 };
 pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 pub(crate) use write::{
-    delete_document_in_conn, update_document_in_conn, update_many_single_in_conn,
+    check_create_access, check_update_access, delete_document_in_conn, update_document_in_conn,
+    update_many_single_in_conn,
 };
 
 #[cfg(all(test, feature = "sqlite"))]

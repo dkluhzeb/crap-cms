@@ -579,6 +579,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Validate dry-runs follow the target operation's access rules.** The
+  `Validate`/`ValidateGlobal` endpoints ran validators — including `unique`
+  checks — without any collection-level access gate, so an anonymous caller
+  could probe value collisions (e.g. whether an email is already registered)
+  through a dry-run the corresponding write would have denied. The shared
+  validate body now evaluates `access.create` (create mode) /
+  `access.update` (update mode and globals) with the same hooks the real
+  write uses: `Denied` is rejected before any validator runs, `Constrained`
+  mirrors the write (rejected for create/globals, enforced against the
+  target row for updates), and `default_deny` / MCP's trusted override
+  behave identically. Ops with no access rule stay open, matching their
+  writes.
+
 - **Lua CRUD reads inside hook transactions no longer share the process-wide
   populate singleflight.** The shared populate *cache* was already excluded
   from these in-transaction reads, but the singleflight has the same sharing

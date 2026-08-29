@@ -4,8 +4,8 @@
 
 use crate::{
     config::LocaleConfig,
-    db::{AccessResult, LocaleContext, query},
-    hooks::{AccessCheckInput, HookContext, ValidationCtx},
+    db::{LocaleContext, query},
+    hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, ServiceContext, WriteInput, WriteResult, persist_bulk_update,
         persist_draft_version, run_after_change_hooks,
@@ -14,7 +14,8 @@ use crate::{
 
 use super::ServiceError;
 use crate::core::nest_group_fields;
-use crate::service::helpers::{collect_api_hidden_field_names, enforce_access_constraints};
+use crate::service::helpers::collect_api_hidden_field_names;
+use crate::service::write::check_update_access;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -37,23 +38,17 @@ pub(crate) fn update_many_single_in_conn(
     // Canonicalize incoming data to nested groups up front (idempotent).
     input.data = nest_group_fields(&input.data, &def.fields);
 
-    let access = write_hooks.check_access(
-        &AccessCheckInput::builder("update", ctx.slug)
-            .access(def.access.update.as_ref())
-            .user(ctx.user)
-            .id(Some(id))
-            .data(Some(&input.data))
-            .locale(input.locale_ctx.map(LocaleContext::access_locale))
-            .ui_locale(input.ui_locale.as_deref())
-            .build(),
+    // The one shared `update` gate (also used by single update and the
+    // update-mode dry-run) — Denied + Constrained row enforcement.
+    check_update_access(
+        ctx,
+        write_hooks,
+        def,
+        id,
+        &input.data,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        input.ui_locale.as_deref(),
     )?;
-
-    if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Update access denied".into()));
-    }
-
-    // When the hook returned Constrained filters, enforce row-level match.
-    enforce_access_constraints(ctx, id, &access, "Update", false)?;
 
     let is_draft = input.draft && def.has_drafts();
 
@@ -149,7 +144,7 @@ mod tests {
             ValidationError, collection::VersionsConfig,
         },
         db::{AccessResult, DbConnection},
-        hooks::{HookContext, HookEvent, ValidationCtx},
+        hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
         service::hooks::WriteHooks,
     };
 

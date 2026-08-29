@@ -262,6 +262,11 @@ opts?)`, `delete_many(query, opts?)`, `list_versions(id, opts?)`,
 `restore_version(id, version_id, opts?)`, and `ref_count(id)` —
 same shape as the slug-keyed equivalents, slug bound.
 
+`validate` runs the target operation's access check (`access.create`, or
+`access.update` when an `id` is passed) for the current hook user before
+validating — same gate as the real write; pass `override_access = true` for
+trusted internal dry-runs.
+
 `unpublish` accepts `override_access`, `hooks`, and `events` options
 (`events = false` for a quiet unpublish, matching
 `update{ unpublish = true, events = false }`).
