@@ -109,7 +109,22 @@ fn setup_service(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
+    setup_service_with_init_lua(collections, globals, None)
+}
+
+/// Like [`setup_service`], but writes `init.lua` into the config dir first so
+/// the hook runner loads fixture hooks (e.g. an `mfa_when` gate).
+fn setup_service_with_init_lua(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    init_lua: Option<&str>,
+) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
+
+    if let Some(src) = init_lua {
+        std::fs::write(tmp.path().join("init.lua"), src).expect("write init.lua");
+    }
+
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
@@ -1231,4 +1246,194 @@ async fn login_locked_account() {
         "Should return generic 'Invalid email or password', got: {}",
         err.message()
     );
+}
+
+// ── gRPC MFA challenge flow ─────────────────────────────────────────────
+
+fn make_mfa_users_def() -> CollectionDefinition {
+    let mut def = make_users_def();
+    def.fields
+        .push(FieldDefinition::builder("mfa_enabled", FieldType::Checkbox).build());
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.mfa(MfaMode::Email)));
+    def
+}
+
+async fn create_login_user(ts: &TestSetup, email: &str) -> String {
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", email),
+                ("name", "Mfa User"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .expect("created document")
+        .id
+}
+
+/// The full gRPC MFA round trip: `Login` on an MFA collection returns the
+/// challenge (no session token), a wrong code is rejected, and the correct
+/// (stored) code completes the login with a working JWT. Regression for the
+/// pre-challenge behavior (`FAILED_PRECONDITION`, no MFA support on gRPC).
+#[tokio::test]
+async fn login_mfa_challenge_and_verify_round_trip() {
+    let ts = setup_service(vec![make_mfa_users_def()], vec![]);
+    let user_id = create_login_user(&ts, "mfa@example.com").await;
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "mfa@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.mfa_required, Some(true));
+    assert!(
+        resp.token.is_empty(),
+        "no session token before the 2nd factor"
+    );
+    assert!(
+        resp.user.is_none(),
+        "no user document before the 2nd factor"
+    );
+    let challenge = resp.mfa_challenge.expect("challenge token");
+
+    // Wrong code → unauthenticated.
+    let err = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: challenge.clone(),
+            code: "000000".to_string(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // Store a known code (the emailed one isn't observable in tests) and
+    // complete the login.
+    {
+        let conn = ts.pool.get().unwrap();
+        let ctx = crap_cms::service::ServiceContext::slug_only("users")
+            .conn(&conn)
+            .build();
+        crap_cms::service::auth::set_mfa_code(
+            &ctx,
+            &user_id,
+            "123456",
+            chrono::Utc::now().timestamp() + 300,
+        )
+        .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: challenge,
+            code: "123456".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.token.is_empty(), "VerifyMfa mints the session token");
+    let user = resp.user.expect("user document");
+    assert_eq!(
+        get_proto_field(&user, "email").as_deref(),
+        Some("mfa@example.com")
+    );
+
+    // The minted token works like a normal login token.
+    let mut me_req = Request::new(content::MeRequest {
+        token: String::new(),
+    });
+    me_req.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {}", resp.token).parse().unwrap(),
+    );
+    let me = ts.service.me(me_req).await.unwrap().into_inner();
+    assert!(me.user.is_some());
+}
+
+/// The `mfa_when` Lua gate: with `mfa = "email"` configured, a hook returning
+/// false for this login skips the second factor entirely (per-user-field
+/// control), while a truthy return keeps the challenge. Also pins the hook
+/// contract: `ctx.surface` is "grpc" here and `ctx.user` carries field data.
+#[tokio::test]
+async fn login_mfa_when_gate_controls_challenge_per_user() {
+    let init_lua = r#"
+        local M = {}
+        function M.gate(ctx)
+            assert(ctx.surface == "grpc", "surface must be grpc")
+            assert(ctx.collection == "users", "collection must be users")
+            return ctx.user.mfa_enabled == true or ctx.user.mfa_enabled == 1
+        end
+        package.loaded["mfa_hooks"] = M
+    "#;
+
+    let mut def = make_mfa_users_def();
+    def.auth = Some(Auth::enabled().map_password_login(|b| {
+        b.mfa(MfaMode::Email)
+            .mfa_when(Some(crap_cms::core::HookRef::new("mfa_hooks.gate")))
+    }));
+
+    let ts = setup_service_with_init_lua(vec![def], vec![], Some(init_lua));
+
+    // User WITHOUT the flag: gate returns false → direct login, no MFA.
+    create_login_user(&ts, "plain@example.com").await;
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "plain@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(resp.mfa_required.is_none(), "gate must skip MFA");
+    assert!(!resp.token.is_empty());
+
+    // User WITH the flag: gate returns true → challenge.
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "flagged@example.com"),
+                ("name", "Flagged"),
+                ("password", "secret123"),
+                ("mfa_enabled", "true"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "flagged@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.mfa_required, Some(true), "flagged user must get MFA");
+    assert!(resp.token.is_empty());
 }

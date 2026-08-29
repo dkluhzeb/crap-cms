@@ -12,13 +12,8 @@ use tracing::error;
 
 use crate::{
     admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
-    core::{
-        AuthUser, Document, DocumentFields, FieldDefinition, Hooks, RequiredLocales,
-        ValidationError,
-    },
-    db::{DbPool, query::LocaleContext},
-    hooks::HookRunner,
-    service,
+    core::{AuthUser, DocumentFields, ValidationError},
+    service::op,
 };
 
 /// JSON request body for validation endpoints.
@@ -79,86 +74,24 @@ pub fn validation_error_response_simple(msg: &str) -> Response {
     .into_response()
 }
 
-/// Parameters for a validation run.
-pub struct RunValidationParams<'a> {
-    pub pool: &'a DbPool,
-    pub runner: &'a HookRunner,
-    pub hooks: &'a Hooks,
-    pub fields: &'a [FieldDefinition],
-    pub slug: &'a str,
-    pub table_name: &'a str,
-    pub operation: &'a str,
-    pub exclude_id: Option<&'a str>,
-    pub data: &'a DocumentFields,
-    pub is_draft: bool,
-    pub soft_delete: bool,
-    /// Whether the collection/global supports drafts (`has_drafts()`), so the
-    /// dry-run clamps `draft && supports_drafts` at the service chokepoint.
-    pub supports_drafts: bool,
-    pub locale_ctx: Option<&'a LocaleContext>,
-    pub user_doc: Option<&'a Document>,
-    /// Collection-level `required_locales` default (`None` for globals).
-    pub required_locales: Option<&'a RequiredLocales>,
-}
-
-/// Run the `before_validate` → validate pipeline inside a rolled-back transaction.
-///
-/// Used by both collection and global validation endpoints. The `table_name`
-/// parameter allows globals to pass `_global_{slug}` while collections pass
-/// the collection slug directly.
-pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
-    let mut conn = p.pool.get()?;
-    let tx = conn.transaction()?;
-
-    let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
-
-    let input = service::WriteInput::builder(p.data.clone())
-        .locale_ctx(p.locale_ctx)
-        .draft(p.is_draft)
-        .build();
-
-    let validate_ctx = service::ValidateContext {
-        slug: p.slug,
-        table_name: p.table_name,
-        fields: p.fields,
-        hooks: p.hooks,
-        operation: p.operation,
-        exclude_id: p.exclude_id,
-        soft_delete: p.soft_delete,
-        supports_drafts: p.supports_drafts,
-        required_locales: p.required_locales,
-    };
-
-    service::validate_document(&tx, &wh, &validate_ctx, input, p.user_doc)
-        .map_err(crate::service::ServiceError::into_anyhow)?;
-
-    // Always rollback — this is validation only
-    drop(tx);
-
-    Ok(())
-}
-
-/// Handle the result of a validation run, returning the appropriate JSON response.
-pub fn handle_validation_result(
-    result: Result<anyhow::Result<()>, tokio::task::JoinError>,
+/// Handle a shared-op dry-run outcome, returning the appropriate JSON
+/// response. Validation failures are translated via i18n (the op keeps the
+/// typed [`ValidationError`] for exactly this).
+pub fn handle_validation_outcome(
+    result: Result<op::ValidateOutput, op::CoreError>,
     auth_user: Option<&Extension<AuthUser>>,
     state: &AdminState,
 ) -> Response {
     match result {
-        Ok(Ok(())) => validation_ok_response(),
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
+        Ok(None) => validation_ok_response(),
+        Ok(Some(ve)) => {
+            let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
 
-                validation_error_response(ve, &state.translations, locale)
-            } else {
-                error!("Validation error: {:#}", e);
-                validation_error_response_simple("Validation failed")
-            }
+            validation_error_response(&ve, &state.translations, locale)
         }
         Err(e) => {
-            error!("Validate task error: {}", e);
-            validation_error_response_simple("Internal error")
+            error!("Validation error: {:#?}", e);
+            validation_error_response_simple("Validation failed")
         }
     }
 }

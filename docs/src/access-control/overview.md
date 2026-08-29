@@ -98,7 +98,7 @@ end
 | `id` | string or nil | update, delete, find_by_id | Document ID |
 | `data` | table or nil | create, update | The **incoming** data being written — *not* the existing stored row. To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** (e.g. `return { author_id = ctx.user.id }`); the system enforces that the target row matches it. |
 | `locale` | string or nil | When localization enabled | The content locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
-| `ui_locale` | string or nil | Admin requests | The operator's admin UI language. Set for admin-originating checks (create/update, global read/update); `nil` for gRPC/REST/internal checks. Distinct from `locale` (the content locale). |
+| `ui_locale` | string or nil | Authenticated requests | The acting user's admin-UI language preference. Set on every surface for authenticated actors — admin requests use the session's UI locale, API surfaces resolve the user's stored preference — for writes and reads alike; `nil` for anonymous/internal checks. Distinct from `locale` (the content locale). |
 
 ## Per-Locale Access
 

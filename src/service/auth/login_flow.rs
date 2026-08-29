@@ -19,10 +19,13 @@ use crate::{
     core::{
         CollectionDefinition, Document,
         auth::PasswordProvider,
-        collection::{Auth, MfaMode},
+        collection::{Auth, MfaMode, Surface},
     },
     db::BoxedConnection,
-    hooks::{HookRunner, lifecycle::AuthStrategyInput},
+    hooks::{
+        HookRunner,
+        lifecycle::{AuthStrategyInput, MfaWhenInput},
+    },
     service::{AppInfra, ServiceContext, ServiceError, auth::authenticate_local},
 };
 
@@ -53,10 +56,14 @@ pub struct LoginFlowRequest<'a> {
     pub def: &'a CollectionDefinition,
     pub email: &'a str,
     pub password: &'a str,
-    /// Transport headers, exposed to custom auth strategies.
+    /// Transport headers, exposed to custom auth strategies and the
+    /// `mfa_when` gate.
     pub headers: &'a HashMap<String, String>,
     /// Client address, exposed to custom auth strategies.
     pub remote_addr: Option<&'a str>,
+    /// The login surface, exposed to the `mfa_when` gate so MFA can apply
+    /// per surface.
+    pub surface: Surface,
     pub password_provider: &'a dyn PasswordProvider,
 }
 
@@ -108,7 +115,9 @@ pub fn verify_login(
         ) {
             Ok(result) => {
                 return Ok(mfa_gate(
-                    req.def,
+                    infra,
+                    &conn,
+                    req,
                     LoginVerified {
                         user: result.user,
                         session_version: result.session_version,
@@ -145,7 +154,9 @@ pub fn verify_login(
         let session_version = crate::service::auth::get_session_version(&ctx, &user.id)?;
 
         return Ok(mfa_gate(
-            req.def,
+            infra,
+            &conn,
+            req,
             LoginVerified {
                 user,
                 session_version,
@@ -164,14 +175,50 @@ pub fn verify_login(
 }
 
 /// Route a verified login through the collection's MFA requirement.
-fn mfa_gate(def: &CollectionDefinition, verified: LoginVerified) -> LoginOutcome {
-    let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Email);
+///
+/// When an `mfa_when` gate hook is configured it decides whether THIS login
+/// needs the second factor (per surface / per user field); a hook error
+/// fails CLOSED — an auth gate that breaks must require more proof, not
+/// less.
+fn mfa_gate(
+    infra: &AppInfra,
+    conn: &BoxedConnection,
+    req: &LoginFlowRequest<'_>,
+    verified: LoginVerified,
+) -> LoginOutcome {
+    let mfa_enabled = req
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.mfa() == MfaMode::Email);
 
-    if mfa_enabled {
-        LoginOutcome::MfaRequired(verified)
-    } else {
-        LoginOutcome::Verified(verified)
+    if !mfa_enabled {
+        return LoginOutcome::Verified(verified);
     }
+
+    if let Some(hook) = req.def.auth.as_ref().and_then(Auth::mfa_when) {
+        let input = MfaWhenInput {
+            collection: req.slug,
+            user: &verified.user,
+            surface: req.surface.as_str(),
+            headers: req.headers,
+        };
+
+        match infra.hook_runner.run_mfa_when(hook, &input, conn) {
+            Ok(false) => return LoginOutcome::Verified(verified),
+            Ok(true) => {}
+            Err(e) => {
+                error!(
+                    collection = req.slug,
+                    hook = hook.reference(),
+                    error = ?e,
+                    "mfa_when hook failed; failing closed (requiring MFA)"
+                );
+            }
+        }
+    }
+
+    LoginOutcome::MfaRequired(verified)
 }
 
 /// Try each configured auth strategy in order, returning the first match.

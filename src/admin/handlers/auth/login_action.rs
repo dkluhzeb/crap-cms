@@ -6,11 +6,10 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
-use rand::Rng;
 use tokio::task;
 use tracing::{error, warn};
 
-use crate::core::collection::Auth;
+use crate::core::collection::{Auth, Surface};
 use crate::{
     admin::{
         AdminState, auth_middleware,
@@ -22,16 +21,9 @@ use crate::{
             shared::paths,
         },
     },
-    config::EmailConfig,
-    core::{
-        CollectionDefinition, Document, DocumentId, SharedPasswordProvider, Slug,
-        auth::{ClaimsBuilder, TokenUse},
-        email::{self, EmailRenderer, MfaCodeEmailContext},
-        normalize_email,
-    },
-    db::DbPool,
+    core::{CollectionDefinition, Document, SharedPasswordProvider, normalize_email},
     service::{
-        AppInfra, ServiceContext, ServiceError,
+        AppInfra, ServiceError,
         auth::{self, LoginFlowRequest, LoginOutcome, verify_login},
     },
 };
@@ -65,78 +57,12 @@ async fn verify_credentials(
                 password: &params.password,
                 headers: &params.headers,
                 remote_addr: Some(&params.remote_addr),
+                surface: Surface::Admin,
                 password_provider: &*params.password_provider,
             },
         )
     })
     .await
-}
-
-/// MFA pending token expiry in seconds (5 minutes).
-const MFA_PENDING_EXPIRY: u64 = 300;
-
-/// Everything needed to store the MFA code and send it by email.
-struct MfaCodeParams {
-    pool: DbPool,
-    slug: String,
-    user_id: DocumentId,
-    user_email: String,
-    email_config: EmailConfig,
-    email_renderer: Arc<EmailRenderer>,
-    email_max_attempts: u32,
-}
-
-/// Store a 6-digit MFA code in the DB and queue the verification email.
-///
-/// Runs inside `spawn_blocking`. Errors are logged but not propagated —
-/// the caller has already redirected to the MFA page.
-fn send_mfa_code(params: &MfaCodeParams, code: &str) {
-    let conn = match params.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("DB connection for MFA code: {}", e);
-            return;
-        }
-    };
-
-    // Saturate to 0 (immediate expiry) on the impossible overflow path —
-    // never-expires is the wrong fallback for security-sensitive timeouts.
-    let exp = Utc::now().timestamp() + i64::try_from(MFA_PENDING_EXPIRY).unwrap_or(0);
-
-    let ctx = ServiceContext::slug_only(&params.slug).conn(&conn).build();
-
-    if let Err(e) = auth::set_mfa_code(&ctx, &params.user_id, code, exp) {
-        error!("Failed to store MFA code: {}", e);
-        return;
-    }
-
-    let html = match params.email_renderer.render(
-        "mfa_code",
-        &MfaCodeEmailContext {
-            code,
-            expiry_minutes: MFA_PENDING_EXPIRY / 60,
-            from_name: &params.email_config.from_name,
-        },
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            error!("Failed to render MFA email: {}", e);
-            return;
-        }
-    };
-
-    if let Err(e) = email::queue_email(
-        &conn,
-        &email::EmailJobData {
-            to: params.user_email.clone(),
-            subject: "Your verification code".to_string(),
-            html,
-            text: None,
-        },
-        params.email_max_attempts,
-    ) {
-        error!("Failed to queue MFA email: {}", e);
-    }
 }
 
 /// Generate a 6-digit MFA code, store it, send it by email, and redirect to the MFA page.
@@ -153,22 +79,15 @@ fn handle_mfa_challenge(
         .unwrap_or(&form.email)
         .to_string();
 
-    // Create a short-lived MFA pending token (5 min)
-    let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
-        .email(user_email.clone())
-        .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(MFA_PENDING_EXPIRY))
-        .session_version(session_version)
-        .token_use(TokenUse::MfaPending)
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("MFA pending claims error: {}", e);
-            return login_error(state, "error_internal", &form.email);
-        }
-    };
-
-    let mfa_token = match state.infra.token_provider.create_token(&claims) {
+    // Create a short-lived MFA pending token (5 min) via the shared
+    // chokepoint (same token the gRPC challenge flow issues).
+    let mfa_token = match auth::mint_mfa_pending_token(
+        &state.infra,
+        &form.collection,
+        user,
+        &user_email,
+        session_version,
+    ) {
         Ok(t) => t,
         Err(e) => {
             error!("MFA pending token error: {}", e);
@@ -192,21 +111,16 @@ fn handle_mfa_challenge(
     if issue_blocked {
         warn!(user = %user.id, "MFA code issuance throttled — reusing the prior code");
     } else {
-        // Generate 6-digit code and queue email in background
-        let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
-        let code_for_db = code.clone();
+        // Generate a 6-digit code, store it, and queue the email in the
+        // background — the shared body the gRPC challenge flow also uses.
+        let code = auth::generate_mfa_code();
+        let infra = Arc::clone(&state.infra);
+        let slug = form.collection.clone();
+        let user_id = user.id.clone();
 
-        let params = MfaCodeParams {
-            pool: state.infra.pool.clone(),
-            slug: form.collection.clone(),
-            user_id: user.id.clone(),
-            user_email,
-            email_config: state.config.email.clone(),
-            email_renderer: state.infra.email.email_renderer.clone(),
-            email_max_attempts: state.config.jobs.system_email_max_attempts(),
-        };
-
-        task::spawn_blocking(move || send_mfa_code(&params, &code_for_db));
+        task::spawn_blocking(move || {
+            auth::send_mfa_code_email(&infra, &slug, &user_id, &user_email, &code);
+        });
     }
 
     // Set MFA pending cookie and redirect to MFA page

@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, anyhow, bail};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, flatten_array_sub_fields,
     },
-    db::query,
+    db::{query, query::filter::decode_where_map},
 };
 
 /// Read the optional `select` field projection from tool args: an array of
@@ -79,149 +79,16 @@ pub(in crate::mcp::tools) fn reserved_data_keys(
     keys
 }
 
-/// Parse JSON `where` object into filter clauses.
-/// Supports `{ field: "value" }` (equals) and `{ field: { op: value } }` (operator-based).
-///
-/// # Errors
-///
-/// Returns an error for an unknown filter operator (or a malformed value for
-/// a scalar operator) rather than silently dropping the condition — a
-/// dropped filter on an AI-driven surface would return more rows than the
-/// caller asked for.
+/// Decode the optional `where` tool argument through the canonical shared
+/// grammar ([`decode_where_map`]) — scalar shorthand, operator objects, and
+/// `or` groups, identical to gRPC and Lua. (The old MCP-local decoder
+/// rejected `or` and silently dropped non-scalar `in` elements.)
 pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Result<Vec<query::FilterClause>> {
     let Some(where_obj) = args.get("where").and_then(|v| v.as_object()) else {
         return Ok(Vec::new());
     };
 
-    let mut clauses = Vec::new();
-
-    for (field, value) in where_obj {
-        match value {
-            Value::String(s) => {
-                clauses.push(make_equals_clause(field, s.clone()));
-            }
-            Value::Number(n) => {
-                clauses.push(make_equals_clause(field, n.to_string()));
-            }
-            Value::Bool(b) => {
-                clauses.push(make_equals_clause(field, bool_to_string(*b)));
-            }
-            Value::Object(ops) => {
-                parse_operator_filters(field, ops, &mut clauses)?;
-            }
-            // Fail loudly rather than silently drop the clause (a dropped filter
-            // widens the match set — dangerous on delete_many/update_many). A
-            // bare array like `{ status: ["a","b"] }` must use `{ status: { in:
-            // [...] } }`.
-            Value::Array(_) => bail!(
-                "MCP where: field '{field}' has an array value; use an operator, \
-                 e.g. {{ \"{field}\": {{ \"in\": [...] }} }}"
-            ),
-            Value::Null => bail!(
-                "MCP where: field '{field}' has a null value; use the `exists` / \
-                 `not_exists` operator instead"
-            ),
-        }
-    }
-
-    Ok(clauses)
-}
-
-/// Create an Equals filter clause for a field.
-fn make_equals_clause(field: &str, value: String) -> query::FilterClause {
-    query::FilterClause::Single(query::Filter {
-        field: field.to_string(),
-        op: query::FilterOp::Equals(value),
-    })
-}
-
-/// Parse operator-based filters: `{ "greater_than": "50", "less_than": "100" }`.
-fn parse_operator_filters(
-    field: &str,
-    ops: &Map<String, Value>,
-    clauses: &mut Vec<query::FilterClause>,
-) -> Result<()> {
-    for (op_name, op_value) in ops {
-        match op_name.as_str() {
-            "in" | "not_in" => {
-                let Some(arr) = op_value.as_array() else {
-                    bail!(
-                        "MCP where: operator '{op_name}' on field '{field}' needs an \
-                         array value"
-                    );
-                };
-                let vals: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| match v {
-                        Value::String(s) => Some(s.clone()),
-                        Value::Number(n) => Some(n.to_string()),
-                        _ => None,
-                    })
-                    .collect();
-                let op = if op_name == "in" {
-                    query::FilterOp::In(vals)
-                } else {
-                    query::FilterOp::NotIn(vals)
-                };
-                clauses.push(query::FilterClause::Single(query::Filter {
-                    field: field.to_string(),
-                    op,
-                }));
-            }
-            "exists" => {
-                clauses.push(query::FilterClause::Single(query::Filter {
-                    field: field.to_string(),
-                    op: query::FilterOp::Exists,
-                }));
-            }
-            "not_exists" => {
-                clauses.push(query::FilterClause::Single(query::Filter {
-                    field: field.to_string(),
-                    op: query::FilterOp::NotExists,
-                }));
-            }
-            _ => {
-                let val_str = match op_value {
-                    Value::String(s) => s.clone(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => bool_to_string(*b),
-                    _ => bail!(
-                        "MCP where: filter operator '{op_name}' on field '{field}' needs a \
-                         string, number, or boolean value"
-                    ),
-                };
-                let op = parse_scalar_op(op_name, val_str)?;
-                clauses.push(query::FilterClause::Single(query::Filter {
-                    field: field.to_string(),
-                    op,
-                }));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Parse a scalar filter operator name into a `FilterOp`.
-///
-/// # Errors
-///
-/// Returns an error for an unrecognized operator name, so a typo'd or
-/// hallucinated operator fails loudly instead of silently dropping the
-/// filter condition.
-fn parse_scalar_op(op_name: &str, val: String) -> Result<query::FilterOp> {
-    query::FilterOp::scalar_from_name(op_name, val).ok_or_else(|| {
-        anyhow!(
-            "MCP where: unknown filter operator '{op_name}'. Valid operators: equals, \
-             not_equals, greater_than, greater_than_or_equal, less_than, less_than_or_equal, \
-             like, contains, in, not_in, exists, not_exists"
-        )
-    })
-}
-
-/// Convert a bool to a SQLite-compatible `"1"` or `"0"` string.
-fn bool_to_string(b: bool) -> String {
-    if b { "1" } else { "0" }.to_string()
+    decode_where_map(where_obj).map_err(|e| anyhow!("MCP where: {e}"))
 }
 
 /// Convert a Document to a JSON Value — the top-level (untagged) envelope. Shares
@@ -453,7 +320,9 @@ mod tests {
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
-                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
+                // Unified grammar: booleans stringify as true/false; the SQL
+                // edge coerces per column type (true ↔ 1 on Checkbox).
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "true"));
             }
             other => panic!("Expected Single, got {other:?}"),
         }
@@ -466,7 +335,7 @@ mod tests {
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
-                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "0"));
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "false"));
             }
             other => panic!("Expected Single, got {other:?}"),
         }
@@ -544,7 +413,7 @@ mod tests {
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
-                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "true"));
             }
             other => panic!("Expected Single, got {other:?}"),
         }
@@ -571,7 +440,10 @@ mod tests {
         // rather than silently dropping the condition.
         let args = json!({ "where": { "field": { "equals": null } } });
         let err = parse_where_filters(&args).unwrap_err().to_string();
-        assert!(err.contains("equals"), "should name the operator: {err}");
+        assert!(
+            err.contains("string, number, or boolean"),
+            "unified scalar-value error: {err}"
+        );
     }
 
     #[test]
@@ -632,7 +504,7 @@ mod tests {
     fn parse_where_bare_array_value_is_rejected() {
         let args = json!({ "where": { "status": ["draft", "review"] } });
         let err = parse_where_filters(&args).unwrap_err().to_string();
-        assert!(err.contains("array value"), "got: {err}");
+        assert!(err.contains("cannot be an array"), "got: {err}");
     }
 
     /// Regression: `in`/`not_in` with a non-array value used to `continue`
@@ -641,7 +513,7 @@ mod tests {
     fn parse_where_in_non_array_is_rejected() {
         let args = json!({ "where": { "status": { "in": "draft" } } });
         let err = parse_where_filters(&args).unwrap_err().to_string();
-        assert!(err.contains("array value"), "got: {err}");
+        assert!(err.contains("requires an array"), "got: {err}");
     }
 
     /// A null field value is rejected (use `exists`/`not_exists`), not dropped.

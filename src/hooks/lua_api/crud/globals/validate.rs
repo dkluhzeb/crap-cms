@@ -11,7 +11,7 @@ use serde_json::Value as JsonValue;
 use crate::{
     config::LocaleConfig,
     core::{DocumentFields, Registry},
-    db::{LocaleContext, query::helpers::global_table},
+    db::LocaleContext,
     hooks::{
         lifecycle::converters::{lua_table_to_hashmap, lua_table_to_json_map},
         lua_api::crud::{
@@ -21,7 +21,8 @@ use crate::{
         },
     },
     service::{
-        LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document,
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, ValidateArgs, ValidateGlobal},
         values_from_strings,
     },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -102,42 +103,26 @@ fn globals_validate(
         .registry(Some(reg.as_ref()))
         .build();
 
-    let table = global_table(&slug);
-    let validate_ctx = ValidateContext {
-        slug: &slug,
-        table_name: &table,
-        fields: &def.fields,
-        hooks: &def.hooks,
-        operation: "update",
-        exclude_id: Some("default"),
-        soft_delete: false,
-        supports_drafts: def.has_drafts(),
-        required_locales: None,
-    };
-
-    let input = WriteInput::builder(data)
-        .locale_ctx(locale_ctx.as_ref())
-        .draft(opts.draft)
+    let ctx = ServiceContext::global(&slug, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
         .ui_locale(ui_locale.clone())
+        .override_access(opts.override_access)
         .build();
 
-    let result = match validate_document(conn, &write_hooks, &validate_ctx, input, user.as_ref()) {
-        Ok(()) => ValidateResult {
-            valid: true,
-            errors: None,
-        },
-        Err(ServiceError::Validation(ve)) => {
-            let errors = ve
-                .errors
-                .iter()
-                .map(|fe| (fe.field.clone(), fe.message.clone()))
-                .collect();
-            ValidateResult {
-                valid: false,
-                errors: Some(errors),
-            }
-        }
-        Err(e) => return Err(RuntimeError(format!("validate error: {e}"))),
+    // Shared operation body — identical dry-run semantics on every surface.
+    let op_args = ValidateArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(opts.draft)
+        .build();
+
+    let outcome = ValidateGlobal::run(&ctx, op_args)
+        .map_err(|e| RuntimeError(format!("validate error: {e}")))?;
+
+    let result = ValidateResult {
+        valid: outcome.is_none(),
+        errors: outcome.map(|ve| ve.to_field_map()),
     };
 
     let value = lua.to_value(&result)?;

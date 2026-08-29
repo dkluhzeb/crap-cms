@@ -29,7 +29,7 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
-        let args = UndeleteArgs::new(req.id.clone());
+        let args = UndeleteArgs::new(req.id.clone()).events(req.events.unwrap_or(true));
 
         let principal = Principal::Credentials(Credentials {
             surface: Surface::Grpc,

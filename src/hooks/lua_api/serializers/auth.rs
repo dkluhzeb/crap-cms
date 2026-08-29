@@ -45,12 +45,16 @@ fn method_to_lua(lua: &Lua, m: &AuthMethod) -> mlua::Result<Table> {
     match m {
         AuthMethod::PasswordLogin {
             mfa,
+            mfa_when,
             verify_email,
             forgot_password,
         } => {
             t.set("type", "password_login")?;
             if matches!(mfa, MfaMode::Email) {
                 t.set("mfa", "email")?;
+            }
+            if let Some(hook) = mfa_when {
+                t.set("mfa_when", hook.reference())?;
             }
             if *verify_email {
                 t.set("verify_email", true)?;

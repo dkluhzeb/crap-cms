@@ -30,7 +30,7 @@ use crate::core::{
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
     AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
-    JobHandlerContext, JobInfo, LiveFilterContext, RouteContext, ValidateContext,
+    JobHandlerContext, JobInfo, LiveFilterContext, MfaWhenContext, RouteContext, ValidateContext,
 };
 use crate::hooks::lua_api::{
     access::render_crap_access_init_lua,
@@ -210,6 +210,7 @@ fn render_collection_types(out: &mut String) {
     Hooks::render_lua_annotation(out);
     Access::render_lua_annotation(out);
     AuthStrategyContext::render_lua_annotation(out);
+    MfaWhenContext::render_lua_annotation(out);
     LiveFilterContext::render_lua_annotation(out);
     Surface::render_lua_alias(out);
     Activation::render_lua_alias(out);
@@ -382,6 +383,7 @@ fn render_callable_aliases(out: &mut String) {
 --- headers + the collection slug; returns a user document on success
 --- or `nil` to fall through to the next method.
 --- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
+--- @alias crap.mfa_when_fn fun(ctx: crap.MfaWhenContext): boolean?
 
 --- Job handler entry point. The runtime ignores the return value.
 --- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)

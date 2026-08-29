@@ -13,7 +13,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::core::collection::Auth;
+use crate::core::collection::{Auth, Surface};
 use crate::{
     api::{
         content,
@@ -24,7 +24,7 @@ use crate::{
     },
     service::{
         AppInfra,
-        auth::{LoginFlowRequest, LoginOutcome, verify_login},
+        auth::{self, LoginFlowRequest, LoginOutcome, LoginVerified, verify_login},
     },
 };
 
@@ -51,6 +51,7 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<LoginOutcome, Status> {
             password: &input.password,
             headers: &input.headers,
             remote_addr: Some(&input.remote_addr),
+            surface: Surface::Grpc,
             password_provider: &*input.password_provider,
         },
     )
@@ -125,15 +126,18 @@ impl ContentService {
 
         let verified = match outcome {
             LoginOutcome::Verified(v) => v,
-            // gRPC has no MFA completion step yet — minting a session on the
-            // password alone would silently bypass the collection's second
-            // factor, so this fails CLOSED. Use a surface with MFA support
-            // (the admin UI) for MFA-enabled collections.
-            LoginOutcome::MfaRequired(_) => {
-                return Err(Status::failed_precondition(
-                    "This collection requires multi-factor authentication, which the gRPC \
-                     Login RPC does not support — log in via a surface with MFA support",
-                ));
+            // The collection requires a second factor: issue the challenge —
+            // store + email a 6-digit code, mint the short-lived pending
+            // token — and return it WITHOUT a session token. The client
+            // completes the login via the VerifyMfa RPC.
+            //
+            // The login limiters are deliberately NOT cleared here: each
+            // code-issuing Login costs one attempt, which caps how fast a
+            // password-holder can flood the victim's inbox with codes (the
+            // admin twin uses a dedicated issuance limiter because it clears
+            // the login limiter on password success; this surface doesn't).
+            LoginOutcome::MfaRequired(v) => {
+                return self.issue_mfa_challenge(&req.collection, &req.email, &v);
             }
             LoginOutcome::Denied => {
                 // Attempt already recorded up front by check_and_block.
@@ -180,6 +184,52 @@ impl ContentService {
         Ok(Response::new(content::LoginResponse {
             token,
             user: Some(document_to_proto(&user, &req.collection)),
+            mfa_required: None,
+            mfa_challenge: None,
+        }))
+    }
+
+    /// Issue the MFA challenge for a credential-verified but MFA-gated login:
+    /// mint the pending token, store + email a fresh 6-digit code (background,
+    /// best-effort), and encode the challenge response (no session token).
+    fn issue_mfa_challenge(
+        &self,
+        collection: &str,
+        fallback_email: &str,
+        verified: &LoginVerified,
+    ) -> Result<Response<content::LoginResponse>, Status> {
+        let user_email = verified
+            .user
+            .fields
+            .get("email")
+            .and_then(|v| v.as_str())
+            .unwrap_or(fallback_email)
+            .to_string();
+
+        let mfa_challenge = auth::mint_mfa_pending_token(
+            &self.infra,
+            collection,
+            &verified.user,
+            &user_email,
+            verified.session_version,
+        )
+        .inspect_err(|e| error!("MFA pending token error: {e}"))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+        let code = auth::generate_mfa_code();
+        let infra = Arc::clone(&self.infra);
+        let slug = collection.to_string();
+        let user_id = verified.user.id.clone();
+
+        task::spawn_blocking(move || {
+            auth::send_mfa_code_email(&infra, &slug, &user_id, &user_email, &code);
+        });
+
+        Ok(Response::new(content::LoginResponse {
+            token: String::new(),
+            user: None,
+            mfa_required: Some(true),
+            mfa_challenge: Some(mfa_challenge),
         }))
     }
 }

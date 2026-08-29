@@ -44,6 +44,7 @@ impl ContentService {
         let args = UpdateGlobalArgs::builder(data)
             .locale_ctx(locale_ctx)
             .events(req.events.unwrap_or(true))
+            .draft(req.draft.unwrap_or(false))
             .build();
 
         let principal = Principal::Credentials(Credentials {

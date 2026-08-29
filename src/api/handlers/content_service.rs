@@ -65,6 +65,8 @@ pub struct ContentService {
     pub(in crate::api::handlers) wanted_strategy_headers: std::collections::HashSet<String>,
     pub(in crate::api::handlers) login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_login_limiter: Arc<LoginRateLimiter>,
+    pub(in crate::api::handlers) mfa_limiter: Arc<LoginRateLimiter>,
+    pub(in crate::api::handlers) ip_mfa_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) reset_token_expiry: u64,
     pub(in crate::api::handlers) forgot_password_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -252,6 +254,8 @@ impl ContentService {
             wanted_strategy_headers,
             login_limiter: deps.login_limiter,
             ip_login_limiter: deps.ip_login_limiter,
+            mfa_limiter: deps.mfa_limiter,
+            ip_mfa_limiter: deps.ip_mfa_limiter,
             reset_token_expiry,
             forgot_password_limiter: deps.forgot_password_limiter,
             ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
@@ -500,6 +504,13 @@ impl ContentApi for ContentService {
         request: Request<content::LoginRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
         self.login_impl(request).await
+    }
+
+    async fn verify_mfa(
+        &self,
+        request: Request<content::VerifyMfaRequest>,
+    ) -> Result<Response<content::LoginResponse>, Status> {
+        self.verify_mfa_impl(request).await
     }
 
     async fn forgot_password(

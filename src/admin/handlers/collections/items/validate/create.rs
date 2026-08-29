@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use axum::{
     Extension, Json,
     extract::{Path, State},
     response::Response,
 };
-use tokio::task;
 
 use crate::{
     admin::{
@@ -11,13 +12,13 @@ use crate::{
         handlers::{
             shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
             validate::{
-                RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
-                validation_error_response_simple,
+                ValidateRequest, handle_validation_outcome, validation_error_response_simple,
             },
         },
     },
     core::auth::AuthUser,
     db::AccessResult,
+    service::op::{self, Principal, TargetRef, Validate, ValidateArgs},
 };
 
 use super::helpers::prepare_form_for_validation;
@@ -50,37 +51,28 @@ pub async fn validate_create(
 
     let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "create");
 
-    let is_draft = payload.draft && def.has_drafts();
     let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return validation_error_response_simple(&msg),
     };
-    let pool = state.infra.pool.clone();
-    let runner = state.infra.hook_runner.clone();
-    let slug_owned = slug.clone();
-    let def_owned = def.clone();
-    let user_doc = get_user_doc(auth_user.as_ref()).cloned();
 
-    let result = task::spawn_blocking(move || {
-        run_validation(&RunValidationParams {
-            pool: &pool,
-            runner: &runner,
-            hooks: &def_owned.hooks,
-            fields: &def_owned.fields,
-            slug: &slug_owned,
-            table_name: &slug_owned,
-            operation: "create",
-            exclude_id: None,
-            data: &data,
-            is_draft,
-            soft_delete: def_owned.soft_delete,
-            supports_drafts: def_owned.has_drafts(),
-            locale_ctx: locale_ctx.as_ref(),
-            user_doc: user_doc.as_ref(),
-            required_locales: def_owned.required_locales.as_ref(),
-        })
-    })
+    // Shared dry-run body: rolled-back transaction, field-access stripping as
+    // the resolved editor, draft clamp — identical on every surface.
+    let args = ValidateArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(payload.draft)
+        .build();
+
+    let result = op::run_blocking::<Validate>(
+        Arc::clone(&state.infra),
+        Principal::Resolved {
+            user: get_user_doc(auth_user.as_ref()).cloned(),
+            ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
+        },
+        TargetRef::collection(slug),
+        args,
+    )
     .await;
 
-    handle_validation_result(result, auth_user.as_ref(), &state)
+    handle_validation_outcome(result, auth_user.as_ref(), &state)
 }

@@ -17,7 +17,10 @@ use crate::{
         get_tx_conn,
         helpers::{ExtractedData, extract_data, hook_ui_locale, hook_user, resolve_collection},
     },
-    service::{LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
+    service::{
+        LuaWriteHooks, ServiceContext,
+        op::{Operation, Validate, ValidateArgs},
+    },
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -97,55 +100,36 @@ fn collections_validate(
         LocaleContext::from_locale_string(opts.locale.as_deref(), lc).map_err(lua_err)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ExtractedData { data, password } = extract_data(&data, &def)?;
+    // `password` is split off so it isn't validated as an unknown field; the
+    // dry-run itself never touches it.
+    let ExtractedData { data, password: _ } = extract_data(&data, &def)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .override_access(opts.override_access)
         .registry(Some(reg.as_ref()))
         .build();
 
-    let operation = if opts.id.is_some() {
-        "update"
-    } else {
-        "create"
-    };
-
-    let validate_ctx = ValidateContext {
-        slug: &collection,
-        table_name: &collection,
-        fields: &def.fields,
-        hooks: &def.hooks,
-        operation,
-        exclude_id: opts.id.as_deref(),
-        soft_delete: def.has_soft_delete(),
-        supports_drafts: def.has_drafts(),
-        required_locales: def.required_locales.as_ref(),
-    };
-
-    let input = WriteInput::builder(data)
-        .password(password.as_deref())
-        .locale_ctx(locale_ctx.as_ref())
-        .draft(opts.draft)
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
         .ui_locale(ui_locale.clone())
+        .override_access(opts.override_access)
         .build();
 
-    let result = match validate_document(conn, &write_hooks, &validate_ctx, input, user.as_ref()) {
-        Ok(()) => ValidateResult {
-            valid: true,
-            errors: None,
-        },
-        Err(ServiceError::Validation(ve)) => {
-            let errors = ve
-                .errors
-                .iter()
-                .map(|fe| (fe.field.clone(), fe.message.clone()))
-                .collect();
-            ValidateResult {
-                valid: false,
-                errors: Some(errors),
-            }
-        }
-        Err(e) => return Err(RuntimeError(format!("validate error: {e}"))),
+    // Shared operation body — identical dry-run semantics on every surface.
+    let op_args = ValidateArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .exclude_id(opts.id.clone())
+        .draft(opts.draft)
+        .build();
+
+    let outcome =
+        Validate::run(&ctx, op_args).map_err(|e| RuntimeError(format!("validate error: {e}")))?;
+
+    let result = ValidateResult {
+        valid: outcome.is_none(),
+        errors: outcome.map(|ve| ve.to_field_map()),
     };
 
     let value = lua.to_value(&result)?;

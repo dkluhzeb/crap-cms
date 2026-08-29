@@ -102,6 +102,30 @@ Response:
 }
 ```
 
+### MFA collections
+
+On a collection with `mfa = "email"`, `Login` verifies the password, emails
+the 6-digit code, and returns a challenge instead of a token:
+
+```json
+{ "mfaRequired": true, "mfaChallenge": "eyJhbGciOi..." }
+```
+
+Complete the login with `VerifyMfa` (the challenge token is single-purpose
+and expires after 5 minutes; codes are single-use):
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "mfa_challenge": "eyJhbGciOi...",
+    "code": "123456"
+}' localhost:50051 crap.ContentAPI/VerifyMfa
+```
+
+The response is the same `LoginResponse` a plain login returns (JWT +
+user). Code guessing is rate-limited per identity and per IP with the same
+budget as the admin MFA page.
+
 ### Authenticated Requests
 
 Pass the token via `authorization` metadata:

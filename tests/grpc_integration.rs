@@ -680,6 +680,7 @@ async fn update_global_and_read_back() {
             slug: "settings".to_string(),
             data: Some(make_struct(&[("site_name", "My CMS")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();

@@ -544,6 +544,8 @@ fn build_grpc_params(res: &StartupResources) -> api::server::GrpcStartParams {
         .config_dir(res.config_dir.clone())
         .login_limiter(res.rate_limiters.login.clone())
         .ip_login_limiter(res.rate_limiters.ip_login.clone())
+        .mfa_limiter(res.rate_limiters.mfa.clone())
+        .ip_mfa_limiter(res.rate_limiters.ip_mfa.clone())
         .forgot_password_limiter(res.rate_limiters.forgot_password.clone())
         .ip_forgot_password_limiter(res.rate_limiters.ip_forgot_password.clone())
         .password_provider(res.password_provider.clone())

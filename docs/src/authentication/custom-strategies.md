@@ -282,4 +282,23 @@ auth = {
 }
 ```
 
-When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use.
+When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns an `mfa_challenge` token and the `VerifyMfa` RPC completes the login.
+
+An optional `mfa_when` hook decides *whether* a verified login needs the second factor — per surface or per user:
+
+```lua
+auth = {
+    methods = {
+        { type = "password_login", mfa = "email", mfa_when = "hooks.auth.mfa_when" },
+        -- ...
+    },
+}
+
+-- hooks/auth.lua
+function M.mfa_when(ctx)
+    -- ctx.collection, ctx.user (field data), ctx.surface ("admin"/"grpc"),
+    -- ctx.headers. Return false/nil to skip MFA for this login,
+    -- anything truthy to require it. A hook error fails closed.
+    return ctx.user.mfa_enabled == true
+end
+```

@@ -183,6 +183,7 @@ async fn create_find_update_delete_undelete_full_round_trip() {
         .undelete(UndeleteRequest {
             collection: "posts".to_string(),
             id: id.clone(),
+            events: None,
         })
         .await
         .expect("undelete");
@@ -289,6 +290,7 @@ async fn delete_with_force_hard_delete_removes_permanently() {
         .undelete(UndeleteRequest {
             collection: "posts".to_string(),
             id,
+            events: None,
         })
         .await;
     assert!(

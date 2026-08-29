@@ -65,6 +65,12 @@ too). A cold or freshly-invalidated key costs one database fetch — not
 one per concurrent reader. Nested document fetches during relationship
 population go through the same deduplication.
 
+Lua CRUD reads that run **inside a hook transaction** are excluded from
+both the cache and the singleflight: sharing mid-transaction state would
+broadcast uncommitted rows to concurrent requests (or hand the
+transaction another connection's stale fetch). Those reads populate
+un-deduplicated on the hook transaction's own connection.
+
 What singleflight does **not** remove:
 
 - A cache clear (every write clears the whole cache) still cold-starts

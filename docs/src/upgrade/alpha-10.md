@@ -420,6 +420,24 @@ action needed for these.
 
 ## Security fixes
 
+- **gRPC `Login` no longer bypasses MFA — and gRPC now completes it.** The
+  RPC previously minted a full JWT on the password alone, silently bypassing
+  the second factor the admin login enforces. On a collection with
+  `mfa = "email"` it now returns `mfa_required = true` plus a short-lived
+  `mfa_challenge` token (and NO session token); the emailed 6-digit code is
+  redeemed via the new `VerifyMfa` RPC, which mints the JWT. Code guessing
+  shares the admin MFA rate limiters (same per-identity/IP budget).
+- **Unpublishing a non-versioned global no longer publishes the form data.**
+  The admin handler's versioning guard silently fell through to a normal
+  update when versioning was off — saving (and publishing) the submitted
+  form under an action labeled "unpublish". The capability gate now lives in
+  the service layer and every surface gets a typed error instead.
+- **Lua CRUD reads inside hook transactions no longer share the process-wide
+  populate singleflight.** An in-transaction populate fetch could broadcast
+  uncommitted rows to concurrent requests (and receive another connection's
+  stale fetch). No action needed; hook-transaction reads now populate
+  un-deduplicated on their own connection.
+
 - **Admin MFA could be bypassed with only the password.** The MFA-pending cookie
   was a valid session token; an attacker who knew the password could use it as a
   session and skip the email code. Tokens now carry a `token_use` claim and only
@@ -615,6 +633,11 @@ action needed for these.
 
 Wire-contract changes — regenerate your gRPC stubs and adjust:
 
+- **`ListVersions` / `RestoreVersion` on a non-versioned collection now
+  return `INVALID_ARGUMENT`** (was `FAILED_PRECONDITION`). The versioning
+  gate moved into the service layer — uniform with `Unpublish`/`Undelete`,
+  and MCP/Lua now get a typed error instead of a raw database error.
+
 - **Document `data`/`fields` are now typed `DataMap`/`FieldValue`, not
   `google.protobuf.Struct`.** Every `google.protobuf.Struct` used for
   document content — `Document.fields`, the `data` on `Create` / `Update` /
@@ -638,7 +661,7 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   It previously dropped it silently, then (earlier in this cycle) rejected it with
   `INVALID_ARGUMENT`; a per-item `password` is now validated against
   `[auth.password_policy]` and hashed per document (parity with single `Create`).
-  `UpdateMany` still rejects a `password` (it applies one value to many rows).
+  `UpdateMany` still rejects a `password` (it applies one value to many rows). A **non-string** `password` (e.g. a number) is rejected the same way — it used to be silently dropped, creating a passwordless auth account.
 - **Removed always-true `success` fields** from `DeleteResponse`,
   `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
   and `AccountActionResponse`. A non-error response is the success signal;
@@ -840,6 +863,39 @@ What changed:
 
 ## Behavior changes (likely no action)
 
+- **Bulk writes are gated by the write-side access rule, uniformly.**
+  `update_many` is gated by `access.update`, `delete_many` by
+  `access.trash`/`access.delete` (trash falls back to `update`), evaluated
+  once up front at the service layer — `Denied` errors before anything is
+  matched, a filter constraint scopes the match-set. Previously gRPC
+  pre-scoped bulk writes with `access.read`'s filters instead: if your
+  collection has a *constrained* `read` rule but **no** `update`/`delete`
+  rule, gRPC bulk writes are no longer narrowed by the read filter — add the
+  write-side rule if you relied on that. (Per-document checks still run
+  inside the transaction; MCP's trusted override is unchanged.)
+- **gRPC `DeleteMany` now matches draft documents too.** The codec used to
+  inject a published-only filter (a gRPC-only quirk); bulk delete on every
+  surface now behaves like Lua/MCP always did. `UpdateMany` keeps the
+  published-only default with the `draft = true` opt-out, uniformly.
+- **`ctx.ui_locale` now reaches read access checks and `after_read` for
+  collections on every surface.** It was always `nil` there (only writes and
+  global reads carried it). For API surfaces the value is the authenticated
+  user's stored UI-locale preference. An access hook or `after_read` that
+  branches on `ctx.ui_locale` may start seeing values where it saw `nil`.
+- **An `access.update` rule may constrain on `_status` for bulk updates.**
+  On a drafts-enabled collection, `update_many` itself targets published
+  rows (unless `draft = true`), so a `{ _status = ... }` constraint from the
+  update rule is accepted there. Everywhere else the system-column rejection
+  is unchanged.
+- **Verification emails from nested Lua creates now send.** A hook running
+  inside an update/delete/undelete/unpublish/bulk/restore transaction that
+  creates a `verify_email` auth document had its verification mail silently
+  dropped (only creates carried the queue). Similarly, mutation events from
+  nested CRUD inside version-restore hooks now publish after commit.
+- **The admin trash view respects an explicit column sort.** It used to
+  always force newest-deleted-first; that is now only the default when no
+  sort is chosen.
+
 - **Job-handler writes now emit live-update events and invalidate the
   populate cache.** Previously a job handler's `crap.collections.create` /
   `update` / `delete` silently published nothing (despite the `events` option
@@ -924,6 +980,57 @@ What changed:
   them there.
 
 ## Additive features (alpha.10)
+
+### gRPC MFA completion (`VerifyMfa`) + the `mfa_when` gate
+
+- New `VerifyMfa` RPC completes an MFA-gated gRPC login (see Security fixes
+  above). `LoginResponse` gained optional `mfa_required` / `mfa_challenge`
+  fields — regenerate stubs; existing clients on non-MFA collections are
+  unaffected.
+- New optional `mfa_when` key on the `password_login` auth method: a Lua
+  hook deciding WHETHER a verified login needs the second factor, called
+  with `{ collection, user, surface, headers }`. Return `false`/`nil` to
+  skip, truthy to require — so MFA can apply per surface
+  (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`).
+  No hook = MFA always required; a hook error fails closed.
+
+### gRPC wire-parity additions
+
+- `UpdateGlobalRequest` gained optional `draft` (save a global as an
+  unpublished draft — parity with MCP/Lua/admin).
+- `UndeleteRequest` gained optional `events` (quiet restore — parity with
+  every other write RPC).
+
+### One `where` grammar on every surface
+
+gRPC, MCP, and Lua CRUD now decode `where` through one shared decoder:
+scalar shorthand (`{ field = value }` ⇒ equals), operator objects, and `or`
+groups everywhere. Concretely new: **MCP accepts `or` groups** (previously
+rejected). Two behavior notes: MCP boolean shorthand now compares as
+`true`/`false` instead of `1`/`0` (identical matches — the SQL edge coerces
+per column type), and a non-scalar element inside `in`/`not_in` is now an
+ERROR on MCP instead of being silently dropped (a dropped element silently
+changed the match set).
+
+### Validate dry-runs: one body, real access semantics
+
+All eight validate endpoints (collection + global on gRPC/MCP/Lua/admin) run
+one shared operation body. Two behavior changes: **MCP validate now runs
+with the same trusted override as MCP's real writes** (it previously
+evaluated field-access as an anonymous user, so its dry-run could report
+field strips the actual write would never apply), and **gRPC/MCP validate
+now run inside a rolled-back transaction** like the admin endpoint always
+did — side effects of `before_validate` hooks during a dry-run are
+discarded instead of persisting.
+
+### MCP + Lua option parity
+
+- MCP `find_*` / `find_by_id_*` accept `select` (field-name projection);
+  `count_*` accepts `search` and `locale`; `unpublish_*` / `undelete_*`
+  accept `events` — the same query now means the same thing on MCP, gRPC,
+  and Lua.
+- Lua `crap.collections.unpublish(id, opts?)` accepts `events = false` for a
+  quiet unpublish, matching `crap.collections.update{ unpublish = true }`.
 
 ### `[server] public_schema_introspection` — gate schema discovery
 

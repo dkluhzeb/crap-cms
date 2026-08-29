@@ -262,6 +262,10 @@ opts?)`, `delete_many(query, opts?)`, `list_versions(id, opts?)`,
 `restore_version(id, version_id, opts?)`, and `ref_count(id)` —
 same shape as the slug-keyed equivalents, slug bound.
 
+`unpublish` accepts `override_access`, `hooks`, and `events` options
+(`events = false` for a quiet unpublish, matching
+`update{ unpublish = true, events = false }`).
+
 `delete_many` accepts a `trash = true` option that permanently removes
 **already-soft-deleted** rows (empty the trash) — a hard delete of
 trashed documents gated by `access.delete`. Without it, `delete_many`

@@ -600,13 +600,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   gate now lives in the service chokepoint (`unpublish_global_document`),
   mirroring the collection sibling; every surface gets a typed error.
 
-- **gRPC `Login` fails closed on MFA-enabled collections.** The RPC had no
-  MFA step at all: on a collection with `mfa = "email"`, a correct password
-  alone minted a full session token over gRPC — silently bypassing the
-  second factor the admin login enforces. The shared login flow now reports
-  the MFA requirement and the RPC returns `FAILED_PRECONDITION` instead of a
-  token; MFA-enabled collections must log in via a surface with MFA support
-  (the admin UI) until a gRPC MFA completion RPC exists.
+- **gRPC `Login` fails closed on MFA-enabled collections — and gRPC can now
+  complete MFA.** The RPC had no MFA step at all: on a collection with
+  `mfa = "email"`, a correct password alone minted a full session token over
+  gRPC — silently bypassing the second factor the admin login enforces. The
+  shared login flow now reports the MFA requirement; `Login` returns
+  `mfa_required = true` + a short-lived `mfa_challenge` token (no session
+  token), stores + emails the 6-digit code through the same chokepoints the
+  admin login uses, and the new `VerifyMfa` RPC redeems the code for the
+  JWT. Code guessing shares the admin `mfa`/`ip_mfa` rate limiters (one
+  budget per identity/IP across surfaces); the pending token is
+  purpose-bound (`MfaPending`), so a session token can't be replayed into
+  the completion step and the challenge can't be used as a session. The
+  login limiters are not cleared on the challenge path, which caps how fast
+  a password-holder can flood the victim's inbox with codes.
 - **gRPC login success no longer clears the shared per-IP rate limiter.**
   One valid login from an IP wiped every other account's failed attempts
   from that same IP — letting a valid account on a shared IP mask a
@@ -2545,6 +2552,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`mfa_when` — a Lua gate for WHEN MFA applies.** New optional key on the
+  `password_login` auth method: a hook called after credential verification
+  with `{ collection, user, surface, headers }`; return `false`/`nil` to
+  skip the second factor for this login, anything truthy to require it —
+  per-surface (`ctx.surface == "grpc"`) or per-user-field
+  (`ctx.user.mfa_enabled`) MFA in one place. No hook = MFA always required
+  when the mode enables it; a hook error fails closed. Applies uniformly to
+  the admin and gRPC logins (both go through the shared `verify_login`
+  flow).
+- **gRPC wire-parity additions:** `UpdateGlobalRequest.draft` (save a global
+  as an unpublished draft) and `UndeleteRequest.events` (quiet restore) —
+  the last per-surface option gaps outside the wire schema are closed.
+- **MCP accepts `or` groups in `where`.** Part of the where-grammar
+  unification (see Changed).
+
 - **MCP read parity:** `find`/`find_by_id` accept `select` (field
   projection), and `count` accepts `search` + `locale` — the same query on
   MCP, gRPC, and Lua now means the same thing. MCP `unpublish`/`undelete` and
@@ -2921,6 +2943,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **One `where` grammar, one decoder.** gRPC, MCP, and Lua CRUD decode
+  `where` through a single canonical decoder
+  (`db::query::filter::decode_where_map`): scalar shorthand, operator
+  objects, and `or` groups on every surface. The three per-surface copies
+  (which had drifted) are gone. Behavior deltas, MCP only: `or` groups are
+  now accepted; boolean shorthand compares as `true`/`false` instead of
+  `1`/`0` (identical matches — the SQL edge coerces per column type); a
+  non-scalar element inside `in`/`not_in` errors instead of being silently
+  dropped (a dropped element silently changed the match set — dangerous on
+  bulk ops).
+- **Validate dry-runs share one operation body with real access semantics.**
+  All eight validate endpoints (collection + global × gRPC/MCP/Lua/admin)
+  run `op::Validate`/`op::ValidateGlobal`. MCP validate now runs with the
+  same trusted override as MCP's real writes (it previously evaluated
+  field-access as an anonymous user, so its dry-run could report field
+  strips the actual write would never apply), and gRPC/MCP dry-runs now run
+  inside a rolled-back transaction like the admin endpoint always did —
+  `before_validate` hook side effects during validation are discarded
+  instead of persisting.
 
 - **gRPC `delete_many` no longer restricts its match-set to published rows.**
   The old codec-injected `_status = 'published'` filter (a gRPC-only quirk)

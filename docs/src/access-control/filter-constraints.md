@@ -120,6 +120,11 @@ end
 > `draft`, and `trash` access keys, which scope each view automatically. Don't
 > return `{ _status = "published" }` to hide drafts; a plain `read` rule already
 > covers published content only.
+>
+> One exception: a `_status` constraint from the **`update`** rule is accepted
+> for **bulk updates** on a drafts-enabled collection — `update_many` itself
+> targets published rows there (unless `draft = true`), so the operation
+> already owns the status dimension the constraint refines.
 
 ## How Constraints Are Merged
 

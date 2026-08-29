@@ -1,139 +1,30 @@
-//! Filter parsing: JSON `where` clause to `FilterClause` conversion.
+//! Filter parsing: JSON `where` clause string to `FilterClause` conversion.
+//!
+//! Thin wire shim: the grammar itself (scalar shorthand, operator objects,
+//! `or` groups) lives in the canonical [`decode_where_map`] shared by every
+//! surface — this module only owns the JSON-string step.
 
-use serde_json::Value as JsonValue;
-
-use crate::db::{Filter, FilterClause, FilterOp};
-
-/// Parse a single field's filter value into one or more `Filter` entries.
-fn parse_field_filters(field: &str, value: &JsonValue, ctx: &str) -> Result<Vec<Filter>, String> {
-    match value {
-        JsonValue::String(s) => Ok(vec![Filter {
-            field: field.to_string(),
-            op: FilterOp::Equals(s.clone()),
-        }]),
-        JsonValue::Number(_) | JsonValue::Bool(_) => {
-            let s = value_to_string(value).map_err(|e| format!("{ctx} '{field}': {e}"))?;
-
-            Ok(vec![Filter {
-                field: field.to_string(),
-                op: FilterOp::Equals(s),
-            }])
-        }
-        JsonValue::Object(ops) => {
-            let mut filters = Vec::new();
-
-            for (op_name, op_value) in ops {
-                let op = parse_filter_op(op_name, op_value)
-                    .map_err(|e| format!("{ctx} '{field}': {e}"))?;
-
-                filters.push(Filter {
-                    field: field.to_string(),
-                    op,
-                });
-            }
-
-            Ok(filters)
-        }
-        _ => Err(format!(
-            "{ctx} '{field}': value must be string, number, boolean, or operator object"
-        )),
-    }
-}
-
-/// Parse an `or` clause array into grouped filter sets.
-fn parse_or_clause(value: &JsonValue) -> Result<FilterClause, String> {
-    let arr = value
-        .as_array()
-        .ok_or_else(|| "'or' must be an array".to_string())?;
-
-    let mut groups = Vec::new();
-
-    for element in arr {
-        let obj = element
-            .as_object()
-            .ok_or_else(|| "'or' elements must be objects".to_string())?;
-
-        let mut group = Vec::new();
-
-        for (f, v) in obj {
-            group.extend(parse_field_filters(f, v, "or field")?);
-        }
-
-        groups.push(group);
-    }
-
-    Ok(FilterClause::or_groups(groups))
-}
+use crate::db::FilterClause;
+use crate::db::query::filter::decode_where_map;
 
 /// Parse a JSON `where` clause string into a list of filter clauses.
 ///
 /// Supports simple equality (`{"field": "value"}`), operator objects
 /// (`{"field": {"greater_than": 5}}`), and `or` groups.
+///
+/// # Errors
+///
+/// Returns an error when the string is not a JSON object or the object does
+/// not decode in the canonical `where` grammar.
 pub fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
-    let obj: JsonValue =
+    let obj: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let map = obj
         .as_object()
         .ok_or_else(|| "where clause must be a JSON object".to_string())?;
 
-    let mut clauses = Vec::new();
-
-    for (field, value) in map {
-        if field == "or" {
-            clauses.push(parse_or_clause(value)?);
-            continue;
-        }
-
-        for filter in parse_field_filters(field, value, "field")? {
-            clauses.push(FilterClause::Single(filter));
-        }
-    }
-
-    Ok(clauses)
-}
-
-/// Parse a filter operator name (e.g. "equals", "`greater_than`") and its JSON value into a `FilterOp`.
-pub(in crate::api::handlers) fn parse_filter_op(
-    op_name: &str,
-    value: &JsonValue,
-) -> Result<FilterOp, String> {
-    // Array / no-value operators — surface-specific value handling.
-    match op_name {
-        "in" => {
-            let arr = value
-                .as_array()
-                .ok_or_else(|| "'in' operator requires an array".to_string())?;
-            let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
-
-            return Ok(FilterOp::In(vals?));
-        }
-        "not_in" => {
-            let arr = value
-                .as_array()
-                .ok_or_else(|| "'not_in' operator requires an array".to_string())?;
-            let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
-
-            return Ok(FilterOp::NotIn(vals?));
-        }
-        "exists" => return Ok(FilterOp::Exists),
-        "not_exists" => return Ok(FilterOp::NotExists),
-        _ => {}
-    }
-
-    // Scalar operators — the shared canonical grammar.
-    FilterOp::scalar_from_name(op_name, value_to_string(value)?)
-        .ok_or_else(|| format!("unknown operator '{op_name}'"))
-}
-
-/// Convert a JSON value to its string representation. Only supports string, number, and boolean.
-pub(in crate::api::handlers) fn value_to_string(v: &JsonValue) -> Result<String, String> {
-    match v {
-        JsonValue::String(s) => Ok(s.clone()),
-        JsonValue::Number(n) => Ok(n.to_string()),
-        JsonValue::Bool(b) => Ok(b.to_string()),
-        _ => Err("value must be string, number, or boolean".to_string()),
-    }
+    decode_where_map(map)
 }
 
 #[cfg(test)]
@@ -157,7 +48,6 @@ mod tests {
 
     use super::*;
     use crate::db::{Filter, FilterClause, FilterOp};
-    use serde_json::json;
 
     /// Unwrap an OR alternative that is a single filter (the shape `or_groups`
     /// produces for one-field groups, since it collapses them to `Single`).
@@ -292,11 +182,8 @@ mod tests {
     fn parse_where_json_invalid_value_type() {
         let result = parse_where_json(r#"{"field": [1, 2]}"#);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("value must be string, number, boolean, or operator object")
-        );
+        // Shared-grammar error: bare arrays point toward the operator forms.
+        assert!(result.unwrap_err().contains("cannot be an array"));
     }
 
     /// Regression: numeric and boolean shorthand values were rejected.
@@ -338,135 +225,5 @@ mod tests {
             }
             _ => panic!("Expected Or filter"),
         }
-    }
-
-    // ── parse_filter_op ────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_filter_op_equals() {
-        let op = parse_filter_op("equals", &json!("hello")).unwrap();
-        assert!(matches!(op, FilterOp::Equals(v) if v == "hello"));
-    }
-
-    #[test]
-    fn parse_filter_op_not_equals() {
-        let op = parse_filter_op("not_equals", &json!("bye")).unwrap();
-        assert!(matches!(op, FilterOp::NotEquals(v) if v == "bye"));
-    }
-
-    #[test]
-    fn parse_filter_op_like() {
-        let op = parse_filter_op("like", &json!("%test%")).unwrap();
-        assert!(matches!(op, FilterOp::Like(v) if v == "%test%"));
-    }
-
-    #[test]
-    fn parse_filter_op_contains() {
-        let op = parse_filter_op("contains", &json!("foo")).unwrap();
-        assert!(matches!(op, FilterOp::Contains(v) if v == "foo"));
-    }
-
-    #[test]
-    fn parse_filter_op_comparison_operators() {
-        let gt = parse_filter_op("greater_than", &json!("10")).unwrap();
-        assert!(matches!(gt, FilterOp::GreaterThan(v) if v == "10"));
-
-        let lt = parse_filter_op("less_than", &json!("5")).unwrap();
-        assert!(matches!(lt, FilterOp::LessThan(v) if v == "5"));
-
-        let gte = parse_filter_op("greater_than_or_equal", &json!("10")).unwrap();
-        assert!(matches!(gte, FilterOp::GreaterThanOrEqual(v) if v == "10"));
-
-        let lte = parse_filter_op("less_than_or_equal", &json!("5")).unwrap();
-        assert!(matches!(lte, FilterOp::LessThanOrEqual(v) if v == "5"));
-    }
-
-    #[test]
-    fn parse_filter_op_in_with_array() {
-        let op = parse_filter_op("in", &json!(["a", "b", "c"])).unwrap();
-        match op {
-            FilterOp::In(vals) => assert_eq!(vals, vec!["a", "b", "c"]),
-            _ => panic!("expected In variant"),
-        }
-    }
-
-    #[test]
-    fn parse_filter_op_not_in_with_array() {
-        let op = parse_filter_op("not_in", &json!(["x", "y"])).unwrap();
-        match op {
-            FilterOp::NotIn(vals) => assert_eq!(vals, vec!["x", "y"]),
-            _ => panic!("expected NotIn variant"),
-        }
-    }
-
-    #[test]
-    fn parse_filter_op_in_requires_array() {
-        let result = parse_filter_op("in", &json!("not an array"));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("requires an array"));
-    }
-
-    #[test]
-    fn parse_filter_op_not_in_requires_array() {
-        let result = parse_filter_op("not_in", &json!("not an array"));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("requires an array"));
-    }
-
-    #[test]
-    fn parse_filter_op_exists_and_not_exists() {
-        let ex = parse_filter_op("exists", &json!(true)).unwrap();
-        assert!(matches!(ex, FilterOp::Exists));
-
-        let nex = parse_filter_op("not_exists", &json!(true)).unwrap();
-        assert!(matches!(nex, FilterOp::NotExists));
-    }
-
-    #[test]
-    fn parse_filter_op_unknown_operator() {
-        let result = parse_filter_op("banana", &json!("val"));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown operator 'banana'"));
-    }
-
-    // ── value_to_string ────────────────────────────────────────────────────
-
-    #[test]
-    fn value_to_string_from_string() {
-        assert_eq!(value_to_string(&json!("hello")).unwrap(), "hello");
-    }
-
-    #[test]
-    fn value_to_string_from_number() {
-        assert_eq!(value_to_string(&json!(42)).unwrap(), "42");
-        assert_eq!(value_to_string(&json!(3.25)).unwrap(), "3.25");
-    }
-
-    #[test]
-    fn value_to_string_from_bool() {
-        assert_eq!(value_to_string(&json!(true)).unwrap(), "true");
-        assert_eq!(value_to_string(&json!(false)).unwrap(), "false");
-    }
-
-    #[test]
-    fn value_to_string_error_on_array() {
-        let result = value_to_string(&json!([1, 2]));
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("must be string, number, or boolean")
-        );
-    }
-
-    #[test]
-    fn value_to_string_error_on_object() {
-        let result = value_to_string(&json!({"a": 1}));
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("must be string, number, or boolean")
-        );
     }
 }

@@ -59,7 +59,7 @@ fn validate_method_keys(method: &Table) -> Result<()> {
         .unwrap_or_default();
 
     let allowed: &[&str] = match ty.as_str() {
-        "password_login" => &["type", "mfa", "verify_email", "forgot_password"],
+        "password_login" => &["type", "mfa", "mfa_when", "verify_email", "forgot_password"],
         "bearer" | "session_cookie" => &["type", "surfaces"],
         "strategy" => &["type", "name", "authenticate", "activates_on", "surfaces"],
         other => bail!(
@@ -130,6 +130,10 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
                 Some("email") => MfaMode::Email,
                 _ => MfaMode::Off,
             },
+            mfa_when: get_optional_hook_ref(tbl, "mfa_when", "password_login method")
+                .ok()
+                .flatten()
+                .filter(|h| !h.reference().is_empty()),
             verify_email: tbl.get::<bool>("verify_email").unwrap_or(false),
             forgot_password: tbl.get::<bool>("forgot_password").unwrap_or(true),
         }),

@@ -361,6 +361,7 @@ async fn undelete_on_non_soft_delete_collection_is_rejected() {
         .undelete(Request::new(content::UndeleteRequest {
             collection: "posts".to_string(),
             id: "nonexistent".to_string(),
+            events: None,
         }))
         .await
         .unwrap_err();
@@ -1231,6 +1232,7 @@ async fn update_global_nonexistent() {
             slug: "nonexistent".to_string(),
             data: Some(make_struct(&[("key", "value")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap_err();

@@ -51,3 +51,34 @@ pub struct AuthStrategyInput<'a> {
     pub password: Option<&'a str>,
     pub remote_addr: Option<&'a str>,
 }
+
+/// Context passed to the `password_login` method's `mfa_when` gate hook.
+/// The credentials are already verified when this runs; the hook only
+/// decides whether THIS login must complete the second factor.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.MfaWhenContext")]
+pub struct MfaWhenContext<'a> {
+    /// Auth collection slug.
+    pub collection: &'a str,
+    /// The credential-verified user's field data (password hash hidden).
+    #[lua(ty = "table<string, any>")]
+    pub user: &'a crate::core::DocumentFields,
+    /// The login surface: `"admin"` or `"grpc"`.
+    pub surface: &'a str,
+    /// Request headers (lowercase keys).
+    #[lua(ty = "table<string, string>")]
+    pub headers: &'a HashMap<String, String>,
+    /// Per-config options from `{ ref, options }`; `nil` for a bare ref.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
+}
+
+/// Surface-neutral inputs for the `mfa_when` gate (see
+/// [`HookRunner::run_mfa_when`](crate::hooks::HookRunner)).
+pub struct MfaWhenInput<'a> {
+    pub collection: &'a str,
+    pub user: &'a crate::core::Document,
+    pub surface: &'a str,
+    pub headers: &'a HashMap<String, String>,
+}

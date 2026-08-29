@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use mlua::{Error::RuntimeError, Lua, LuaSerdeExt, Result as LuaResult, Value};
 use serde::Deserialize;
 
-use crate::db::{Filter, FilterClause, FilterOp};
+use crate::db::{FilterClause, FilterOp, query::filter::decode_where_map};
 use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaTypeAlias};
 
 /// Scalar filter value — `string`, `integer`, `number`, or `boolean`.
@@ -161,39 +161,6 @@ pub(crate) enum FilterValue {
 }
 
 impl FilterValue {
-    /// Build a `FilterValue` from a JSON value (the post-`from_value`
-    /// shape the CRUD-input path produces). Used by
-    /// `convert_where_clause` after Lua → JSON conversion.
-    pub(crate) fn from_serde(value: serde_json::Value) -> Result<Self, String> {
-        match value {
-            serde_json::Value::Null => {
-                Err("filter value must not be nil; use { exists = true/false } instead".into())
-            }
-            serde_json::Value::Bool(b) => Ok(Self::Scalar(FilterScalar::Bool(b))),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Self::Scalar(FilterScalar::Int(i)))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Self::Scalar(FilterScalar::Float(f)))
-                } else {
-                    Err(format!(
-                        "filter number {n} cannot be represented as i64 or f64"
-                    ))
-                }
-            }
-            serde_json::Value::String(s) => Ok(Self::Scalar(FilterScalar::Str(s))),
-            serde_json::Value::Object(map) => {
-                let ops: FilterOperators = serde_json::from_value(serde_json::Value::Object(map))
-                    .map_err(|e| e.to_string())?;
-                Ok(Self::Operators(Box::new(ops)))
-            }
-            serde_json::Value::Array(_) => Err(
-                "filter value cannot be an array; use { ['in'] = {...} } or an OR group instead"
-                    .into(),
-            ),
-        }
-    }
-
     /// Build a `FilterValue` directly from an `mlua::Value`. Used by
     /// the access-filter path (`hooks::lifecycle::access::collection`)
     /// which walks an mlua `Table` returned by an access hook. The
@@ -248,11 +215,6 @@ impl LuaAlias for FilterValue {
 #[lua(alias = "crap.OrCondition", target = "table<string, crap.FilterValue>")]
 pub(crate) struct OrCondition;
 
-/// One AND-group inside a `where.or` array. Plain map of field →
-/// filter value; serde resolves each value into the right
-/// `FilterValue` variant.
-type OrGroup = HashMap<String, serde_json::Value>;
-
 /// Pull a `where` `HashMap` (post-`from_value` JSON) into `Vec<FilterClause>`.
 /// The `"or"` key is treated specially — its value must be an array of
 /// AND-groups, each of which is a `where`-shaped map. Called by every
@@ -261,44 +223,13 @@ type OrGroup = HashMap<String, serde_json::Value>;
 pub(crate) fn convert_where_clause(
     where_: HashMap<String, serde_json::Value>,
 ) -> LuaResult<Vec<FilterClause>> {
-    let mut out = Vec::new();
+    // The canonical shared grammar (scalar shorthand, operator tables, `or`
+    // groups) — identical to gRPC and MCP by construction. `FilterValue`
+    // below stays for the access-constraint path, which walks live mlua
+    // tables instead of serde values.
+    let map: serde_json::Map<String, serde_json::Value> = where_.into_iter().collect();
 
-    for (field, value) in where_ {
-        if field == "or" {
-            let groups: Vec<OrGroup> = serde_json::from_value(value)
-                .map_err(|e| RuntimeError(format!("invalid `or` clause: {e}")))?;
-            out.push(FilterClause::or_groups(build_or_groups(groups)?));
-            continue;
-        }
-
-        let fv = FilterValue::from_serde(value).map_err(RuntimeError)?;
-        for op in fv.into_filter_ops() {
-            out.push(FilterClause::Single(Filter {
-                field: field.clone(),
-                op,
-            }));
-        }
-    }
-
-    Ok(out)
-}
-
-fn build_or_groups(groups: Vec<OrGroup>) -> LuaResult<Vec<Vec<Filter>>> {
-    let mut converted = Vec::with_capacity(groups.len());
-    for group in groups {
-        let mut filters = Vec::new();
-        for (field, value) in group {
-            let fv = FilterValue::from_serde(value).map_err(RuntimeError)?;
-            for op in fv.into_filter_ops() {
-                filters.push(Filter {
-                    field: field.clone(),
-                    op,
-                });
-            }
-        }
-        converted.push(filters);
-    }
-    Ok(converted)
+    decode_where_map(&map).map_err(|e| RuntimeError(format!("invalid where clause: {e}")))
 }
 
 #[cfg(test)]
@@ -310,62 +241,61 @@ mod tests {
         matches!(op, FilterOp::Equals(v) if v == expected)
     }
 
-    // ── FilterValue::from_serde dispatch ────────────────────────────
+    // ── convert_where_clause (the CRUD where codec, over the shared
+    // decode_where_map grammar) ─────────────────────────────────────
 
-    #[test]
-    fn filter_value_from_bool_becomes_scalar_bool() {
-        let fv = FilterValue::from_serde(json!(true)).unwrap();
-        assert!(matches!(fv, FilterValue::Scalar(FilterScalar::Bool(true))));
+    fn one(field_value: serde_json::Value) -> Result<Vec<FilterClause>, mlua::Error> {
+        let mut map = HashMap::new();
+        map.insert("f".to_string(), field_value);
+        convert_where_clause(map)
     }
 
     #[test]
-    fn filter_value_from_integer_becomes_scalar_int() {
-        let fv = FilterValue::from_serde(json!(42)).unwrap();
-        assert!(matches!(fv, FilterValue::Scalar(FilterScalar::Int(42))));
+    fn where_scalar_shorthand_becomes_equals() {
+        for (v, expected) in [
+            (json!(true), "true"),
+            (json!(42), "42"),
+            (json!(3.5), "3.5"),
+            (json!("published"), "published"),
+        ] {
+            let clauses = one(v).unwrap();
+            let FilterClause::Single(f) = &clauses[0] else {
+                panic!("expected Single");
+            };
+            assert!(scalar_eq(&f.op, expected), "for {expected}");
+        }
     }
 
     #[test]
-    fn filter_value_from_float_becomes_scalar_float() {
-        let fv = FilterValue::from_serde(json!(3.5)).unwrap();
-        let FilterValue::Scalar(FilterScalar::Float(f)) = fv else {
-            panic!("expected Float scalar");
+    fn where_operator_table_decodes() {
+        let clauses = one(json!({ "contains": "rust" })).unwrap();
+        let FilterClause::Single(f) = &clauses[0] else {
+            panic!("expected Single");
         };
-        assert!((f - 3.5).abs() < f64::EPSILON);
+        assert!(matches!(&f.op, FilterOp::Contains(v) if v == "rust"));
     }
 
     #[test]
-    fn filter_value_from_string_becomes_scalar_str() {
-        let fv = FilterValue::from_serde(json!("published")).unwrap();
-        assert!(matches!(fv, FilterValue::Scalar(FilterScalar::Str(ref s)) if s == "published"));
+    fn where_or_group_decodes() {
+        let mut map = HashMap::new();
+        map.insert(
+            "or".to_string(),
+            json!([{ "status": "a" }, { "status": "b" }]),
+        );
+        let clauses = convert_where_clause(map).unwrap();
+        assert!(matches!(&clauses[0], FilterClause::Or(_)));
     }
 
     #[test]
-    fn filter_value_from_object_becomes_operators() {
-        let fv = FilterValue::from_serde(json!({ "contains": "rust" })).unwrap();
-        let FilterValue::Operators(ops) = fv else {
-            panic!("expected Operators variant");
-        };
-        assert_eq!(ops.contains.as_deref(), Some("rust"));
+    fn where_null_and_array_error() {
+        assert!(one(json!(null)).is_err());
+        assert!(one(json!(["a", "b"])).is_err());
     }
 
     #[test]
-    fn filter_value_from_null_errors() {
-        let err = FilterValue::from_serde(json!(null)).unwrap_err();
-        assert!(err.contains("must not be nil"), "got: {err}");
-    }
-
-    #[test]
-    fn filter_value_from_array_errors() {
-        let err = FilterValue::from_serde(json!(["a", "b"])).unwrap_err();
-        assert!(err.contains("cannot be an array"), "got: {err}");
-    }
-
-    #[test]
-    fn filter_value_unknown_operator_errors() {
-        // `deny_unknown_fields` on FilterOperators surfaces unknown
-        // operator keys as a serde error.
-        let err = FilterValue::from_serde(json!({ "bad_op": "x" })).unwrap_err();
-        assert!(err.contains("bad_op"), "got: {err}");
+    fn where_unknown_operator_errors() {
+        let err = one(json!({ "bad_op": "x" })).unwrap_err();
+        assert!(err.to_string().contains("bad_op"), "got: {err}");
     }
 
     // ── FilterOperators → FilterOp expansion ────────────────────────
@@ -515,7 +445,7 @@ mod tests {
         w.insert("or".to_string(), json!({ "author": "alice" }));
         let err = convert_where_clause(w).unwrap_err();
         assert!(
-            err.to_string().contains("invalid `or` clause"),
+            err.to_string().contains("'or' must be an array"),
             "got: {err}"
         );
     }

@@ -327,6 +327,11 @@ The `find_*` tools accept these parameters:
 | `before_cursor` | string | Backward cursor (cursor mode only, mutually exclusive with `page` and `after_cursor`) |
 | `depth` | integer | Relationship population depth |
 | `search` | string | Full-text search query |
+| `select` | string[] | Field names to return (projection); omit for all fields |
+
+`count_*` accepts `where`, `search`, `locale`, `draft`, and `trash` — the
+same query a `find_*` call matches. `unpublish_*` and `undelete_*` accept an
+`events` boolean (default `true`) for quiet writes.
 
 ### Response Format
 

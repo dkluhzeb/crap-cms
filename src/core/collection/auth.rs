@@ -85,6 +85,18 @@ pub enum Surface {
     Grpc,
 }
 
+impl Surface {
+    /// The lowercase wire/hook-context name (`"admin"` / `"grpc"`), matching
+    /// the serde spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Grpc => "grpc",
+        }
+    }
+}
+
 /// Ordered list of surfaces this method is allowed on. Empty
 /// means "no surface" (effectively disabled); not a default.
 /// Default constructors below give sensible per-variant scopes.
@@ -236,6 +248,17 @@ pub enum AuthMethod {
         #[serde(default)]
         #[lua(ty = "\"email\"|false", optional)]
         mfa: MfaMode,
+        /// Optional Lua gate deciding WHETHER a verified login must complete
+        /// the second factor — called after credential verification with
+        /// `{ collection, user, surface, headers }`; return `false`/`nil` to
+        /// skip MFA for this login, anything truthy to require it. Lets MFA
+        /// apply per surface (`ctx.surface == "grpc"`) or per user field
+        /// (`ctx.user.mfa_enabled`). Only meaningful with `mfa = "email"`;
+        /// no hook = MFA always required. A hook error fails CLOSED
+        /// (requires MFA).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[lua(ty = "string | crap.HookRef", optional)]
+        mfa_when: Option<HookRef>,
         /// Require email verification before login (default `false`).
         #[serde(default)]
         #[lua(optional)]
@@ -298,6 +321,7 @@ impl AuthMethod {
     pub fn password_login() -> Self {
         Self::PasswordLogin {
             mfa: MfaMode::Off,
+            mfa_when: None,
             verify_email: false,
             forgot_password: true,
         }
@@ -319,6 +343,7 @@ impl AuthMethod {
     pub fn password_login_builder() -> PasswordLoginBuilder {
         PasswordLoginBuilder {
             mfa: MfaMode::Off,
+            mfa_when: None,
             verify_email: false,
             forgot_password: true,
         }
@@ -345,9 +370,10 @@ impl AuthMethod {
 /// password-login knobs are reachable, so misusing the builder for
 /// a different variant is a compile error rather than the silent
 /// no-op a method-on-the-enum approach would give.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PasswordLoginBuilder {
     mfa: MfaMode,
+    mfa_when: Option<HookRef>,
     verify_email: bool,
     forgot_password: bool,
 }
@@ -357,6 +383,14 @@ impl PasswordLoginBuilder {
     #[must_use]
     pub fn mfa(mut self, mode: MfaMode) -> Self {
         self.mfa = mode;
+        self
+    }
+
+    /// Set the `mfa_when` gate hook. Default: `None` (MFA always required
+    /// when the mode enables it).
+    #[must_use]
+    pub fn mfa_when(mut self, hook: Option<HookRef>) -> Self {
+        self.mfa_when = hook;
         self
     }
 
@@ -381,6 +415,7 @@ impl PasswordLoginBuilder {
     pub fn build(self) -> AuthMethod {
         AuthMethod::PasswordLogin {
             mfa: self.mfa,
+            mfa_when: self.mfa_when,
             verify_email: self.verify_email,
             forgot_password: self.forgot_password,
         }
@@ -438,6 +473,7 @@ impl Auth {
         vec![
             AuthMethod::PasswordLogin {
                 mfa: MfaMode::Off,
+                mfa_when: None,
                 verify_email: false,
                 forgot_password: true,
             },
@@ -459,6 +495,7 @@ impl Auth {
         self.methods.iter().find_map(|m| match m {
             AuthMethod::PasswordLogin {
                 mfa,
+                mfa_when: _,
                 verify_email,
                 forgot_password,
             } => Some(PasswordLoginCfg {
@@ -519,6 +556,15 @@ impl Auth {
         self.password_login().map_or(MfaMode::Off, |c| c.mfa)
     }
 
+    /// The `password_login` method's `mfa_when` gate hook, if configured.
+    #[must_use]
+    pub fn mfa_when(&self) -> Option<&HookRef> {
+        self.methods.iter().find_map(|m| match m {
+            AuthMethod::PasswordLogin { mfa_when, .. } => mfa_when.as_ref(),
+            _ => None,
+        })
+    }
+
     /// True iff this collection has at least one `strategy` method.
     #[must_use]
     pub fn has_strategies(&self) -> bool {
@@ -557,12 +603,14 @@ impl Auth {
             .position(|m| matches!(m, AuthMethod::PasswordLogin { .. }))
             && let AuthMethod::PasswordLogin {
                 mfa,
+                ref mfa_when,
                 verify_email,
                 forgot_password,
             } = self.methods[idx]
         {
             let seed = PasswordLoginBuilder {
                 mfa,
+                mfa_when: mfa_when.clone(),
                 verify_email,
                 forgot_password,
             };
@@ -676,6 +724,7 @@ mod tests {
             enabled: true,
             methods: vec![AuthMethod::PasswordLogin {
                 mfa: MfaMode::Email,
+                mfa_when: None,
                 verify_email: true,
                 forgot_password: false,
             }],
@@ -749,6 +798,7 @@ mod tests {
         match m {
             AuthMethod::PasswordLogin {
                 mfa,
+                mfa_when: _,
                 verify_email,
                 forgot_password,
             } => {

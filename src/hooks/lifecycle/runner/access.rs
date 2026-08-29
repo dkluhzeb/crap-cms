@@ -13,7 +13,7 @@ use crate::{
     hooks::{
         HookRunner,
         lifecycle::{
-            AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
+            AccessCheckInput, AuthStrategyContext, AuthStrategyInput, MfaWhenContext, MfaWhenInput,
             access::{
                 ReadStripInput, WriteStripInput, check_collection_access, collect_denials_flat,
                 collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
@@ -89,6 +89,41 @@ impl HookRunner {
             Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
             _ => Ok(None),
         }
+    }
+
+    /// Run a `password_login` method's `mfa_when` gate: decides whether THIS
+    /// verified login must complete a second factor. Lua truthiness applies —
+    /// `false`/`nil` skips MFA, anything else requires it (so
+    /// `return ctx.user.mfa_enabled` works without a boolean cast). Errors
+    /// propagate; the caller fails CLOSED (requires MFA).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or the hook call fails.
+    pub fn run_mfa_when(
+        &self,
+        hook: &HookRef,
+        input: &MfaWhenInput,
+        conn: &dyn DbConnection,
+    ) -> Result<bool> {
+        let lua = self.pool.acquire()?;
+
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+
+        let func = resolve_hook_function(&lua, hook.reference())?;
+
+        let ctx = MfaWhenContext {
+            collection: input.collection,
+            user: &input.user.fields,
+            surface: input.surface,
+            headers: input.headers,
+            options: hook.options(),
+        };
+        let ctx_value = lua.to_value(&ctx)?;
+
+        let result: Value = func.call(ctx_value)?;
+
+        Ok(!matches!(result, Value::Boolean(false) | Value::Nil))
     }
 
     /// Run a collection-level or global-level access check.

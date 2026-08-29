@@ -584,6 +584,7 @@ async fn subscribe_global_events() {
             slug: "settings".to_string(),
             data: Some(make_struct(&[("site_name", "My Site")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();

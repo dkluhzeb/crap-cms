@@ -512,6 +512,16 @@ function crap.fields.join(config) end
 --- @field remote_addr? string The client's remote IP address, when known.
 --- @field options? table Per-config options from the strategy's `authenticate` `{ ref, options }` table; `nil` when configured as a bare ref string.
 
+--- Context passed to the `password_login` method's `mfa_when` gate hook.
+--- The credentials are already verified when this runs; the hook only
+--- decides whether THIS login must complete the second factor.
+--- @class crap.MfaWhenContext
+--- @field collection string Auth collection slug.
+--- @field user table<string, any> The credential-verified user's field data (password hash hidden).
+--- @field surface string The login surface: `"admin"` or `"grpc"`.
+--- @field headers table<string, string> Request headers (lowercase keys).
+--- @field options? table Per-config options from `{ ref, options }`; `nil` for a bare ref.
+
 --- Context passed to the `live.filter` function — the per-collection gate that
 --- decides whether a committed mutation is broadcast to live subscribers.
 ---
@@ -565,6 +575,7 @@ function crap.fields.join(config) end
 --- @class crap.AuthMethodPasswordLogin
 --- @field type "password_login"
 --- @field mfa? "email"|false Email-MFA mode. `"email"` enables; `false` (or omit) disables.
+--- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Only meaningful with `mfa = "email"`; no hook = MFA always required. A hook error fails CLOSED (requires MFA).
 --- @field verify_email? boolean Require email verification before login (default `false`).
 --- @field forgot_password? boolean Enable the forgot-password flow (default `true`).
 
@@ -874,6 +885,7 @@ function crap.fields.join(config) end
 --- headers + the collection slug; returns a user document on success
 --- or `nil` to fall through to the next method.
 --- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
+--- @alias crap.mfa_when_fn fun(ctx: crap.MfaWhenContext): boolean?
 
 --- Job handler entry point. The runtime ignores the return value.
 --- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)

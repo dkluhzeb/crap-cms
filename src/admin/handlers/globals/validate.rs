@@ -3,12 +3,13 @@
 //! Runs the full before_validate → validate pipeline inside a rolled-back transaction,
 //! returning JSON `{ valid: true }` or `{ valid: false, errors: { ... } }`.
 
+use std::sync::Arc;
+
 use axum::{
     Extension, Json,
     extract::{Path, State},
     response::Response,
 };
-use tokio::task;
 
 use crate::{
     admin::{
@@ -17,13 +18,14 @@ use crate::{
             forms::FormData,
             shared::{check_access_or_forbid, get_user_doc, parse_request_locale},
             validate::{
-                RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
-                validation_error_response_simple, values_to_string_map,
+                ValidateRequest, handle_validation_outcome, validation_error_response_simple,
+                values_to_string_map,
             },
         },
     },
     core::{DocumentFields, auth::AuthUser},
-    db::{AccessResult, query::helpers::global_table},
+    db::AccessResult,
+    service::op::{self, Principal, TargetRef, ValidateArgs, ValidateGlobal},
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update
@@ -60,39 +62,28 @@ pub async fn validate_global(
 
     let data: DocumentFields = FormData::from_raw(form_data, &def.fields).into();
 
-    let is_draft = payload.draft && def.has_drafts();
     let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return validation_error_response_simple(&msg),
     };
 
-    let gtable = global_table(&slug);
-    let pool = state.infra.pool.clone();
-    let runner = state.infra.hook_runner.clone();
-    let slug_owned = slug.clone();
-    let def_owned = def.clone();
-    let user_doc = get_user_doc(auth_user.as_ref()).cloned();
+    // Shared dry-run body — globals always validate as an update against the
+    // singleton `default` row of `_global_<slug>`.
+    let args = ValidateArgs::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(payload.draft)
+        .build();
 
-    let result = task::spawn_blocking(move || {
-        run_validation(&RunValidationParams {
-            pool: &pool,
-            runner: &runner,
-            hooks: &def_owned.hooks,
-            fields: &def_owned.fields,
-            slug: &slug_owned,
-            table_name: &gtable,
-            operation: "update",
-            exclude_id: Some("default"),
-            data: &data,
-            is_draft,
-            soft_delete: false,
-            supports_drafts: def_owned.has_drafts(),
-            locale_ctx: locale_ctx.as_ref(),
-            user_doc: user_doc.as_ref(),
-            required_locales: None,
-        })
-    })
+    let result = op::run_blocking::<ValidateGlobal>(
+        Arc::clone(&state.infra),
+        Principal::Resolved {
+            user: get_user_doc(auth_user.as_ref()).cloned(),
+            ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
+        },
+        TargetRef::global(slug),
+        args,
+    )
     .await;
 
-    handle_validation_result(result, auth_user.as_ref(), &state)
+    handle_validation_outcome(result, auth_user.as_ref(), &state)
 }

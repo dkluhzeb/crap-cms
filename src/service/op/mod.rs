@@ -42,6 +42,7 @@ mod unpublish;
 mod update;
 mod update_global;
 mod update_many;
+mod validate;
 mod versions;
 
 pub use count::{Count, CountArgs};
@@ -57,6 +58,7 @@ pub use unpublish::{Unpublish, UnpublishArgs};
 pub use update::{Update, UpdateArgs};
 pub use update_global::{UnpublishGlobal, UnpublishGlobalArgs, UpdateGlobal, UpdateGlobalArgs};
 pub use update_many::{UpdateMany, UpdateManyArgs};
+pub use validate::{Validate, ValidateArgs, ValidateGlobal, ValidateOutput};
 pub use versions::{ListVersions, ListVersionsArgs, RestoreVersion, RestoreVersionArgs};
 
 /// A single canonical operation: owned per-call arguments plus the handler

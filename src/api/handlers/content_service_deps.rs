@@ -30,6 +30,8 @@ pub struct ContentServiceDeps {
     pub config_dir: PathBuf,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub mfa_limiter: Arc<LoginRateLimiter>,
+    pub ip_mfa_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub password_provider: SharedPasswordProvider,
@@ -54,6 +56,8 @@ pub struct ContentServiceDepsBuilder {
     event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
+    mfa_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_mfa_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
@@ -77,6 +81,8 @@ impl ContentServiceDepsBuilder {
             event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
+            mfa_limiter: None,
+            ip_mfa_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
             storage: None,
@@ -148,6 +154,20 @@ impl ContentServiceDepsBuilder {
     #[must_use]
     pub fn ip_login_limiter(mut self, ip_login_limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_login_limiter = Some(ip_login_limiter);
+
+        self
+    }
+
+    #[must_use]
+    pub fn mfa_limiter(mut self, mfa_limiter: Arc<LoginRateLimiter>) -> Self {
+        self.mfa_limiter = Some(mfa_limiter);
+
+        self
+    }
+
+    #[must_use]
+    pub fn ip_mfa_limiter(mut self, ip_mfa_limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_mfa_limiter = Some(ip_mfa_limiter);
 
         self
     }
@@ -269,12 +289,29 @@ impl ContentServiceDepsBuilder {
             )
         });
 
+        // Defaulted from config when unset (test constructions): the MFA
+        // guess budget mirrors the login thresholds, in its own keyspace.
+        let mfa_limiter = self.mfa_limiter.unwrap_or_else(|| {
+            Arc::new(LoginRateLimiter::new(
+                config.auth.max_login_attempts,
+                config.auth.login_lockout_seconds,
+            ))
+        });
+        let ip_mfa_limiter = self.ip_mfa_limiter.unwrap_or_else(|| {
+            Arc::new(LoginRateLimiter::new(
+                config.auth.max_ip_login_attempts,
+                config.auth.login_lockout_seconds,
+            ))
+        });
+
         ContentServiceDeps {
             infra,
             config,
             config_dir: self.config_dir.expect("config_dir is required"),
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
+            mfa_limiter,
+            ip_mfa_limiter,
             forgot_password_limiter: self
                 .forgot_password_limiter
                 .expect("forgot_password_limiter is required"),

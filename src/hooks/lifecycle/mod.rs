@@ -12,7 +12,8 @@ mod validation;
 pub use context::{
     AccessCheckInput, AccessContext, AuthStrategyContext, AuthStrategyInput, ConditionContext,
     FieldHookContext, HookContext, HookContextBuilder, JobHandlerContext, JobInfo,
-    LiveFilterContext, RouteContext, RouteHandlerInput, ValidateContext,
+    LiveFilterContext, MfaWhenContext, MfaWhenInput, RouteContext, RouteHandlerInput,
+    ValidateContext,
 };
 pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,

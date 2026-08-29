@@ -161,7 +161,7 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND            — collection or document not found
   //   PERMISSION_DENIED    — trash access denied
-  //   FAILED_PRECONDITION  — collection does not have soft_delete enabled
+  //   INVALID_ARGUMENT     — collection does not have soft_delete enabled
   //   UNAVAILABLE          — transient DB error; retry
   rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 
@@ -206,6 +206,15 @@ service ContentAPI {
   //                        or unverified accounts to prevent state enumeration)
   //   RESOURCE_EXHAUSTED — rate limit exceeded; try again later
   rpc Login (LoginRequest) returns (LoginResponse);
+
+  // VerifyMfa completes an MFA-gated login. When Login returns
+  // mfa_required=true (collection has mfa="email"), call this with the
+  // challenge token and the emailed 6-digit code to receive the JWT.
+  //
+  // Errors:
+  //   UNAUTHENTICATED    — challenge token invalid/expired, or wrong code
+  //   RESOURCE_EXHAUSTED — rate limited
+  rpc VerifyMfa (VerifyMfaRequest) returns (LoginResponse);
 
   // Me validates a JWT token and returns the associated user document.
   // Use this to verify a token is still valid and to fetch the current user.
@@ -355,7 +364,7 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND              — collection slug not registered
   //   PERMISSION_DENIED      — read access denied
-  //   FAILED_PRECONDITION    — collection does not have versioning enabled
+  //   INVALID_ARGUMENT       — collection does not have versioning enabled
   //   UNAVAILABLE            — transient DB error; retry
   rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
 
@@ -367,7 +376,7 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND           — collection slug not registered, or version_id not found
   //   PERMISSION_DENIED   — update access denied
-  //   FAILED_PRECONDITION — collection does not have versioning enabled
+  //   INVALID_ARGUMENT    — collection does not have versioning enabled
   //   UNAVAILABLE         — transient DB error; retry
   rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
 
@@ -817,6 +826,10 @@ message UndeleteRequest {
 
   // The document's nanoid ID.
   string id = 2;
+
+  // Emit a live-update event for the restored document. Default: true.
+  // Set false for a quiet restore.
+  optional bool events = 3;
 }
 
 // UndeleteResponse confirms the undeletion.
@@ -859,6 +872,10 @@ message UpdateGlobalRequest {
   // Emit a live-update event for the updated global. Default: true.
   // Set false for a quiet write.
   optional bool events = 4;
+
+  // Save as an unpublished draft (drafts-enabled globals only). Default:
+  // false (publishes). Parity with the MCP/Lua/admin global update.
+  optional bool draft = 5;
 }
 
 // UpdateGlobalResponse returns the global document after the update.
@@ -890,6 +907,30 @@ message LoginResponse {
   // The authenticated user document (fields visible to the response caller).
   // Does NOT include the password hash — that column is always hidden.
   Document user = 2;
+
+  // True when the collection requires a second factor for this login: the
+  // password was verified, a 6-digit code was emailed to the user, and NO
+  // token was issued. Complete the login with the VerifyMfa RPC.
+  optional bool mfa_required = 3;
+
+  // Short-lived challenge token binding this pending login (present only
+  // when mfa_required is true). Pass it to VerifyMfa together with the
+  // emailed code.
+  optional string mfa_challenge = 4;
+}
+
+// VerifyMfaRequest completes an MFA-gated login: the challenge token from
+// LoginResponse.mfa_challenge plus the 6-digit code emailed to the user.
+message VerifyMfaRequest {
+  // The auth collection slug (must match the Login call).
+  string collection = 1;
+
+  // The challenge token returned by Login when mfa_required was true.
+  string mfa_challenge = 2;
+
+  // The 6-digit code emailed to the user. Codes are single-use and expire
+  // after 5 minutes.
+  string code = 3;
 }
 
 // MeRequest validates a JWT and returns the associated user.

@@ -6,3 +6,4 @@ mod login;
 mod me;
 mod reset_password;
 mod verify_email;
+mod verify_mfa;

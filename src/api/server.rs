@@ -34,6 +34,8 @@ pub struct GrpcStartParams {
     pub config_dir: PathBuf,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub mfa_limiter: Arc<LoginRateLimiter>,
+    pub ip_mfa_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub password_provider: SharedPasswordProvider,
@@ -58,6 +60,8 @@ pub struct GrpcStartParamsBuilder {
     config_dir: Option<PathBuf>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
+    mfa_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_mfa_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     password_provider: Option<SharedPasswordProvider>,
@@ -72,6 +76,8 @@ impl GrpcStartParamsBuilder {
             config_dir: None,
             login_limiter: None,
             ip_login_limiter: None,
+            mfa_limiter: None,
+            ip_mfa_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
             password_provider: None,
@@ -105,6 +111,18 @@ impl GrpcStartParamsBuilder {
     pub fn ip_login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_login_limiter = Some(limiter);
 
+        self
+    }
+
+    #[must_use]
+    pub fn mfa_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.mfa_limiter = Some(limiter);
+        self
+    }
+
+    #[must_use]
+    pub fn ip_mfa_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_mfa_limiter = Some(limiter);
         self
     }
 
@@ -156,6 +174,8 @@ impl GrpcStartParamsBuilder {
             config_dir: self.config_dir.expect("config_dir is required"),
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
+            mfa_limiter: self.mfa_limiter.expect("mfa_limiter is required"),
+            ip_mfa_limiter: self.ip_mfa_limiter.expect("ip_mfa_limiter is required"),
             forgot_password_limiter: self
                 .forgot_password_limiter
                 .expect("forgot_password_limiter is required"),
@@ -202,6 +222,8 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .config_dir(params.config_dir)
         .login_limiter(params.login_limiter)
         .ip_login_limiter(params.ip_login_limiter)
+        .mfa_limiter(params.mfa_limiter)
+        .ip_mfa_limiter(params.ip_mfa_limiter)
         .forgot_password_limiter(params.forgot_password_limiter)
         .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
         .password_provider(params.password_provider)

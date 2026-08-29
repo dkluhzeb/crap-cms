@@ -1,18 +1,18 @@
 //! Execute `validate_global` — check global document data against its
-//! field rules without persisting. Mirrors the admin global-validate
-//! endpoint: runs the full before-write pipeline (field coercion,
-//! validators, `before_validate` hooks) and reports per-field errors.
+//! field rules without persisting.
+//!
+//! Codec over [`op::run`] with [`Principal::Override`] — same trusted
+//! override as MCP's real `update_global`, so the dry-run predicts what that
+//! write would do. Semantics (singleton `default` update against
+//! `_global_<slug>`) live in the shared [`ValidateGlobal`] body.
 
 use anyhow::{Context as _, Result};
 use serde_json::{Value, json, to_string_pretty};
 
 use crate::{
-    db::{LocaleContext, query::helpers::global_table},
+    db::LocaleContext,
     mcp::tools::{ToolExecCtx, collection::helpers::extract_data_from_args},
-    service::{
-        RunnerWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document,
-        validate_outcome,
-    },
+    service::op::{self, Principal, TargetRef, ValidateArgs, ValidateGlobal},
 };
 
 /// Execute `validate_global` — returns `{ "valid": bool, "errors": { field: message } }`.
@@ -21,6 +21,8 @@ pub(in crate::mcp::tools) fn exec_validate_global(
     slug: &str,
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
+    // The def is needed at decode for the strict unknown-field rejection;
+    // the op resolves its own copy from the registry.
     let def = ctx
         .infra
         .registry
@@ -28,45 +30,30 @@ pub(in crate::mcp::tools) fn exec_validate_global(
         .get(slug)
         .context("Global not found")?;
 
-    let conn = ctx.infra.pool.get().context("DB connection")?;
-
     // `locale` and `draft` are reserved top-level keys — excluded from field data.
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
-    let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false) && def.has_drafts();
+    let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
     let data = extract_data_from_args(args, &["locale", "draft"], &def.fields)?;
 
-    let write_hooks = RunnerWriteHooks::new(&ctx.infra.hook_runner);
-
-    // Globals are a singleton row keyed `default` in the `_global_<slug>`
-    // table — validate as an update that excludes that row from unique checks.
-    let table = global_table(slug);
-    let validate_ctx = ValidateContext {
-        slug,
-        table_name: &table,
-        fields: &def.fields,
-        hooks: &def.hooks,
-        operation: "update",
-        exclude_id: Some("default"),
-        soft_delete: false,
-        supports_drafts: def.has_drafts(),
-        required_locales: None,
-    };
-
-    let input = WriteInput::builder(data)
-        .locale_ctx(locale_ctx.as_ref())
+    let op_args = ValidateArgs::builder(data)
+        .locale_ctx(locale_ctx)
         .draft(draft)
         .build();
 
-    let (valid, errors) = validate_outcome(validate_document(
-        &conn,
-        &write_hooks,
-        &validate_ctx,
-        input,
-        None,
-    ))
-    .map_err(ServiceError::into_anyhow)?;
+    let outcome = op::run::<ValidateGlobal>(
+        &ctx.infra,
+        Principal::Override,
+        &TargetRef::global(slug),
+        op_args,
+    )
+    .map_err(|e| e.into_service_error().into_anyhow())?;
+
+    let (valid, errors) = match outcome {
+        None => (true, std::collections::HashMap::new()),
+        Some(ve) => (false, ve.to_field_map()),
+    };
 
     Ok(to_string_pretty(
         &json!({ "valid": valid, "errors": errors }),

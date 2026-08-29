@@ -35,7 +35,10 @@ pub use evaluator::{
 };
 pub use local::{AuthResult, authenticate_local};
 pub use login_flow::{LoginFlowRequest, LoginOutcome, LoginVerified, verify_login};
-pub use mfa::{set_mfa_code, verify_mfa_code};
+pub use mfa::{
+    MFA_PENDING_EXPIRY, generate_mfa_code, mint_mfa_pending_token, send_mfa_code_email,
+    set_mfa_code, verify_mfa_code,
+};
 pub use tokens::{
     ResetTokenResult, consume_reset_token, consume_verification_token, find_by_reset_token,
     generate_reset_token, generate_security_token,
