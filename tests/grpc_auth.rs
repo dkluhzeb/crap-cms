@@ -1517,3 +1517,86 @@ async fn validate_follows_collection_access_rules() {
     let resp = ts.service.validate(req).await.unwrap().into_inner();
     assert!(resp.valid, "authenticated update-mode validate passes");
 }
+
+/// End-to-end custom MFA delivery: `mfa = "custom"` hands the generated code
+/// to the `mfa_deliver` Lua hook instead of emailing it. The fixture hook
+/// "delivers" by writing the code into a second collection via nested CRUD
+/// (proving the hook's connection injection); the test reads it back and
+/// completes the login through `VerifyMfa` — so the delivered code and the
+/// stored code are proven identical.
+#[tokio::test]
+async fn login_mfa_custom_delivery_round_trip() {
+    let init_lua = r#"
+        local M = {}
+        function M.deliver(ctx)
+            assert(ctx.collection == "users", "collection in deliver ctx")
+            assert(type(ctx.code) == "string" and #ctx.code == 6, "6-digit code")
+            assert(ctx.expires_in == 300, "expiry seconds")
+            crap.collections.create("outbox", {
+                body = ctx.code,
+            }, { override_access = true, hooks = false, events = false })
+        end
+        package.loaded["mfa_hooks"] = M
+    "#;
+
+    let mut users = make_users_def();
+    users.auth = Some(Auth::enabled().map_password_login(|b| {
+        b.mfa(MfaMode::Custom)
+            .mfa_deliver(Some(crap_cms::core::HookRef::new("mfa_hooks.deliver")))
+    }));
+
+    let mut outbox = CollectionDefinition::new("outbox");
+    outbox.labels = Labels {
+        singular: Some(LocalizedString::Plain("Outbox".to_string())),
+        plural: Some(LocalizedString::Plain("Outbox".to_string())),
+    };
+    outbox.fields = vec![FieldDefinition::builder("body", FieldType::Text).build()];
+
+    let ts = setup_service_with_init_lua(vec![users, outbox], vec![], Some(init_lua));
+    create_login_user(&ts, "custom@example.com").await;
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "custom@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.mfa_required, Some(true));
+    let challenge = resp.mfa_challenge.expect("challenge token");
+
+    // Delivery runs in a background blocking task — poll the outbox briefly.
+    let mut delivered: Option<String> = None;
+    for _ in 0..50 {
+        let found = ts
+            .service
+            .find(Request::new(content::FindRequest {
+                collection: "outbox".to_string(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        if let Some(doc) = found.documents.first() {
+            delivered = get_proto_field(doc, "body");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let code = delivered.expect("mfa_deliver hook must have written the code");
+
+    let resp = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: challenge,
+            code,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!resp.token.is_empty(), "delivered code completes the login");
+}

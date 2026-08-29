@@ -59,7 +59,14 @@ fn validate_method_keys(method: &Table) -> Result<()> {
         .unwrap_or_default();
 
     let allowed: &[&str] = match ty.as_str() {
-        "password_login" => &["type", "mfa", "mfa_when", "verify_email", "forgot_password"],
+        "password_login" => &[
+            "type",
+            "mfa",
+            "mfa_when",
+            "mfa_deliver",
+            "verify_email",
+            "forgot_password",
+        ],
         "bearer" | "session_cookie" => &["type", "surfaces"],
         "strategy" => &["type", "name", "authenticate", "activates_on", "surfaces"],
         other => bail!(
@@ -128,9 +135,14 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
         "password_login" => Some(AuthMethod::PasswordLogin {
             mfa: match tbl.get::<String>("mfa").ok().as_deref() {
                 Some("email") => MfaMode::Email,
+                Some("custom") => MfaMode::Custom,
                 _ => MfaMode::Off,
             },
             mfa_when: get_optional_hook_ref(tbl, "mfa_when", "password_login method")
+                .ok()
+                .flatten()
+                .filter(|h| !h.reference().is_empty()),
+            mfa_deliver: get_optional_hook_ref(tbl, "mfa_deliver", "password_login method")
                 .ok()
                 .flatten()
                 .filter(|h| !h.reference().is_empty()),
@@ -236,6 +248,36 @@ mod tests {
         assert!(matches!(auth.methods[0], AuthMethod::PasswordLogin { .. }));
         assert!(matches!(auth.methods[1], AuthMethod::Bearer { .. }));
         assert!(matches!(auth.methods[2], AuthMethod::SessionCookie { .. }));
+    }
+
+    /// `mfa = "custom"` + `mfa_deliver` parse into the typed pair (the
+    /// startup validator enforces they arrive together).
+    #[test]
+    fn parses_custom_mfa_with_deliver_hook() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+        m.set("mfa", "custom").unwrap();
+        m.set("mfa_deliver", "hooks.mfa.send_sms").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+
+        let auth = parse_collection_auth(&tbl).unwrap();
+        let AuthMethod::PasswordLogin {
+            mfa, mfa_deliver, ..
+        } = &auth.methods[0]
+        else {
+            panic!("expected PasswordLogin");
+        };
+        assert_eq!(*mfa, MfaMode::Custom);
+        assert_eq!(
+            mfa_deliver.as_ref().map(crate::core::HookRef::reference),
+            Some("hooks.mfa.send_sms")
+        );
     }
 
     #[test]

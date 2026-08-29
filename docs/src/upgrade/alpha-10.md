@@ -994,6 +994,16 @@ What changed:
   (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`).
   No hook = MFA always required; a hook error fails closed.
 
+### Custom MFA delivery (`mfa = "custom"` + `mfa_deliver`)
+
+The MFA mode gained a third value: `mfa = "custom"` keeps the built-in code
+generation, storage, verification, rate limiting, and challenge flow, but
+hands delivery to the required `mfa_deliver` Lua hook
+(`{ collection, user, code, expires_in }`) — SMS, push, chat, anything.
+Startup validates the pairing (`custom` without the hook, or the hook
+without `custom`, is a boot error). Works identically on the admin MFA page
+and the gRPC `Login`/`VerifyMfa` flow, and composes with `mfa_when`.
+
 ### gRPC wire-parity additions
 
 - `UpdateGlobalRequest` gained optional `draft` (save a global as an

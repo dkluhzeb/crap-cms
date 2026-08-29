@@ -219,10 +219,10 @@ impl ContentService {
         let code = auth::generate_mfa_code();
         let infra = Arc::clone(&self.infra);
         let slug = collection.to_string();
-        let user_id = verified.user.id.clone();
+        let user_owned = verified.user.clone();
 
         task::spawn_blocking(move || {
-            auth::send_mfa_code_email(&infra, &slug, &user_id, &user_email, &code);
+            auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
         });
 
         Ok(Response::new(content::LoginResponse {

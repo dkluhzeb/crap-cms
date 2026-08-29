@@ -278,11 +278,41 @@ Auth collections can require a second factor after password verification:
 
 ```lua
 auth = {
-    mfa = "email",  -- "email" or false (default)
+    mfa = "email",  -- "email", "custom", or false (default)
 }
 ```
 
 When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns an `mfa_challenge` token and the `VerifyMfa` RPC completes the login.
+
+### Custom delivery (`mfa = "custom"`)
+
+With `mfa = "custom"`, the CMS still generates, stores, and verifies the
+6-digit code — but delivery is yours: the required `mfa_deliver` hook
+receives the code and sends it via any channel (SMS, push, chat, …).
+Verification is identical to email MFA on both surfaces (admin MFA page /
+gRPC `VerifyMfa`).
+
+```lua
+auth = {
+    methods = {
+        { type = "password_login", mfa = "custom", mfa_deliver = "hooks.mfa.send" },
+        -- ...
+    },
+}
+
+-- hooks/mfa.lua
+function M.send(ctx)
+    -- ctx.collection, ctx.user (field data), ctx.code (6 digits, SENSITIVE —
+    -- never log it), ctx.expires_in (seconds). Nested CRUD is available,
+    -- e.g. to enqueue the send in a jobs collection.
+    my_sms.send(ctx.user.phone, "Your code: " .. ctx.code)
+end
+```
+
+`mfa = "custom"` without `mfa_deliver` (or the hook without the mode) is a
+**startup error** — the pairing is validated so a login can never silently
+receive no code. Delivery is best-effort like the built-in email: hook errors
+are logged server-side and the previously issued code stays valid.
 
 An optional `mfa_when` hook decides *whether* a verified login needs the second factor — per surface or per user:
 

@@ -44,7 +44,7 @@ crap.collections.define("users", {
 | `token_expiry` | integer | `7200` | JWT token lifetime in seconds. Overrides the global `[auth] token_expiry`. |
 | `methods` | AuthMethod[] | default set | Ordered list of auth methods (`password_login`, `bearer`, `session_cookie`, `strategy`). When `enabled = true` and `methods` is empty, the default set is used. See [Auth Methods](auth-methods.md). |
 
-> The password-only knobs (`mfa`, `mfa_when`, `verify_email`, `forgot_password`) now live on the
+> The password-only knobs (`mfa`, `mfa_when`, `mfa_deliver`, `verify_email`, `forgot_password`) now live on the
 > `password_login` **method** entry, not at the top level. To disable password login,
 > omit the `password_login` method instead of the former `disable_local` flag; custom
 > authenticators are `strategy` methods rather than a top-level `strategies` list.

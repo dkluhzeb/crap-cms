@@ -3,10 +3,12 @@
 //!
 //! The gRPC `Login`/`VerifyMfa` RPCs and the admin login/MFA pages are
 //! codecs over the same primitives: a short-lived pending token
-//! ([`mint_mfa_pending_token`]), a 6-digit code stored + emailed
-//! ([`generate_mfa_code`] / [`send_mfa_code_email`]), and code verification
-//! ([`verify_mfa_code`]). Issuance throttling and the response shape
-//! (challenge token vs pending cookie) stay per surface.
+//! ([`mint_mfa_pending_token`]), a 6-digit code stored + delivered
+//! ([`generate_mfa_code`] / [`deliver_mfa_code`] — built-in email for
+//! `mfa = "email"`, the collection's `mfa_deliver` hook for
+//! `mfa = "custom"`), and code verification ([`verify_mfa_code`]). Issuance
+//! throttling and the response shape (challenge token vs pending cookie)
+//! stay per surface.
 
 use chrono::Utc;
 use rand::Rng as _;
@@ -14,11 +16,13 @@ use tracing::error;
 
 use crate::{
     core::{
-        Document, DocumentId, Slug,
+        Document, Slug,
         auth::{ClaimsBuilder, TokenUse},
+        collection::{Auth, MfaMode},
         email::{self, MfaCodeEmailContext},
     },
     db::query,
+    hooks::lifecycle::MfaDeliverInput,
     service::{AppInfra, ServiceContext, ServiceError},
 };
 
@@ -87,14 +91,17 @@ pub fn mint_mfa_pending_token(
         .map_err(ServiceError::Internal)
 }
 
-/// Store a 6-digit MFA code and queue the code email — the shared body both
-/// login surfaces call (in `spawn_blocking`). Best-effort: errors are logged,
-/// not propagated — the caller has already committed to the MFA challenge
-/// response, and the previously issued code (if any) stays valid.
-pub fn send_mfa_code_email(
+/// Store a 6-digit MFA code and deliver it — the shared body both login
+/// surfaces call (in `spawn_blocking`). The channel follows the collection's
+/// MFA mode: built-in email for `mfa = "email"`, the `mfa_deliver` hook for
+/// `mfa = "custom"` (the code is handed to userland for SMS/push/…).
+/// Best-effort: errors are logged, not propagated — the caller has already
+/// committed to the MFA challenge response, and the previously issued code
+/// (if any) stays valid.
+pub fn deliver_mfa_code(
     infra: &AppInfra,
     slug: &str,
-    user_id: &DocumentId,
+    user: &Document,
     user_email: &str,
     code: &str,
 ) {
@@ -112,8 +119,44 @@ pub fn send_mfa_code_email(
 
     let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
-    if let Err(e) = set_mfa_code(&ctx, user_id, code, exp) {
+    if let Err(e) = set_mfa_code(&ctx, &user.id, code, exp) {
         error!("Failed to store MFA code: {}", e);
+        return;
+    }
+
+    let auth = infra
+        .registry
+        .get_collection(slug)
+        .and_then(|d| d.auth.as_ref());
+
+    // Custom delivery: the hook owns the channel. Only reachable with a
+    // configured hook (startup validation pairs `mfa = "custom"` with
+    // `mfa_deliver`), but fail LOUDLY if the pairing is somehow broken —
+    // silently sending nothing would strand every login on this collection.
+    if auth.map(Auth::mfa) == Some(MfaMode::Custom) {
+        let Some(hook) = auth.and_then(Auth::mfa_deliver) else {
+            error!(
+                collection = slug,
+                "mfa = \"custom\" without an mfa_deliver hook — no code delivered"
+            );
+            return;
+        };
+
+        let input = MfaDeliverInput {
+            collection: slug,
+            user,
+            code,
+            expires_in: MFA_PENDING_EXPIRY,
+        };
+
+        if let Err(e) = infra.hook_runner.run_mfa_deliver(hook, &input, &conn) {
+            error!(
+                collection = slug,
+                hook = hook.reference(),
+                error = ?e,
+                "mfa_deliver hook failed — no code delivered"
+            );
+        }
         return;
     }
 

@@ -104,8 +104,9 @@ Response:
 
 ### MFA collections
 
-On a collection with `mfa = "email"`, `Login` verifies the password, emails
-the 6-digit code, and returns a challenge instead of a token:
+On an MFA-enabled collection (`mfa = "email"` or `"custom"`), `Login`
+verifies the password, delivers the 6-digit code (email, or your
+`mfa_deliver` hook), and returns a challenge instead of a token:
 
 ```json
 { "mfaRequired": true, "mfaChallenge": "eyJhbGciOi..." }

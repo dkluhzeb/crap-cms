@@ -522,6 +522,16 @@ function crap.fields.join(config) end
 --- @field headers table<string, string> Request headers (lowercase keys).
 --- @field options? table Per-config options from `{ ref, options }`; `nil` for a bare ref.
 
+--- Context passed to the `password_login` method's `mfa_deliver` hook
+--- (`mfa = "custom"`): send the code via your channel (SMS, push, chat, …).
+--- The code is **sensitive** — never log it.
+--- @class crap.MfaDeliverContext
+--- @field collection string Auth collection slug.
+--- @field user table<string, any> The credential-verified user's field data (password hash hidden).
+--- @field code string The 6-digit code to deliver. Single-use; already stored server-side.
+--- @field expires_in integer Seconds until the code expires.
+--- @field options? table Per-config options from `{ ref, options }`; `nil` for a bare ref.
+
 --- Context passed to the `live.filter` function — the per-collection gate that
 --- decides whether a committed mutation is broadcast to live subscribers.
 ---
@@ -574,8 +584,9 @@ function crap.fields.join(config) end
 --- scattered across the collection.
 --- @class crap.AuthMethodPasswordLogin
 --- @field type "password_login"
---- @field mfa? "email"|false Email-MFA mode. `"email"` enables; `false` (or omit) disables.
+--- @field mfa? "email"|"custom"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook; `false` (or omit) disables.
 --- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Only meaningful with `mfa = "email"`; no hook = MFA always required. A hook error fails CLOSED (requires MFA).
+--- @field mfa_deliver? string | crap.HookRef Delivery hook for `mfa = "custom"`: called after credential verification with `{ collection, user, code, expires_in }` — send the code via your channel (SMS, push, …). The code is SENSITIVE: never log it. Errors are logged server-side; the previously issued code (if any) stays valid. Required with `mfa = "custom"`, rejected otherwise (startup error).
 --- @field verify_email? boolean Require email verification before login (default `false`).
 --- @field forgot_password? boolean Enable the forgot-password flow (default `true`).
 
@@ -886,6 +897,7 @@ function crap.fields.join(config) end
 --- or `nil` to fall through to the next method.
 --- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
 --- @alias crap.mfa_when_fn fun(ctx: crap.MfaWhenContext): boolean?
+--- @alias crap.mfa_deliver_fn fun(ctx: crap.MfaDeliverContext)
 
 --- Job handler entry point. The runtime ignores the return value.
 --- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)

@@ -15,7 +15,7 @@ crap.collections.define("users", {
 
 | Type | Purpose | Default surfaces | Notes |
 |---|---|---|---|
-| `password_login` | Enables the `Login` RPC; issues JWTs. Owns the password-only knobs (`mfa`, `mfa_when`, `verify_email`, `forgot_password`). | n/a (Login is one RPC) | At most one per collection. |
+| `password_login` | Enables the `Login` RPC; issues JWTs. Owns the password-only knobs (`mfa`, `mfa_when`, `mfa_deliver`, `verify_email`, `forgot_password`). | n/a (Login is one RPC) | At most one per collection. |
 | `bearer` | Accept JWTs in `Authorization: Bearer …` (HTTP) / gRPC metadata. | `{"grpc", "admin"}` | At most one per collection. |
 | `session_cookie` | Accept the `crap_session` cookie. | `{"admin"}` | Admin-HTTP only in practice. |
 | `strategy` | Custom Lua authenticator (API keys, SSO headers, mTLS). Declares its own `activates_on` discriminator. | `{"admin"}` | Any number per collection. |

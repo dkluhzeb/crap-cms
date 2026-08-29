@@ -19,5 +19,8 @@ pub use hook_context::HookContext;
 pub use job::{JobHandlerContext, JobInfo};
 pub use live::LiveFilterContext;
 pub use route::{RouteContext, RouteHandlerInput};
-pub use strategy::{AuthStrategyContext, AuthStrategyInput, MfaWhenContext, MfaWhenInput};
+pub use strategy::{
+    AuthStrategyContext, AuthStrategyInput, MfaDeliverContext, MfaDeliverInput, MfaWhenContext,
+    MfaWhenInput,
+};
 pub use validate::ValidateContext;

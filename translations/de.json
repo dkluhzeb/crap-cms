@@ -141,7 +141,7 @@
   "success_password_reset": "Passwort erfolgreich zurückgesetzt",
   "success_email_verified": "E-Mail erfolgreich bestätigt",
   "mfa_page_title": "Verifizierung",
-  "mfa_enter_code": "Geben Sie den 6-stelligen Code ein, der an Ihre E-Mail gesendet wurde.",
+  "mfa_enter_code": "Geben Sie den 6-stelligen Verifizierungscode ein, der Ihnen gesendet wurde.",
   "mfa_code_label": "Verifizierungscode",
   "mfa_verify": "Verifizieren",
   "error_mfa_invalid_code": "Ungültiger oder abgelaufener Code. Bitte versuchen Sie es erneut.",

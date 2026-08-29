@@ -24,7 +24,7 @@ use crate::admin::custom_routes::is_reserved_path;
 use crate::core::{
     Access, FieldDefinition, FieldType, HookRef, Hooks, Registry, RequiredLocales, SchemaStep,
     Slug,
-    collection::{Activation, AuthMethod, Surface},
+    collection::{Activation, AuthMethod, MfaMode, Surface},
     walk_all_fields,
 };
 use crate::db::query::helpers::{global_table, join_table, prefixed_name, walk_leaf_fields};
@@ -277,7 +277,30 @@ fn check_one_collection_methods(
             ));
         }
         match m {
-            AuthMethod::PasswordLogin { .. } => password_count += 1,
+            AuthMethod::PasswordLogin {
+                mfa, mfa_deliver, ..
+            } => {
+                password_count += 1;
+
+                // `custom` MFA and its delivery hook come as a PAIR — a custom
+                // mode with no hook strands every login (no code delivered), a
+                // hook without the mode is silently dead config.
+                if *mfa == MfaMode::Custom && mfa_deliver.is_none() {
+                    errors.push(format!(
+                        "Collection '{slug}': mfa = \"custom\" requires an mfa_deliver hook"
+                    ));
+                }
+                if *mfa != MfaMode::Custom && mfa_deliver.is_some() {
+                    errors.push(format!(
+                        "Collection '{slug}': mfa_deliver is only valid with mfa = \"custom\" (got mfa = \"{}\")",
+                        match mfa {
+                            MfaMode::Email => "email",
+                            MfaMode::Off => "false",
+                            MfaMode::Custom => unreachable!(),
+                        }
+                    ));
+                }
+            }
             AuthMethod::Bearer { .. } => bearer_count += 1,
             AuthMethod::Strategy {
                 name,
@@ -1011,6 +1034,62 @@ mod tests {
             ..Default::default()
         });
         def
+    }
+
+    /// The `mfa = "custom"` mode and its `mfa_deliver` hook come as a pair —
+    /// both halves of the pairing are startup errors on their own.
+    #[test]
+    fn validate_auth_methods_enforces_custom_mfa_deliver_pairing() {
+        use crate::core::collection::MfaMode;
+
+        // custom without deliver → error
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login_builder()
+                    .mfa(MfaMode::Custom)
+                    .build(),
+                AuthMethod::bearer(),
+            ],
+        ));
+        let msg = format!(
+            "{:#}",
+            validate_auth_methods(&registry.read().unwrap()).unwrap_err()
+        );
+        assert!(msg.contains("requires an mfa_deliver hook"), "{msg}");
+
+        // deliver without custom → error
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login_builder()
+                    .mfa(MfaMode::Email)
+                    .mfa_deliver(Some(HookRef::new("hooks.mfa.send")))
+                    .build(),
+                AuthMethod::bearer(),
+            ],
+        ));
+        let msg = format!(
+            "{:#}",
+            validate_auth_methods(&registry.read().unwrap()).unwrap_err()
+        );
+        assert!(msg.contains("only valid with mfa = \"custom\""), "{msg}");
+
+        // the valid pair passes
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login_builder()
+                    .mfa(MfaMode::Custom)
+                    .mfa_deliver(Some(HookRef::new("hooks.mfa.send")))
+                    .build(),
+                AuthMethod::bearer(),
+            ],
+        ));
+        validate_auth_methods(&registry.read().unwrap()).expect("valid pairing passes");
     }
 
     #[test]

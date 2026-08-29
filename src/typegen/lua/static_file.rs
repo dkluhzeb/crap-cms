@@ -30,7 +30,8 @@ use crate::core::{
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
     AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
-    JobHandlerContext, JobInfo, LiveFilterContext, MfaWhenContext, RouteContext, ValidateContext,
+    JobHandlerContext, JobInfo, LiveFilterContext, MfaDeliverContext, MfaWhenContext, RouteContext,
+    ValidateContext,
 };
 use crate::hooks::lua_api::{
     access::render_crap_access_init_lua,
@@ -211,6 +212,7 @@ fn render_collection_types(out: &mut String) {
     Access::render_lua_annotation(out);
     AuthStrategyContext::render_lua_annotation(out);
     MfaWhenContext::render_lua_annotation(out);
+    MfaDeliverContext::render_lua_annotation(out);
     LiveFilterContext::render_lua_annotation(out);
     Surface::render_lua_alias(out);
     Activation::render_lua_alias(out);
@@ -384,6 +386,7 @@ fn render_callable_aliases(out: &mut String) {
 --- or `nil` to fall through to the next method.
 --- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
 --- @alias crap.mfa_when_fn fun(ctx: crap.MfaWhenContext): boolean?
+--- @alias crap.mfa_deliver_fn fun(ctx: crap.MfaDeliverContext)
 
 --- Job handler entry point. The runtime ignores the return value.
 --- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)

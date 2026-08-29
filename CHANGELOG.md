@@ -2574,6 +2574,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   when the mode enables it; a hook error fails closed. Applies uniformly to
   the admin and gRPC logins (both go through the shared `verify_login`
   flow).
+- **Custom MFA delivery — `mfa = "custom"` + `mfa_deliver`.** The CMS keeps
+  generating, storing, verifying, and rate-limiting the 6-digit code, but the
+  `mfa_deliver` hook sends it (`{ collection, user, code, expires_in }`) via
+  any channel — SMS, push, chat. The pairing is startup-validated both ways
+  (custom without a hook would strand every login; a hook without the mode is
+  dead config). Identical on the admin MFA page and the gRPC
+  `Login`/`VerifyMfa` flow; composes with `mfa_when`; delivery is
+  best-effort like the built-in email (hook errors logged, prior code stays
+  valid). The admin MFA page wording is channel-neutral now ("sent to you",
+  not "sent to your email").
 - **gRPC wire-parity additions:** `UpdateGlobalRequest.draft` (save a global
   as an unpublished draft) and `UndeleteRequest.events` (quiet restore) —
   the last per-surface option gaps outside the wire schema are closed.

@@ -65,6 +65,10 @@ pub enum MfaMode {
     Off,
     /// Email-based MFA: send a 6-digit code to the user's email after password verification.
     Email,
+    /// Custom delivery: the code is generated and stored by the CMS, but the
+    /// `mfa_deliver` hook sends it (SMS, push, chat, …) instead of the
+    /// built-in email. Verification is identical to `email`.
+    Custom,
 }
 
 /// Which host surfaces a method can fire on. Surface filtering is
@@ -244,9 +248,10 @@ pub enum AuthMethod {
     /// `forgot_password`) so the password-only concerns aren't
     /// scattered across the collection.
     PasswordLogin {
-        /// Email-MFA mode. `"email"` enables; `false` (or omit) disables.
+        /// MFA mode. `"email"` sends the code by email, `"custom"` hands it
+        /// to the `mfa_deliver` hook; `false` (or omit) disables.
         #[serde(default)]
-        #[lua(ty = "\"email\"|false", optional)]
+        #[lua(ty = "\"email\"|\"custom\"|false", optional)]
         mfa: MfaMode,
         /// Optional Lua gate deciding WHETHER a verified login must complete
         /// the second factor — called after credential verification with
@@ -259,6 +264,15 @@ pub enum AuthMethod {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[lua(ty = "string | crap.HookRef", optional)]
         mfa_when: Option<HookRef>,
+        /// Delivery hook for `mfa = "custom"`: called after credential
+        /// verification with `{ collection, user, code, expires_in }` — send
+        /// the code via your channel (SMS, push, …). The code is SENSITIVE:
+        /// never log it. Errors are logged server-side; the previously issued
+        /// code (if any) stays valid. Required with `mfa = "custom"`,
+        /// rejected otherwise (startup error).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[lua(ty = "string | crap.HookRef", optional)]
+        mfa_deliver: Option<HookRef>,
         /// Require email verification before login (default `false`).
         #[serde(default)]
         #[lua(optional)]
@@ -322,6 +336,7 @@ impl AuthMethod {
         Self::PasswordLogin {
             mfa: MfaMode::Off,
             mfa_when: None,
+            mfa_deliver: None,
             verify_email: false,
             forgot_password: true,
         }
@@ -344,6 +359,7 @@ impl AuthMethod {
         PasswordLoginBuilder {
             mfa: MfaMode::Off,
             mfa_when: None,
+            mfa_deliver: None,
             verify_email: false,
             forgot_password: true,
         }
@@ -374,6 +390,7 @@ impl AuthMethod {
 pub struct PasswordLoginBuilder {
     mfa: MfaMode,
     mfa_when: Option<HookRef>,
+    mfa_deliver: Option<HookRef>,
     verify_email: bool,
     forgot_password: bool,
 }
@@ -391,6 +408,13 @@ impl PasswordLoginBuilder {
     #[must_use]
     pub fn mfa_when(mut self, hook: Option<HookRef>) -> Self {
         self.mfa_when = hook;
+        self
+    }
+
+    /// Set the `mfa_deliver` hook (required with [`MfaMode::Custom`]).
+    #[must_use]
+    pub fn mfa_deliver(mut self, hook: Option<HookRef>) -> Self {
+        self.mfa_deliver = hook;
         self
     }
 
@@ -416,6 +440,7 @@ impl PasswordLoginBuilder {
         AuthMethod::PasswordLogin {
             mfa: self.mfa,
             mfa_when: self.mfa_when,
+            mfa_deliver: self.mfa_deliver,
             verify_email: self.verify_email,
             forgot_password: self.forgot_password,
         }
@@ -474,6 +499,7 @@ impl Auth {
             AuthMethod::PasswordLogin {
                 mfa: MfaMode::Off,
                 mfa_when: None,
+                mfa_deliver: None,
                 verify_email: false,
                 forgot_password: true,
             },
@@ -496,6 +522,7 @@ impl Auth {
             AuthMethod::PasswordLogin {
                 mfa,
                 mfa_when: _,
+                mfa_deliver: _,
                 verify_email,
                 forgot_password,
             } => Some(PasswordLoginCfg {
@@ -565,6 +592,15 @@ impl Auth {
         })
     }
 
+    /// The `password_login` method's `mfa_deliver` hook, if configured.
+    #[must_use]
+    pub fn mfa_deliver(&self) -> Option<&HookRef> {
+        self.methods.iter().find_map(|m| match m {
+            AuthMethod::PasswordLogin { mfa_deliver, .. } => mfa_deliver.as_ref(),
+            _ => None,
+        })
+    }
+
     /// True iff this collection has at least one `strategy` method.
     #[must_use]
     pub fn has_strategies(&self) -> bool {
@@ -604,6 +640,7 @@ impl Auth {
             && let AuthMethod::PasswordLogin {
                 mfa,
                 ref mfa_when,
+                ref mfa_deliver,
                 verify_email,
                 forgot_password,
             } = self.methods[idx]
@@ -611,6 +648,7 @@ impl Auth {
             let seed = PasswordLoginBuilder {
                 mfa,
                 mfa_when: mfa_when.clone(),
+                mfa_deliver: mfa_deliver.clone(),
                 verify_email,
                 forgot_password,
             };
@@ -725,6 +763,7 @@ mod tests {
             methods: vec![AuthMethod::PasswordLogin {
                 mfa: MfaMode::Email,
                 mfa_when: None,
+                mfa_deliver: None,
                 verify_email: true,
                 forgot_password: false,
             }],
@@ -799,6 +838,7 @@ mod tests {
             AuthMethod::PasswordLogin {
                 mfa,
                 mfa_when: _,
+                mfa_deliver: _,
                 verify_email,
                 forgot_password,
             } => {

@@ -111,15 +111,16 @@ fn handle_mfa_challenge(
     if issue_blocked {
         warn!(user = %user.id, "MFA code issuance throttled — reusing the prior code");
     } else {
-        // Generate a 6-digit code, store it, and queue the email in the
-        // background — the shared body the gRPC challenge flow also uses.
+        // Generate a 6-digit code, store it, and deliver it (built-in email
+        // or the collection's `mfa_deliver` hook) in the background — the
+        // shared body the gRPC challenge flow also uses.
         let code = auth::generate_mfa_code();
         let infra = Arc::clone(&state.infra);
         let slug = form.collection.clone();
-        let user_id = user.id.clone();
+        let user_owned = user.clone();
 
         task::spawn_blocking(move || {
-            auth::send_mfa_code_email(&infra, &slug, &user_id, &user_email, &code);
+            auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
         });
     }
 

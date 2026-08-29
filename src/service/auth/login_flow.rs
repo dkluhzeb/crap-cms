@@ -190,7 +190,7 @@ fn mfa_gate(
         .def
         .auth
         .as_ref()
-        .is_some_and(|a| a.mfa() == MfaMode::Email);
+        .is_some_and(|a| a.mfa() != MfaMode::Off);
 
     if !mfa_enabled {
         return LoginOutcome::Verified(verified);

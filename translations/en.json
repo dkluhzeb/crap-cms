@@ -141,7 +141,7 @@
   "success_password_reset": "Password reset successfully",
   "success_email_verified": "Email verified successfully",
   "mfa_page_title": "Verification",
-  "mfa_enter_code": "Enter the 6-digit code sent to your email.",
+  "mfa_enter_code": "Enter the 6-digit verification code that was sent to you.",
   "mfa_code_label": "Verification code",
   "mfa_verify": "Verify",
   "error_mfa_invalid_code": "Invalid or expired code. Please try again.",

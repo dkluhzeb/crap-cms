@@ -13,7 +13,8 @@ use crate::{
     hooks::{
         HookRunner,
         lifecycle::{
-            AccessCheckInput, AuthStrategyContext, AuthStrategyInput, MfaWhenContext, MfaWhenInput,
+            AccessCheckInput, AuthStrategyContext, AuthStrategyInput, MfaDeliverContext,
+            MfaDeliverInput, MfaWhenContext, MfaWhenInput,
             access::{
                 ReadStripInput, WriteStripInput, check_collection_access, collect_denials_flat,
                 collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
@@ -124,6 +125,40 @@ impl HookRunner {
         let result: Value = func.call(ctx_value)?;
 
         Ok(!matches!(result, Value::Boolean(false) | Value::Nil))
+    }
+
+    /// Run a `password_login` method's `mfa_deliver` hook (`mfa = "custom"`):
+    /// hand the freshly stored code to userland for delivery (SMS, push, …).
+    /// The return value is ignored; errors propagate for the caller to log —
+    /// delivery is best-effort, like the built-in email path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or the hook call fails.
+    pub fn run_mfa_deliver(
+        &self,
+        hook: &HookRef,
+        input: &MfaDeliverInput,
+        conn: &dyn DbConnection,
+    ) -> Result<()> {
+        let lua = self.pool.acquire()?;
+
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+
+        let func = resolve_hook_function(&lua, hook.reference())?;
+
+        let ctx = MfaDeliverContext {
+            collection: input.collection,
+            user: &input.user.fields,
+            code: input.code,
+            expires_in: input.expires_in,
+            options: hook.options(),
+        };
+        let ctx_value = lua.to_value(&ctx)?;
+
+        let _: Value = func.call(ctx_value)?;
+
+        Ok(())
     }
 
     /// Run a collection-level or global-level access check.

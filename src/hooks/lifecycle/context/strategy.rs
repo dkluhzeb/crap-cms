@@ -82,3 +82,33 @@ pub struct MfaWhenInput<'a> {
     pub surface: &'a str,
     pub headers: &'a HashMap<String, String>,
 }
+
+/// Context passed to the `password_login` method's `mfa_deliver` hook
+/// (`mfa = "custom"`): send the code via your channel (SMS, push, chat, …).
+/// The code is **sensitive** — never log it.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.MfaDeliverContext")]
+pub struct MfaDeliverContext<'a> {
+    /// Auth collection slug.
+    pub collection: &'a str,
+    /// The credential-verified user's field data (password hash hidden).
+    #[lua(ty = "table<string, any>")]
+    pub user: &'a crate::core::DocumentFields,
+    /// The 6-digit code to deliver. Single-use; already stored server-side.
+    pub code: &'a str,
+    /// Seconds until the code expires.
+    pub expires_in: u64,
+    /// Per-config options from `{ ref, options }`; `nil` for a bare ref.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
+}
+
+/// Surface-neutral inputs for the `mfa_deliver` hook (see
+/// [`HookRunner::run_mfa_deliver`](crate::hooks::HookRunner)).
+pub struct MfaDeliverInput<'a> {
+    pub collection: &'a str,
+    pub user: &'a crate::core::Document,
+    pub code: &'a str,
+    pub expires_in: u64,
+}
