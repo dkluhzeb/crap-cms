@@ -11,96 +11,27 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`UpdateMany`]. A `password` never travels here — a
 /// broadcast write must not set one credential on many rows; every surface
 /// rejects it at decode.
+#[derive(Builder)]
 pub struct UpdateManyArgs {
+    #[builder(required)]
     pub filters: Vec<FilterClause>,
+    #[builder(required)]
     pub data: DocumentFields,
     pub locale_ctx: Option<LocaleContext>,
+    #[builder(default = true)]
     pub run_hooks: bool,
     pub draft: bool,
     /// `server.bulk_max_documents` cap. `0` = no limit.
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
-}
-
-impl UpdateManyArgs {
-    #[must_use]
-    pub fn builder(filters: Vec<FilterClause>, data: DocumentFields) -> UpdateManyArgsBuilder {
-        UpdateManyArgsBuilder::new(filters, data)
-    }
-}
-
-/// Builder for [`UpdateManyArgs`].
-pub struct UpdateManyArgsBuilder {
-    filters: Vec<FilterClause>,
-    data: DocumentFields,
-    locale_ctx: Option<LocaleContext>,
-    run_hooks: bool,
-    draft: bool,
-    max_documents: i64,
-    events: bool,
-}
-
-impl UpdateManyArgsBuilder {
-    fn new(filters: Vec<FilterClause>, data: DocumentFields) -> Self {
-        Self {
-            filters,
-            data,
-            locale_ctx: None,
-            run_hooks: true,
-            draft: false,
-            max_documents: 0,
-            events: false,
-        }
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn run_hooks(mut self, run_hooks: bool) -> Self {
-        self.run_hooks = run_hooks;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn max_documents(mut self, max_documents: i64) -> Self {
-        self.max_documents = max_documents;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> UpdateManyArgs {
-        UpdateManyArgs {
-            filters: self.filters,
-            data: self.data,
-            locale_ctx: self.locale_ctx,
-            run_hooks: self.run_hooks,
-            draft: self.draft,
-            max_documents: self.max_documents,
-            events: self.events,
-        }
-    }
 }
 
 /// Bulk-update all documents matching a filter in one transaction.

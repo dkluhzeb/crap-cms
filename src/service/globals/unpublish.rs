@@ -1,18 +1,14 @@
 //! Global document unpublish.
 
-use std::{cell::RefCell, rc::Rc};
-
-use anyhow::Context as _;
-
 use serde_json::Value;
 
 use crate::{
     core::{Document, event::EventOperation},
     db::{AccessResult, LocaleContext, query, query::helpers::global_table},
-    hooks::{AccessCheckInput, HookContext, HookEvent, LuaCrudInfra},
+    hooks::{AccessCheckInput, HookContext, HookEvent},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue,
-        flush_verification_queue, helpers, run_after_change_hooks, unpublish_with_snapshot,
+        AfterChangeInput, ServiceContext, ServiceError, helpers, run_after_change_hooks,
+        run_pool_write, unpublish_with_snapshot,
     },
 };
 
@@ -153,53 +149,12 @@ fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
 /// post-commit side effects.
 #[cfg(not(tarpaulin_include))]
 fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.global_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
-
-    // The verification queue exists for NESTED Lua creates: a hook running
-    // inside this transaction that creates a verify-email auth document must
-    // get its verification mail sent after commit — without the queue it was
-    // silently dropped (only the create orchestrators used to carry one).
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::global(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .locale_config(ctx.locale_config)
-        .build();
-
-    let doc = unpublish_global_in_conn(&inner_ctx)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit transaction")?;
-
-    ctx.clear_cache();
-
-    // Same post-commit sequence as `update_global_document` / the collection
-    // unpublish path: notify subscribers of the status change, then flush any
-    // events queued by nested hook CRUD.
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(doc)
+    run_pool_write(ctx, None, unpublish_global_in_conn, |ctx, doc| {
+        // Same post-commit sequence as `update_global_document` / the
+        // collection unpublish path: notify subscribers of the status
+        // change; the envelope flushes nested-hook events after.
+        ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    })
 }
 
 #[cfg(test)]

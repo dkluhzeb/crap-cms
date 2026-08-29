@@ -9,70 +9,21 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`UpdateGlobal`]. Mirrors [`super::CreateArgs`]
 /// without a password (globals have no auth).
+#[derive(Builder)]
 pub struct UpdateGlobalArgs {
+    #[builder(required)]
     pub data: DocumentFields,
     pub locale_ctx: Option<LocaleContext>,
     pub draft: bool,
     /// Publish a mutation event for this write (request `events` flag).
+    #[builder(default = true)]
     pub events: bool,
-}
-
-impl UpdateGlobalArgs {
-    #[must_use]
-    pub fn builder(data: DocumentFields) -> UpdateGlobalArgsBuilder {
-        UpdateGlobalArgsBuilder::new(data)
-    }
-}
-
-/// Builder for [`UpdateGlobalArgs`].
-pub struct UpdateGlobalArgsBuilder {
-    data: DocumentFields,
-    locale_ctx: Option<LocaleContext>,
-    draft: bool,
-    events: bool,
-}
-
-impl UpdateGlobalArgsBuilder {
-    fn new(data: DocumentFields) -> Self {
-        Self {
-            data,
-            locale_ctx: None,
-            draft: false,
-            events: true,
-        }
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> UpdateGlobalArgs {
-        UpdateGlobalArgs {
-            data: self.data,
-            locale_ctx: self.locale_ctx,
-            draft: self.draft,
-            events: self.events,
-        }
-    }
 }
 
 /// Update a global document with the full write lifecycle.

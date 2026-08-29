@@ -11,11 +11,16 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`DeleteMany`].
+#[derive(Builder)]
 pub struct DeleteManyArgs {
+    #[builder(required)]
     pub filters: Vec<FilterClause>,
+    #[builder(default = true)]
     pub run_hooks: bool,
     /// Match soft-deleted rows instead of live ones (with `trash`, or a
     /// force-hard delete that should also sweep trashed matches).
@@ -34,87 +39,6 @@ pub struct DeleteManyArgs {
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
-}
-
-impl DeleteManyArgs {
-    #[must_use]
-    pub fn builder(filters: Vec<FilterClause>) -> DeleteManyArgsBuilder {
-        DeleteManyArgsBuilder::new(filters)
-    }
-}
-
-/// Builder for [`DeleteManyArgs`].
-pub struct DeleteManyArgsBuilder {
-    filters: Vec<FilterClause>,
-    run_hooks: bool,
-    include_deleted: bool,
-    trash: bool,
-    force_hard_delete: bool,
-    max_documents: i64,
-    events: bool,
-}
-
-impl DeleteManyArgsBuilder {
-    fn new(filters: Vec<FilterClause>) -> Self {
-        Self {
-            filters,
-            run_hooks: true,
-            include_deleted: false,
-            trash: false,
-            force_hard_delete: false,
-            max_documents: 0,
-            events: false,
-        }
-    }
-
-    #[must_use]
-    pub fn run_hooks(mut self, run_hooks: bool) -> Self {
-        self.run_hooks = run_hooks;
-        self
-    }
-
-    #[must_use]
-    pub fn include_deleted(mut self, include_deleted: bool) -> Self {
-        self.include_deleted = include_deleted;
-        self
-    }
-
-    #[must_use]
-    pub fn trash(mut self, trash: bool) -> Self {
-        self.trash = trash;
-        self
-    }
-
-    #[must_use]
-    pub fn force_hard_delete(mut self, force_hard_delete: bool) -> Self {
-        self.force_hard_delete = force_hard_delete;
-        self
-    }
-
-    #[must_use]
-    pub fn max_documents(mut self, max_documents: i64) -> Self {
-        self.max_documents = max_documents;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> DeleteManyArgs {
-        DeleteManyArgs {
-            filters: self.filters,
-            run_hooks: self.run_hooks,
-            include_deleted: self.include_deleted,
-            trash: self.trash,
-            force_hard_delete: self.force_hard_delete,
-            max_documents: self.max_documents,
-            events: self.events,
-        }
-    }
 }
 
 /// Bulk-delete all documents matching a filter in one transaction.

@@ -1,20 +1,15 @@
 //! Global document update.
 
-use std::{cell::RefCell, rc::Rc};
-
-use anyhow::Context as _;
-
 use crate::{
     core::{
         Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
         nest_group_fields,
     },
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
-    hooks::{AccessCheckInput, HookContext, LuaCrudInfra, ValidationCtx},
+    hooks::{AccessCheckInput, HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
-        WriteResult, flush_queue, flush_verification_queue, helpers as svc_helpers,
-        run_after_change_hooks,
+        AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
+        helpers as svc_helpers, run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
     },
 };
@@ -40,49 +35,14 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
 }
 
 fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.global_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
-
-    // The verification queue exists for NESTED Lua creates: a hook running
-    // inside this transaction that creates a verify-email auth document must
-    // get its verification mail sent after commit — without the queue it was
-    // silently dropped (only the create orchestrators used to carry one).
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::global(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let result = update_global_in_conn(&inner_ctx, input)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit transaction")?;
-
-    ctx.clear_cache();
-
-    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(result)
+    run_pool_write(
+        ctx,
+        None,
+        |inner| update_global_in_conn(inner, input),
+        |ctx, result| {
+            ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+        },
+    )
 }
 
 fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {

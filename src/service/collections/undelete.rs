@@ -1,16 +1,11 @@
 //! Collection document undelete from soft-delete.
 
-use anyhow::Context as _;
-
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     core::{Document, event::EventOperation},
     db::{AccessResult, query},
-    hooks::{AccessCheckInput, LuaCrudInfra},
+    hooks::AccessCheckInput,
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, flush_verification_queue,
-        helpers, invalidate_user_streams_if_auth,
+        ServiceContext, ServiceError, helpers, invalidate_user_streams_if_auth, run_pool_write,
     },
 };
 
@@ -94,50 +89,16 @@ pub fn undelete_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
 /// Pool-based undelete: own transaction with event publishing after commit.
 fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.collection_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
-
-    // The verification queue exists for NESTED Lua creates: a hook running
-    // inside this transaction that creates a verify-email auth document must
-    // get its verification mail sent after commit — without the queue it was
-    // silently dropped (only the create orchestrators used to carry one).
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let doc = undelete_document_in_conn(&inner_ctx, id)?;
-    drop(inner_ctx);
-
-    tx.commit()?;
-
-    ctx.clear_cache();
-
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
-    invalidate_user_streams_if_auth(ctx, &doc.id);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(doc)
+    run_pool_write(
+        ctx,
+        None,
+        |inner| undelete_document_in_conn(inner, id),
+        |ctx, doc| {
+            ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+            // Restoring an auth document changes that user's effective access.
+            invalidate_user_streams_if_auth(ctx, &doc.id);
+        },
+    )
 }
 
 /// Conn-based undelete: uses existing connection (Lua CRUD path).

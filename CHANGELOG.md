@@ -3052,6 +3052,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **One pool-mode write envelope.** Every pool-mode write operation
+  (create/update/delete/undelete/unpublish, the three bulk ops, both global
+  writes, both version restores) now runs through a single
+  `run_pool_write` orchestrator owning the transaction, the nested-CRUD
+  event + verification queues, the runner write hooks (override,
+  hooks-enabled), the inner conn-mode context, commit, cache clear, and the
+  post-commit queue flushes — the per-operation code shrinks to its body and
+  its event publishes (net −400 lines across 11 orchestrators). The inner
+  context is a deliberate superset (verification queue, email context,
+  locale config, UI locale always attached), closing the forgot-a-field
+  class where this cycle's orchestration bugs clustered. One micro-ordering
+  change: create's verification email now dispatches before (not between)
+  the queue flushes — the two are independent.
+
 - **Filter hygiene moved into the operation bodies.** Dot-path normalization
   (`seo.title` → `seo__title`) and system-column rejection now run once in
   `Find`/`Count`/`UpdateMany`/`DeleteMany` — previously gRPC and Lua each did

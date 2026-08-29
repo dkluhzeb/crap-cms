@@ -1,19 +1,14 @@
 //! Collection document deletion.
 
-use std::{cell::RefCell, rc::Rc};
-
-use anyhow::Context as _;
-
 use crate::{
     config::LocaleConfig,
     core::{
         ReqContext,
         upload::{self, StorageBackend},
     },
-    hooks::LuaCrudInfra,
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
-        flush_verification_queue, invalidate_user_streams_if_auth,
+        ServiceContext, ServiceError, delete_document_in_conn, invalidate_user_streams_if_auth,
+        run_pool_write,
     },
 };
 
@@ -49,54 +44,23 @@ fn delete_document_pool(
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<ReqContext> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
     let def = ctx.collection_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let queue = Rc::new(RefCell::new(Vec::new()));
-
-    // The verification queue exists for NESTED Lua creates: a hook running
-    // inside this transaction that creates a verify-email auth document must
-    // get its verification mail sent after commit — without the queue it was
-    // silently dropped (only the create orchestrators used to carry one).
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let result = delete_document_in_conn(&inner_ctx, id, locale_config)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit transaction")?;
-
-    ctx.clear_cache();
-
-    ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
-    // Deleting an auth document revokes that user — tear down their live streams
-    // post-commit. This applies to BOTH hard and soft delete: the per-request
-    // evaluator resolves users via `find_by_id`, which excludes soft-deleted
-    // rows, so a trashed user is already rejected (`UserMissing`) on new
-    // requests; their open SSE/subscribe streams (which never re-resolve) must be
-    // torn down too. No-op for non-auth collections.
-    invalidate_user_streams_if_auth(ctx, id);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
+    let result = run_pool_write(
+        ctx,
+        None,
+        |inner| delete_document_in_conn(inner, id, locale_config),
+        |ctx, result| {
+            ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+            // Deleting an auth document revokes that user — tear down their live streams
+            // post-commit. This applies to BOTH hard and soft delete: the per-request
+            // evaluator resolves users via `find_by_id`, which excludes soft-deleted
+            // rows, so a trashed user is already rejected (`UserMissing`) on new
+            // requests; their open SSE/subscribe streams (which never re-resolve) must be
+            // torn down too. No-op for non-auth collections.
+            invalidate_user_streams_if_auth(ctx, id);
+        },
+    )?;
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
     if !def.soft_delete

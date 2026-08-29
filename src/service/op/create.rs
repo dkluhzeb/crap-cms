@@ -6,81 +6,23 @@ use crate::{
     service::{ServiceContext, ServiceError, WriteInput, WriteResult, create_document},
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`Create`]. `password` arrives already separated from
 /// the data map by the codec's reserved-field handling; the service write
 /// chokepoint polices it.
+#[derive(Builder)]
 pub struct CreateArgs {
+    #[builder(required)]
     pub data: DocumentFields,
     pub password: Option<String>,
     pub locale_ctx: Option<LocaleContext>,
     pub draft: bool,
     /// Publish a mutation event for this write (request `events` flag).
+    #[builder(default = true)]
     pub events: bool,
-}
-
-impl CreateArgs {
-    #[must_use]
-    pub fn builder(data: DocumentFields) -> CreateArgsBuilder {
-        CreateArgsBuilder::new(data)
-    }
-}
-
-/// Builder for [`CreateArgs`].
-pub struct CreateArgsBuilder {
-    data: DocumentFields,
-    password: Option<String>,
-    locale_ctx: Option<LocaleContext>,
-    draft: bool,
-    events: bool,
-}
-
-impl CreateArgsBuilder {
-    fn new(data: DocumentFields) -> Self {
-        Self {
-            data,
-            password: None,
-            locale_ctx: None,
-            draft: false,
-            events: true,
-        }
-    }
-
-    #[must_use]
-    pub fn password(mut self, password: Option<String>) -> Self {
-        self.password = password;
-        self
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> CreateArgs {
-        CreateArgs {
-            data: self.data,
-            password: self.password,
-            locale_ctx: self.locale_ctx,
-            draft: self.draft,
-            events: self.events,
-        }
-    }
 }
 
 /// Create a document with the full write lifecycle (validation, hooks,

@@ -9,6 +9,8 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`Find`]. The query arrives already decoded into the
@@ -16,11 +18,14 @@ use super::Operation;
 /// decoding from the wire shape is the codec's job. Definition-dependent
 /// behavior — the trash downgrade and the trash default sort order — lives
 /// in [`Find::run`], previously quadruplicated across the four surfaces.
+#[derive(Builder)]
 pub struct FindArgs {
+    #[builder(required)]
     pub query: FindQuery,
     pub depth: i32,
     /// Hydrate join-table fields (arrays/blocks/has-many). The admin list
     /// view opts out; API surfaces hydrate.
+    #[builder(default = true)]
     pub hydrate: bool,
     pub locale_ctx: Option<LocaleContext>,
     pub include_drafts: bool,
@@ -29,96 +34,6 @@ pub struct FindArgs {
     pub cursor_enabled: bool,
     /// List the trash view. Ignored unless the collection has soft delete.
     pub trash: bool,
-}
-
-impl FindArgs {
-    #[must_use]
-    pub fn builder(query: FindQuery) -> FindArgsBuilder {
-        FindArgsBuilder::new(query)
-    }
-}
-
-/// Builder for [`FindArgs`].
-pub struct FindArgsBuilder {
-    query: FindQuery,
-    depth: i32,
-    hydrate: bool,
-    locale_ctx: Option<LocaleContext>,
-    include_drafts: bool,
-    status_filter: Option<Vec<String>>,
-    cursor_enabled: bool,
-    trash: bool,
-}
-
-impl FindArgsBuilder {
-    fn new(query: FindQuery) -> Self {
-        Self {
-            query,
-            depth: 0,
-            hydrate: true,
-            locale_ctx: None,
-            include_drafts: false,
-            status_filter: None,
-            cursor_enabled: false,
-            trash: false,
-        }
-    }
-
-    #[must_use]
-    pub fn depth(mut self, depth: i32) -> Self {
-        self.depth = depth;
-        self
-    }
-
-    #[must_use]
-    pub fn hydrate(mut self, hydrate: bool) -> Self {
-        self.hydrate = hydrate;
-        self
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn include_drafts(mut self, include_drafts: bool) -> Self {
-        self.include_drafts = include_drafts;
-        self
-    }
-
-    #[must_use]
-    pub fn status_filter(mut self, status_filter: Option<Vec<String>>) -> Self {
-        self.status_filter = status_filter;
-        self
-    }
-
-    #[must_use]
-    pub fn cursor_enabled(mut self, cursor_enabled: bool) -> Self {
-        self.cursor_enabled = cursor_enabled;
-        self
-    }
-
-    #[must_use]
-    pub fn trash(mut self, trash: bool) -> Self {
-        self.trash = trash;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> FindArgs {
-        FindArgs {
-            query: self.query,
-            depth: self.depth,
-            hydrate: self.hydrate,
-            locale_ctx: self.locale_ctx,
-            include_drafts: self.include_drafts,
-            status_filter: self.status_filter,
-            cursor_enabled: self.cursor_enabled,
-            trash: self.trash,
-        }
-    }
 }
 
 /// Paginated list query with the full read lifecycle.

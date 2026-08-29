@@ -1,15 +1,10 @@
 //! Collection document creation.
 
-use anyhow::Context as _;
-
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     core::event::EventOperation,
-    hooks::LuaCrudInfra,
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
-        create_document_in_conn, flush_queue, flush_verification_queue,
+        ServiceContext, ServiceError, WriteInput, WriteResult, create_document_in_conn,
+        run_pool_write,
     },
 };
 
@@ -37,48 +32,18 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
     }
 }
 
-/// Pool-based create: own transaction with event publishing after commit.
+/// Pool-based create: the shared write envelope with create's post-commit
+/// effects (mutation event + verification email for auth collections).
 fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def()?)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .verification_queue(vqueue.clone())
-        .email_ctx(ctx.email_ctx.clone())
-        .build();
-
-    let result = create_document_in_conn(&inner_ctx, input)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit transaction")?;
-
-    ctx.clear_cache();
-
-    ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
-    flush_queue(ctx, &queue);
-    ctx.maybe_send_verification(&result.0);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(result)
+    run_pool_write(
+        ctx,
+        None,
+        |inner| create_document_in_conn(inner, input),
+        |ctx, result| {
+            ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
+            ctx.maybe_send_verification(&result.0);
+        },
+    )
 }
 
 /// Conn-based create: uses existing connection (Lua CRUD path).

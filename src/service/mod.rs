@@ -60,6 +60,7 @@ pub(crate) mod helpers;
 pub(crate) mod hooks;
 pub mod jobs;
 pub mod op;
+mod orchestrate;
 mod persist;
 pub(crate) mod read;
 mod types;
@@ -96,6 +97,7 @@ pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
     LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
+pub(crate) use orchestrate::run_pool_write;
 pub(crate) use persist::persist_bulk_update;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{

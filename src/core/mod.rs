@@ -64,6 +64,12 @@ pub mod validate;
 pub mod walk;
 
 // Leaf-module types: flat re-export.
+/// `#[derive(Builder)]` — generates the house builder convention
+/// (positional required fields in `builder()`, chained `#[must_use]`
+/// setters that keep `Option` symmetry, infallible `build()`). See
+/// `macros/src/builder.rs` for the field rules.
+pub use crap_cms_macros::Builder;
+
 pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError, normalize_email};
 pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,

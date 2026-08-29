@@ -4,81 +4,23 @@ use crate::service::{
     CreateManyItem, CreateManyOptions, CreateManyResult, ServiceContext, ServiceError, create_many,
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`CreateMany`]. Items carry per-item policed
 /// passwords (auth seeding); the service chokepoint validates and hashes.
+#[derive(Builder)]
 pub struct CreateManyArgs {
+    #[builder(required)]
     pub items: Vec<CreateManyItem>,
+    #[builder(default = true)]
     pub run_hooks: bool,
     pub draft: bool,
     /// `server.bulk_max_documents` cap. `0` = no limit.
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
-}
-
-impl CreateManyArgs {
-    #[must_use]
-    pub fn builder(items: Vec<CreateManyItem>) -> CreateManyArgsBuilder {
-        CreateManyArgsBuilder::new(items)
-    }
-}
-
-/// Builder for [`CreateManyArgs`].
-pub struct CreateManyArgsBuilder {
-    items: Vec<CreateManyItem>,
-    run_hooks: bool,
-    draft: bool,
-    max_documents: i64,
-    events: bool,
-}
-
-impl CreateManyArgsBuilder {
-    fn new(items: Vec<CreateManyItem>) -> Self {
-        Self {
-            items,
-            run_hooks: true,
-            draft: false,
-            max_documents: 0,
-            events: false,
-        }
-    }
-
-    #[must_use]
-    pub fn run_hooks(mut self, run_hooks: bool) -> Self {
-        self.run_hooks = run_hooks;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn max_documents(mut self, max_documents: i64) -> Self {
-        self.max_documents = max_documents;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> CreateManyArgs {
-        CreateManyArgs {
-            items: self.items,
-            run_hooks: self.run_hooks,
-            draft: self.draft,
-            max_documents: self.max_documents,
-            events: self.events,
-        }
-    }
 }
 
 /// Bulk-create documents in one transaction.

@@ -6,50 +6,17 @@ use crate::{
     service::{GetGlobalInput, ServiceContext, ServiceError, get_global_document},
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`GetGlobal`].
+#[derive(Builder)]
 pub struct GetGlobalArgs {
     pub locale_ctx: Option<LocaleContext>,
     /// Whether this read may see unpublished (draft) global content. Public
     /// surfaces default to `false`; the admin edit form opts in.
     pub include_drafts: bool,
-}
-
-impl GetGlobalArgs {
-    #[must_use]
-    pub fn builder() -> GetGlobalArgsBuilder {
-        GetGlobalArgsBuilder::default()
-    }
-}
-
-/// Builder for [`GetGlobalArgs`].
-#[derive(Default)]
-pub struct GetGlobalArgsBuilder {
-    locale_ctx: Option<LocaleContext>,
-    include_drafts: bool,
-}
-
-impl GetGlobalArgsBuilder {
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn include_drafts(mut self, include_drafts: bool) -> Self {
-        self.include_drafts = include_drafts;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> GetGlobalArgs {
-        GetGlobalArgs {
-            locale_ctx: self.locale_ctx,
-            include_drafts: self.include_drafts,
-        }
-    }
 }
 
 /// Read a global document with the full read lifecycle (view union,

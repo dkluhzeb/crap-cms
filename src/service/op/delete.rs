@@ -5,10 +5,14 @@ use crate::{
     service::{ServiceContext, ServiceError, delete_document},
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`Delete`].
+#[derive(Builder)]
 pub struct DeleteArgs {
+    #[builder(required)]
     pub id: String,
     /// Permanently delete even when the collection has soft delete. Expressed
     /// by disabling soft-delete on a local definition clone (see
@@ -16,52 +20,8 @@ pub struct DeleteArgs {
     /// every surface.
     pub force_hard_delete: bool,
     /// Publish a mutation event for this write (request `events` flag).
+    #[builder(default = true)]
     pub events: bool,
-}
-
-impl DeleteArgs {
-    #[must_use]
-    pub fn builder(id: impl Into<String>) -> DeleteArgsBuilder {
-        DeleteArgsBuilder::new(id.into())
-    }
-}
-
-/// Builder for [`DeleteArgs`].
-pub struct DeleteArgsBuilder {
-    id: String,
-    force_hard_delete: bool,
-    events: bool,
-}
-
-impl DeleteArgsBuilder {
-    fn new(id: String) -> Self {
-        Self {
-            id,
-            force_hard_delete: false,
-            events: true,
-        }
-    }
-
-    #[must_use]
-    pub fn force_hard_delete(mut self, force_hard_delete: bool) -> Self {
-        self.force_hard_delete = force_hard_delete;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> DeleteArgs {
-        DeleteArgs {
-            id: self.id,
-            force_hard_delete: self.force_hard_delete,
-            events: self.events,
-        }
-    }
 }
 
 /// Delete a document: soft delete when the collection has it (gated by

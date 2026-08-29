@@ -8,17 +8,9 @@
 //! existing connection (atomic with the caller's transaction). Events are
 //! queued for later flush by the caller.
 
-use std::{cell::RefCell, rc::Rc};
-
-use anyhow::Context as _;
-
 use crate::{
     core::{DocumentFields, event::EventOperation},
-    hooks::LuaCrudInfra,
-    service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_in_conn,
-        flush_queue, flush_verification_queue,
-    },
+    service::{ServiceContext, ServiceError, WriteInput, create_document_in_conn, run_pool_write},
     typegen::lua::LuaAnnotation,
 };
 
@@ -79,8 +71,8 @@ pub fn create_many(
     items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
-    if let Some(pool) = ctx.pool {
-        create_many_pooled(ctx, pool, items, opts)
+    if ctx.pool.is_some() {
+        create_many_pooled(ctx, items, opts)
     } else {
         create_many_on_conn(ctx, items, opts)
     }
@@ -90,83 +82,43 @@ pub fn create_many(
 /// is atomic — a failure on any document rolls the whole batch back.
 fn create_many_pooled(
     ctx: &ServiceContext,
-    pool: &crate::db::DbPool,
     items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
-    let runner = ctx.runner()?;
-    let def = ctx.collection_def()?;
-
     enforce_bulk_limit("create_many", items.len(), opts.max_documents)?;
 
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn
-        .transaction_immediate()
-        .context("Start bulk create transaction")?;
+    run_pool_write(
+        ctx,
+        (!opts.run_hooks).then_some(false),
+        |inner| {
+            let mut documents = Vec::with_capacity(items.len());
+            let mut created = 0i64;
 
-    let queue = Rc::new(RefCell::new(Vec::new()));
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
+            for item in items {
+                let input = WriteInput::builder(item.data.clone())
+                    .password(item.password.as_deref())
+                    .draft(opts.draft)
+                    .ui_locale(ctx.ui_locale.clone())
+                    .build();
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
+                // A failure here returns via `?`; the envelope rolls back
+                // every document created so far.
+                let (doc, _after_ctx) = create_document_in_conn(inner, input)?;
+                documents.push(doc);
+                created += 1;
+            }
 
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-    if !opts.run_hooks {
-        wh = wh.with_hooks_enabled(false);
-    }
-
-    // Mirror the update_many/delete_many siblings: a trusted caller (MCP's
-    // Principal::Override) must bypass the access hook and field-level
-    // stripping here too — this was the one bulk op missing the block, so MCP
-    // bulk creates were access-gated and silently field-stripped.
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .verification_queue(vqueue.clone())
-        .email_ctx(ctx.email_ctx.clone())
-        .build();
-
-    let mut documents = Vec::with_capacity(items.len());
-    let mut created = 0i64;
-
-    for item in items {
-        let input = WriteInput::builder(item.data.clone())
-            .password(item.password.as_deref())
-            .draft(opts.draft)
-            .ui_locale(ctx.ui_locale.clone())
-            .build();
-
-        // A failure here returns via `?`; `tx` drops without commit, rolling
-        // back every document created so far.
-        let (doc, _after_ctx) = create_document_in_conn(&inner_ctx, input)?;
-        documents.push(doc);
-        created += 1;
-    }
-
-    // Release the borrows of `tx` before committing it.
-    drop(inner_ctx);
-    drop(wh);
-    tx.commit().context("Commit bulk create transaction")?;
-
-    ctx.clear_cache();
-
-    // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
-    // Verification emails and nested-hook events always flush.
-    for doc in &documents {
-        ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
-        ctx.maybe_send_verification(doc);
-    }
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(CreateManyResult { created, documents })
+            Ok(CreateManyResult { created, documents })
+        },
+        |ctx, result| {
+            // Per-doc events are gated by `ctx.emit_events` (bulk defaults to
+            // off). Verification emails always send.
+            for doc in &result.documents {
+                ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
+                ctx.maybe_send_verification(doc);
+            }
+        },
+    )
 }
 
 /// Conn mode (Lua): create on existing connection without transaction management.

@@ -26,10 +26,14 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`Validate`] / [`ValidateGlobal`].
+#[derive(Builder)]
 pub struct ValidateArgs {
+    #[builder(required)]
     pub data: DocumentFields,
     pub locale_ctx: Option<LocaleContext>,
     /// Update-mode target id, excluded from unique checks. `None` = create
@@ -38,56 +42,6 @@ pub struct ValidateArgs {
     /// Validate as a draft write (skips required-field checks where the
     /// target supports drafts — the body clamps, like the real write path).
     pub draft: bool,
-}
-
-impl ValidateArgs {
-    #[must_use]
-    pub fn builder(data: DocumentFields) -> ValidateArgsBuilder {
-        ValidateArgsBuilder {
-            data,
-            locale_ctx: None,
-            exclude_id: None,
-            draft: false,
-        }
-    }
-}
-
-/// Builder for [`ValidateArgs`].
-pub struct ValidateArgsBuilder {
-    data: DocumentFields,
-    locale_ctx: Option<LocaleContext>,
-    exclude_id: Option<String>,
-    draft: bool,
-}
-
-impl ValidateArgsBuilder {
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn exclude_id(mut self, exclude_id: Option<String>) -> Self {
-        self.exclude_id = exclude_id;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> ValidateArgs {
-        ValidateArgs {
-            data: self.data,
-            locale_ctx: self.locale_ctx,
-            exclude_id: self.exclude_id,
-            draft: self.draft,
-        }
-    }
 }
 
 /// The dry-run outcome: `None` = valid; `Some(err)` = the typed validation

@@ -10,56 +10,18 @@ use crate::{
     },
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`ListVersions`]. Limit/offset are floored at the
 /// service + db chokepoints.
+#[derive(Builder)]
 pub struct ListVersionsArgs {
+    #[builder(required)]
     pub parent_id: String,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
-}
-
-impl ListVersionsArgs {
-    #[must_use]
-    pub fn builder(parent_id: impl Into<String>) -> ListVersionsArgsBuilder {
-        ListVersionsArgsBuilder {
-            parent_id: parent_id.into(),
-            limit: None,
-            offset: None,
-        }
-    }
-}
-
-/// Builder for [`ListVersionsArgs`] — same Args/Builder pair as every other
-/// operation, so the family stays uniform.
-pub struct ListVersionsArgsBuilder {
-    parent_id: String,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-impl ListVersionsArgsBuilder {
-    #[must_use]
-    pub fn limit(mut self, limit: Option<i64>) -> Self {
-        self.limit = limit;
-        self
-    }
-
-    #[must_use]
-    pub fn offset(mut self, offset: Option<i64>) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> ListVersionsArgs {
-        ListVersionsArgs {
-            parent_id: self.parent_id,
-            limit: self.limit,
-            offset: self.offset,
-        }
-    }
 }
 
 /// List a document's version history (gated by `access.versions ?? update`;

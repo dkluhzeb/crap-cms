@@ -6,13 +6,17 @@ use crate::{
     service::{FindByIdInput, ServiceContext, ServiceError, find_document_by_id},
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`FindById`]. Codecs decode their wire format into
 /// this and pass the flags RAW — the definition-dependent downgrades (draft
 /// needs versions, trash needs soft-delete) happen once in [`FindById::run`],
 /// so no surface can drift on them.
+#[derive(Builder)]
 pub struct FindByIdArgs {
+    #[builder(required)]
     pub id: String,
     pub depth: i32,
     pub select: Option<Vec<String>>,
@@ -23,78 +27,6 @@ pub struct FindByIdArgs {
     /// Read from the trash view (soft-deleted rows). Ignored unless the
     /// collection has soft delete.
     pub include_deleted: bool,
-}
-
-impl FindByIdArgs {
-    #[must_use]
-    pub fn builder(id: impl Into<String>) -> FindByIdArgsBuilder {
-        FindByIdArgsBuilder::new(id.into())
-    }
-}
-
-/// Builder for [`FindByIdArgs`].
-pub struct FindByIdArgsBuilder {
-    id: String,
-    depth: i32,
-    select: Option<Vec<String>>,
-    locale_ctx: Option<LocaleContext>,
-    use_draft: bool,
-    include_deleted: bool,
-}
-
-impl FindByIdArgsBuilder {
-    fn new(id: String) -> Self {
-        Self {
-            id,
-            depth: 0,
-            select: None,
-            locale_ctx: None,
-            use_draft: false,
-            include_deleted: false,
-        }
-    }
-
-    #[must_use]
-    pub fn depth(mut self, depth: i32) -> Self {
-        self.depth = depth;
-        self
-    }
-
-    #[must_use]
-    pub fn select(mut self, select: Option<Vec<String>>) -> Self {
-        self.select = select;
-        self
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn use_draft(mut self, use_draft: bool) -> Self {
-        self.use_draft = use_draft;
-        self
-    }
-
-    #[must_use]
-    pub fn include_deleted(mut self, include_deleted: bool) -> Self {
-        self.include_deleted = include_deleted;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> FindByIdArgs {
-        FindByIdArgs {
-            id: self.id,
-            depth: self.depth,
-            select: self.select,
-            locale_ctx: self.locale_ctx,
-            use_draft: self.use_draft,
-            include_deleted: self.include_deleted,
-        }
-    }
 }
 
 /// Single-document lookup by ID. See [`find_document_by_id`] for the

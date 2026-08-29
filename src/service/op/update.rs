@@ -6,84 +6,24 @@ use crate::{
     service::{ServiceContext, ServiceError, WriteInput, WriteResult, update_document},
 };
 
+use crate::core::Builder;
+
 use super::Operation;
 
 /// Owned arguments for [`Update`]. Mirrors [`super::CreateArgs`] plus the
 /// target document id.
+#[derive(Builder)]
 pub struct UpdateArgs {
+    #[builder(required)]
     pub id: String,
+    #[builder(required)]
     pub data: DocumentFields,
     pub password: Option<String>,
     pub locale_ctx: Option<LocaleContext>,
     pub draft: bool,
     /// Publish a mutation event for this write (request `events` flag).
+    #[builder(default = true)]
     pub events: bool,
-}
-
-impl UpdateArgs {
-    #[must_use]
-    pub fn builder(id: impl Into<String>, data: DocumentFields) -> UpdateArgsBuilder {
-        UpdateArgsBuilder::new(id.into(), data)
-    }
-}
-
-/// Builder for [`UpdateArgs`].
-pub struct UpdateArgsBuilder {
-    id: String,
-    data: DocumentFields,
-    password: Option<String>,
-    locale_ctx: Option<LocaleContext>,
-    draft: bool,
-    events: bool,
-}
-
-impl UpdateArgsBuilder {
-    fn new(id: String, data: DocumentFields) -> Self {
-        Self {
-            id,
-            data,
-            password: None,
-            locale_ctx: None,
-            draft: false,
-            events: true,
-        }
-    }
-
-    #[must_use]
-    pub fn password(mut self, password: Option<String>) -> Self {
-        self.password = password;
-        self
-    }
-
-    #[must_use]
-    pub fn locale_ctx(mut self, locale_ctx: Option<LocaleContext>) -> Self {
-        self.locale_ctx = locale_ctx;
-        self
-    }
-
-    #[must_use]
-    pub fn draft(mut self, draft: bool) -> Self {
-        self.draft = draft;
-        self
-    }
-
-    #[must_use]
-    pub fn events(mut self, events: bool) -> Self {
-        self.events = events;
-        self
-    }
-
-    #[must_use]
-    pub fn build(self) -> UpdateArgs {
-        UpdateArgs {
-            id: self.id,
-            data: self.data,
-            password: self.password,
-            locale_ctx: self.locale_ctx,
-            draft: self.draft,
-            events: self.events,
-        }
-    }
 }
 
 /// Update a document with the full write lifecycle.

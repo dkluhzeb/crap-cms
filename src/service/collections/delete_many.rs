@@ -1,17 +1,14 @@
 //! Bulk delete — delete multiple documents matching a filter.
 
-use std::{cell::RefCell, rc::Rc};
-
 use anyhow::Context as _;
 
 use crate::{
     config::LocaleConfig,
     core::DocumentFields,
     db::{FilterClause, FindQuery, query},
-    hooks::LuaCrudInfra,
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
-        flush_verification_queue, invalidate_user_streams_if_auth,
+        ServiceContext, ServiceError, delete_document_in_conn, invalidate_user_streams_if_auth,
+        run_pool_write,
     },
 };
 
@@ -91,120 +88,99 @@ fn delete_many_pool(
     locale_config: &LocaleConfig,
     opts: &DeleteManyOptions,
 ) -> Result<DeleteManyResult> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.collection_def()?;
+    let (result, _) = run_pool_write(
+        ctx,
+        Some(opts.run_hooks),
+        |inner| {
+            let def = inner.collection_def()?;
 
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn
-        .transaction_immediate()
-        .context("Start bulk delete transaction")?;
+            // Gate + scope the match-set at the chokepoint (see `bulk_access`).
+            let mut scoped_filters = filters.to_vec();
+            scope_bulk_access(
+                inner,
+                inner.write_hooks()?,
+                &delete_scope(def),
+                &mut scoped_filters,
+            )?;
 
-    let queue = Rc::new(RefCell::new(Vec::new()));
-    // The verification queue exists for NESTED Lua creates: a hook running
-    // inside this transaction that creates a verify-email auth document must
-    // get its verification mail sent after commit — without the queue it was
-    // silently dropped (only the create orchestrators used to carry one).
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
+            // Collect the whole match-set up front (IDs only) so the entire
+            // delete is atomic — a per-document failure rolls everything back.
+            // Referenced documents are skipped individually (best-effort,
+            // counted in `skipped`), not errored.
+            let conn = inner.resolve_conn()?;
+            let find_query = FindQuery::builder()
+                .filters(scoped_filters)
+                .include_deleted(opts.include_deleted)
+                .build();
+            let doc_ids = query::find_ids(conn.as_ref(), inner.slug, def, &find_query, None)
+                .context("Find matching IDs for delete")?;
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
+            enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
 
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_hooks_enabled(opts.run_hooks)
-        .with_conn(&tx)
-        .with_infra(infra);
+            let mut hard_count = 0i64;
+            let mut soft_count = 0i64;
+            let mut skipped_count = 0i64;
+            let mut upload_fields_to_clean = Vec::new();
+            let mut deleted_ids = Vec::new();
+            // Pre-deletion `_status` per deleted id, in lockstep with
+            // `deleted_ids`, to gate each hard-delete event by the status view
+            // the document was last in.
+            let mut pre_statuses = Vec::new();
 
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    // Gate + scope the match-set at the chokepoint (see `bulk_access`).
-    let mut scoped_filters = filters.to_vec();
-    scope_bulk_access(ctx, &wh, &delete_scope(def), &mut scoped_filters)?;
-
-    // Collect the whole match-set up front (IDs only) so the entire delete
-    // runs in ONE transaction and is atomic — a per-document failure rolls
-    // everything back. Referenced documents are skipped individually
-    // (best-effort, counted in `skipped`), not errored.
-    let find_query = FindQuery::builder()
-        .filters(scoped_filters)
-        .include_deleted(opts.include_deleted)
-        .build();
-    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, None)
-        .context("Find matching IDs for delete")?;
-
-    enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let mut hard_count = 0i64;
-    let mut soft_count = 0i64;
-    let mut skipped_count = 0i64;
-    let mut upload_fields_to_clean = Vec::new();
-    let mut deleted_ids = Vec::new();
-    // Pre-deletion `_status` per deleted id, in lockstep with `deleted_ids`, to
-    // gate each hard-delete event by the status view the document was last in.
-    let mut pre_statuses = Vec::new();
-
-    for id in &doc_ids {
-        match delete_document_in_conn(&inner_ctx, id, Some(locale_config)) {
-            Ok(result) => {
-                if def.soft_delete {
-                    soft_count += 1;
-                } else {
-                    hard_count += 1;
-                    if let Some(fields) = result.upload_doc_fields {
-                        upload_fields_to_clean.push(fields);
+            for id in &doc_ids {
+                match delete_document_in_conn(inner, id, Some(locale_config)) {
+                    Ok(result) => {
+                        if def.soft_delete {
+                            soft_count += 1;
+                        } else {
+                            hard_count += 1;
+                            if let Some(fields) = result.upload_doc_fields {
+                                upload_fields_to_clean.push(fields);
+                            }
+                        }
+                        deleted_ids.push(id.clone());
+                        pre_statuses.push(result.pre_status);
                     }
+                    // A referenced document is skipped (best-effort), not a failure.
+                    Err(ServiceError::Referenced { .. }) => {
+                        skipped_count += 1;
+                    }
+                    // A real error aborts the whole op via `?`; the envelope
+                    // rolls back every delete made so far.
+                    Err(e) => return Err(e),
                 }
-                deleted_ids.push(id.clone());
-                pre_statuses.push(result.pre_status);
             }
-            // A referenced document is skipped (best-effort), not a failure.
-            Err(ServiceError::Referenced { .. }) => {
-                skipped_count += 1;
+
+            Ok((
+                DeleteManyResult {
+                    hard_deleted: hard_count,
+                    soft_deleted: soft_count,
+                    skipped: skipped_count,
+                    deleted_ids,
+                    upload_fields_to_clean,
+                },
+                pre_statuses,
+            ))
+        },
+        |ctx, (result, pre_statuses)| {
+            let soft_delete = ctx.collection_def().is_ok_and(|d| d.soft_delete);
+
+            // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
+            for (id, pre_status) in result.deleted_ids.iter().zip(pre_statuses) {
+                ctx.publish_delete_event(id, soft_delete, pre_status.clone());
             }
-            // A real error aborts the whole op via `?`; `tx` drops without
-            // commit, rolling back every delete made so far.
-            Err(e) => return Err(e),
-        }
-    }
+            // Deleting an auth document revokes that user — tear down each
+            // affected user's live streams POST-COMMIT, for BOTH hard and soft
+            // delete: the evaluator's `find_by_id` excludes soft-deleted rows,
+            // so a trashed user is rejected on new requests and their open
+            // streams must be closed too.
+            for id in &result.deleted_ids {
+                invalidate_user_streams_if_auth(ctx, id);
+            }
+        },
+    )?;
 
-    // Release the borrows of `tx` before committing it.
-    drop(inner_ctx);
-    drop(wh);
-
-    tx.commit().context("Commit bulk delete transaction")?;
-
-    ctx.clear_cache();
-
-    // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
-    // Nested-hook events queued during the op always flush.
-    for (id, pre_status) in deleted_ids.iter().zip(&pre_statuses) {
-        ctx.publish_delete_event(id, def.soft_delete, pre_status.clone());
-    }
-    // Deleting an auth document revokes that user — tear down each affected
-    // user's live streams POST-COMMIT, for BOTH hard and soft delete: the
-    // evaluator's `find_by_id` excludes soft-deleted rows, so a trashed user is
-    // rejected on new requests and their open streams must be closed too.
-    for id in &deleted_ids {
-        invalidate_user_streams_if_auth(ctx, id);
-    }
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(DeleteManyResult {
-        hard_deleted: hard_count,
-        soft_deleted: soft_count,
-        skipped: skipped_count,
-        deleted_ids,
-        upload_fields_to_clean,
-    })
+    Ok(result)
 }
 
 /// Conn-based bulk delete: uses existing connection (Lua CRUD path).

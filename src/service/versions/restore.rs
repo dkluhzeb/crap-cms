@@ -1,8 +1,7 @@
 //! Version restore operations for collections and globals.
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::collections::HashSet;
 
-use anyhow::Context as _;
 use serde_json::Value;
 use tracing::warn;
 
@@ -13,11 +12,10 @@ use crate::{
         AccessResult, query,
         query::helpers::{global_table, prefixed_name, tz_column},
     },
-    hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
+    hooks::{AccessCheckInput, ValidationCtx},
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, flush_verification_queue,
-        helpers, hooks::WriteHooks, invalidate_user_streams_if_auth,
-        versions::gate::versions_gate_decision,
+        ServiceContext, ServiceError, helpers, hooks::WriteHooks, invalidate_user_streams_if_auth,
+        run_pool_write, versions::gate::versions_gate_decision,
     },
 };
 
@@ -164,47 +162,16 @@ fn restore_collection_version_pool(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.collection_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    // Event + verification queues for NESTED Lua CRUD inside restore hooks —
-    // restore was the one pool orchestrator without them, so a hook's nested
-    // mutation events and verification mails were silently dropped.
-    let queue = Rc::new(RefCell::new(Vec::new()));
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::collection(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let doc = restore_collection_version_core(&inner_ctx, document_id, version_id, locale_config)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit")?;
-
-    ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
-    invalidate_user_streams_if_auth(ctx, document_id);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(doc)
+    run_pool_write(
+        ctx,
+        None,
+        |inner| restore_collection_version_core(inner, document_id, version_id, locale_config),
+        |ctx, doc| {
+            ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
+            // Restoring an auth document can change that user's access.
+            invalidate_user_streams_if_auth(ctx, document_id);
+        },
+    )
 }
 
 fn restore_collection_version_conn(
@@ -359,44 +326,14 @@ pub fn restore_global_version(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
-    let pool = ctx.pool.context("pool required")?;
-    let runner = ctx.runner()?;
-    let def = ctx.global_def()?;
-    let mut conn = pool.write().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    // Same nested-CRUD queues as the collection restore (see above).
-    let queue = Rc::new(RefCell::new(Vec::new()));
-    let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-    let mut wh = RunnerWriteHooks::new(runner)
-        .with_conn(&tx)
-        .with_infra(infra);
-
-    if ctx.override_access {
-        wh = wh.with_override_access();
-    }
-
-    let inner_ctx = ServiceContext::global(ctx.slug, def)
-        .conn(&tx)
-        .write_hooks(&wh)
-        .inherit_write_infra(ctx)
-        .event_queue(queue.clone())
-        .build();
-
-    let doc = restore_global_version_core(&inner_ctx, version_id, locale_config)?;
-    drop(inner_ctx);
-
-    tx.commit().context("Commit")?;
-
-    ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, "default", &doc.fields);
-    flush_queue(ctx, &queue);
-    flush_verification_queue(ctx, &vqueue);
-
-    Ok(doc)
+    run_pool_write(
+        ctx,
+        None,
+        |inner| restore_global_version_core(inner, version_id, locale_config),
+        |ctx, doc| {
+            ctx.publish_mutation_event(EventOperation::Update, "default", &doc.fields);
+        },
+    )
 }
 
 /// Core logic for global version restore on an existing connection/transaction.
