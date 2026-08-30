@@ -35,7 +35,7 @@ struct LoginBlockingInput {
     slug: String,
     email: String,
     password: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     password_provider: SharedPasswordProvider,
     headers: HashMap<String, String>,
     remote_addr: String,

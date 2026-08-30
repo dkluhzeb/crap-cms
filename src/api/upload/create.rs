@@ -1,5 +1,7 @@
 //! POST /api/upload/{slug} — upload a file and create a document.
 
+use std::sync::Arc;
+
 use tracing::error;
 
 use axum::{
@@ -32,7 +34,7 @@ struct UploadCreateBlockingInput {
     runner: HookRunner,
     storage: SharedStorage,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     user_doc: Option<Document>,
     file: UploadedFile,
     form_data: HashMap<String, String>,

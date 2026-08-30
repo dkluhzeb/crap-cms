@@ -234,7 +234,7 @@ mod tests {
             .build()
             .expect("build runner");
 
-        let posts = registry.get_collection("posts").unwrap().clone();
+        let posts = registry.get_collection("posts").unwrap().as_ref().clone();
 
         (runner, registry, posts)
     }

@@ -149,7 +149,7 @@ fn setup_app_in_dir(
     let has_auth = registry
         .collections
         .values()
-        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
+        .any(|d| d.is_auth_collection());
 
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
     let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
@@ -1876,7 +1876,7 @@ end"#,
     let has_auth = registry
         .collections
         .values()
-        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
+        .any(|d| d.is_auth_collection());
 
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
     let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));

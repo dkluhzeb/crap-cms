@@ -24,7 +24,7 @@ struct MeBlockingInput {
     infra: Arc<AppInfra>,
     collection: String,
     id: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
 }
 
 fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool), Status> {

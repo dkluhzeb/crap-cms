@@ -1,5 +1,7 @@
 //! Serves uploaded files with access-control-aware caching.
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -52,7 +54,7 @@ fn has_path_traversal(segment: &str) -> bool {
 struct UploadVisibilityInput {
     pool: DbPool,
     runner: HookRunner,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     slug: String,
     filename: String,
     user_doc: Option<Document>,

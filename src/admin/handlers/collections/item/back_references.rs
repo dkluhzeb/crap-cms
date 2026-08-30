@@ -35,7 +35,7 @@ struct BackRefParams {
     slug: String,
     target_id: String,
     user_doc: Option<crate::core::Document>,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     read_access: AccessResult,
 }
 

@@ -18,7 +18,7 @@ use crate::{
 struct VerifyEmailBlockingInput {
     infra: Arc<AppInfra>,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     token: String,
 }
 

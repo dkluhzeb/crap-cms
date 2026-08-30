@@ -145,6 +145,8 @@ pub(super) fn find_orphan_columns(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         core::{FieldDefinition, FieldType, collection::CollectionDefinition},
@@ -194,7 +196,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection("posts", vec![text_field("title")]),
+            Arc::new(simple_collection("posts", vec![text_field("title")])),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
@@ -212,7 +214,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection("posts", vec![text_field("title")]),
+            Arc::new(simple_collection("posts", vec![text_field("title")])),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
@@ -232,7 +234,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "users".into(),
-            simple_collection("users", vec![text_field("email")]),
+            Arc::new(simple_collection("users", vec![text_field("email")])),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
@@ -250,14 +252,14 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection(
+            Arc::new(simple_collection(
                 "posts",
                 vec![
                     FieldDefinition::builder("seo", FieldType::Group)
                         .fields(vec![text_field("meta_title"), text_field("meta_desc")])
                         .build(),
                 ],
-            ),
+            )),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
@@ -275,14 +277,14 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection(
+            Arc::new(simple_collection(
                 "posts",
                 vec![
                     FieldDefinition::builder("title", FieldType::Text)
                         .localized(true)
                         .build(),
                 ],
-            ),
+            )),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &locale_en_de()).unwrap();
@@ -300,7 +302,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection(
+            Arc::new(simple_collection(
                 "posts",
                 vec![
                     text_field("title"),
@@ -308,7 +310,7 @@ mod tests {
                         .fields(vec![text_field("meta")])
                         .build(),
                 ],
-            ),
+            )),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
@@ -327,7 +329,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.collections.insert(
             "posts".into(),
-            simple_collection(
+            Arc::new(simple_collection(
                 "posts",
                 vec![
                     FieldDefinition::builder("layout", FieldType::Tabs)
@@ -346,7 +348,7 @@ mod tests {
                         )])
                         .build(),
                 ],
-            ),
+            )),
         );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();

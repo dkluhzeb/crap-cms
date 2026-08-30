@@ -3089,6 +3089,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **`Arc<CollectionDefinition>` registry storage.** The registry's four
+  definition maps (collections, globals, jobs, richtext nodes) now hold
+  `Arc`-wrapped definitions; lookups return `&Arc`, so read-only callers
+  deref for free and ownership-taking callers (`spawn_blocking` moves, the
+  param structs that carry a def across threads) pay a refcount bump
+  instead of deep-cloning the whole definition tree. `Registry::snapshot`
+  collapses from deep-copying every definition to one refcount bump per
+  entry (pinned by a new `Arc::ptr_eq` test), and the few
+  adjust-then-use paths (force-hard-delete def tweaks) use copy-on-write
+  `Arc::make_mut`, so only the adjusted path ever clones. No behavior
+  change; per-entry snapshot semantics (a request keeps its def even if
+  Lua redefines the collection mid-request) are unchanged.
+
 - **Constant-query deep reads — batch coverage completed (B2).** Hydration of
   array and blocks fields, join-shaped fields nested inside groups (at any
   depth, via a recursive batched group walk), and join-field children (one

@@ -1,5 +1,7 @@
 //! Shared helpers for user management commands.
 
+use std::sync::Arc;
+
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -29,7 +31,7 @@ pub(super) fn get_user_email(doc: &Document) -> &str {
 pub(super) fn load_auth_collection(
     registry: &Registry,
     collection: &str,
-) -> Result<CollectionDefinition> {
+) -> Result<Arc<CollectionDefinition>> {
     let def = registry
         .get_collection(collection)
         .ok_or_else(|| anyhow!("Collection '{collection}' not found"))?;
@@ -61,7 +63,7 @@ pub(super) fn resolve_user(
     collection: &str,
     email: Option<String>,
     id: Option<String>,
-) -> Result<(CollectionDefinition, Document)> {
+) -> Result<(Arc<CollectionDefinition>, Document)> {
     let def = load_auth_collection(registry, collection)?;
     let conn = pool.get().context("Failed to get database connection")?;
 
@@ -91,8 +93,8 @@ pub(super) fn resolve_user(
 fn select_user_interactive(
     conn: &BoxedConnection,
     collection: &str,
-    def: &CollectionDefinition,
-) -> Result<(CollectionDefinition, Document)> {
+    def: &Arc<CollectionDefinition>,
+) -> Result<(Arc<CollectionDefinition>, Document)> {
     let find_query = query::FindQuery::default();
     let users = query::find(conn, collection, def, &find_query, None)?;
 

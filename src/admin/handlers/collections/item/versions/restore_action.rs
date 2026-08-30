@@ -21,7 +21,7 @@ use crate::{
 struct RestoreVersionInput {
     infra: Arc<AppInfra>,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     user_doc: Option<Document>,
     id: String,
     version_id: String,

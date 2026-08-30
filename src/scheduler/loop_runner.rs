@@ -572,7 +572,7 @@ fn resolve_job_def(
     job_run: &JobRun,
     pool: &DbPool,
     queue_timeouts: &HashMap<String, u64>,
-) -> Option<JobDefinition> {
+) -> Option<Arc<JobDefinition>> {
     if let Some(def) = registry.get_job(&job_run.slug) {
         return Some(def.clone());
     }
@@ -587,12 +587,12 @@ fn resolve_job_def(
             .get(SYSTEM_EMAIL_QUEUE)
             .copied()
             .unwrap_or(DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS);
-        return Some(
+        return Some(Arc::new(
             JobDefinition::builder(SYSTEM_EMAIL_JOB, "_system")
                 .queue(SYSTEM_EMAIL_QUEUE)
                 .timeout(timeout)
                 .build(),
-        );
+        ));
     }
 
     if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
@@ -600,12 +600,12 @@ fn resolve_job_def(
             .get(IMAGE_CONVERT_QUEUE)
             .copied()
             .unwrap_or(DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS);
-        return Some(
+        return Some(Arc::new(
             JobDefinition::builder(SYSTEM_IMAGE_CONVERT_JOB, "_system")
                 .queue(IMAGE_CONVERT_QUEUE)
                 .timeout(timeout)
                 .build(),
-        );
+        ));
     }
 
     warn!(

@@ -41,7 +41,7 @@ use crate::{
 struct UpdateParams {
     infra: Arc<AppInfra>,
     slug: String,
-    def: GlobalDefinition,
+    def: Arc<GlobalDefinition>,
     form: FormData,
     locale_ctx: Option<LocaleContext>,
     draft: bool,

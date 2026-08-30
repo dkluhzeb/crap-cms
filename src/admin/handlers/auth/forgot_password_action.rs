@@ -30,7 +30,7 @@ use crate::{
 struct ResetEmailParams {
     pool: DbPool,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     user_email: String,
     email_config: EmailConfig,
     email_renderer: Arc<EmailRenderer>,
@@ -43,7 +43,7 @@ struct ResetEmailParams {
 fn forgot_password_collection(
     state: &AdminState,
     collection: &str,
-) -> Option<CollectionDefinition> {
+) -> Option<Arc<CollectionDefinition>> {
     let def = state.infra.registry.get_collection(collection)?;
 
     if def.is_auth_collection()

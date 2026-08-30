@@ -105,7 +105,7 @@ fn collections_delete(
         .events(opts.events)
         .build();
     if let Some(adjusted) = Delete::adjust_collection_def(&args, &def) {
-        def = adjusted;
+        def = Arc::new(adjusted);
     }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete");

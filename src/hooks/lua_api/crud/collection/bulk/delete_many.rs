@@ -194,9 +194,10 @@ fn collections_delete_many(
     // purge, so the per-row delete hard-removes and its read doesn't append
     // `_deleted_at IS NULL` (which would hide the already-trashed rows).
     // Mirrors the admin empty-trash path.
-    let mut service_def = def.clone();
+    let mut service_def = Arc::clone(&def);
     if opts.force_hard_delete || opts.trash {
-        service_def.make_hard_delete();
+        // Copy-on-write: only this adjusted path pays a deep clone.
+        Arc::make_mut(&mut service_def).make_hard_delete();
     }
 
     let invalidation_transport = hook_invalidation_transport(lua);

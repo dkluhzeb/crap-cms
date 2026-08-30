@@ -44,10 +44,16 @@ pub struct StrategyEntry {
 /// nothing was going to match.
 #[derive(Clone, Default)]
 pub struct Registry {
-    pub collections: HashMap<Slug, CollectionDefinition>,
-    pub globals: HashMap<Slug, GlobalDefinition>,
-    pub jobs: HashMap<Slug, JobDefinition>,
-    pub richtext_nodes: HashMap<String, RichtextNodeDef>,
+    /// Definitions are `Arc`-wrapped: loaded once, shared widely, rarely
+    /// replaced. Lookups hand out `&Arc` so read-only callers deref for
+    /// free and callers that need ownership (`spawn_blocking` moves) pay a
+    /// refcount bump via `.cloned()` instead of a deep struct clone — and
+    /// [`Registry::snapshot`]'s `clone()` collapses from deep-copying every
+    /// definition to bumping one refcount per entry.
+    pub collections: HashMap<Slug, Arc<CollectionDefinition>>,
+    pub globals: HashMap<Slug, Arc<GlobalDefinition>>,
+    pub jobs: HashMap<Slug, Arc<JobDefinition>>,
+    pub richtext_nodes: HashMap<String, Arc<RichtextNodeDef>>,
     /// `Activation::Always`-activated strategies grouped by the
     /// surface they fire on. Looked up once per request to enumerate
     /// strategies that run unconditionally for that surface.
@@ -128,7 +134,7 @@ impl Registry {
 
         Self::warn_invalid_field_refs(&def);
 
-        self.collections.insert(def.slug.clone(), def);
+        self.collections.insert(def.slug.clone(), Arc::new(def));
     }
 
     /// Log warnings for admin config fields that reference nonexistent field names.
@@ -195,18 +201,21 @@ impl Registry {
     pub fn register_global(&mut self, def: GlobalDefinition) {
         debug!("Registering global '{}'", def.slug);
 
-        self.globals.insert(def.slug.clone(), def);
+        self.globals.insert(def.slug.clone(), Arc::new(def));
     }
 
-    /// Look up a collection definition by slug.
+    /// Look up a collection definition by slug. Returns the `Arc` so a
+    /// caller keeps a read borrow for free (deref) or takes shared
+    /// ownership with `.cloned()` (refcount bump, no deep clone).
     #[must_use]
-    pub fn get_collection(&self, slug: &str) -> Option<&CollectionDefinition> {
+    pub fn get_collection(&self, slug: &str) -> Option<&Arc<CollectionDefinition>> {
         self.collections.get(slug)
     }
 
-    /// Look up a global definition by slug.
+    /// Look up a global definition by slug (see [`Self::get_collection`]
+    /// for the `Arc` rationale).
     #[must_use]
-    pub fn get_global(&self, slug: &str) -> Option<&GlobalDefinition> {
+    pub fn get_global(&self, slug: &str) -> Option<&Arc<GlobalDefinition>> {
         self.globals.get(slug)
     }
 
@@ -214,12 +223,12 @@ impl Registry {
     pub fn register_job(&mut self, def: JobDefinition) {
         debug!("Registering job '{}'", def.slug);
 
-        self.jobs.insert(def.slug.clone(), def);
+        self.jobs.insert(def.slug.clone(), Arc::new(def));
     }
 
     /// Look up a job definition by slug.
     #[must_use]
-    pub fn get_job(&self, slug: &str) -> Option<&JobDefinition> {
+    pub fn get_job(&self, slug: &str) -> Option<&Arc<JobDefinition>> {
         self.jobs.get(slug)
     }
 
@@ -227,12 +236,12 @@ impl Registry {
     pub fn register_richtext_node(&mut self, def: RichtextNodeDef) {
         debug!("Registering richtext node '{}'", def.name);
 
-        self.richtext_nodes.insert(def.name.clone(), def);
+        self.richtext_nodes.insert(def.name.clone(), Arc::new(def));
     }
 
     /// Look up a custom richtext node definition by name.
     #[must_use]
-    pub fn get_richtext_node(&self, name: &str) -> Option<&RichtextNodeDef> {
+    pub fn get_richtext_node(&self, name: &str) -> Option<&Arc<RichtextNodeDef>> {
         self.richtext_nodes.get(name)
     }
 
@@ -410,6 +419,27 @@ mod tests {
         assert_eq!(node.label, "Call to Action");
         assert!(!node.inline);
         assert_eq!(node.attrs.len(), 1);
+    }
+
+    /// The point of Arc-backed storage: a snapshot shares the definition
+    /// allocations with the live registry (refcount bumps), it does not
+    /// deep-clone them. Guards against a regression back to owned maps.
+    #[test]
+    fn snapshot_shares_definitions_via_arc() {
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            reg.register_collection(make_collection("posts"));
+        }
+        let snap = Registry::snapshot(&shared);
+
+        let reg = shared.read().unwrap();
+        let live = reg.get_collection("posts").unwrap();
+        let snapped = snap.get_collection("posts").unwrap();
+        assert!(
+            Arc::ptr_eq(live, snapped),
+            "snapshot must share the definition Arc, not deep-clone it"
+        );
     }
 
     #[test]

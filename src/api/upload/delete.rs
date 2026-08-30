@@ -1,5 +1,7 @@
 //! DELETE /api/upload/{slug}/{id} — delete an upload document and its files.
 
+use std::sync::Arc;
+
 use tracing::error;
 
 use axum::{
@@ -25,7 +27,7 @@ use crate::{
 struct UploadDeleteBlockingInput {
     pool: DbPool,
     runner: HookRunner,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     slug: String,
     id: String,
     user_doc: Option<Document>,

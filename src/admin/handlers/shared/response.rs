@@ -1,5 +1,7 @@
 //! Response helpers — error pages, redirects, HTMX-aware responses, toast rendering.
 
+use std::sync::Arc;
+
 use std::fmt::Write as _;
 
 use axum::{
@@ -270,7 +272,7 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
 pub fn require_collection(
     state: &AdminState,
     slug: &str,
-) -> Result<CollectionDefinition, Box<Response>> {
+) -> Result<Arc<CollectionDefinition>, Box<Response>> {
     state
         .infra
         .registry
@@ -286,7 +288,10 @@ pub fn require_collection(
 ///
 /// Returns the rendered 404 [`Response`] (boxed — it is the large variant) when
 /// no global matches `slug`.
-pub fn require_global(state: &AdminState, slug: &str) -> Result<GlobalDefinition, Box<Response>> {
+pub fn require_global(
+    state: &AdminState,
+    slug: &str,
+) -> Result<Arc<GlobalDefinition>, Box<Response>> {
     state
         .infra
         .registry
@@ -341,7 +346,7 @@ pub fn json_server_error(message: &str) -> Response {
 pub fn require_collection_json(
     state: &AdminState,
     slug: &str,
-) -> Result<CollectionDefinition, Box<Response>> {
+) -> Result<Arc<CollectionDefinition>, Box<Response>> {
     state
         .infra
         .registry

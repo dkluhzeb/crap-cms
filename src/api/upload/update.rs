@@ -1,5 +1,7 @@
 //! PATCH /api/upload/{slug}/{id} — replace file on an existing document.
 
+use std::sync::Arc;
+
 use tracing::error;
 
 use axum::{
@@ -29,7 +31,7 @@ struct UploadUpdateBlockingInput {
     storage: SharedStorage,
     slug: String,
     id: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     user_doc: Option<Document>,
     file: Option<UploadedFile>,
     form_data: HashMap<String, String>,

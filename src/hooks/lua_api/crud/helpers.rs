@@ -3,6 +3,8 @@
 //! Extracts duplicated patterns from the registration closures (opts parsing,
 //! user/locale extraction, registry lookup, hook depth checking, data extraction).
 
+use std::sync::Arc;
+
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use serde_json::Value;
 use tracing::warn;
@@ -56,7 +58,10 @@ pub(crate) fn hook_locale_config(lua: &Lua) -> Option<LocaleConfig> {
 
 /// Look up a collection definition from the registry snapshot, returning a
 /// `RuntimeError` if not found.
-pub(crate) fn resolve_collection(reg: &Registry, slug: &str) -> LuaResult<CollectionDefinition> {
+pub(crate) fn resolve_collection(
+    reg: &Registry,
+    slug: &str,
+) -> LuaResult<Arc<CollectionDefinition>> {
     reg.get_collection(slug)
         .cloned()
         .ok_or_else(|| RuntimeError(format!("Collection '{slug}' not found")))
@@ -64,7 +69,7 @@ pub(crate) fn resolve_collection(reg: &Registry, slug: &str) -> LuaResult<Collec
 
 /// Look up a global definition from the registry snapshot, returning a
 /// `RuntimeError` if not found.
-pub(crate) fn resolve_global(reg: &Registry, slug: &str) -> LuaResult<GlobalDefinition> {
+pub(crate) fn resolve_global(reg: &Registry, slug: &str) -> LuaResult<Arc<GlobalDefinition>> {
     reg.get_global(slug)
         .cloned()
         .ok_or_else(|| RuntimeError(format!("Global '{slug}' not found")))

@@ -21,7 +21,7 @@ use crate::{
 struct RestoreGlobalVersionInput {
     infra: Arc<AppInfra>,
     slug: String,
-    def: GlobalDefinition,
+    def: Arc<GlobalDefinition>,
     user_doc: Option<Document>,
     version_id: String,
 }

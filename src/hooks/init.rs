@@ -169,11 +169,14 @@ fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
         return;
     };
 
+    // Init phase: the registry is being built and nothing else holds a
+    // reference to these Arcs yet, so `make_mut` mutates in place without
+    // cloning.
     for def in reg.collections.values_mut() {
-        apply_default_timezone(&mut def.fields, default_tz);
+        apply_default_timezone(&mut Arc::make_mut(def).fields, default_tz);
     }
     for def in reg.globals.values_mut() {
-        apply_default_timezone(&mut def.fields, default_tz);
+        apply_default_timezone(&mut Arc::make_mut(def).fields, default_tz);
     }
 }
 

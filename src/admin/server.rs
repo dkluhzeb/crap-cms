@@ -55,8 +55,8 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
     core::{
-        CollectionDefinition, JwtSecret, SharedPasswordProvider,
-        email::create_email_provider_with_lease, rate_limit::LoginRateLimiter,
+        JwtSecret, SharedPasswordProvider, email::create_email_provider_with_lease,
+        rate_limit::LoginRateLimiter,
     },
     db::DbConnection,
     service::AppInfra,
@@ -152,7 +152,7 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
         .registry
         .collections
         .values()
-        .any(CollectionDefinition::is_auth_collection);
+        .any(|d| d.is_auth_collection());
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;

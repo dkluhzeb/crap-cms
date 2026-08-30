@@ -177,6 +177,7 @@
 - [Operation Core — Migration Plan](internals/operation-core-migration.md)
 - [Lua Connection Injection — Hardening Plan](internals/lua-connection-injection.md)
 - [Performance Architecture — Plan](internals/performance-architecture.md)
+- [REST Surface — Analysis](internals/rest-surface-analysis.md)
 
 # Advanced
 

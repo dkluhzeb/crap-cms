@@ -34,7 +34,7 @@ struct VerifyParams {
     infra: Arc<AppInfra>,
     password_provider: SharedPasswordProvider,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     email: String,
     password: String,
     remote_addr: String,
@@ -199,7 +199,7 @@ pub async fn login_action(
         .registry
         .get_collection(&form.collection)
         .cloned()
-        .filter(crate::core::CollectionDefinition::is_auth_collection)
+        .filter(|d| d.is_auth_collection())
     else {
         return login_error(&state, "error_invalid_collection", &form.email);
     };

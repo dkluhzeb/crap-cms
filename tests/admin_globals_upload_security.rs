@@ -147,7 +147,7 @@ fn setup_app_in_dir(
     let has_auth = registry
         .collections
         .values()
-        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
+        .any(|d| d.is_auth_collection());
 
     let storage = crap_cms::core::upload::create_storage(
         tmp.path(),

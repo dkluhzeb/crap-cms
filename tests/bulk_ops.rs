@@ -25,7 +25,7 @@ struct Setup {
     _tmp: tempfile::TempDir,
     pool: DbPool,
     runner: HookRunner,
-    def: CollectionDefinition,
+    def: std::sync::Arc<CollectionDefinition>,
 }
 
 /// A `posts` collection with a **unique** `title` (used to trigger a
@@ -75,7 +75,7 @@ fn setup(n: usize) -> Setup {
         _tmp: tmp,
         pool,
         runner,
-        def,
+        def: Arc::new(def),
     }
 }
 
@@ -151,7 +151,7 @@ fn setup_auth() -> Setup {
         _tmp: tmp,
         pool,
         runner,
-        def,
+        def: Arc::new(def),
     }
 }
 

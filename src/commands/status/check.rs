@@ -10,7 +10,7 @@ use crate::core::collection::Auth;
 use crate::{
     cli,
     config::{CacheBackend, CompressionMode, CrapConfig, EmailProvider},
-    core::{CollectionDefinition, Hooks, LiveMode, Registry},
+    core::{Hooks, LiveMode, Registry},
     db::{DbConnection, DbPool, migrate},
 };
 
@@ -355,10 +355,7 @@ fn check_cors(cfg: &CrapConfig, findings: &mut Vec<Finding>) {
 }
 
 fn check_rate_limiting(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
-    let has_auth = reg
-        .collections
-        .values()
-        .any(CollectionDefinition::is_auth_collection);
+    let has_auth = reg.collections.values().any(|d| d.is_auth_collection());
 
     if has_auth && cfg.server.grpc_rate_limit_requests == 0 {
         findings.push(

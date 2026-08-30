@@ -19,7 +19,7 @@ use crate::{
 struct ResetPasswordBlockingInput {
     infra: Arc<AppInfra>,
     slug: String,
-    def: CollectionDefinition,
+    def: Arc<CollectionDefinition>,
     token: String,
     password: String,
 }

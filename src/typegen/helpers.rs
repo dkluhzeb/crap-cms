@@ -160,6 +160,8 @@ pub(super) fn collect_sub_type_fields<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::core::{FieldDefinition, FieldTab, GlobalDefinition, RelationshipConfig};
 
@@ -255,13 +257,13 @@ mod tests {
         let mut registry = Registry::default();
         registry
             .collections
-            .insert("zebra".into(), make_collection("zebra"));
+            .insert("zebra".into(), Arc::new(make_collection("zebra")));
         registry
             .collections
-            .insert("alpha".into(), make_collection("alpha"));
+            .insert("alpha".into(), Arc::new(make_collection("alpha")));
         registry
             .collections
-            .insert("middle".into(), make_collection("middle"));
+            .insert("middle".into(), Arc::new(make_collection("middle")));
         let slugs = sorted_collection_slugs(&registry);
         let expected: Vec<Slug> = vec!["alpha".into(), "middle".into(), "zebra".into()];
         assert_eq!(slugs, expected.iter().collect::<Vec<&Slug>>());
@@ -272,10 +274,10 @@ mod tests {
         let mut registry = Registry::default();
         registry
             .globals
-            .insert("settings".into(), make_global("settings"));
+            .insert("settings".into(), Arc::new(make_global("settings")));
         registry
             .globals
-            .insert("about".into(), make_global("about"));
+            .insert("about".into(), Arc::new(make_global("about")));
         let slugs = sorted_global_slugs(&registry);
         let expected: Vec<Slug> = vec!["about".into(), "settings".into()];
         assert_eq!(slugs, expected.iter().collect::<Vec<&Slug>>());

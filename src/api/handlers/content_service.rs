@@ -100,7 +100,7 @@ impl ContentService {
     pub(in crate::api::handlers) fn get_collection_def(
         &self,
         slug: &str,
-    ) -> Result<CollectionDefinition, Status> {
+    ) -> Result<Arc<CollectionDefinition>, Status> {
         self.infra
             .registry
             .get_collection(slug)
@@ -111,7 +111,7 @@ impl ContentService {
     pub(in crate::api::handlers) fn get_global_def(
         &self,
         slug: &str,
-    ) -> Result<GlobalDefinition, Status> {
+    ) -> Result<Arc<GlobalDefinition>, Status> {
         self.infra
             .registry
             .get_global(slug)

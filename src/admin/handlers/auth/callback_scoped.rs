@@ -17,10 +17,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::{
-    admin::{AdminState, handlers::shared::paths},
-    core::CollectionDefinition,
-};
+use crate::admin::{AdminState, handlers::shared::paths};
 
 use super::callback::complete_auth_callback;
 
@@ -45,7 +42,7 @@ pub async fn auth_callback_scoped(
         .infra
         .registry
         .get_collection(&collection)
-        .is_some_and(CollectionDefinition::is_auth_collection);
+        .is_some_and(|d| d.is_auth_collection());
 
     if !is_auth {
         return Redirect::to(paths::LOGIN).into_response();
