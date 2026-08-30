@@ -27,11 +27,11 @@ struct JoinTarget<'a> {
 }
 use crate::db::{
     Filter, FilterClause, FilterOp, FindQuery,
-    query::{hydrate_document, read},
+    query::{hydrate_documents, read},
 };
 
 use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
-use crate::db::query::populate::single::{nested, populate_relationships_cached};
+use crate::db::query::populate::single::nested;
 
 use super::{nonpoly, poly};
 
@@ -97,19 +97,33 @@ fn populate_relationships_batch_cached_inner(
     cache: &dyn CacheBackend,
     singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+
+    populate_batch_with_visited(ctx, docs, opts, cache, singleflight, &mut visited)
+}
+
+/// Core of the batch populate, taking a caller-seeded `visited` set so
+/// nested batch invocations (join children) inherit their ancestors' cycle
+/// guard. Seeds the current docs into `visited` itself.
+fn populate_batch_with_visited(
+    ctx: &PopulateContext<'_>,
+    docs: &mut [Document],
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<CachedDoc>,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
     if opts.depth <= 0 || docs.is_empty() {
         return Ok(());
     }
-
-    let mut visited: HashSet<(String, String)> = HashSet::new();
 
     for doc in docs.iter() {
         visited.insert((ctx.collection_slug.to_string(), doc.id.to_string()));
     }
 
-    populate_flat_relationships(ctx, docs, opts, cache, singleflight, &visited)?;
-    populate_nested_containers(ctx, docs, opts, cache, singleflight, &visited)?;
-    populate_join_fields(ctx, docs, opts, cache, &visited)?;
+    populate_flat_relationships(ctx, docs, opts, cache, singleflight, visited)?;
+    populate_nested_containers(ctx, docs, opts, cache, singleflight, visited)?;
+    populate_join_fields(ctx, docs, opts, cache, visited)?;
 
     Ok(())
 }
@@ -355,7 +369,10 @@ fn populate_single_join_field(
     Ok(())
 }
 
-/// Hydrate + recursively populate each matched join child, at depth-1.
+/// Hydrate + recursively populate the matched join children, at depth-1.
+/// Children all belong to one target collection, so hydration is ONE batched
+/// pass and the recursive populate is ONE batch invocation (seeded with the
+/// ancestors' visited set) — previously both ran per child.
 fn prepare_join_children(
     ctx: &PopulateContext<'_>,
     opts: &PopulateOpts<'_>,
@@ -364,46 +381,52 @@ fn prepare_join_children(
     target: &JoinTarget<'_>,
     matched_docs: Vec<Document>,
 ) -> Result<Vec<Document>> {
-    let mut prepared: Vec<Document> = Vec::with_capacity(matched_docs.len());
-    let mut nested_visited = visited.clone();
-    for mut matched_doc in matched_docs {
-        hydrate_document(
-            ctx.conn,
-            &target.config.collection,
-            &target.target_def.fields,
-            &mut matched_doc,
-            None,
-            opts.locale_ctx,
-        )?;
-
-        if let Some(ref uc) = target.target_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut matched_doc, uc);
-        }
-
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: ctx.conn,
-                registry: ctx.registry,
-                collection_slug: &target.config.collection,
-                def: target.target_def,
-            },
-            &mut matched_doc,
-            &mut nested_visited,
-            &PopulateOpts {
-                depth: opts.depth - 1,
-                select: None,
-                locale_ctx: opts.locale_ctx,
-                published_only: opts.published_only,
-                join_access: opts.join_access,
-                user: opts.user,
-            },
-            cache,
-        )?;
-
-        prepared.push(matched_doc);
+    let mut prepared = matched_docs;
+    if prepared.is_empty() {
+        return Ok(prepared);
     }
+
+    hydrate_documents(
+        ctx.conn,
+        &target.config.collection,
+        &target.target_def.fields,
+        &mut prepared,
+        None,
+        opts.locale_ctx,
+    )?;
+
+    if let Some(ref uc) = target.target_def.upload
+        && uc.enabled
+    {
+        for doc in &mut prepared {
+            upload::assemble_sizes_object(doc, uc);
+        }
+    }
+
+    let mut nested_visited = visited.clone();
+    let child_singleflight = Singleflight::new();
+
+    populate_batch_with_visited(
+        &PopulateContext {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            collection_slug: &target.config.collection,
+            def: target.target_def,
+        },
+        &mut prepared,
+        &PopulateOpts {
+            depth: opts.depth - 1,
+            select: None,
+            locale_ctx: opts.locale_ctx,
+            published_only: opts.published_only,
+            join_access: opts.join_access,
+            user: opts.user,
+        },
+        cache,
+        &child_singleflight,
+        &mut nested_visited,
+    )?;
+
     Ok(prepared)
 }
 
@@ -612,6 +635,134 @@ mod tests {
         assert!(
             posts.is_empty(),
             "no-match parent must render as empty array, not missing"
+        );
+    }
+
+    /// Regression (B2): join-children preparation is batched — ONE hydrate
+    /// query per join-shaped child field and ONE child-populate pass for the
+    /// whole batch, regardless of how many parents or children matched.
+    /// Before, `prepare_join_children` hydrated and populated each child in
+    /// a loop (one array query PER CHILD here).
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn batch_join_children_hydrate_query_count_is_constant() {
+        use crate::core::field::JoinConfig;
+        use crate::core::{FieldDefinition, Slug};
+        use crate::db::query::test_helpers::CountingConn;
+        use crate::db::{DbConnection as _, InMemoryConn};
+
+        let conn = InMemoryConn::open();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                 id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT
+             );
+             CREATE TABLE posts (
+                 id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                 created_at TEXT, updated_at TEXT
+             );
+             CREATE TABLE posts_sections (
+                 id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT
+             );
+             INSERT INTO posts VALUES
+                 ('p1', 'One', 'a1', '2024-01-01', '2024-01-01'),
+                 ('p2', 'Two', 'a1', '2024-01-01', '2024-01-01'),
+                 ('p3', 'Three', 'a2', '2024-01-01', '2024-01-01');
+             INSERT INTO posts_sections VALUES
+                 ('s1', 'p1', 0, 'Intro'), ('s2', 'p2', 0, 'Body'), ('s3', 'p3', 0, 'End');",
+        )
+        .unwrap();
+
+        let mut join_field = FieldDefinition::builder("posts", FieldType::Join).build();
+        join_field.join = Some(JoinConfig {
+            collection: Slug::new("posts"),
+            on: "author".to_string(),
+        });
+        let mut authors_def = CollectionDefinition::new("authors");
+        authors_def.fields = vec![
+            FieldDefinition::builder("name", FieldType::Text).build(),
+            join_field,
+        ];
+
+        let mut posts_def = CollectionDefinition::new("posts");
+        posts_def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(crate::core::RelationshipConfig::new("authors", false))
+                .build(),
+            FieldDefinition::builder("sections", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let run = |parents: &[&str]| -> (usize, Vec<Document>) {
+            let counting = CountingConn::new(&conn);
+            let mut docs: Vec<Document> = parents
+                .iter()
+                .map(|id| {
+                    let mut d = Document::new((*id).to_string());
+                    d.fields.insert("name".to_string(), json!("x"));
+                    d
+                })
+                .collect();
+
+            populate_relationships_batch_cached(
+                &PopulateContext {
+                    conn: &counting,
+                    registry: &registry,
+                    collection_slug: "authors",
+                    def: &authors_def,
+                },
+                &mut docs,
+                &PopulateOpts {
+                    depth: 1,
+                    select: None,
+                    locale_ctx: None,
+                    published_only: false,
+                    join_access: None,
+                    user: None,
+                },
+                &NoneCache,
+            )
+            .unwrap();
+            (counting.reads(), docs)
+        };
+
+        let (reads_one, _) = run(&["a1"]);
+        let (reads_two, docs) = run(&["a1", "a2"]);
+
+        // Correctness: children carry their hydrated array rows, per parent
+        // (order-independent — the default sort ties on equal timestamps).
+        let a1_posts = docs[0]
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(a1_posts.len(), 2);
+        let a1_labels: Vec<&str> = a1_posts
+            .iter()
+            .filter_map(|p| p["sections"][0]["label"].as_str())
+            .collect();
+        assert!(a1_labels.contains(&"Intro") && a1_labels.contains(&"Body"));
+        let a2_posts = docs[1]
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(a2_posts[0]["sections"][0]["label"], "End");
+
+        assert_eq!(
+            reads_one, reads_two,
+            "join-children query count must not scale with parents/children"
+        );
+        assert_eq!(
+            reads_two, 2,
+            "one children find + one batched sections hydrate"
         );
     }
 

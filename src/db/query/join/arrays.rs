@@ -13,7 +13,7 @@ use crate::db::{
     },
 };
 
-use super::helpers::{delete_junction_rows, select_junction_rows};
+use super::helpers::{delete_junction_rows, select_junction_rows, select_junction_rows_batch};
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -173,6 +173,70 @@ pub fn find_array_rows(
         result.push(Value::Object(map));
     }
     Ok(result)
+}
+
+/// Batched twin of [`find_array_rows`]: read the array rows of MANY parents
+/// in one `IN (…)` query and bucket them per parent (ordered — the shared
+/// batch SELECT orders by `parent_id, _order`). Parents with no rows are
+/// absent from the map, which is what lets the caller's locale-fallback
+/// pass target exactly the empty parents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn find_array_rows_batch(
+    conn: &dyn DbConnection,
+    collection: &str,
+    field_name: &str,
+    parent_ids: &[&str],
+    sub_fields: &[FieldDefinition],
+    locale: Option<&str>,
+) -> Result<HashMap<String, Vec<Value>>> {
+    if parent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let table_name = join_table(collection, field_name);
+    let flat_subs = flatten_array_sub_fields(sub_fields);
+
+    // Same column list as the per-parent path, with `parent_id` spliced in
+    // at index 1 for bucketing (sub-field decoding starts at index 2).
+    let mut select_col_names: Vec<String> = Vec::new();
+    for sf in &flat_subs {
+        select_col_names.push(sf.name.clone());
+        if sf.field_type == FieldType::Date && sf.timezone {
+            select_col_names.push(tz_column(&sf.name));
+        }
+    }
+    let select_cols = if select_col_names.is_empty() {
+        "id, parent_id".to_string()
+    } else {
+        format!("id, parent_id, {}", select_col_names.join(", "))
+    };
+
+    let (sql, params) =
+        select_junction_rows_batch(conn, &table_name, &select_cols, parent_ids, locale);
+
+    let db_rows = conn.query_all(&sql, &params)?;
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for db_row in &db_rows {
+        let Some(DbValue::Text(parent)) = db_row.get_value(1) else {
+            continue;
+        };
+
+        let mut map = reconstruct_array_row(db_row, &flat_subs, 2);
+
+        if let Some(DbValue::Text(s)) = db_row.get_value(0) {
+            map.insert("id".to_string(), Value::String(s.clone()));
+        }
+
+        out.entry(parent.clone())
+            .or_default()
+            .push(Value::Object(map));
+    }
+
+    Ok(out)
 }
 
 /// Whether a sub-field column holds JSON that must be parsed on read: any

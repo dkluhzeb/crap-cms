@@ -7,6 +7,14 @@ future change is a deliberate, breaking decision rather than an accidental
 but not renamed, removed, or reshaped without breaking existing users' configs,
 stored data, or clients.
 
+**Freeze policy during the alpha series:** every alpha release *targets* a
+complete freeze of this page. If a contract nonetheless turns out to be wrong,
+it is fixed **properly** — a clean breaking change with an upgrade-guide entry
+and migration gate — never preserved through a compatibility workaround, and
+the freeze target moves to the next alpha. The project moves to **beta** only
+once an alpha cycle has passed with this page untouched; from beta on, the
+freeze is unconditional.
+
 ## On-disk / storage (changing any = a data migration)
 
 - **System column namespace.** All `_`-prefixed columns (`_status`,

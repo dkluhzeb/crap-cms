@@ -565,13 +565,39 @@ impl tokio_postgres::types::ToSql for AdaptiveInt {
     tokio_postgres::types::to_sql_checked!();
 }
 
+/// Type-agnostic SQL NULL. Binding `None::<String>` (the old approach)
+/// declares the parameter as TEXT, which tokio-postgres rejects against any
+/// non-text column — e.g. a NULL checkbox sub-field in an array row hits an
+/// INT2 column and fails with "cannot convert … Option<String> and the
+/// Postgres type int2". SQL NULL carries no type, so accept every column
+/// type and always serialize as NULL.
+#[derive(Debug)]
+struct AdaptiveNull;
+
+impl tokio_postgres::types::ToSql for AdaptiveNull {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        _out: &mut bytes::BytesMut,
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    {
+        Ok(tokio_postgres::types::IsNull::Yes)
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+
+    tokio_postgres::types::to_sql_checked!();
+}
+
 /// Convert `DbValue` slice to tokio-postgres parameter boxes.
 fn to_pg_params(params: &[DbValue]) -> Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> {
     params
         .iter()
         .map(|v| -> Box<dyn tokio_postgres::types::ToSql + Sync + Send> {
             match v {
-                DbValue::Null => Box::new(None::<String>),
+                DbValue::Null => Box::new(AdaptiveNull),
                 DbValue::Integer(i) => Box::new(AdaptiveInt(*i)),
                 DbValue::Real(f) => Box::new(*f),
                 DbValue::Text(s) => Box::new(s.clone()),
@@ -777,5 +803,37 @@ mod tests {
                 .to_sql(&Type::INT2, &mut out)
                 .is_err()
         );
+    }
+
+    /// Regression: a `DbValue::Null` parameter must bind against ANY column
+    /// type. The old `None::<String>` binding declared TEXT and made
+    /// tokio-postgres reject NULLs for non-text columns — first hit by a
+    /// NULL checkbox sub-field (INT2) in an array-row INSERT, which broke
+    /// the example seed migration on Postgres.
+    #[test]
+    fn adaptive_null_accepts_every_column_type() {
+        use tokio_postgres::types::{IsNull, ToSql};
+
+        for ty in [
+            Type::INT2,
+            Type::INT4,
+            Type::INT8,
+            Type::FLOAT8,
+            Type::TEXT,
+            Type::BOOL,
+            Type::TIMESTAMPTZ,
+        ] {
+            assert!(
+                <AdaptiveNull as ToSql>::accepts(&ty),
+                "NULL must be accepted for {ty}"
+            );
+            let mut out = bytes::BytesMut::new();
+            let is_null = AdaptiveNull.to_sql(&ty, &mut out).unwrap();
+            assert!(
+                matches!(is_null, IsNull::Yes),
+                "must serialize as NULL for {ty}"
+            );
+            assert!(out.is_empty(), "NULL writes no payload bytes");
+        }
     }
 }

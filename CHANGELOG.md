@@ -1365,6 +1365,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Postgres: `migrate fresh` can drop FK-linked tables.** The drop-all pass
+  issued bare `DROP TABLE`, which Postgres refuses for tables that join
+  tables reference via `parent_id` foreign keys; it now uses
+  `DROP TABLE … CASCADE` on Postgres (SQLite unchanged — its DROP grammar
+  has no CASCADE and its FK enforcement doesn't block the drop).
+- **Postgres: NULL parameters now bind against any column type.** Every
+  `DbValue::Null` was bound as a TEXT NULL (`None::<String>`), which
+  tokio-postgres rejects for non-text columns — first hit by a NULL checkbox
+  sub-field (SMALLINT) in an array-row INSERT, which broke the example seed
+  migration on Postgres with "cannot convert between the Rust type
+  `Option<String>` and the Postgres type `int2`". SQL NULL carries no type;
+  the new binding accepts every column type. SQLite was unaffected.
+
 - **gRPC `CreateManyRequest.locale` was a dead field — bulk create now
   routes the locale through the shared create chokepoint.** The proto
   documented "BCP-47 locale for localized field writes" but the handler
@@ -3075,6 +3088,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- **Constant-query deep reads — batch coverage completed (B2).** Hydration of
+  array and blocks fields, join-shaped fields nested inside groups (at any
+  depth, via a recursive batched group walk), and join-field children (one
+  hydrate + one populate pass for the whole child batch) now each issue ONE
+  `IN (…)` query per field instead of one per document — the per-request
+  query count of a deep `find` is constant in the number of documents.
+  Per-parent locale-fallback semantics are preserved exactly (parents whose
+  primary-locale read comes back empty are re-queried against the fallback
+  in one second batched query). Regression tests assert the query counts via
+  a counting connection wrapper.
 
 - **Single-source wire model** (`service::op::wire`): every operation's wire
   option fields (name, kind, requiredness, per-surface exposure, description)

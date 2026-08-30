@@ -144,8 +144,13 @@ pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let tables = conn.list_user_tables()?;
 
+    // Postgres refuses to drop a table other tables reference (join tables
+    // carry `parent_id` FKs), so CASCADE there; SQLite's DROP TABLE grammar
+    // has no CASCADE and its FK enforcement doesn't block the drop.
+    let cascade = if conn.is_postgres() { " CASCADE" } else { "" };
+
     for table in &tables {
-        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{table}\""), &[])
+        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{table}\"{cascade}"), &[])
             .with_context(|| format!("Failed to drop table {table}"))?;
 
         info!("Dropped table: {}", table);

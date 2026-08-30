@@ -1,7 +1,7 @@
 crap.collections.define("posts", {
   labels = { singular = "Post", plural = "Posts" },
   timestamps = true,
-  versions = true,
+  versions = { drafts = true, max_versions = 50 },
   live = true,
   soft_delete = true,
   soft_delete_retention = "30d",

@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 use crate::core::BLOCK_TYPE_KEY;
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::{delete_junction_rows, select_junction_rows};
+use super::helpers::{delete_junction_rows, select_junction_rows, select_junction_rows_batch};
 
 /// Split a block row into `(_block_type, data_json)` for INSERT.
 ///
@@ -135,34 +136,79 @@ pub fn find_block_rows(
 
     let db_rows = conn.query_all(&sql, &params)?;
     let result = db_rows
-        .into_iter()
-        .filter_map(|row| {
-            let id = row.get_value(0).cloned()?;
-            let block_type = row.get_value(1).cloned()?;
-            let data_raw = row.get_value(2).cloned()?;
-
-            let DbValue::Text(id_str) = id else {
-                return None;
-            };
-            let DbValue::Text(bt_str) = block_type else {
-                return None;
-            };
-            let data_str = if let DbValue::Text(s) = data_raw {
-                s
-            } else {
-                String::new()
-            };
-
-            let mut map = match serde_json::from_str::<Value>(&data_str) {
-                Ok(Value::Object(m)) => m,
-                _ => Map::new(),
-            };
-            map.insert("id".to_string(), Value::String(id_str));
-            map.insert(BLOCK_TYPE_KEY.to_string(), Value::String(bt_str));
-            Some(Value::Object(map))
-        })
+        .iter()
+        .filter_map(|row| decode_block_row(row, 0))
         .collect();
     Ok(result)
+}
+
+/// Decode one block join-table row starting at column `start`
+/// (`id, _block_type, data`). Shared by the per-parent and batched readers.
+fn decode_block_row(row: &crate::db::DbRow, start: usize) -> Option<Value> {
+    let DbValue::Text(id_str) = row.get_value(start).cloned()? else {
+        return None;
+    };
+    let DbValue::Text(bt_str) = row.get_value(start + 1).cloned()? else {
+        return None;
+    };
+    let data_str = if let Some(DbValue::Text(s)) = row.get_value(start + 2).cloned() {
+        s
+    } else {
+        String::new()
+    };
+
+    let mut map = match serde_json::from_str::<Value>(&data_str) {
+        Ok(Value::Object(m)) => m,
+        _ => Map::new(),
+    };
+    map.insert("id".to_string(), Value::String(id_str));
+    map.insert(BLOCK_TYPE_KEY.to_string(), Value::String(bt_str));
+    Some(Value::Object(map))
+}
+
+/// Batched twin of [`find_block_rows`]: read the block rows of MANY parents
+/// in one `IN (…)` query and bucket them per parent (ordered — the shared
+/// batch SELECT orders by `parent_id, _order`). Parents with no rows are
+/// absent from the map, which is what lets the caller's locale-fallback
+/// pass target exactly the empty parents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn find_block_rows_batch(
+    conn: &dyn DbConnection,
+    collection: &str,
+    field_name: &str,
+    parent_ids: &[&str],
+    locale: Option<&str>,
+) -> Result<HashMap<String, Vec<Value>>> {
+    if parent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let table_name = join_table(collection, field_name);
+    let (sql, params) = select_junction_rows_batch(
+        conn,
+        &table_name,
+        "parent_id, id, _block_type, data",
+        parent_ids,
+        locale,
+    );
+
+    let db_rows = conn.query_all(&sql, &params)?;
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for row in &db_rows {
+        let Some(DbValue::Text(parent)) = row.get_value(0).cloned() else {
+            continue;
+        };
+        let Some(decoded) = decode_block_row(row, 1) else {
+            continue;
+        };
+        out.entry(parent).or_default().push(decoded);
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]

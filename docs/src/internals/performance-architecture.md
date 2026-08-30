@@ -107,11 +107,15 @@ checked out.
   is the worst-case VM-memory bound; raise the pre-warm (`vm_pool_size`) to
   avoid first-request build latency under an immediate burst.
 
-**A4 — Compile a per-collection hook plan at registration. (internal)**
-Precompute per `(collection × event)`: any hooks? which fields have field-hooks?
-Store as flags on the resolved schema. Runtime does one branch — "skip / run
-batch" — and for field-level events marshals **only** fields that actually have a
-field-hook, never the whole document.
+**A4 — Compile a per-collection hook plan at registration. (internal — largely
+subsumed; residual deferred behind profiling)**
+The two payoffs mostly exist already: the no-hook fast path gates before any VM
+work (`runner/read_write.rs`), and the field-hook walk prunes hookless subtrees
+during traversal (`execution/field_hooks.rs`), so marshalling only touches
+hook-bearing subtrees. The residual idea — precomputing the per
+`(collection × event)` booleans at registration instead of an in-memory
+field-tree walk per call — saves microseconds of pure CPU; build it only if a
+profile ever shows the walk in the hot path.
 
 ---
 
@@ -142,11 +146,19 @@ Update writers via two parallel `ghz` runs, reported as `mixed_read` /
 accountable to. Unit tests in `db::pool` assert the pools are independent
 (exhausting the write pool does not block reads) and share one database.
 
-**B2 — Depth-1 population via `LEFT JOIN` in the main SELECT. (internal)**
-Population is batched now but still **post-query** — one round-trip per
-`(collection, field)` level. For the common **depth-1** case, fold the related
-row into the main `SELECT` with a `LEFT JOIN`, eliminating the extra round-trips
-that floor deep `find` at ~20 req/s. Keep the post-query batch path for depth ≥ 2.
+**B2 — Constant-query deep reads (complete batch coverage). (internal) — ✅ LANDED**
+Originally framed as depth-1 `LEFT JOIN` folding, B2's actual target — the
+deep-read query floor — was reached by **completing batch coverage** instead:
+array and blocks hydration, join-shaped fields nested inside groups at any
+depth (recursive batched group walk), and join-children preparation (one
+hydrate + one populate for the whole child batch) now all issue **one
+`IN (…)` query per field**, so the per-request query count is constant in the
+document count. Regression tests assert the count (`hydrate/read.rs`,
+`populate/batch/dispatch.rs`). Literal `LEFT JOIN` folding of the remaining
+constant per-field queries into the main SELECT is **deferred behind
+measurement**: on embedded SQLite a handful of constant same-process queries
+cost microseconds, while the fold complicates `row_to_document` and pagination
+— revisit only if the load test still shows a deep-read gap.
 
 **B3 — One canonical wire encode. (breaking-friendly)**
 There are ~130 per-surface serialization sites that rebuild the wire form from a
@@ -176,8 +188,9 @@ acceptance evidence — never merge a perf change without the number it bought.
    justify breaking the per-document plain-table `ctx.data` hook contract that
    the freeze commits to. A4 (hook plan) remains open as a non-breaking
    follow-up.
-4. **B2 (JOIN population)** — targets the deep-read ceiling specifically.
-   Still open.
+4. **B2 (constant-query deep reads)** — ✅ **landed** (August 2026) as
+   complete batch coverage; `LEFT JOIN` folding stays deferred behind a
+   measured gap (see Part B).
 5. **A2 (lazy proxy)** and **B3 (single encode)** — **deferred behind a
    measured hook-bearing benchmark**; revisit only if profiling shows the
    marshalling cost dominating after B2.

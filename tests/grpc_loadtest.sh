@@ -189,8 +189,14 @@ ok "Got JWT token (${#JWT_TOKEN} chars)"
 
 POST_ID=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
     "collection": "posts",
-    "limit": "1"
+    "limit": "1",
+    "order_by": "created_at"
 }' "$GRPC_ADDR" crap.ContentAPI/Find 2>/dev/null | jq -r '.documents[0].id // empty')
+# order_by created_at ASCENDING pins the OLDEST (seeded) post. The default
+# newest-first sort once picked up a leftover `loadtest-ghz-*` post from an
+# interrupted earlier run — the create-scenario cleanup then hard-deleted it
+# mid-suite and every subsequent update/find_by_id was a guaranteed NotFound
+# (an entire PG update column read 100% errors from this).
 
 if [[ -z "$POST_ID" ]]; then
     warn "No posts found in DB — find_by_id/update tests will be skipped"
@@ -437,6 +443,14 @@ scenario_update() {
         return
     fi
     header "Scenario: gRPC Update"
+    # NOTE: every update on a versioned collection writes a version
+    # snapshot for POST_ID (a *seeded* post — the create-scenario cleanup
+    # and the orphan purge never touch its history). Version growth is
+    # bounded by the collection's `max_versions` retention cap (the
+    # example's posts set 50), which also makes this scenario measure the
+    # real prune-on-write cost. Against an UNCAPPED collection this
+    # scenario accumulates one version row per request (a past run left
+    # 34k rows / 23MB in `_versions_posts`).
     # Idempotent update — same field value each time
     local data="{\"collection\":\"posts\",\"id\":\"${POST_ID}\",\"data\":{\"fields\":{\"content\":{\"string_value\":\"Updated by ghz loadtest.\"}}}}"
     for c in $CONCURRENCY_LEVELS; do
