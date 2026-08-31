@@ -4,7 +4,8 @@
       class="items-row__link"
       href="/admin/collections/{{collection.slug}}/{{this.id}}"
       hx-get="/admin/collections/{{collection.slug}}/{{this.id}}"
-      hx-target="body"
+      hx-target="#main"
+      hx-swap="innerHTML show:window:top"
       hx-push-url="true"
     >
       {{#if this.thumbnail_url}}
@@ -54,7 +55,8 @@
             method="POST"
             action="/admin/collections/{{collection.slug}}/{{this.id}}/undelete"
             hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/undelete"
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
           >
             <button
               type="submit"

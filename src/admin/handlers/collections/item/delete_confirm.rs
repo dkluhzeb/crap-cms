@@ -6,6 +6,7 @@ use axum::{
 };
 use tracing::warn;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -66,6 +67,7 @@ fn fetch_delete_title(
 /// GET /admin/collections/{slug}/{id}/delete — delete confirmation page
 pub async fn delete_confirm(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -142,5 +144,5 @@ pub async fn delete_confirm(
         ref_count,
     };
 
-    render_page(&state, "collections/delete", &ctx)
+    render_page(&state, hx, "collections/delete", &ctx)
 }

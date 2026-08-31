@@ -1365,6 +1365,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Admin media/upload forms validated as broken (`validation.invalid_number`
+  on every metadata field).** The validate dry-run injected the string
+  placeholder `_pending_upload` into ALL upload system fields so required
+  string fields (`filename`, `url`) wouldn't block pre-upload validation —
+  but once Number fields started strictly rejecting non-numeric input, the
+  placeholder itself failed on every numeric system field (width, height,
+  filesize, focal point, per-size variants), making upload forms
+  unsubmittable (it even overwrote real metadata when editing existing
+  media). Number-typed system fields are now OMITTED from the dry-run
+  payload (server-managed and filled by the upload pipeline); string-typed
+  ones keep the placeholder. Regression-tested at both the helper and the
+  endpoint level.
+
 - **Postgres: `migrate fresh` can drop FK-linked tables.** The drop-all pass
   issued bare `DROP TABLE`, which Postgres refuses for tables that join
   tables reference via `parent_id` foreign keys; it now uses
@@ -2598,6 +2611,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Four new template slots** — drop-in extension points so common admin
+  customizations no longer require forking whole templates:
+  `list_toolbar_actions` and `list_footer` on the collection list page
+  (previously slot-less despite being the highest-traffic surface), and
+  `global_edit_toolbar` / `global_edit_sidebar` on global edit pages
+  (parity with the collection edit slots). Documented in the slots guide;
+  slot names are part of the stable customization API.
+
 - **gRPC `ListVersionsRequest.offset`** — pagination offset for version
   listings, closing the last `list_versions` parity gap (MCP and Lua already
   took an offset; the service chokepoint floors it).
@@ -3003,6 +3024,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **Admin navigation swaps `#main` instead of the whole page.** All admin
+  nav links (sidebar, breadcrumbs, list rows, sort headers, version
+  sidebar, …) now target `#main` with an htmx partial swap: the server
+  renders only `<title>` + main content for htmx navigations (detected via
+  `HX-Request`/`HX-Target`), and the shell — head, scripts, header,
+  sidebar, web-component singletons — stays untouched in the DOM. Direct
+  loads, history-restore requests, and non-navigation htmx requests still
+  receive the full document. Navigation gets noticeably lighter (no
+  script/style re-evaluation, no component re-init); scroll resets to top
+  per navigation as before. **Template-overlay note:** an overlay that
+  overrides `layout/base.hbs` from an older version must adopt the new
+  `{{#if htmx_partial}}` branch, or htmx navigations will nest a full
+  document inside `#main` (links in overridden page templates that still
+  use `hx-target="body"` keep working with the old full-page behavior).
 
 - **One `where` grammar, one decoder.** gRPC, MCP, and Lua CRUD decode
   `where` through a single canonical decoder

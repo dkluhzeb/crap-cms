@@ -1,89 +1,99 @@
-<!DOCTYPE html>
-<html lang="{{#if _locale}}{{_locale}}{{else}}en{{/if}}">
-  <head>
-    {{> partials/meta-tags}}
-    <script nonce="{{crap.csp_nonce}}">
+{{#if htmx_partial}}
+  {{!-- htmx navigation targeting #main: only the title (htmx applies it to
+       document.title natively) and the main content. The shell (head,
+       header, sidebar, component singletons) stays untouched in the DOM.
+       Full-document requests (direct loads, history-restore) take the
+       {{else}} branch below. --}}
+  <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
+  {{> @partial-block}}
+{{else}}
+  <!DOCTYPE html>
+  <html lang="{{#if _locale}}{{_locale}}{{else}}en{{/if}}">
+    <head>
+      {{> partials/meta-tags}}
+      <script nonce="{{crap.csp_nonce}}">
       (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
-    </script>
-    <link
-      href="/static/styles/main.css"
-      rel="stylesheet"
-    />
-    {{> partials/icon-font}}
-    <!-- Disable HTMX's runtime `<style>` injection. Indicator rules are shipped
+      </script>
+      <link
+        href="/static/styles/main.css"
+        rel="stylesheet"
+      />
+      {{> partials/icon-font}}
+      <!-- Disable HTMX's runtime `<style>` injection. Indicator rules are shipped
        in styles/base/reset.css instead, so CSP `style-src` doesn't need `'unsafe-inline'`. -->
-    <meta
-      name="htmx-config"
-      content='{"includeIndicatorStyles":false}'
-    />
-    <script
-      src="/static/vendor/htmx.js"
-      defer
-    >
-    </script>
-    <script nonce="{{crap.csp_nonce}}">
+      <meta
+        name="htmx-config"
+        content='{"includeIndicatorStyles":false}'
+      />
+      <script
+        src="/static/vendor/htmx.js"
+        defer
+      >
+      </script>
+      <script nonce="{{crap.csp_nonce}}">
       (function(){
       function gc(n){var m=document.cookie.match(new RegExp('(?:^|;\\s*)'+n+'=([^;]*)'));return m?m[1]:null}
       document.addEventListener('htmx:configRequest',function(e){var t=gc('crap_csrf');if(t)e.detail.headers['X-CSRF-Token']=t});
       document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
       })();
-    </script>
-    <script
-      src="/static/vendor/prosemirror.js"
-      defer
-    >
-    </script>
-    <script
-      src="/static/vendor/codemirror.js"
-      defer
-    >
-    </script>
-    <script
-      type="module"
-      src="/static/components/index.js"
-    >
-    </script>
+      </script>
+      <script
+        src="/static/vendor/prosemirror.js"
+        defer
+      >
+      </script>
+      <script
+        src="/static/vendor/codemirror.js"
+        defer
+      >
+      </script>
+      <script
+        type="module"
+        src="/static/components/index.js"
+      >
+      </script>
 
-    <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
-    <script
-      type="application/json"
-      id="crap-i18n"
-      nonce="{{crap.csp_nonce}}"
-    >
+      <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
+      <script
+        type="application/json"
+        id="crap-i18n"
+        nonce="{{crap.csp_nonce}}"
+      >
 {{{admin_i18n}}}
-    </script>
+      </script>
 
-    {{slot "head_extras"}}
-  </head>
+      {{slot "head_extras"}}
+    </head>
 
-  <body>
-    <div
-      class="layout"
-      data-admin-layout
-    >
-      {{> layout/header}}
+    <body>
       <div
-        class="sidebar-backdrop"
-        data-action="toggle-sidebar"
+        class="layout"
+        data-admin-layout
       >
+        {{> layout/header}}
+        <div
+          class="sidebar-backdrop"
+          data-action="toggle-sidebar"
+        >
+        </div>
+        {{> layout/sidebar}}
+        <main
+          id="main"
+          class="main"
+        >
+          {{> @partial-block}}
+        </main>
       </div>
-      {{> layout/sidebar}}
-      <main
-        id="main"
-        class="main"
-      >
-        {{> @partial-block}}
-      </main>
-    </div>
 
-    <crap-toast></crap-toast>
-    <crap-delete-dialog></crap-delete-dialog>
-    <crap-session-dialog></crap-session-dialog>
-    <crap-confirm-dialog></crap-confirm-dialog>
-    <crap-create-panel></crap-create-panel>
-    <crap-drawer></crap-drawer>
-    <crap-live-events></crap-live-events>
+      <crap-toast></crap-toast>
+      <crap-delete-dialog></crap-delete-dialog>
+      <crap-session-dialog></crap-session-dialog>
+      <crap-confirm-dialog></crap-confirm-dialog>
+      <crap-create-panel></crap-create-panel>
+      <crap-drawer></crap-drawer>
+      <crap-live-events></crap-live-events>
 
-    {{slot "body_end_scripts"}}
-  </body>
-</html>
+      {{slot "body_end_scripts"}}
+    </body>
+  </html>
+{{/if}}

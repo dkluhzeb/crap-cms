@@ -18,13 +18,15 @@
             hx-post="/admin/globals/{{global.slug}}"
             action="/admin/globals/{{global.slug}}"
             method="post"
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
             hx-indicator="#upload-loading"
             class="form"
             novalidate
             data-collection-slug="{{global.slug}}"
             data-global-slug="{{global.slug}}"
           >
+            {{slot "global_edit_toolbar"}}
             {{#if has_editor_locales}}
               <input
                 type="hidden"

@@ -15,7 +15,8 @@
   class="button button--{{#if variant}}{{variant}}{{else}}ghost{{/if}}{{#if size}} button--{{size}}{{/if}}"
   href="{{href}}"
   hx-get="{{href}}"
-  hx-target="body"
+  hx-target="#main"
+  hx-swap="innerHTML show:window:top"
   hx-push-url="true"
 >
   {{#if icon}}

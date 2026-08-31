@@ -54,7 +54,8 @@ the partial, parameters are available at the root context:
   class="button button--{{variant}}"
   href="{{href}}"
   hx-get="{{href}}"
-  hx-target="body"
+  hx-target="#main"
+  hx-swap="innerHTML show:window:top"
   hx-push-url="true"
 >
   {{#if icon}}<span class="material-symbols-outlined">{{icon}}</span>{{/if}}

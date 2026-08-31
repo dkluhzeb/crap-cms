@@ -14,6 +14,7 @@ use tracing::warn;
 use crate::admin::context::field::{
     BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
 };
+use crate::admin::handlers::shared::HxNav;
 
 use crate::{
     admin::{
@@ -273,6 +274,7 @@ fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Uplo
 /// lives in the helpers above.
 pub async fn edit_form(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -338,7 +340,7 @@ pub async fn edit_form(
         sidebar_fields,
     });
 
-    render_page(&state, "collections/edit", &ctx)
+    render_page(&state, hx, "collections/edit", &ctx)
 }
 
 /// Run the blocking document read on a tokio task and fold the

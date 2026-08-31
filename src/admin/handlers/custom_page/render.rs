@@ -13,6 +13,7 @@ use axum::{
     response::Response,
 };
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -28,6 +29,7 @@ use crate::{
 /// GET /admin/p/{slug} — render a custom admin page.
 pub async fn render_custom_page(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path(slug): Path<String>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -72,5 +74,5 @@ pub async fn render_custom_page(
 
     let ctx = CustomPage { base, slug };
 
-    render_page(&state, &template_name, &ctx)
+    render_page(&state, hx, &template_name, &ctx)
 }

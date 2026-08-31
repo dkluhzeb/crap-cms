@@ -65,9 +65,9 @@ $ crap-cms templates diff templates/layout/base.hbs
 +    <link href="/static/styles/main.css" rel="stylesheet" />
 ```
 
-Upstream renamed `styles.css` → `styles/main.css`. The
-compatibility-alias layer keeps your overlay working today, but
-you'll see deprecation warnings in the logs. To clear them:
+Upstream renamed `styles.css` → `styles/main.css`. **The old path
+404s — there is no alias layer** — so an overlay still referencing it
+silently loses its stylesheet. To re-extract on the new path:
 
 ```
 $ crap-cms templates extract --force layout/base.hbs
@@ -102,10 +102,10 @@ Old layout detected (3 files):
   ...
 ```
 
-You're on the pre-1.0 reshuffle layout. Aliases serve your old
-paths transparently for this release, with deprecation warnings on
-first hit. To clear the warnings, follow the auto-generated
-migration recipe printed by `templates layout`.
+You're on the pre-1.0 reshuffle layout. **Old paths are not served
+— they 404** — so migrate now: follow the auto-generated migration
+recipe printed by `templates layout` (typically a set of `git mv`
+commands).
 
 See [Migrating from the old layout](../upgrade/migrating-from-old-layout.md)
 for the full path map and recipe.

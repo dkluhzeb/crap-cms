@@ -122,6 +122,10 @@ stable API.
 | `collection_edit_sidebar` | `collections/edit_sidebar.hbs` | edit-form context | extra sidebar panels on collection edit pages (related items, audit log, custom metadata) |
 | `sidebar_bottom` | `layout/sidebar.hbs` | nav context | extra navigation links pinned to the bottom of the left sidebar |
 | `login_extras` | `auth/login.hbs` | minimal auth context | additional content on the login page (compliance notices, SSO links, banner messages) |
+| `list_toolbar_actions` | `collections/items.hbs` | list context (`collection`, `documents`, `pagination`, `user`) | extra buttons in the list toolbar, next to Filters/Columns (export, bulk tools, custom views) |
+| `list_footer` | `collections/items.hbs` | list context | content below the list table/pagination (summaries, legends, totals) |
+| `global_edit_toolbar` | `globals/edit.hbs` | global edit context (`global`, `user`) | extra toolbar actions on global edit pages — parity with `collection_edit_toolbar` |
+| `global_edit_sidebar` | `globals/edit_sidebar.hbs` | global edit context | extra sidebar panels on global edit pages — parity with `collection_edit_sidebar` |
 
 ## Worked example — dashboard weather widget
 

@@ -3,6 +3,7 @@
 use axum::{Extension, extract::State, http::HeaderMap, response::Response};
 use tracing::error;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -127,6 +128,7 @@ fn build_global_cards(
 /// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
     State(state): State<AdminState>,
+    hx: HxNav,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
@@ -161,5 +163,5 @@ pub async fn index(
         global_cards,
     };
 
-    render_page(&state, "dashboard/index", &ctx)
+    render_page(&state, hx, "dashboard/index", &ctx)
 }

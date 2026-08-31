@@ -99,7 +99,8 @@ grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
 # public_url = "https://cms.example.com"  # Public-facing base URL for generated links
 # h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
-# trust_proxy = false   # Trust X-Forwarded-For (enable behind reverse proxy)
+# trust_proxy = false          # Trust X-Forwarded-For (enable behind reverse proxy)
+# trusted_proxies = ["10.0.0.0/8"]  # REQUIRED with trust_proxy: CIDRs allowed to set XFF
 # compression = "off"   # "off" (default), "gzip", "br", "all"
 # grpc_reflection = false        # Enable gRPC server reflection (default: false)
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
@@ -276,7 +277,8 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
 | `host` | string | `"0.0.0.0"` | Bind address for both servers. **The default `0.0.0.0` binds every network interface** — the expected default for a served CMS and container deployments, but it means the admin UI and gRPC API are reachable from anywhere the host is routable. Put crap-cms behind a firewall or reverse proxy, or set `host = "127.0.0.1"` to bind loopback only (e.g. when a proxy on the same host is the only intended client). |
 | `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
-| `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
+| `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. **Requires `trusted_proxies` to be set as well** — `trust_proxy = true` without it is a fatal startup error (an XFF header is only honored when the TCP peer is inside a trusted CIDR). When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
+| `trusted_proxies` | string list | `[]` | CIDRs (e.g. `["10.0.0.0/8"]`) whose `X-Forwarded-For` headers are trusted when `trust_proxy = true`. `["*"]` trusts every peer (logs a startup warning). Malformed entries are fatal at startup. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
 | `grpc_reflection` | boolean | `false` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disabled by default to hide the API surface from unauthenticated probing. |
 | `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
@@ -358,6 +360,9 @@ nonce applies to `script-src` only).
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
 | `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
 | `session_cookie_samesite` | string | `"lax"` | `SameSite` attribute for the `crap_session` admin cookie. Accepts `"lax"` (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), `"strict"` (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or `"none"` (reserved; currently falls back to `"lax"` at runtime). |
+| `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
+| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
+| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
 
 ### `[auth.password_policy]`
 
@@ -371,9 +376,6 @@ Password strength requirements applied to all password-setting paths (create, up
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |
 | `require_special` | boolean | `false` | Require at least one special (non-alphanumeric) character. |
-| `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
-| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
-| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
 
 ### `[depth]`
 

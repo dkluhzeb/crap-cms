@@ -7,7 +7,8 @@
             class="link link--ghost"
             href="/admin"
             hx-get="/admin"
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
             hx-push-url="true"
           >
             <span class="material-symbols-outlined">dashboard</span>
@@ -26,7 +27,8 @@
               class="link link--ghost"
               href="/admin/p/{{slug}}"
               hx-get="/admin/p/{{slug}}"
-              hx-target="body"
+              hx-target="#main"
+              hx-swap="innerHTML show:window:top"
               hx-push-url="true"
             >
               {{#if icon}}

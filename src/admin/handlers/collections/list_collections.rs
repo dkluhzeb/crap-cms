@@ -1,5 +1,6 @@
 use axum::{Extension, extract::State, http::HeaderMap, response::Response};
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -15,6 +16,7 @@ use crate::{
 /// GET /admin/collections — list all registered collections
 pub async fn list_collections(
     State(state): State<AdminState>,
+    hx: HxNav,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
@@ -49,5 +51,5 @@ pub async fn list_collections(
 
     let ctx = CollectionListPage { base, collections };
 
-    render_page(&state, "collections/list", &ctx)
+    render_page(&state, hx, "collections/list", &ctx)
 }

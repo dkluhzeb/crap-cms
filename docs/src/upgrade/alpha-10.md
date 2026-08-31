@@ -382,6 +382,21 @@ action needed for these.
 
 ## Admin UI behavior
 
+### Navigation now partial-swaps `#main`
+
+Admin nav links target `#main` (htmx partial swap): the server returns only
+`<title>` + main content for htmx navigations; the shell (head, scripts,
+sidebar, component singletons) stays in the DOM. Direct loads and htmx
+history-restores still get the full document.
+
+**If your template overlay overrides `layout/base.hbs`**, port the new
+`{{#if htmx_partial}}` branch from the default layout — without it, htmx
+navigations nest a full document inside `#main`. Overridden page templates
+whose links still use `hx-target="body"` keep the old full-page swap and
+continue to work.
+
+
+
 - **List pages return 400 on invalid query params.** A
   present-but-invalid `where[...]` filter (unknown operator or field,
   system column, malformed key), an unknown/unsortable `sort` field, or

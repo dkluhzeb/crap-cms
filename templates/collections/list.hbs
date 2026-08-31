@@ -7,7 +7,8 @@
         class="card"
         href="/admin/collections/{{this.slug}}"
         hx-get="/admin/collections/{{this.slug}}"
-        hx-target="body"
+        hx-target="#main"
+        hx-swap="innerHTML show:window:top"
         hx-push-url="true"
       >
         <div class="card__header">

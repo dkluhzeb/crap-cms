@@ -8,6 +8,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -114,6 +115,7 @@ fn upload_accept_context(def: &CollectionDefinition) -> UploadFormContext {
 /// GET /admin/collections/{slug}/create — show create form
 pub async fn create_form(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path(slug): Path<String>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -181,7 +183,7 @@ pub async fn create_form(
         upload,
     };
 
-    render_page(&state, "collections/edit", &ctx)
+    render_page(&state, hx, "collections/edit", &ctx)
 }
 
 #[cfg(test)]

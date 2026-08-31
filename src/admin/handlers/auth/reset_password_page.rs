@@ -6,6 +6,7 @@ use axum::{
 };
 use tokio::task;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -62,5 +63,5 @@ pub async fn reset_password_page(
         error: (!valid).then(|| "error_reset_link_invalid".to_string()),
     };
 
-    render_page(&state, "auth/reset_password", &ctx)
+    render_page(&state, HxNav::full(), "auth/reset_password", &ctx)
 }

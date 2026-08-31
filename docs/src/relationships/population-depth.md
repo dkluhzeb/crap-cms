@@ -12,12 +12,20 @@ The `depth` parameter controls how deeply relationship fields are populated with
 
 ## Defaults
 
+Every read surface resolves an omitted `depth` the same way: it falls back
+to `[depth] default_depth` from `crap.toml` (default: `1`), clamped to
+`max_depth`.
+
 | Operation | Default Depth |
 |-----------|--------------|
-| `Find` (gRPC) | `0` (avoids N+1 on list queries) |
-| `FindByID` (gRPC) | `depth.default_depth` from `crap.toml` (default: `1`) |
-| `crap.collections.find()` (Lua) | `0` |
-| `crap.collections.find_by_id()` (Lua) | `0` |
+| `Find` (gRPC) | `depth.default_depth` (default: `1`) |
+| `FindByID` (gRPC) | `depth.default_depth` (default: `1`) |
+| `crap.collections.find()` (Lua) | `depth.default_depth` (default: `1`) |
+| `crap.collections.find_by_id()` (Lua) | `depth.default_depth` (default: `1`) |
+| MCP `find_*` / `find_by_id_*` | `depth.default_depth` (default: `1`) |
+
+To make list endpoints return bare IDs, either pass `depth = 0` explicitly
+or set `[depth] default_depth = 0` project-wide.
 
 ## Configuration
 
@@ -25,8 +33,8 @@ The `depth` parameter controls how deeply relationship fields are populated with
 
 ```toml
 [depth]
-default_depth = 1   # Default for FindByID (default: 1)
-max_depth = 10       # Hard cap for all requests (default: 10)
+default_depth = 1   # Fallback when a request omits `depth` (all read surfaces)
+max_depth = 10      # Hard cap for all requests (default: 10)
 ```
 
 ### Per-Field Max Depth
@@ -120,7 +128,9 @@ max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off
 
 ### Recommendations
 
-- **Use `depth=0` for list endpoints.** `Find` defaults to `depth=0` for this reason. Fetch related data when displaying a single document instead.
+- **Pass `depth=0` explicitly on hot list endpoints** (or set
+  `default_depth = 0` project-wide) when the list view doesn't render related
+  data — the out-of-the-box default populates one level on every read.
 - **Use `select` to limit populated fields.** Non-selected relationship fields are skipped entirely during population.
 - **Set per-field `max_depth`** on relationship fields that don't need deep population.
 - **If you need related data in a list**, use `depth=1` with `select` to populate only the specific relationship fields you need.

@@ -45,7 +45,8 @@
             hx-delete="/admin/collections/{{collection.slug}}/{{document_id}}"
             action="/admin/collections/{{collection.slug}}/{{document_id}}"
             method="post"
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
           >
             <input
               type="hidden"

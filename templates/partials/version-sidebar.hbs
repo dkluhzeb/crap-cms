@@ -23,7 +23,8 @@
         class="edit-sidebar__versions-link"
         href="{{versions_url}}"
         hx-get="{{versions_url}}"
-        hx-target="body"
+        hx-target="#main"
+        hx-swap="innerHTML show:window:top"
         hx-push-url="true"
       >
         {{t "view_all_versions"}}

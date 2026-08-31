@@ -387,7 +387,11 @@ mod tests {
 
         assert!(html.contains(r#"href="/admin/foo""#), "{html}");
         assert!(html.contains(r#"hx-get="/admin/foo""#), "{html}");
-        assert!(html.contains(r#"hx-target="body""#), "{html}");
+        assert!(html.contains(r##"hx-target="#main""##), "{html}");
+        assert!(
+            html.contains(r#"hx-swap="innerHTML show:window:top""#),
+            "nav links partial-swap #main and scroll to top: {html}"
+        );
         assert!(html.contains(r#"hx-push-url="true""#), "{html}");
         assert!(html.contains(r"button button--primary"), "{html}");
         assert!(
@@ -836,5 +840,41 @@ mod tests {
             html.contains(r#"<p class="form__help">help text</p>"#),
             "{html}"
         );
+    }
+
+    /// The built-in slot names documented in the slots guide are a STABLE
+    /// customization API — user overlays reference them by name. A template
+    /// refactor that drops or renames one silently breaks those overlays;
+    /// this pins every documented slot to its declaring template.
+    #[test]
+    fn documented_builtin_slots_exist_in_templates() {
+        let expected: &[(&str, &str)] = &[
+            ("layout/base.hbs", "head_extras"),
+            ("layout/base.hbs", "body_end_scripts"),
+            ("layout/header.hbs", "page_header_actions"),
+            ("layout/sidebar.hbs", "sidebar_bottom"),
+            ("dashboard/index.hbs", "dashboard_widgets"),
+            ("collections/edit_form.hbs", "collection_edit_toolbar"),
+            ("collections/edit_sidebar.hbs", "collection_edit_sidebar"),
+            ("collections/items.hbs", "list_toolbar_actions"),
+            ("collections/items.hbs", "list_footer"),
+            ("globals/edit.hbs", "global_edit_toolbar"),
+            ("globals/edit_sidebar.hbs", "global_edit_sidebar"),
+            ("auth/login.hbs", "login_extras"),
+            ("partials/breadcrumb.hbs", "breadcrumb_extras"),
+            ("partials/field.hbs", "field_help"),
+        ];
+
+        for (file, slot) in expected {
+            let contents = TEMPLATES_DIR
+                .get_file(file)
+                .unwrap_or_else(|| panic!("template `{file}` missing"))
+                .contents_utf8()
+                .unwrap_or_else(|| panic!("template `{file}` not UTF-8"));
+            assert!(
+                contents.contains(&format!("{{{{slot \"{slot}\"")),
+                "documented slot `{slot}` missing from `{file}` — built-in slot names are a stable API"
+            );
+        }
     }
 }

@@ -7,6 +7,7 @@ use axum::{
 use serde_json::{Value, from_str, json};
 use tracing::warn;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -493,6 +494,7 @@ pub async fn list_items(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
+    let hx = HxNav::from_headers(&headers);
     let def = match require_collection(&state, &slug) {
         Ok(d) => d,
         Err(resp) => return *resp,
@@ -520,7 +522,7 @@ pub async fn list_items(
         auth_user: auth_user.as_ref(),
     });
 
-    render_page(&state, "collections/items", &ctx)
+    render_page(&state, hx, "collections/items", &ctx)
 }
 
 /// Build a single item row for the collection list table.

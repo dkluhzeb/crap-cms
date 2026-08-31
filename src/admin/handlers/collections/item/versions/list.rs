@@ -7,6 +7,7 @@ use axum::{
 use serde_json::Value;
 use tracing::error;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -92,6 +93,7 @@ fn fetch_version_data(
 /// GET /admin/collections/{slug}/{id}/versions — dedicated version history page
 pub async fn list_versions_page(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path((slug, id)): Path<(String, String)>,
     Query(params): Query<PaginationParams>,
     headers: HeaderMap,
@@ -145,5 +147,5 @@ pub async fn list_versions_page(
         restore_url_prefix: paths::collection_item(&slug, &id),
     };
 
-    render_page(&state, "collections/versions", &ctx)
+    render_page(&state, hx, "collections/versions", &ctx)
 }

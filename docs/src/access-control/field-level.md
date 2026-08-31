@@ -40,11 +40,14 @@ Before a write operation, denied fields are **stripped from the input data**. Th
 
 After a query, denied fields are **stripped from the response**. The field still exists in the database, but the user doesn't see it.
 
-Fields with `admin.hidden = true` are also stripped from all API responses, regardless of access rules.
+Fields with the **top-level `hidden = true`** flag are also stripped from all
+API responses, regardless of access rules. (`admin.hidden` is different — it
+only hides the field from admin *forms*; the value is still returned by the
+APIs.)
 
 Field-level read access is independent of the [content view](overview.md#content-views) a document came from: the same field rules are applied per returned document whether it was read as published, draft, or trash content. Field access narrows *which fields* of an already-visible document the user sees; the collection-level view keys decide *which documents* are visible in the first place.
 
-This also applies to **populated relationship and upload targets**: when a reference is expanded into the full related document, the target collection's own field-level read rules (and `admin.hidden` flags) are evaluated for the requesting user and denied fields are stripped from the embedded document — at any populate depth, including references nested inside groups, arrays, and blocks.
+This also applies to **populated relationship and upload targets**: when a reference is expanded into the full related document, the target collection's own field-level read rules (and top-level `hidden` flags) are evaluated for the requesting user and denied fields are stripped from the embedded document — at any populate depth, including references nested inside groups, arrays, and blocks.
 
 ## Data-Aware Field Access
 

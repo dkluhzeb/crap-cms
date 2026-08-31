@@ -48,7 +48,8 @@
           class="list-toolbar__search"
           action="/admin/collections/{{ collection.slug }}"
           hx-get="/admin/collections/{{ collection.slug }}"
-          hx-target="body"
+          hx-target="#main"
+          hx-swap="innerHTML show:window:top"
           hx-push-url="true"
           hx-trigger="submit"
         >
@@ -74,7 +75,8 @@
               class="search-bar__input"
               id="list-search-input"
               hx-get="/admin/collections/{{ collection.slug }}"
-              hx-target="body"
+              hx-target="#main"
+              hx-swap="innerHTML show:window:top"
               hx-push-url="true"
               hx-trigger="input changed delay:300ms, search"
               hx-include="closest form"
@@ -85,7 +87,8 @@
                 class="search-bar__clear"
                 href="/admin/collections/{{ collection.slug }}"
                 hx-get="/admin/collections/{{ collection.slug }}"
-                hx-target="body"
+                hx-target="#main"
+                hx-swap="innerHTML show:window:top"
                 hx-push-url="true"
                 aria-label='{{ t "clear_search" }}'
               >
@@ -126,6 +129,7 @@
             <span class="material-symbols-outlined">view_column</span>
             {{t "columns"}}
           </button>
+          {{slot "list_toolbar_actions"}}
         </div>
       </div>
       {{#if active_filters}}
@@ -141,7 +145,8 @@
                 class="filter-pill__remove"
                 href="{{ this.remove_url }}"
                 hx-get="{{ this.remove_url }}"
-                hx-target="body"
+                hx-target="#main"
+                hx-swap="innerHTML show:window:top"
                 hx-push-url="true"
               >
                 <span class="material-symbols-outlined">close</span>
@@ -154,6 +159,7 @@
     {{#if docs}}
       {{> collections/items_table}}
       {{> partials/pagination}}
+      {{slot "list_footer"}}
     {{else}}
       {{> collections/items_empty}}
     {{/if}}

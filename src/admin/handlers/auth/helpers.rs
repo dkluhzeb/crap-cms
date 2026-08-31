@@ -12,6 +12,7 @@ use axum::{
 use chrono::Utc;
 use ipnet::IpNet;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::core::collection::Auth;
 use crate::{
     admin::{
@@ -136,7 +137,7 @@ pub(in crate::admin::handlers) fn login_error(
         success: None,
     };
 
-    render_page(state, "auth/login", &ctx)
+    render_page(state, HxNav::full(), "auth/login", &ctx)
 }
 
 /// Check if every auth collection has password-login turned off
@@ -209,7 +210,7 @@ pub(in crate::admin::handlers) fn render_forgot_success(
         show_collection_picker,
     };
 
-    render_page(state, "auth/forgot_password", &ctx)
+    render_page(state, HxNav::full(), "auth/forgot_password", &ctx)
 }
 
 /// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.
@@ -348,7 +349,7 @@ pub(in crate::admin::handlers) fn render_mfa_form(
         error: error.map(str::to_string),
     };
 
-    render_page(state, "auth/mfa", &ctx)
+    render_page(state, HxNav::full(), "auth/mfa", &ctx)
 }
 
 #[cfg(test)]

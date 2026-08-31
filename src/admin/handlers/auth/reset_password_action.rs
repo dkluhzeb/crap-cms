@@ -9,6 +9,7 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::core::collection::Auth;
 use crate::{
     admin::{
@@ -37,7 +38,7 @@ fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> R
         error: Some(error.to_string()),
     };
 
-    render_page(state, "auth/reset_password", &ctx)
+    render_page(state, HxNav::full(), "auth/reset_password", &ctx)
 }
 
 /// Find the reset token across all auth collections, validate it, and update the password.

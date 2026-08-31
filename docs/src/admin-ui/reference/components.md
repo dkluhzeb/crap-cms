@@ -254,7 +254,7 @@ folder to override.
 | `partials/field.hbs`        | Wraps form input with label, required marker, locale badge, error, help; three variants: `default`, `fieldset` (radio groups), `checkbox` (slot-then-label) |
 | `partials/sidebar-panel.hbs`| `<div class="edit-sidebar__panel">` with optional header (icon + label) and slotted body |
 | `partials/array-row-header.hbs` | Drag handle + toggle + title slot + error badge + 4 action buttons; consumed by `<crap-array-field>` |
-| `partials/htmx-nav-link.hbs`| `<a class="button" hx-get hx-target="body" hx-push-url>` link |
+| `partials/htmx-nav-link.hbs`| `<a class="button" hx-get hx-target="#main" hx-push-url>` nav link (partial swap) |
 | `partials/status-badge.hbs` | `<span class="badge badge--{status}">{status}</span>`         |
 | `partials/error-page.hbs`   | Full 404/403/500-style error card                             |
 | `partials/warning-card.hbs` | `<div class="card card--warning">` with title and slotted body |

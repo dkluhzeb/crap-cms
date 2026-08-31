@@ -79,22 +79,44 @@ crap-cms user create \
 
 ## 4. Create content via gRPC
 
-Use `grpcurl` to interact with the API. The server supports reflection, so no proto import is needed:
+Two things to know before the first `grpcurl` call:
+
+1. **Reflection is off by default.** Enable it so `grpcurl` needs no proto
+   import — in `crap.toml`:
+
+   ```toml
+   [server]
+   grpc_reflection = true
+   ```
+
+2. **Requests are authenticated.** Access defaults to deny for anonymous
+   callers (`[access] default_deny = true`), so log in first and pass the
+   token as a Bearer header.
 
 ```bash
+# Log in with the admin user from step 3
+TOKEN=$(grpcurl -plaintext localhost:50051 crap.ContentAPI/Login \
+    -d '{"collection": "users", "email": "admin@example.com", "password": "secret123"}' \
+    | jq -r .token)
+
 # List all posts
-grpcurl -plaintext localhost:50051 crap.ContentAPI/Find \
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" \
+    localhost:50051 crap.ContentAPI/Find \
     -d '{"collection": "posts"}'
 
-# Create a post
-grpcurl -plaintext localhost:50051 crap.ContentAPI/Create \
+# Create a post — document values use the typed DataMap shape:
+# {"fields": {"<name>": {"string_value" | "int_value" | "bool_value": ...}}}
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" \
+    localhost:50051 crap.ContentAPI/Create \
     -d '{
       "collection": "posts",
       "data": {
-        "title": "Hello World",
-        "slug": "hello-world",
-        "status": "draft",
-        "content": "My first post."
+        "fields": {
+          "title":   {"string_value": "Hello World"},
+          "slug":    {"string_value": "hello-world"},
+          "status":  {"string_value": "draft"},
+          "content": {"string_value": "My first post."}
+        }
       }
     }'
 ```

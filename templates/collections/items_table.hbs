@@ -12,7 +12,8 @@
             class="table__sort-link"
             href="{{title_sort_url}}"
             hx-get="{{title_sort_url}}"
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
             hx-push-url="true"
           >
             {{#if collection.title_field}}
@@ -63,7 +64,8 @@
               class="table__sort-link"
               href="{{this.sort_url}}"
               hx-get="{{this.sort_url}}"
-              hx-target="body"
+              hx-target="#main"
+              hx-swap="innerHTML show:window:top"
               hx-push-url="true"
             >
               {{t this.label}}

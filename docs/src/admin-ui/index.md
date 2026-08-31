@@ -80,9 +80,10 @@ the version you forked.
 
 The pre-1.0 layout reshuffle moved several files into role-grouped
 subdirectories (`static/styles/`, `static/vendor/`, `static/icons/`,
-`static/components/_internal/`). All old paths still resolve via
-compatibility aliases for this release, with a deprecation warning
-logged on first hit.
+`static/components/_internal/`). **There are no compatibility
+aliases — old paths 404 outright.** Overlay files at old paths are
+silently ignored; run `crap-cms templates layout` to detect them and
+print a migration recipe.
 
 See **[Migrating from the old layout](upgrade/migrating-from-old-layout.md)**
 for the full path map and an auto-generated migration recipe via

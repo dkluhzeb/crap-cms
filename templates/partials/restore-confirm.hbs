@@ -23,7 +23,8 @@
         method="post"
         action="{{restore_url}}"
         hx-post="{{restore_url}}"
-        hx-target="body"
+        hx-target="#main"
+        hx-swap="innerHTML show:window:top"
       >
         <button
           type="submit"

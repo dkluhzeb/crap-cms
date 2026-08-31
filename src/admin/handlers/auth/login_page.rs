@@ -3,6 +3,7 @@ use axum::{
     response::Response,
 };
 
+use crate::admin::handlers::shared::HxNav;
 use crate::admin::{
     AdminState,
     context::{AuthBasePageContext, PageMeta, PageType, page::auth::LoginPage},
@@ -43,5 +44,5 @@ pub async fn login_page(State(state): State<AdminState>, query: Query<LoginPageQ
         success,
     };
 
-    render_page(&state, "auth/login", &ctx)
+    render_page(&state, HxNav::full(), "auth/login", &ctx)
 }

@@ -161,7 +161,12 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Update
 ```
 
-Non-localized fields are always written to their single column regardless of the locale parameter.
+Non-localized (shared) fields are **only writable under the default locale**.
+A write with a non-default `locale` parameter is *locale-locked*: any shared
+fields in the payload are **silently skipped** (the write succeeds, the shared
+values stay unchanged) — this protects the canonical value from being
+clobbered by a translation edit. To change shared fields, write without a
+`locale` parameter or with the default locale.
 
 ### Removing a translation
 

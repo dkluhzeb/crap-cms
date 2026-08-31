@@ -17,6 +17,7 @@ use crate::{
     admin::{
         AdminState,
         context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
+        handlers::shared::hx::HxNav,
     },
     core::{CollectionDefinition, GlobalDefinition, richtext::renderer::html_escape},
     service::ServiceError,
@@ -28,8 +29,23 @@ use crate::{
 ///
 /// This is the seam between typed Rust page contexts and the JSON-shaped
 /// world the Lua hook + Handlebars renderer operate in.
-pub fn render_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
-    let data = to_value(ctx).expect("admin page context serializes infallibly");
+/// `hx` decides partial-vs-full: an htmx navigation targeting `#main`
+/// (see [`HxNav`]) gets only `<title>` + main content — the `htmx_partial`
+/// branch in `layout/base.hbs` — everything else the full document.
+pub fn render_page<T: Serialize>(
+    state: &AdminState,
+    hx: HxNav,
+    template: &str,
+    ctx: &T,
+) -> Response {
+    let mut data = to_value(ctx).expect("admin page context serializes infallibly");
+
+    if hx.partial
+        && let Some(obj) = data.as_object_mut()
+    {
+        obj.insert("htmx_partial".to_string(), Value::Bool(true));
+    }
+
     let data = state.infra.hook_runner.run_before_render(data);
 
     render_or_error(state, template, &data)

@@ -6,6 +6,7 @@ use axum::{
 };
 use serde_json::json;
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -27,6 +28,7 @@ use crate::{
 /// GET /`admin/globals/{slug}/versions/{version_id}/restore` — confirmation page
 pub async fn restore_confirm(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path((slug, version_id)): Path<(String, String)>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -109,5 +111,5 @@ pub async fn restore_confirm(
         back_url,
     };
 
-    render_page(&state, "globals/restore", &ctx)
+    render_page(&state, hx, "globals/restore", &ctx)
 }

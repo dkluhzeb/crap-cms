@@ -9,6 +9,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
+use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -130,6 +131,7 @@ fn fetch_global_version_sidebar(
 
 pub async fn edit_form(
     State(state): State<AdminState>,
+    hx: HxNav,
     Path(slug): Path<String>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
@@ -237,5 +239,5 @@ pub async fn edit_form(
         locale_data,
     };
 
-    render_page(&state, "globals/edit", &ctx)
+    render_page(&state, hx, "globals/edit", &ctx)
 }

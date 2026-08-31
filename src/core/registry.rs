@@ -70,6 +70,14 @@ pub struct Registry {
 /// Thread-safe shared reference to the registry. Used during init when
 /// definitions are being mutated; runtime VMs hold an `Arc<Registry>`
 /// snapshot instead.
+///
+/// **Post-boot immutability invariant:** every Lua `define()` path is gated
+/// by `require_init_phase` (and pool-VM defines are write-less no-ops), so
+/// the registry is only ever mutated on the boot init VM, BEFORE
+/// [`Registry::snapshot`] runs. Snapshots therefore cannot go stale — the
+/// snapshot/live split is a boot-phase artifact, not a synchronization
+/// mechanism, and no live-refresh machinery is needed (a previously planned
+/// "snapshot/live unification" was closed as obsolete on this basis).
 pub type SharedRegistry = Arc<RwLock<Registry>>;
 
 /// Read-only registry handle. Implemented for both [`SharedRegistry`]

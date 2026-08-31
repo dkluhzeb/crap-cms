@@ -31,7 +31,8 @@
             action="/admin/collections/{{collection.slug}}"
             method="post"
             {{/if}}
-            hx-target="body"
+            hx-target="#main"
+            hx-swap="innerHTML show:window:top"
             class="form"
             novalidate
             {{#if collection.upload}}enctype="multipart/form-data"{{/if}}

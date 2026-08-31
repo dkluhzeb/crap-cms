@@ -3,6 +3,7 @@
 mod access;
 mod breadcrumbs;
 mod document;
+pub(crate) mod hx;
 mod locale;
 mod pagination;
 pub(crate) mod paths;
@@ -43,6 +44,7 @@ pub(crate) use locale::{
 };
 
 // pagination
+pub use hx::HxNav;
 pub use pagination::{Pagination, PaginationParams};
 
 // response
