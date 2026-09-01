@@ -175,6 +175,13 @@ pub(crate) struct LuaVmInfra {
     /// Per-VM storage backend for upload file cleanup in CRUD hooks (see the
     /// struct docs for why it's per-VM). `None` only in tests.
     pub(crate) storage: Option<SharedStorage>,
+    /// Per-VM cache handle for `[cache] backend = "custom"`: a `LocalLease`-
+    /// backed `CustomCache` over THIS VM, swapped into the CRUD context by
+    /// `hook_lua_infra` so write-through `clear_cache` from a hook or job
+    /// handler reuses the current VM instead of re-acquiring from the pool
+    /// (the same per-VM treatment as `storage`). `None` for every other
+    /// backend — the process cache then flows in via `LuaCrudInfra`.
+    pub(crate) cache: Option<SharedCache>,
     /// User-invalidation transport so CRUD delete and lock paths can publish
     /// live-stream tear-down signals from Lua-invoked service calls.
     /// `None` = no-op.
@@ -193,6 +200,7 @@ impl Default for LuaVmInfra {
             registry: Arc::new(Registry::default()),
             locale_config: LocaleConfig::default(),
             storage: None,
+            cache: None,
             invalidation_transport: None,
             max_hook_depth: 3,
             default_deny: false,

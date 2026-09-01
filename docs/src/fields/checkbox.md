@@ -4,7 +4,7 @@ Boolean field stored as an integer (0 or 1).
 
 ## SQLite Storage
 
-`INTEGER` column with `DEFAULT 0`.
+`INTEGER` column with `DEFAULT 0` on SQLite; `SMALLINT` on Postgres.
 
 ## Definition
 

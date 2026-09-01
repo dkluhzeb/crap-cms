@@ -8,15 +8,24 @@ Hooks let you intercept and modify data at every stage of a document's lifecycle
 2. **Collection-level hooks** — per-collection lifecycle hooks. Defined on `CollectionDefinition` or `GlobalDefinition`.
 3. **Globally registered hooks** — fire for all collections. Registered via `crap.hooks.register()` in `init.lua`.
 
-All hooks at all levels run in this order for each lifecycle event:
+For the events where multiple levels apply, hooks run in this order:
 
 ```
 field-level → collection-level → globally registered
 ```
 
+The field-level tier exists only for the four value-transform events
+(`before_validate`, `before_change`, `after_change`, `after_read`);
+the other lifecycle events (`before_read`, `before_delete`,
+`after_delete`, `before_render`, `before_broadcast`) are
+collection-level/global only — see
+[Field Hooks](field-hooks.md) for the field-tier table.
+
 ## Hook References
 
-Collection-level and field-level hooks are string references in `module.function` format:
+Collection-level and field-level hooks are references in `module.function`
+format — either a bare string, or a `{ ref, options }` table whose `options`
+arrive as `ctx.options`:
 
 ```lua
 hooks = {
@@ -66,7 +75,7 @@ vm_pool_size = 8       # Lua VMs pre-warmed at startup (default: CPU cores)
 # max_vm_pool_size = 64  # hard cap; the pool grows on demand up to this
 ```
 
-Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.
+The pool is **elastic**: `vm_pool_size` VMs are pre-warmed at startup, and further VMs are built on demand up to `max_vm_pool_size` as concurrency rises (each with the same full initialization: package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.
 
 ## Resource Limits
 

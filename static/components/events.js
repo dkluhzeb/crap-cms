@@ -105,3 +105,22 @@ export const EV_PICK = 'crap:pick';
  * picked up by the array-fields container to insert a new block row.
  */
 export const EV_REQUEST_ADD_BLOCK = 'crap:request-add-block';
+
+/**
+ * Emitted by `<crap-pill-list>` (bubbling, composed) when a chip's
+ * remove button is clicked. `detail: { id }`. `<crap-relationship-search>`
+ * listens to drop the corresponding reference.
+ */
+export const EV_PILL_REMOVED = 'crap:pill-removed';
+
+/**
+ * Emitted by `<crap-column-picker>` (bubbling, composed) once the column
+ * selection has been saved. `<crap-list-settings>` closes its drawer on it.
+ */
+export const EV_COLUMN_PICKER_SAVED = 'crap:column-picker-saved';
+
+/**
+ * Emitted by `<crap-filter-builder>` (bubbling, composed) when the user
+ * applies the filter set. `<crap-list-settings>` closes its drawer on it.
+ */
+export const EV_FILTER_BUILDER_APPLIED = 'crap:filter-builder-applied';

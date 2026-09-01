@@ -4,7 +4,7 @@ Background job definition and queuing.
 
 ## crap.jobs.define(slug, config)
 
-Define a background job. **Init-only:** call this from `jobs/*.lua`,
+Define a background job. The `config` table is **strict** — an unknown key is a load error, never silently ignored. **Init-only:** call this from `jobs/*.lua`,
 `init.lua`, or any file loaded by `require` from those. The scheduler
 enrolls jobs once at startup; runtime registration would never reach
 the cron or queue worker, so it's rejected outright:
@@ -49,7 +49,7 @@ crap.jobs.define("send_digest", {
 
 ## crap.jobs.queue(slug, data?, opts?)
 
-Queue a job for background execution. Only available inside hooks with transaction context.
+Queue a job for background execution. Needs a database context (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)); the enqueue joins that context's transaction.
 
 **Parameters:**
 - `slug` (string) — Job slug (must be previously defined)
@@ -256,8 +256,8 @@ Common patterns:
 
 | Goal | Idiom |
 |---|---|
-| Re-enqueue the work on failure | `if not ok then crap.jobs.queue(ctx.slug, ctx.data) end` |
-| Emit a metric on every rollback | `if not ok then crap.metrics.inc("tx_rollback") end` |
+| Re-enqueue the work on failure | `if not ok then crap.jobs.queue(ctx.job.slug, ctx.data) end` |
+| Log every rollback | `if not ok then crap.log.warn("tx rolled back: " .. tostring(err)) end` |
 | Compensate external side-effects | Run the side-effect inside the `if not ok` branch (after rollback) |
 | Stop the job from being marked failed | Catch with `pcall` and return success from `M.run`; the framework will treat it as completed |
 
@@ -268,7 +268,7 @@ Strictest applicable cap wins.
 
 | Cap | Scope | Configured in | Counts |
 |---|---|---|---|
-| `[jobs] max_concurrent` | **Per-server** | `crap.toml` | Total jobs in flight on this scheduler process |
+| `[jobs] max_concurrent` | **Cluster-global** | `crap.toml` | Total jobs in flight across the whole DB (`COUNT(*)` over `_crap_jobs`, no per-server filter) |
 | `[jobs.queues.<name>] concurrency` | **Cluster-global** | `crap.toml` | Total jobs in queue `<name>` across the whole DB |
 | `JobDefinition::concurrency` | **Cluster-global** | `crap.jobs.define({ concurrency = N })` | Total jobs of this specific slug across the whole DB |
 

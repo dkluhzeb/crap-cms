@@ -355,12 +355,13 @@ crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PA
 crap-cms init [DIR] [--no-input]
 ```
 
-Runs an interactive wizard that scaffolds a complete config directory. Defaults to `./crap-cms` if no directory is given.
+Runs an interactive wizard that scaffolds a complete config directory. When no directory is given, the wizard prompts for a project path (default `./crap-cms`). With `--no-input` the wizard is skipped entirely — defaults are used, an auth (`users`) and an upload (`media`) collection are created, and **`DIR` is required** (there is no default in non-interactive mode).
 
 The wizard prompts for:
 
 | Prompt | Default | Description |
 |--------|---------|-------------|
+| Project path | `./crap-cms` | Target directory (only when `DIR` is omitted) |
 | Admin port | `3000` | Port for the admin UI |
 | gRPC port | `50051` | Port for the gRPC API |
 | Enable localization? | No | If yes, prompts for default locale and additional locales |
@@ -416,6 +417,16 @@ Modifiers are order-independent:
 |----------|-------------|
 | `required` | Field is required |
 | `localized` | Field has per-locale values (see [Localization](../locale/overview.md)) |
+
+Container types take their sub-fields in parentheses directly after the type (modifiers follow the closing `)`):
+
+| Type | Syntax |
+|------|--------|
+| `group`, `array`, `row`, `collapsible` | `name:type(subfields):modifiers` — e.g. `seo:group(title:text,description:textarea)` |
+| `blocks` | `name:blocks(type\|label(subfields),...)` — e.g. `content:blocks(hero\|Hero(heading:text:required),cta\|Call to Action(url:text))` |
+| `tabs` | `name:tabs(label(subfields),...)` — e.g. `settings:tabs(Content(title:text),Style(variant:select))` |
+
+Nesting is unlimited; commas and colons inside parentheses belong to the inner field list. Any other type given sub-fields is an error.
 
 ```bash
 # Basic
@@ -520,7 +531,7 @@ crap-cms make job [SLUG] [-s <SCHEDULE>] [-q <QUEUE>] [-r <RETRIES>] [-t <TIMEOU
 |------|-------|---------|-------------|
 | `--schedule` | `-s` | — | Cron expression (e.g., `"0 3 * * *"`) |
 | `--queue` | `-q` | `default` | Queue name |
-| `--retries` | `-r` | 0 | Max retry attempts |
+| `--retries` | `-r` | *(queue default)* | Max retry attempts. Omit to let the job inherit `[jobs.queues.<queue>] retries` at runtime; pass an explicit value (including `0`) to write a fixed `retries` into the generated Lua |
 | `--timeout` | `-t` | 60 | Timeout in seconds |
 | `--force` | `-f` | — | Overwrite existing file |
 
@@ -534,6 +545,91 @@ crap-cms make job cleanup_expired -s "0 3 * * *" -r 3 -t 300
 # Simple job (triggered from hooks)
 crap-cms make job send_welcome_email
 ```
+
+#### `make page`
+
+```bash
+crap-cms make page [SLUG] [-l <LABEL>] [-s <SECTION>] [-i <ICON>] [-a <ACCESS>] [-f]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--label` | `-l` | Sidebar label (defaults to the title-cased slug) |
+| `--section` | `-s` | Sidebar section heading (e.g. `"Tools"`) |
+| `--icon` | `-i` | Material Symbols icon name |
+| `--access` | `-a` | Lua hook ref for access control (e.g. `access.admin_only`) |
+| `--force` | `-f` | Overwrite existing file |
+
+Writes `templates/pages/<slug>.hbs` (served at `/admin/p/<slug>`) and prints the matching `crap.pages.register(...)` snippet for `init.lua`. See [Custom Pages](../admin-ui/scenarios/05-custom-page.md).
+
+#### `make route`
+
+```bash
+crap-cms make route [NAME] [-m <METHOD>] [-p <PATH>] [-f]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--method` | `-m` | `GET` | HTTP method |
+| `--path` | `-p` | `/<name>` | URL path to mount at |
+| `--force` | `-f` | — | Overwrite existing file |
+
+Writes `routes/<name>.lua` (a typed `function(ctx)` handler) and prints the `crap.routes.register(...)` snippet for `init.lua`. See [`crap.routes`](../lua-api/routes.md).
+
+#### `make slot`
+
+```bash
+crap-cms make slot [SLOT] [--file <NAME>] [--force]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--file` | `-f` | `widget` | Filename inside the slot directory |
+| `--force` | — | — | Overwrite existing file (long form only — `-f` is taken by `--file`) |
+
+Writes `templates/slots/<slot>/<file>.hbs`. See [Slots](../admin-ui/guides/slots.md) for the slot names.
+
+#### `make node`
+
+```bash
+crap-cms make node [NAME] [-i] [-f]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--inline` | `-i` | Inline node (default: block-level) |
+| `--force` | `-f` | Overwrite existing file |
+
+Writes `lua/richtext_nodes/<name>.lua`, a custom richtext node definition, and prints the one-line `require(...)` to add to `init.lua` (the command never rewrites `init.lua` itself).
+
+#### `make field`
+
+```bash
+crap-cms make field [NAME] [-b <BASE_TYPE>] [-f]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--base-type` | `-b` | `number` | Base field type to wrap: `text`, `number`, `textarea`, `select`, `radio`, `checkbox`, `date`, `email`, `json`, `code` |
+| `--force` | `-f` | — | Overwrite existing files |
+
+Writes three wired-together files: `templates/fields/<name>.hbs` (render template), `plugins/<name>.lua` (Lua wrapper plugin) and `static/components/crap-<name>.js` (Web Component skeleton).
+
+#### `make theme`
+
+```bash
+crap-cms make theme [NAME] [-f]
+```
+
+Writes `static/styles/themes/themes-<name>.css` (a starter overriding the CSS tokens). See [Themes](../admin-ui/guides/themes.md).
+
+#### `make component`
+
+```bash
+crap-cms make component [TAG] [-f]
+```
+
+Writes `static/components/<tag>.js`, a custom Web Component skeleton (`TAG` must contain a hyphen, e.g. `my-widget`). See [Components](../admin-ui/reference/components.md).
 
 ### `blueprint` — Manage saved blueprints
 
@@ -575,7 +671,7 @@ crap-cms blueprint remove <NAME>
 crap-cms db console
 ```
 
-Opens an interactive `sqlite3` session on the project database.
+Opens an interactive shell on the project database: `sqlite3 <path>` on SQLite, `psql <database.url>` on PostgreSQL. The client binary must be on `PATH`.
 
 #### `db cleanup`
 
@@ -629,6 +725,8 @@ crap-cms import <FILE> [-c <COLLECTION>]
 crap-cms import backup.json
 crap-cms import backup.json -c posts
 ```
+
+Import is a **raw restore**, not a write through the service layer: each document is upserted by `id` straight into its table (existing rows with the same id are overwritten), join tables are rebuilt, and `_ref_count` is kept consistent. Lifecycle hooks, field validation, access rules and live events do **not** run. Every collection in the file must exist in the current Lua definitions — unknown collections are rejected **before anything is written**. Each collection is then imported in its own transaction, so a failure inside collection N (a malformed document, a DB error) rolls back N but leaves collections 1…N-1 imported.
 
 ### `typegen` — Generate typed definitions
 
@@ -917,7 +1015,7 @@ crap-cms jobs healthcheck
 
 Checks job system health and prints a summary: defined jobs, stale jobs (running but heartbeat expired), failed jobs in the last 24 hours, pending jobs waiting longer than 5 minutes, and scheduled jobs that have never completed a run.
 
-Exit status: `healthy` (no issues), `warning` (failed or long-pending jobs), `unhealthy` (stale jobs detected).
+Status: `healthy` (no issues), `warning` (failed jobs in the last 24h, jobs pending longer than 5 minutes, or scheduled jobs that have never completed a run), `unhealthy` (stale jobs detected). The **exit code** follows the status so it can gate CI/monitoring: `0` healthy, `2` warning, `1` unhealthy (mirrors `status --check`).
 
 ```bash
 crap-cms jobs list
@@ -1178,7 +1276,7 @@ eval "$(crap-cms update completions bash)"  # source directly
 | Variable | Description |
 |----------|-------------|
 | `CRAP_CONFIG_DIR` | Path to the config directory (same as `--config` flag; flag takes priority) |
-| `RUST_LOG` | Controls log verbosity. Default: `crap_cms=debug,info` for `serve`, `crap_cms=error` for all other commands. Example: `RUST_LOG=crap_cms=trace` |
+| `RUST_LOG` | Controls log verbosity. Defaults: `crap_cms=info` for `serve`, `work` and `mcp`; `crap_cms=debug,info` for `serve`/`work` when `[admin] dev_mode = true`; `crap_cms=error` for every other command. Example: `RUST_LOG=crap_cms=trace` |
 | `CRAP_LOG_FORMAT` | Set to `json` for structured JSON log output (same as `--json` flag) |
 | `CRAP_NO_UNICODE` | Force ASCII glyphs (`+ ! x >`) instead of Unicode (`✓ ⚠ ✗ →`) in CLI output. Truthy values (`1`, `true`, `yes`, `on`) enable it. |
 | `CRAP_FORCE_UNICODE` | Force Unicode glyphs even when terminal detection says otherwise. Truthy values (`1`, `true`, `yes`, `on`) enable it. |

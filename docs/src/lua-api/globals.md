@@ -60,17 +60,21 @@ See [Plugins](../plugins/overview.md) for patterns using these functions.
 ## Runtime operations — `crap.globals.<slug>`
 
 Every global registered via `define()` gets a typed accessor at
-`crap.globals.<slug>` with `get` / `update` methods. The slug is
-bound; return values are typed as the per-global document class.
+`crap.globals.<slug>` with `get` / `update` / `unpublish` /
+`validate` methods. The slug is bound; return values are typed as
+the per-global document class.
 
-Both operations are **only available inside hooks with transaction
-context**.
+All operations need a database context — a lifecycle hook, a job
+handler, a custom route handler, or a `crap.transaction(fn)` block
+(see [CRUD Availability](overview.md#crud-availability)).
 
 > For the rare dynamic-slug case (you don't know the slug until
 > runtime — e.g. iterating `crap.globals.config.list()`), call the
 > slug-keyed dispatch: `crap.globals.get(slug, opts?)` /
-> `crap.globals.update(slug, data, opts?)`. Same semantics, slug as
-> the first arg.
+> `crap.globals.update(slug, data, opts?)` /
+> `crap.globals.unpublish(slug, opts?)` /
+> `crap.globals.validate(slug, data, opts?)`. Same semantics, slug
+> as the first arg.
 
 ### `crap.globals.<slug>.get(opts?)`
 
@@ -143,7 +147,7 @@ stored field data. Only available on globals with `versions` enabled
 crap.globals.banner.unpublish()
 ```
 
-### `crap.globals.validate(slug, data, opts?)`
+### `crap.globals.<slug>.validate(data, opts?)`
 
 Validate global field data **without persisting**. Runs the full
 before-write pipeline (field coercion, validators, `before_validate`
@@ -162,7 +166,7 @@ fixed `default` row — there is no create mode and no `id` option. Mirrors
 | `draft` | boolean | Validate as a draft (relaxes required checks for globals with drafts enabled). |
 
 ```lua
-local result = crap.globals.validate("site_settings", {
+local result = crap.globals.site_settings.validate({
     tagline = "A tagline that is far too long for the field",
 })
 

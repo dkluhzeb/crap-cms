@@ -47,4 +47,4 @@ Renders as an `<input type="text">` element. When `has_many = true`, renders as 
 ## Notes
 
 - Empty strings are stored as `NULL` in SQLite
-- Unknown field types default to `text`
+- An unknown `type` in a field definition is a **hard load error** (with a did-you-mean suggestion) — it never silently falls back to `text`

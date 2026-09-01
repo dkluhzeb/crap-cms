@@ -97,6 +97,7 @@ end
 | `ctx.form` | table? | Parsed body for `application/x-www-form-urlencoded`. |
 | `ctx.user` | doc? | Authenticated user, or `nil` (anonymous). |
 | `ctx.collection` | string? | The user's auth collection. |
+| `ctx.ui_locale` | string? | The authenticated user's admin-UI locale preference (`nil` for anonymous). |
 | `ctx.ip` | string | Client IP (honors `trusted_proxies`). |
 | `ctx.options` | table? | The route's `options`. |
 

@@ -56,7 +56,8 @@ pub(crate) struct FindQueryInput {
     /// Ignored when `page` is set — `page` takes precedence.
     #[lua(optional)]
     pub(crate) offset: Option<i64>,
-    /// Population depth for relationship fields (default: `0`).
+    /// Population depth for relationship fields (default: `[depth]
+    /// default_depth` from `crap.toml`, which defaults to 1).
     #[lua(optional)]
     pub(crate) depth: Option<i32>,
     /// Locale code for localized fields (`"en"`, `"de"`, `"all"`).

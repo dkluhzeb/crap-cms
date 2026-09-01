@@ -85,7 +85,7 @@ system-font fallback chain.
 ```
 
 Themes override shadows for dark variants
-(see `themes.css`).
+(see `static/styles/themes/default.css`).
 
 ## Transitions
 
@@ -166,8 +166,9 @@ but lets themes redirect (`--accent-primary`, `--accent-primary-bg`).
 ## Code-editor syntax palette
 
 `<crap-code>` consumes a `--code-*` palette so syntax highlighting
-follows the active theme. Light defaults live in `styles.css`; each
-dark theme in `themes.css` redefines the full set.
+follows the active theme. Light defaults live in
+`static/styles/tokens.css`; each dark theme in
+`static/styles/themes/default.css` redefines the full set.
 
 ```css
 --code-keyword     /* control flow, declarations */
@@ -190,15 +191,16 @@ dark theme in `themes.css` redefines the full set.
 
 ## How themes override
 
-`themes.css` redefines the relevant palette + surface + text tokens
-under `html[data-theme="<name>"]`. The `<crap-theme-picker>` component
+`static/styles/themes/default.css` redefines the relevant palette +
+surface + text tokens under `html[data-theme="<name>"]`. The `<crap-theme-picker>` component
 sets that attribute and persists the choice in `localStorage` under
 the `crap-theme` key. A small inline FOUC-prevention script in
 `layout/base.hbs` reads the same key on first paint to avoid a
 light-then-dark flash on page load.
 
-To add a custom theme, override `static/themes.css` (or append a new
-selector block) defining at minimum:
+To add a custom theme, overlay `static/styles/themes/default.css` (or
+drop an extra stylesheet via the `head_extras` slot) with a new
+`html[data-theme="<name>"]` block defining at minimum:
 
 - The full color palette (primary/danger/success/warning + bg variants)
 - `--text-*` foreground colors

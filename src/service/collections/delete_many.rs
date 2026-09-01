@@ -254,6 +254,10 @@ fn delete_many_conn(
         invalidate_user_streams_if_auth(ctx, id);
     }
 
+    // Parity with the single-document conn path (and the pool path's
+    // orchestrator): every write clears the populate cache.
+    ctx.clear_cache();
+
     Ok(DeleteManyResult {
         hard_deleted: hard_count,
         soft_deleted: soft_count,

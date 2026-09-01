@@ -30,7 +30,7 @@ channel_capacity = 1024     # default: 1024
 
 `transport = "redis"` uses the same Redis URL as `[cache] redis_url` (single source of truth). When the binary isn't built with `--features redis`, selecting `"redis"` aborts startup with a clear error.
 
-Set `enabled = false` to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.
+Set `enabled = false` to disable live updates entirely. gRPC Subscribe fails with `UNAVAILABLE`; the admin SSE endpoint still accepts the connection (`200`) but serves an empty stream that never emits events — so the admin UI degrades gracefully instead of erroring.
 
 Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive `503 Service Unavailable` and new gRPC Subscribe calls receive `RESOURCE_EXHAUSTED` status. (gRPC `UNAVAILABLE` is reserved for live updates being disabled, a different condition.) Existing connections are not affected.
 

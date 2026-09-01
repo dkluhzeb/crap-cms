@@ -38,8 +38,8 @@ Generate modern format variants for each image size:
 
 ```lua
 format_options = {
-    webp = { quality = 80 },  -- WebP at 80% quality
-    avif = { quality = 60 },  -- AVIF at 60% quality
+    webp = { quality = 80 },  -- WebP at 80% quality (80 is also the default when omitted)
+    avif = { quality = 60 },  -- AVIF at 60% quality (60 is also the default when omitted)
 }
 ```
 
@@ -84,7 +84,7 @@ crap-cms -C ./my-project images purge --older-than 7d  # clean up old entries
 
 For each uploaded image:
 
-1. **Original** — saved as-is to `uploads/<collection>/<id>_<filename>`
+1. **Original** — saved as-is to `uploads/<collection>/<nanoid>_<filename>` (a random 10-char nanoid, not the document id, so filenames never collide and are not guessable from the id)
 2. **Image dimensions** — read from the decoded image
 3. **Per-size variants** — resized according to fit mode, saved in the original format
 4. **Format variants** — each sized image is also saved as WebP and/or AVIF (if configured)

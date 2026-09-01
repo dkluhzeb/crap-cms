@@ -113,17 +113,15 @@ async fn collapsible_toggles_on_click() {
         .await
         .unwrap();
 
-    // Click toggle to collapse
-    page.find_element("[data-action=\"toggle-group\"]")
-        .await
-        .unwrap()
-        .click()
-        .await
-        .unwrap();
-
-    // Should now be collapsed — poll until the class appears
-    let collapsed =
-        browser::wait_for_element_count(&page, ".form__collapsible--collapsed", 1).await;
+    // Click toggle to collapse. `click_until_element_count` re-clicks if the
+    // first click raced the component upgrade (module-bound handler).
+    let collapsed = browser::click_until_element_count(
+        &page,
+        "[data-action=\"toggle-group\"]",
+        ".form__collapsible--collapsed",
+        1,
+    )
+    .await;
     assert_eq!(
         collapsed.len(),
         1,
@@ -171,16 +169,16 @@ async fn collapsible_re_expands() {
         .await
         .unwrap();
 
-    // Collapse
-    page.find_element("[data-action=\"toggle-group\"]")
-        .await
-        .unwrap()
-        .click()
-        .await
-        .unwrap();
-
-    // Wait until it is actually collapsed before toggling back
-    browser::wait_for_element(&page, ".form__collapsible--collapsed").await;
+    // Collapse (retry-click: the first click can race the component upgrade;
+    // once collapsed, the handler is proven bound, so the re-expand below can
+    // click plainly).
+    browser::click_until_element_count(
+        &page,
+        "[data-action=\"toggle-group\"]",
+        ".form__collapsible--collapsed",
+        1,
+    )
+    .await;
 
     // Re-expand
     page.find_element("[data-action=\"toggle-group\"]")

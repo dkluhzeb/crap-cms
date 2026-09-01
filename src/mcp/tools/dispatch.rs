@@ -128,8 +128,11 @@ pub(in crate::mcp) fn generate_tools(
         }
     }
 
+    // Same filter as execution (`execute_tool` applies `should_include` to
+    // every parsed slug): a global excluded by config must not be listed as
+    // a tool it can never run.
     for (slug, def) in &registry.globals {
-        if exposure.allows(slug) {
+        if should_include(slug, config) && exposure.allows(slug) {
             tools.extend(global_tools(slug, def));
         }
     }
@@ -818,6 +821,30 @@ mod tests {
         let parsed = parse_tool_name("global_update_settings", &reg).unwrap();
         assert_eq!(parsed.op, ToolOp::UpdateGlobal);
         assert_eq!(parsed.slug, "settings");
+    }
+
+    /// Regression: an excluded global was listed by `tools/list` but rejected
+    /// by `execute_tool` (listed-but-uncallable). Listing now applies the same
+    /// include/exclude filter as execution.
+    #[test]
+    fn global_tools_obey_include_exclude_in_listing() {
+        let reg = make_registry();
+
+        let config = McpConfig {
+            exclude_collections: vec!["settings".to_string()],
+            ..Default::default()
+        };
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
+        assert!(tools.iter().all(|t| t.name != "global_read_settings"));
+        assert!(tools.iter().all(|t| t.name != "global_update_settings"));
+
+        let config = McpConfig {
+            include_collections: vec!["posts".to_string()],
+            ..Default::default()
+        };
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
+        assert!(tools.iter().any(|t| t.name == "find_posts"));
+        assert!(tools.iter().all(|t| t.name != "global_read_settings"));
     }
 
     #[test]

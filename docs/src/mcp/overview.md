@@ -16,6 +16,7 @@ enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
 api_key = ""                # API key for HTTP auth (required, min 32 chars, when http = true)
+http_max_body_bytes = "1MB" # Max /mcp request-body size (int bytes or "16MB"-style string)
 include_collections = []    # Whitelist (empty = all)
 exclude_collections = []    # Blacklist (takes precedence over include)
 ```
@@ -87,6 +88,13 @@ An `api_key` is **required** when HTTP transport is enabled, and must be at leas
 header; a missing or wrong key is answered with a JSON-RPC error (code `-32600`,
 "Invalid or missing API key") over HTTP `200`, not an HTTP `401`.
 
+Request bodies are capped at `[mcp] http_max_body_bytes` (default **1 MiB**;
+larger bodies get a JSON-RPC parse error). Raise it when clients push large
+payloads — bulk creates, or `write_config_file` with big assets. A JSON-RPC
+**notification** (a request without an `id`) is executed and answered with
+HTTP `204 No Content`, per the JSON-RPC convention of not responding to
+notifications.
+
 ## Auto-Generated Tools
 
 ### Content CRUD (per collection)
@@ -107,7 +115,8 @@ For each collection (e.g., `posts`), a set of CRUD tools is generated:
 | `delete_many_posts` | Bulk delete documents matching a filter |
 
 Collections with `soft_delete` also get `undelete_posts`; versioned collections
-add `unpublish_posts`, `list_versions_posts`, and `restore_version_posts`.
+add `unpublish_posts`, `list_versions_posts` (args: `id`, optional `limit` /
+`offset`), and `restore_version_posts` (args: `id`, `version_id`).
 
 > **Reserved slug prefixes.** Because tool names are built as `{op}_{slug}` and
 > `{op}` includes the compound forms `create_many_` / `update_many_` /
@@ -143,9 +152,11 @@ arguments** (excluded from the document's field data, like `id` and
 |----------|-------|-------------|
 | `locale` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
 | `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_update_*`, `global_validate_*` | Write as a draft version. |
+| `events` | all write tools | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
+| `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 
-> A collection with a field literally named `locale`, `draft`, or
+> A collection with a field literally named `locale`, `draft`, `events`, or
 > `force_hard_delete` would have it shadowed by the reserved argument — the
 > same caveat that already applies to `id` and `password`.
 
@@ -177,10 +188,10 @@ When `config_tools = true`:
 | Tool | Description |
 |------|-------------|
 | `read_config_file` | Read a file from the config directory (secrets in `crap.toml` are redacted) |
-| `write_config_file` | Write a Lua file to the config directory |
+| `write_config_file` | Write **any file** (Lua, templates, static assets, `crap.toml`, …) inside the config directory. Path-traversal-safe (confined to the config dir) but not restricted by file type |
 | `list_config_files` | List files in the config directory |
 
-These are opt-in because they allow writing to the filesystem.
+These are opt-in because they allow arbitrary file writes inside the config directory — which includes executable Lua (hooks, jobs, routes) that the server runs. Enable them only for trusted MCP clients.
 
 `read_config_file` **redacts secrets when it reads `crap.toml`** — `auth.secret`,
 `email.smtp_pass`, `mcp.api_key`, and the S3 `secret_key` come back masked, the
@@ -269,7 +280,7 @@ enabled = true
 exclude_collections = ["users"]  # Hide sensitive collections
 ```
 
-`exclude_collections` takes precedence when a collection appears in both lists.
+`exclude_collections` takes precedence when a collection appears in both lists. Both lists are matched by **slug** and apply to globals as well as collections: a non-empty `include_collections` exposes *only* the listed slugs (list your globals too), and an excluded global disappears from tool listing, execution and the schema resources alike.
 
 ## Security & Access Model
 
@@ -346,19 +357,19 @@ same query a `find_*` call matches. `unpublish_*` and `undelete_*` accept an
     { "id": "abc123", "title": "Hello World", "created_at": "2026-01-15T09:00:00Z" }
   ],
   "pagination": {
-    "totalDocs": 25,
+    "total_docs": 25,
     "limit": 10,
-    "hasNextPage": true,
-    "hasPrevPage": false,
-    "totalPages": 3,
+    "has_next_page": true,
+    "has_prev_page": false,
+    "total_pages": 3,
     "page": 1,
-    "pageStart": 1,
-    "nextPage": 2
+    "page_start": 1,
+    "next_page": 2
   }
 }
 ```
 
-In cursor mode, `page`/`totalPages`/`pageStart`/`nextPage`/`prevPage` are replaced by `startCursor`/`endCursor`.
+In cursor mode, `page`/`total_pages`/`page_start`/`next_page`/`prev_page` are replaced by `start_cursor`/`end_cursor`.
 
 ### Where clause example
 

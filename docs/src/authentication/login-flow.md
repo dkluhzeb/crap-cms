@@ -19,13 +19,20 @@
 - `/admin/forgot-password`
 - `/admin/reset-password`
 - `/admin/verify-email`
-- `/static/*`
+- `/admin/mfa` (requires a pending MFA challenge cookie, not a session)
+- `/admin/auth/callback/{name}` and `/admin/auth/callback/{collection}/{name}` (OAuth/OIDC callbacks)
+- `/static/*`, `/health`, `/ready`
 
-**Custom strategy flow:**
-If custom strategies are configured, the middleware checks them before redirecting to login:
-1. JWT cookie check (fast path)
-2. Custom strategies in definition order
-3. Redirect to login (if all fail)
+**Request authentication:** every other `/admin/**` request runs the shared auth evaluator with the fixed precedence described in [Auth Methods](auth-methods.md#evaluation-order): session cookie → always-active strategies → header-activated strategies. A cookie that decodes but is invalid (expired, password changed, locked, user deleted) or that its collection no longer accepts is **cleared** and the browser is redirected to `/admin/login`; a cookie whose user lookup failed for a transient reason (database error) is kept and the request is denied, so a blip does not log everyone out. With no credential at all the request is redirected to login.
+
+## Session lifetime
+
+Two bounds apply to an admin session:
+
+- **`token_expiry`** (default 2h) — the lifetime of the current cookie. Shortly before it elapses the admin UI's session dialog offers to stay signed in and calls `POST /admin/api/session-refresh`, which reissues the cookie for another `token_expiry` (sliding refresh). Refresh only succeeds for a still-valid session.
+- **`[auth] session_absolute_max_age`** (default 30d, `0` to disable) — a hard ceiling measured from the original login (`auth_time` claim), regardless of how many refreshes happened. After it, refresh is refused and the user must log in again. Values above 30 days log a startup warning.
+
+Changing the password, locking the account, or un-verifying it bumps the user's `session_version`, which invalidates every existing cookie and token immediately.
 
 ## Security
 
@@ -150,7 +157,7 @@ grpcurl -plaintext -d '{
 
 You can have multiple auth collections (e.g., `users` and `admins`). The `Login` RPC takes a `collection` parameter to specify which one to authenticate against.
 
-The admin UI login always tries all auth collections.
+The admin login form carries a `collection` field: with a single auth collection it is implied; with several, the login page shows an *account type* picker and each attempt targets exactly one collection.
 
 ## Password Reset Flow
 

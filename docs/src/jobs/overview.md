@@ -101,6 +101,8 @@ function M.run(ctx)
     ctx.job.unique_key   -- string?: dedup key, if queued with { unique = ... }
     ctx.job.scheduled_by -- string?: "cron" | "hook" | "grpc" | "cli"
     ctx.job.queued_at -- string?: ISO-8601 time the run was queued
+    ctx.options       -- table?: per-config options when the handler was
+                      --   registered as { ref = "...", options = {...} }
 end
 ```
 
@@ -204,6 +206,8 @@ crap-cms -C <config_dir> jobs list                   # list defined jobs
 crap-cms -C <config_dir> jobs trigger <slug>         # manually queue a job
 crap-cms -C <config_dir> jobs status [--id <id>]     # show recent job runs
 crap-cms -C <config_dir> jobs purge [--older-than 7d] # clean up old runs
+crap-cms -C <config_dir> jobs cancel [-s <slug>]      # cancel pending runs
+crap-cms -C <config_dir> jobs healthcheck             # health summary; exit 0/2/1
 ```
 
 ## gRPC API

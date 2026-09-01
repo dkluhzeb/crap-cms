@@ -76,7 +76,8 @@ clever.
     class="card"
     href="/admin/collections/{{slug}}"
     hx-get="/admin/collections/{{slug}}"
-    hx-target="body"
+    hx-target="#main"
+    hx-swap="innerHTML show:window:top"
     hx-push-url="true"
   >
     ...

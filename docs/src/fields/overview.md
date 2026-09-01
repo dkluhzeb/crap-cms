@@ -48,7 +48,8 @@ Every field type accepts these properties:
 | `unique` | boolean | `false` | Unique constraint. Checked in the current transaction. For [localized](../locale/overview.md#unique--localized) fields, enforced per locale. |
 | `index` | boolean | `false` | Create a B-tree index on this column. Skipped when `unique = true` (already indexed by SQLite). |
 | `localized` | boolean | `false` | Enable per-locale values. Requires [localization](../locale/overview.md) to be configured. |
-| `validate` | string | `nil` | Lua function ref for custom validation (see below). |
+| `required_locales` | `"all"` \| string[] | `nil` | For a `required` + `localized` field: which locales must be filled before a non-draft save (default: only the default locale). See [Required across locales](../locale/overview.md#required-across-locales). |
+| `validate` | string or table | `nil` | Lua function ref for custom validation — a `"module.fn"` string or `{ ref, options }` table (see below). |
 | `default_value` | any | `nil` | Default value applied on create if no value provided. |
 | `hidden` | boolean | `false` | Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use `admin.hidden` instead. |
 | `admin` | table | `{}` | Admin UI display options. |
@@ -112,12 +113,17 @@ of the tables.
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `hidden` | boolean | `false` | Hide from the admin edit form. The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it. For full API stripping, use the top-level `hidden` field property instead. |
 | `readonly` | boolean | `false` | Display but don't allow editing |
-| `width` | string | `nil` | Field width: `"full"` (default), `"half"`, or `"third"` |
+| `width` | string | `nil` | Field width: `"full"` (default), `"half"`, `"third"`, or any CSS width string (`"50%"`, `"200px"`) |
 | `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |
 | `condition` | string | `nil` | Lua function ref for conditional visibility (see [Conditions](../hooks/conditions.md)) |
 | `step` | string | `nil` | Step attribute for number inputs (e.g., `"1"`, `"0.01"`, `"any"`) |
 | `rows` | integer | `nil` | Visible rows for textarea fields |
 | `collapsed` | boolean | `true` | Default collapsed state for groups, collapsibles, array/block rows |
+| `label_field` | string | `nil` | Sub-field whose value titles each row (arrays/blocks). For blocks, a per-block `label_field` takes priority. |
+| `row_label` | string | `nil` | Lua function ref for computed row labels (arrays/blocks) — `fun(row): string?`. Takes priority over `label_field`. |
+| `labels` | table | `{}` | Custom `{ singular, plural }` row-item labels (e.g. the "Add Slide" button text). |
+| `language` | string | `nil` | Syntax-highlight language for `code` fields (the fixed language, or the initial one when `languages` is set). |
+| `languages` | string[] | `[]` | Allow-list of languages the editor can switch between on a `code` field; the choice persists in a `<name>_lang` companion column. |
 
 ## Layout Wrappers
 
@@ -165,7 +171,7 @@ All combinations work: Row inside Tabs, Tabs inside Collapsible, Collapsible ins
 
 ### Depth limit
 
-The admin UI rendering caps layout nesting at **5 levels deep**. Beyond this, fields are silently omitted from the form. This limit is a safety guard against infinite recursion — realistic schemas never hit it (5 levels means something like Array → Tabs → Collapsible → Row → Tabs → field).
+The admin UI rendering caps layout nesting at **5 levels deep**. Beyond this, fields are omitted from the form, and the server logs a **startup warning** naming the collection and its actual depth (it is not silent). This limit is a safety guard against infinite recursion — realistic schemas never hit it (5 levels means something like Array → Tabs → Collapsible → Row → Tabs → field).
 
 The data layer (DDL, read, write, versions) has no depth limit.
 
@@ -208,3 +214,4 @@ The context table contains:
 | `user` | table/nil | Authenticated user document (nil if unauthenticated) |
 | `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |
 | `locale` | string/nil | Content locale this write targets (nil when localization is disabled) |
+| `options` | table/nil | Per-config options when the validator is declared as `validate = { ref = "module.fn", options = {...} }`; nil for a bare-string ref |

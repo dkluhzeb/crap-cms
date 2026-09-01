@@ -2,45 +2,13 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
-#[cfg(not(feature = "redis"))]
-use anyhow::bail;
+use anyhow::{Result, bail};
 use tracing::info;
 
 use crate::config::{CacheBackend, CacheConfig};
+use crate::core::lua_lease::LuaVmLease;
 
-// Aliased to disambiguate from the `CacheBackend` config enum imported above.
-use super::{CacheBackend as CacheBackendTrait, MemoryCache, NoneCache, SharedCache};
-
-/// No-op placeholder that reports `kind() = "custom"` for diagnostics.
-/// Used when `backend = "custom"` is selected but Lua init hasn't run yet.
-struct CustomPlaceholder;
-
-impl CacheBackendTrait for CustomPlaceholder {
-    fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
-        Ok(None)
-    }
-
-    fn set(&self, _key: &str, _value: &[u8]) -> Result<()> {
-        Ok(())
-    }
-
-    fn delete(&self, _key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    fn clear(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn has(&self, _key: &str) -> Result<bool> {
-        Ok(false)
-    }
-
-    fn kind(&self) -> &'static str {
-        "custom"
-    }
-}
+use super::{CustomCache, MemoryCache, NoneCache, SharedCache};
 
 /// Create the appropriate cache backend from config.
 ///
@@ -80,12 +48,43 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
                  Rebuild with `--features redis`."
             );
         }
+        // The custom backend needs a Lua VM lease — it is constructed by
+        // [`create_cache_with_lease`] once the hook runner exists. Reaching
+        // this arm means a caller without a runner asked for it.
         CacheBackend::Custom => {
-            info!("Custom cache backend selected — waiting for Lua init");
-
-            Ok(Arc::new(CustomPlaceholder))
+            bail!(
+                "[cache] backend = \"custom\" requires the Lua runtime —                  constructed via create_cache_with_lease at startup"
+            );
         }
     }
+}
+
+/// Create the cache backend, with a Lua VM lease available for the `custom`
+/// backend. Non-custom backends delegate to [`create_cache`].
+///
+/// For `custom`, the registration is verified immediately: `[cache]
+/// backend = "custom"` without a `crap.cache.register(...)` call in
+/// `init.lua` fails the boot here with a clear message instead of erroring
+/// on the first cached read.
+///
+/// # Errors
+///
+/// Returns an error if the backend fails to initialize, or (for `custom`)
+/// when no handler is registered on the leased VM.
+pub fn create_cache_with_lease(
+    config: &CacheConfig,
+    lease: Arc<dyn LuaVmLease>,
+) -> Result<SharedCache> {
+    if config.backend == CacheBackend::Custom {
+        info!("Using custom (Lua-delegated) cache backend");
+
+        let cache = CustomCache::new(lease);
+        cache.verify_registered()?;
+
+        return Ok(Arc::new(cache));
+    }
+
+    create_cache(config)
 }
 
 #[cfg(test)]
@@ -109,17 +108,62 @@ mod tests {
         assert_eq!(cache.kind(), "none");
     }
 
+    /// Regression: `backend = "custom"` used to hand back a silent no-op
+    /// placeholder; it now requires the lease-based constructor, and that
+    /// constructor fails fast when `crap.cache.register` was never called.
     #[test]
-    fn create_custom_uses_placeholder() {
+    fn create_custom_without_lease_errors() {
         let config = CacheConfig {
             backend: CacheBackend::Custom,
             ..Default::default()
         };
-        let cache = create_cache(&config).unwrap();
-        assert_eq!(cache.kind(), "custom");
+        let err = create_cache(&config)
+            .err()
+            .expect("custom without lease must fail")
+            .to_string();
+        assert!(err.contains("create_cache_with_lease"), "{err}");
+    }
 
-        // Placeholder behaves as no-op
+    #[test]
+    fn create_custom_with_lease_verifies_registration() {
+        use crate::core::lua_lease::LocalLease;
+
+        let config = CacheConfig {
+            backend: CacheBackend::Custom,
+            ..Default::default()
+        };
+
+        // Unregistered VM → boot-time error naming the register call.
+        let lua = mlua::Lua::new();
+        lua.load("crap = {}").exec().unwrap();
+        let err = create_cache_with_lease(&config, Arc::new(LocalLease::new(&lua)))
+            .err()
+            .expect("unregistered VM must fail")
+            .to_string();
+        assert!(err.contains("crap.cache.register"), "{err}");
+
+        // Registered VM → working backend.
+        lua.load(
+            r"
+            local store = {}
+            crap._cache = {
+                get = function(k) return store[k] end,
+                set = function(k, v) store[k] = v end,
+                delete = function(k) store[k] = nil end,
+                clear = function() store = {} end,
+            }
+            ",
+        )
+        .exec()
+        .unwrap();
+        let cache = create_cache_with_lease(&config, Arc::new(LocalLease::new(&lua))).unwrap();
+        assert_eq!(cache.kind(), "custom");
         cache.set("k", b"v").unwrap();
-        assert!(cache.get("k").unwrap().is_none());
+        assert_eq!(cache.get("k").unwrap().unwrap(), b"v");
+
+        // Non-custom configs pass through to the plain factory.
+        let mem = create_cache_with_lease(&CacheConfig::default(), Arc::new(LocalLease::new(&lua)))
+            .unwrap();
+        assert_eq!(mem.kind(), "memory");
     }
 }

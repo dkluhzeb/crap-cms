@@ -35,8 +35,21 @@ pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
 
 /// Build a `LuaCrudInfra` from all available Lua `app_data` fields.
 /// Returns `None` when no infra was threaded into the VM.
+///
+/// When this VM carries a per-VM cache handle (`[cache] backend = "custom"`,
+/// see [`LuaVmInfra::cache`]), it shadows the caller-derived one so an in-VM
+/// `clear_cache` runs on THIS VM's `LocalLease` instead of re-acquiring a
+/// pool VM from inside a held one.
 pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
-    lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())
+    let mut infra = lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())?;
+
+    if let Some(vm) = lua.app_data_ref::<LuaVmInfra>()
+        && vm.cache.is_some()
+    {
+        infra.cache.clone_from(&vm.cache);
+    }
+
+    Some(infra)
 }
 
 /// Extract the invalidation transport from the VM-stable [`LuaVmInfra`]. Used

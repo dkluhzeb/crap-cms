@@ -282,7 +282,16 @@ fn jobs_cancel() {
 fn jobs_healthcheck() {
     let (_tmp, config_dir) = setup_with_job();
 
-    let stdout = run_ok_in(&config_dir, &["jobs", "healthcheck"]);
+    // The fixture defines a *scheduled* job that has never completed a run,
+    // which classifies as `warning` — and the exit code follows the status
+    // (0 healthy / 2 warning / 1 unhealthy) so CI can gate on it.
+    let output = run_in(&config_dir, &["jobs", "healthcheck"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "scheduled-but-never-ran job must exit 2 (warning); stdout: {stdout}"
+    );
     assert!(
         stdout.contains("Job system health"),
         "should show health status, got: {stdout}"
@@ -290,6 +299,10 @@ fn jobs_healthcheck() {
     assert!(
         stdout.contains("Defined:"),
         "should show defined jobs count, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("warning"),
+        "status line should say warning, got: {stdout}"
     );
 }
 

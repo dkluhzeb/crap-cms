@@ -49,7 +49,7 @@ crap.fields.number({
 })
 ```
 
-Valid values: `"1"` (integers only), `"0.01"` (cents), `"any"` (no step constraint). Defaults to browser default (`"1"`).
+Valid values: `"1"` (integers only), `"0.01"` (cents), `"any"` (no step constraint). When `admin.step` is unset the default is **`"any"`** — except on fields with `integer = true`, where it defaults to `"1"`.
 
 ## Integer-Only
 

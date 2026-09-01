@@ -28,7 +28,7 @@ import { clear } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
 import { discoverSingleton } from './_internal/util/discover.js';
 import { readDataIsland } from './_internal/util/json.js';
-import { EV_DRAWER_REQUEST } from './events.js';
+import { EV_COLUMN_PICKER_SAVED, EV_DRAWER_REQUEST, EV_FILTER_BUILDER_APPLIED } from './events.js';
 
 /**
  * @typedef {{
@@ -104,7 +104,7 @@ class CrapListSettings extends HTMLElement {
     const picker = document.createElement('crap-column-picker');
     picker.dataset.collection = slug;
     picker.dataset.options = JSON.stringify(options);
-    picker.addEventListener('crap:column-picker-saved', () => drawer.close(), { once: true });
+    picker.addEventListener(EV_COLUMN_PICKER_SAVED, () => drawer.close(), { once: true });
 
     drawer.open({ title: t('columns') });
     clear(drawer.body);
@@ -128,7 +128,7 @@ class CrapListSettings extends HTMLElement {
     const builder = document.createElement('crap-filter-builder');
     builder.dataset.collection = slug;
     builder.dataset.fields = JSON.stringify(fieldMetas);
-    builder.addEventListener('crap:filter-builder-applied', () => drawer.close(), { once: true });
+    builder.addEventListener(EV_FILTER_BUILDER_APPLIED, () => drawer.close(), { once: true });
 
     drawer.open({ title: t('filters') });
     clear(drawer.body);

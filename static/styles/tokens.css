@@ -2,7 +2,7 @@
  * Design tokens — the public theming surface.
  *
  * Every token in this file is part of the documented theming
- * contract (see docs/src/admin-ui/css-variables.md). Themes override
+ * contract (see docs/src/admin-ui/reference/css-variables.md). Themes override
  * a subset of these via `html[data-theme="..."]` selectors in
  * `themes/default.css` (light/dark) and user-supplied
  * `themes/themes-<name>.css` files.

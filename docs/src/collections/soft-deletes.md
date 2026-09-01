@@ -17,6 +17,14 @@ When `soft_delete = true`:
 - Soft-deleted documents are excluded from all reads, counts, and search
 - Upload files are preserved until the document is permanently purged
 - Version history is preserved
+- **`unique` fields become partial unique indexes** scoped to non-trashed
+  rows (`WHERE _deleted_at IS NULL`) — a trashed document's value can be
+  reused by a new document; restoring the trashed one then fails the
+  uniqueness check until the conflict is resolved
+- **Enabling it on an existing table with inline `UNIQUE` columns triggers a
+  one-time table rebuild** during migration (SQLite can't drop an inline
+  constraint in place) — expect that migration to take longer on large
+  tables
 
 ## Permissions
 

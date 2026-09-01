@@ -130,44 +130,27 @@ When auth collections are configured and no `access` function is set, any authen
 
 ## Routes
 
-| Route | Description |
-|-------|-------------|
-| `/health` | Liveness check (public) |
-| `/ready` | Readiness check (public) |
-| `/admin` | Dashboard |
-| `/admin/login` | Login page (public) |
-| `/admin/logout` | Logout (public) |
-| `/admin/forgot-password` | Forgot password page (public) |
-| `/admin/reset-password` | Reset password page (public) |
-| `/admin/verify-email` | Email verification (public) |
-| `/admin/collections` | Collection list |
-| `/admin/collections/{slug}` | Collection items list |
-| `/admin/collections/{slug}/create` | Create form |
-| `/admin/collections/{slug}/{id}` | Edit form |
-| `/admin/collections/{slug}/{id}/delete` | Delete confirmation |
-| `/admin/collections/{slug}/{id}/versions` | Version history |
-| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | Restore a version |
-| `/admin/collections/{slug}/validate` | Inline validation (POST) |
-| `/admin/collections/{slug}/evaluate-conditions` | Display condition evaluation (POST) |
-| `/admin/globals/{slug}` | Global edit form |
-| `/admin/globals/{slug}/validate` | Global inline validation (POST) |
-| `/admin/globals/{slug}/versions` | Global version history |
-| `/admin/globals/{slug}/versions/{version_id}/restore` | Restore global version |
-| `/admin/events` | SSE live update stream |
-| `/admin/api/search/{slug}` | Relationship search endpoint |
-| `/admin/api/session-refresh` | Session token refresh (POST) |
-| `/admin/api/locale` | Save locale preference (POST) |
-| `/admin/api/user-settings/{slug}` | Save user settings (POST) |
-| `/api/upload/{slug}` | File upload endpoint (POST) |
-| `/mcp` | MCP HTTP endpoint (POST, if enabled) |
-| `/static/*` | Static assets (public) |
-| `/uploads/{collection_slug}/{filename}` | Uploaded files |
+The full route-by-route reference (method, auth, CSRF, description for
+every admin and API route) lives in
+**[reference/routes.md](reference/routes.md)** — that table is the
+normative one. The shape in brief:
+
+- `/admin/...` — the server-rendered admin UI (login, dashboard,
+  collection lists/forms, globals, versions, custom pages under
+  `/admin/p/{slug}`).
+- `/admin/api/...` — JSON endpoints backing the UI (search,
+  session-refresh, locale, user-settings, back-references).
+- `/api/upload/{slug}` — the client upload API (Bearer auth).
+- `/admin/events` — the SSE live-update stream.
+- `/health`, `/ready`, `/static/*`, `/uploads/{slug}/{filename}` —
+  liveness/readiness, compiled-in static assets, stored files.
+- `/mcp` — MCP HTTP endpoint (when enabled).
 
 ### Session Refresh Endpoint
 
 `POST /admin/api/session-refresh` reissues the admin session cookie when the user is about to be logged out by token expiry.
 
-- **Triggered by the client.** The `<crap-session-guard>` web component (`static/components/session-guard.js`) shows a pre-expiry warning toast and POSTs here when the operator clicks "Stay signed in". It is **not** polled on a fixed interval — only fired in response to the warning.
+- **Triggered by the client.** The `<crap-session-dialog>` web component (`static/components/session-guard.js`) shows a pre-expiry warning toast and POSTs here when the operator clicks "Stay signed in". It is **not** polled on a fixed interval — only fired in response to the warning.
 - **Authentication required.** The handler reads `Claims` from request extensions (populated by the admin auth middleware), so an unauthenticated request returns `401 Unauthorized` before any work is done. CSRF is enforced via the `X-CSRF-Token` header / `crap_csrf` cookie like the rest of the admin POST routes.
 - **Re-validates the user before reissuing.** It checks that the user still exists, is not `_locked`, and that the token's `session_version` matches the current value in the auth collection (so a password change or session-version bump invalidates older tokens). Any failure returns `401`; a deleted user can't silently keep refreshing.
 - **Behavior on success.** Issues a fresh JWT, sets `crap_session` (and the matching expiry cookie) with the same `SameSite`/`Secure` flags as login, and returns `204 No Content`. The body is empty — the client treats the new cookie as the success signal.
@@ -201,9 +184,9 @@ See [Versions & Drafts](../collections/versions.md) for the full configuration a
 
 ## CSS Architecture
 
-- Custom properties in `:root` (colors, spacing, fonts, shadows)
-- Separate files per concern: `layout.css`, `buttons.css`, `cards.css`, `forms.css`, `tables.css`
-- Composed via `@import` in `styles.css`
+- Design tokens (custom properties) in `:root` — `static/styles/tokens.css` is the public theming surface
+- Separate files per concern under `static/styles/` (`base/`, `layout/`, `parts/`, `themes/`)
+- Composed via `@import` in `static/styles/main.css`
 - BEM-ish naming (`.block`, `.block__element`, `.block--modifier`)
 - Geist font family (variable weight)
 

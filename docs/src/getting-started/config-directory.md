@@ -22,15 +22,20 @@ my-project/
 │   ├── posts.lua
 │   └── access.lua
 ├── access/                # Reusable access-control Lua modules
-├── jobs/                  # Job handler Lua modules (see `jobs` feature)
+├── jobs/                  # Job definitions + handlers (see `jobs` feature)
+├── routes/                # Custom HTTP route handlers (`crap.routes.register`)
 ├── plugins/               # Plugin Lua modules (see `plugins` feature)
 ├── migrations/            # Custom SQL migrations (see `migrate` command)
 ├── templates/             # Handlebars overrides for admin UI
-│   └── fields/
-│       └── custom.hbs
+│   ├── fields/            # Field render templates (`make field`)
+│   │   └── custom.hbs
+│   ├── pages/             # Custom admin pages (`make page`)
+│   └── slots/             # Slot widgets (`make slot`)
 ├── translations/          # (optional, user-created) Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
+│   ├── components/        # Custom Web Components (`make component`, `make field`)
+│   └── styles/themes/     # Theme CSS files (`make theme`)
 ├── data/                  # Runtime data (auto-created)
 │   ├── crap.db            # SQLite database
 │   ├── crap.pid           # Process ID file (when running with --detach)
@@ -44,14 +49,17 @@ my-project/
     └── proto.rs           # (optional) `From<proto::Document>` impls for Rust gRPC
 ```
 
-The `access/`, `jobs/`, `plugins/`, `migrations/`, `templates/`, and `static/` directories are created empty by `crap-cms init` — populate them as needed. The `translations/` directory is not scaffolded; create it yourself when you want to override admin UI strings (see [Localization](../locale/overview.md)).
+`crap-cms init` creates `collections/`, `globals/`, `hooks/`, `access/`, `jobs/`, `plugins/`, `templates/`, `static/`, `migrations/` and `types/` (most of them empty) — populate them as needed. `routes/`, `translations/` and the `templates/pages|slots` and `static/components|styles/themes` subdirectories are not scaffolded; the matching `make` subcommand creates them on first use, or create them yourself (see [Localization](../locale/overview.md) for `translations/`).
 
 ## File Loading Order
 
 1. `crap.toml` is loaded first (or defaults are used if absent)
 2. `collections/*.lua` files are loaded alphabetically
 3. `globals/*.lua` files are loaded alphabetically
-4. `init.lua` is executed last
+4. `jobs/*.lua` files are loaded alphabetically
+5. `init.lua` is executed last — this is where `crap.routes.register`, `crap.pages.register`, custom providers and other register-only APIs are called
+
+`hooks/`, `access/` and `routes/` are **not** loaded eagerly: their modules are `require`d on demand through hook refs (`"hooks.posts.slugify"`, `"routes.stripe_webhook"`), and every statically-known ref is resolved once at startup so a typo fails to boot rather than at first request.
 
 ## Lua Package Path
 

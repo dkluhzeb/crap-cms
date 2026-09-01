@@ -154,7 +154,57 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
 }
 
 /// Check job system health: stale, failed, pending, never-completed.
-fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Result<()> {
+/// Overall job-system health, in ascending severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobHealth {
+    Healthy,
+    Warning,
+    Unhealthy,
+}
+
+impl JobHealth {
+    /// Human label printed in the `Status` line.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Warning => "warning",
+            Self::Unhealthy => "unhealthy",
+        }
+    }
+
+    /// Process exit code. Mirrors `status --check` (2 = warnings) and
+    /// `update check` (1 = action needed) so CI can gate on the result:
+    /// 0 healthy, 2 warning, 1 unhealthy.
+    fn exit_code(self) -> i32 {
+        match self {
+            Self::Healthy => 0,
+            Self::Warning => 2,
+            Self::Unhealthy => 1,
+        }
+    }
+}
+
+/// Classify the health probes: any stale (heartbeat-expired) running job
+/// is `Unhealthy`; recent failures, long-pending jobs, or scheduled jobs
+/// that never completed a run are `Warning`.
+fn classify_health(
+    stale: usize,
+    failed_24h: i64,
+    pending_long: i64,
+    never_ran: usize,
+) -> JobHealth {
+    if stale > 0 {
+        return JobHealth::Unhealthy;
+    }
+
+    if failed_24h > 0 || pending_long > 0 || never_ran > 0 {
+        return JobHealth::Warning;
+    }
+
+    JobHealth::Healthy
+}
+
+fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Result<JobHealth> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
     let defined_count = registry.jobs.len();
@@ -182,14 +232,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Resu
         }
     }
 
-    // Determine status
-    let status = if stale_count > 0 {
-        "unhealthy"
-    } else if failed_24h > 0 || pending_long > 0 || !no_recent_runs.is_empty() {
-        "warning"
-    } else {
-        "healthy"
-    };
+    let health = classify_health(stale_count, failed_24h, pending_long, no_recent_runs.len());
 
     cli::header("Job system health");
     cli::kv("Defined", &defined_count.to_string());
@@ -201,7 +244,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Resu
         no_recent_runs.sort();
         cli::kv("No runs", &no_recent_runs.join(", "));
     }
-    cli::kv_status("Status", status, status == "healthy");
+    cli::kv_status("Status", health.label(), health == JobHealth::Healthy);
 
     if stale_count > 0 {
         cli::header("Stale jobs");
@@ -217,7 +260,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Resu
         }
     }
 
-    Ok(())
+    Ok(health)
 }
 
 /// Trigger a job manually by slug, queuing it for the scheduler.
@@ -341,7 +384,15 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
         JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),
         JobsAction::Healthcheck => {
             let (cfg, registry, pool) = init_stack(config_dir)?;
-            run_healthcheck(&cfg, &registry, &pool)
+            let health = run_healthcheck(&cfg, &registry, &pool)?;
+
+            // CI usability: a non-healthy result must be distinguishable
+            // from a healthy one by exit code (see `JobHealth::exit_code`).
+            if health != JobHealth::Healthy {
+                std::process::exit(health.exit_code());
+            }
+
+            Ok(())
         }
     }
 }
@@ -352,6 +403,23 @@ mod tests {
 
     fn run(status: JobStatus) -> JobRun {
         JobRun::builder("r", "cleanup").status(status).build()
+    }
+
+    /// Regression: `jobs healthcheck` used to exit 0 regardless of the
+    /// result, so a CI gate on it never fired.
+    #[test]
+    fn healthcheck_classification_and_exit_codes() {
+        assert_eq!(classify_health(0, 0, 0, 0), JobHealth::Healthy);
+        assert_eq!(classify_health(0, 1, 0, 0), JobHealth::Warning);
+        assert_eq!(classify_health(0, 0, 3, 0), JobHealth::Warning);
+        assert_eq!(classify_health(0, 0, 0, 2), JobHealth::Warning);
+        // Stale wins over every warning signal.
+        assert_eq!(classify_health(1, 5, 5, 5), JobHealth::Unhealthy);
+
+        assert_eq!(JobHealth::Healthy.exit_code(), 0);
+        assert_eq!(JobHealth::Warning.exit_code(), 2);
+        assert_eq!(JobHealth::Unhealthy.exit_code(), 1);
+        assert_eq!(JobHealth::Unhealthy.label(), "unhealthy");
     }
 
     #[test]

@@ -32,7 +32,7 @@ The default Light theme is defined in `:root` CSS custom properties in `static/s
   /* ... */
 }
 
-/* Dark theme override (themes.css) */
+/* Dark theme override (styles/themes/default.css) */
 html[data-theme="tokyo-night"] {
   color-scheme: dark;
   --color-primary: #7aa2f7;
@@ -48,7 +48,8 @@ To create a custom theme, add a CSS file in your config directory's `static/` fo
 
 ### 1. Create the theme CSS
 
-Create `static/themes-custom.css` in your config directory:
+Create `static/styles/themes/themes-acme.css` in your config
+directory (the same `styles/themes/` folder step 2 wires up):
 
 ```css
 html[data-theme="my-theme"] {
@@ -153,9 +154,19 @@ Override `templates/layout/header.hbs` and add a button to the `.theme-picker__d
 
 ```html
 <button type="button" class="theme-picker__option" data-theme-value="my-theme">
-  <span class="theme-picker__swatch" style="background:#f8fafc"></span>
+  <span class="theme-picker__swatch"></span>
   My Theme
 </button>
+```
+
+Color the swatch from CSS (the admin CSP has no `'unsafe-inline'`
+for styles, so an inline `style=` attribute would be blocked) — add
+to your theme stylesheet:
+
+```css
+.theme-picker__option[data-theme-value="my-theme"] .theme-picker__swatch {
+  background: #f8fafc;
+}
 ```
 
 ## CSS Custom Properties Reference

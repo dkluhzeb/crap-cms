@@ -35,6 +35,7 @@
 
 import { css } from './_internal/css.js';
 import { clear, h } from './_internal/h.js';
+import { EV_PILL_REMOVED } from './events.js';
 
 /**
  * @typedef {{
@@ -185,7 +186,7 @@ export class CrapPillList extends HTMLElement {
   /** @param {string} id */
   _emitRemoved(id) {
     this.dispatchEvent(
-      new CustomEvent('crap:pill-removed', {
+      new CustomEvent(EV_PILL_REMOVED, {
         bubbles: true,
         composed: true,
         detail: { id },

@@ -35,8 +35,10 @@ use crate::{
 pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
         RuntimeError(
-            "crap.collections CRUD functions are only available inside hooks \
-             with transaction context (before_change, before_delete, etc.)"
+            "crap.collections CRUD functions need a database context — call \
+             them inside a lifecycle hook (before_change, before_delete, \
+             etc.), a job handler, a custom route handler, or wrap the call \
+             in crap.transaction(fn)"
                 .into(),
         )
     })?;
@@ -157,6 +159,6 @@ mod tests {
         let Err(err) = get_tx_conn(&lua) else {
             panic!("expected error when called outside hook context");
         };
-        assert!(err.to_string().contains("only available inside hooks"));
+        assert!(err.to_string().contains("need a database context"));
     }
 }

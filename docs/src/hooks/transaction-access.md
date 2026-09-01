@@ -51,12 +51,20 @@ If any hook (before or after) returns an error or throws a Lua error, the entire
 
 ## Calling CRUD Outside Hooks
 
-Calling `crap.collections.find()` etc. outside a hook context (no active transaction) results in an error:
+Calling `crap.collections.find()` etc. in a context with no database
+connection (e.g. at the top level of a definition file) results in an error:
 
 ```
-crap.collections CRUD functions are only available inside hooks
-with transaction context (before_change, before_delete, etc.)
+crap.collections CRUD functions need a database context — call
+them inside a lifecycle hook (before_change, before_delete,
+etc.), a job handler, a custom route handler, or wrap the call
+in crap.transaction(fn)
 ```
+
+Job handlers and custom route handlers run in **pool mode**: each CRUD
+call batch pulls a fresh connection and opens its own transaction.
+`crap.transaction(fn)` gives the same explicit transactional block
+anywhere a pool context is available.
 
 ## on_init Hooks
 
@@ -92,8 +100,8 @@ If an `on_init` hook fails, the server aborts startup.
 
 ## Access Control Functions
 
-Collection, global, and field-level access control functions run with CRUD access inside their own transaction. Each access check gets a dedicated transaction that commits on success or rolls back on error. (Which keys each surface honors — e.g. collections expose `read`/`draft`/`trash`/`versions`/`create`/`update`/`delete` while globals expose only `read`/`draft`/`update`/`versions` — is covered in [Access Control](../access-control/overview.md); the transaction behavior here applies to all of them.)
+Collection, global, and field-level access control functions run with CRUD access **on the calling operation's connection**. For write operations that means they run inside the operation's transaction (an access function's own writes roll back with the operation); for reads there is no transaction — each statement auto-commits. Access checks do **not** get a dedicated transaction of their own, so keep access functions read-only. (Which keys each surface honors — e.g. collections expose `read`/`draft`/`trash`/`versions`/`create`/`update`/`delete` while globals expose only `read`/`draft`/`update`/`versions` — is covered in [Access Control](../access-control/overview.md); the transaction behavior here applies to all of them.)
 
 ## Auth Strategies
 
-Custom auth strategy `authenticate` functions run with CRUD access inside a transaction. All strategies for a given request share a single transaction — if a strategy authenticates successfully, the transaction commits. If all strategies fail, the transaction rolls back.
+Custom auth strategy `authenticate` functions run with CRUD access on the request's pooled connection, **without a transaction wrapper**: any write a strategy performs is applied immediately and is **not rolled back** if the strategy — or the rest of the login — subsequently fails. Keep strategy side effects idempotent (e.g. an upsert-style "find or create user"), or avoid writes in strategies entirely.

@@ -9,7 +9,7 @@ use crate::{
     cli,
     commands::{export::file::ExportFile, load_config_and_sync},
     config::{CrapConfig, LocaleConfig},
-    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Registry},
     db::{
         DbConnection, DbValue,
         query::{self, helpers::prefixed_name},
@@ -265,6 +265,8 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -
         export_file.collections.keys().cloned().collect()
     };
 
+    check_import_slugs(&registry, &slugs)?;
+
     let mut total_imported = 0usize;
 
     for slug in &slugs {
@@ -301,6 +303,31 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -
     Ok(())
 }
 
+/// Verify every collection in the import set exists in the registry BEFORE
+/// any write. Each collection commits its own transaction, so resolving
+/// slugs lazily inside the loop used to leave earlier collections imported
+/// when a later slug was unknown — a partial import with no clean way back.
+fn check_import_slugs(registry: &Registry, slugs: &[String]) -> Result<()> {
+    let unknown: Vec<&str> = slugs
+        .iter()
+        .filter(|s| registry.get_collection(s).is_none())
+        .map(String::as_str)
+        .collect();
+
+    if unknown.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "Collection(s) {} exist in the import file but not in the schema — nothing was imported",
+        unknown
+            .iter()
+            .map(|s| format!("'{s}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -308,7 +335,7 @@ mod tests {
     use super::*;
     use crate::{
         config::DatabaseConfig,
-        core::{Registry, field::RelationshipConfig},
+        core::field::RelationshipConfig,
         db::{migrate, pool},
     };
 
@@ -342,6 +369,34 @@ mod tests {
         migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
 
         (tmp, db_pool, posts_def)
+    }
+
+    /// Regression: an unknown slug must be rejected before any collection is
+    /// written (previously detected lazily, after earlier collections had
+    /// already committed).
+    #[test]
+    fn unknown_import_slugs_rejected_up_front() {
+        let shared = Registry::shared();
+        shared
+            .write()
+            .unwrap()
+            .register_collection(CollectionDefinition::new("posts"));
+        let registry = (*Registry::snapshot(&shared)).clone();
+
+        assert!(check_import_slugs(&registry, &["posts".to_string()]).is_ok());
+
+        let err = check_import_slugs(
+            &registry,
+            &[
+                "posts".to_string(),
+                "ghosts".to_string(),
+                "zombies".to_string(),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("'ghosts', 'zombies'"), "{err}");
+        assert!(err.contains("nothing was imported"), "{err}");
     }
 
     /// Regression: imported relationships must adjust `_ref_count` — the

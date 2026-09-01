@@ -77,7 +77,12 @@ pub(super) fn parse_tab_definitions(lua: &Lua, tabs_tbl: &Table) -> Result<Vec<F
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
         let def = entry?;
         deny_unknown_keys(&def, "tab", &["label", "description", "fields"])?;
-        let label = get_string(&def, "label").unwrap_or_default();
+
+        // A tab without a label renders an empty, unclickable-looking tab
+        // button — reject at load like every other required schema key.
+        let label = get_string(&def, "label")
+            .filter(|l| !l.is_empty())
+            .ok_or_else(|| anyhow!("tab definition missing required key 'label'"))?;
         let description = get_string(&def, "description");
         let fields = if let Ok(fields_tbl) = get_table(&def, "fields") {
             parse_fields(lua, &fields_tbl)?
@@ -122,6 +127,36 @@ mod tests {
         assert_eq!(fields[0].blocks[0].block_type, "paragraph");
         assert_eq!(fields[0].blocks[0].fields.len(), 1);
         assert_eq!(fields[0].blocks[0].fields[0].name, "text");
+    }
+
+    /// Regression: a tab without a `label` used to parse silently with an
+    /// empty label (rendering a blank tab button); it is now a load error,
+    /// matching the documented "label (required)" contract.
+    #[test]
+    fn parse_tab_definitions_requires_label() {
+        let lua = Lua::new();
+
+        let tabs_tbl = lua.create_table().unwrap();
+        let tab = lua.create_table().unwrap();
+        tab.set("fields", lua.create_table().unwrap()).unwrap();
+        tabs_tbl.set(1, tab).unwrap();
+
+        let err = parse_tab_definitions(&lua, &tabs_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("missing required key 'label'"),
+            "got: {err}"
+        );
+
+        let tabs_tbl = lua.create_table().unwrap();
+        let tab = lua.create_table().unwrap();
+        tab.set("label", "").unwrap();
+        tab.set("fields", lua.create_table().unwrap()).unwrap();
+        tabs_tbl.set(1, tab).unwrap();
+
+        assert!(
+            parse_tab_definitions(&lua, &tabs_tbl).is_err(),
+            "empty label rejected"
+        );
     }
 
     /// Regression: a block `type` must be a valid slug, like every other

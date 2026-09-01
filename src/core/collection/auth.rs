@@ -258,9 +258,9 @@ pub enum AuthMethod {
         /// `{ collection, user, surface, headers }`; return `false`/`nil` to
         /// skip MFA for this login, anything truthy to require it. Lets MFA
         /// apply per surface (`ctx.surface == "grpc"`) or per user field
-        /// (`ctx.user.mfa_enabled`). Only meaningful with `mfa = "email"`;
-        /// no hook = MFA always required. A hook error fails CLOSED
-        /// (requires MFA).
+        /// (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode
+        /// (`"email"` or `"custom"`); no hook = MFA always required. A
+        /// hook error fails CLOSED (requires MFA).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[lua(ty = "string | crap.HookRef", optional)]
         mfa_when: Option<HookRef>,

@@ -64,7 +64,7 @@ On `crap-cms serve` startup, a one-line notice prints when a newer release is in
 check_on_startup = false
 ```
 
-**Distro-managed installs refuse self-update.** If the running binary lives under `/usr/`, `/opt/`, or `/nix/`, `crap-cms update` refuses with a message telling you to update via your package manager. Use `--force` to bypass.
+**Distro-managed installs refuse self-update.** If the running binary (after resolving symlinks) lives under `/usr/`, `/opt/`, `/nix/`, `/bin/` or `/sbin/`, `crap-cms update` refuses with a message telling you to update via your package manager. Use `--force` to bypass.
 
 **Windows.** `crap-cms update install` / `use` / the bare `crap-cms update` are not supported on Windows yet — the version-store layout uses symlinks, which require Developer Mode or admin privileges on Windows. The read-only subcommands (`check`, `list`, `where`) still work. Windows users should download `crap-cms-windows-x86_64.exe` manually from the [releases page](https://github.com/dkluhzeb/crap-cms/releases/latest) and replace their binary to upgrade.
 

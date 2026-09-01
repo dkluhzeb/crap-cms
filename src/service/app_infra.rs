@@ -37,8 +37,8 @@ use crate::{
     config::{CrapConfig, LocaleConfig, PasswordPolicy},
     core::{
         Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
-        SharedTokenProvider, auth::JwtTokenProvider, cache::create_cache, email::EmailRenderer,
-        event::InProcessInvalidationBus,
+        SharedTokenProvider, auth::JwtTokenProvider, cache::create_cache_with_lease,
+        email::EmailRenderer, event::InProcessInvalidationBus,
     },
     db::{DbPool, SharedPopulateSingleflight, Singleflight},
     hooks::HookRunner,
@@ -100,12 +100,15 @@ impl AppInfra {
             .invalidation_transport
             .unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
 
+        // Lease taken before `p.hook_runner` moves into the builder below.
+        let cache = create_cache_with_lease(&p.config.cache, p.hook_runner.lua_lease())?;
+
         Ok(Arc::new(
             Self::builder()
                 .pool(p.pool)
                 .registry(p.registry)
                 .hook_runner(p.hook_runner)
-                .cache(create_cache(&p.config.cache)?)
+                .cache(cache)
                 .storage(p.storage)
                 .event_transport(p.event_transport)
                 .invalidation_transport(invalidation_transport)

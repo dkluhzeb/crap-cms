@@ -27,7 +27,7 @@ Each option is a table with:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `label` | string | Display text in the admin UI |
+| `label` | string \| table | Display text in the admin UI. Supports [localized strings](../locale/overview.md#admin-label-localization) (`{ en = "Red", de = "Rot" }`). |
 | `value` | string | Stored value in the database |
 
 ## Multi-Value (`has_many`)

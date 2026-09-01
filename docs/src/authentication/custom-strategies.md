@@ -99,12 +99,21 @@ Strategy functions have full CRUD access (via the same TxContext pattern as hook
 
 ## Execution Order
 
-For every request (admin or gRPC):
+For every request (admin or gRPC) the evaluator applies a **fixed precedence** — not the order methods are declared:
 
-1. The evaluator walks every registered auth collection's `methods` in declaration order.
-2. For each method, it checks: (a) the surface filter includes the current request's surface, and (b) the activation discriminator matches (for `strategy`: the named header is present, or `always = true`).
-3. The first method that matches and produces a principal wins.
-4. If no method matches, the request is anonymous.
+1. **Bearer JWT** (`Authorization: Bearer …` / gRPC metadata) — accepted only if the *issuing* collection (named in the claims) lists `bearer` for the current surface.
+2. **Session cookie** (`crap_session`, admin only) — accepted only if the issuing collection lists `session_cookie` for the surface.
+3. **Always-active strategies** (`activates_on = { always = true }`) whose `surfaces` include the current surface.
+4. **Header-activated strategies** — looked up by the request's header names; only strategies whose `activates_on.header` is present on the request run.
+
+The first credential that authenticates wins. Within one collection, strategies run in declaration order; across collections the order is unspecified (`crap-cms status` warns about strategies that could collide). If no path produces a principal, the request is anonymous.
+
+Two consequences worth knowing:
+
+- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
+- A credential that is valid but **not accepted** by any method (its collection dropped `bearer`/`session_cookie` for this surface, and no strategy fired) is also rejected rather than treated as anonymous, so a stale cookie cannot loop the browser.
+
+The **login path** (admin form POST, gRPC `Login`) is separate: the submitted email/password go to `password_login` first, then to each strategy whose `surfaces` include the login surface **and** whose `activates_on` matches the request (an `always` strategy, or one whose header is present). A strategy scoped to `surfaces = {"grpc"}` never runs on the admin form.
 
 Each strategy is bound to its own activation signal — cross-collection accidental authentication is structurally impossible.
 
@@ -127,7 +136,7 @@ auth = {
 When `password_login` is absent:
 - The login form shows a message instead of email/password inputs.
 - Only the listed strategy methods can authenticate users.
-- The `Login` gRPC RPC for this collection returns `INVALID_ARGUMENT`.
+- The `Login` gRPC RPC returns `PERMISSION_DENIED` ("Local login is disabled") when the collection has **no strategies either**. With strategies present, `Login` still offers the submitted credentials to every strategy whose `surfaces` include `grpc` and whose `activates_on` matches the request — so a header-activated API-key strategy is unreachable from `Login` unless the header is sent, while an `always` strategy on `grpc` can implement its own credential check.
 
 Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually paired with omitting `password_login` since the JWT can't be issued without it).
 
@@ -274,15 +283,21 @@ To initiate the OAuth flow, add a link on your login page pointing to the provid
 
 ## Email MFA
 
-Auth collections can require a second factor after password verification:
+Auth collections can require a second factor after password verification. MFA is a property of the `password_login` method:
 
 ```lua
 auth = {
-    mfa = "email",  -- "email", "custom", or false (default)
+    methods = {
+        { type = "password_login", mfa = "email" },  -- "email", "custom", or omit for none
+        { type = "bearer" },
+        { type = "session_cookie" },
+    },
 }
 ```
 
-When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns an `mfa_challenge` token and the `VerifyMfa` RPC completes the login.
+When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns `mfa_required = true` plus an `mfa_challenge` token and the `VerifyMfa` RPC completes the login (see [gRPC Authentication](../grpc-api/authentication.md#email-mfa)).
+
+**Throttling.** Code *guesses* are limited per user and per IP on both surfaces (the admin MFA page and gRPC `VerifyMfa`), independently of the login limiter — knowing the password does not reset the guess budget. Code *issuance* is throttled on the admin login only: a user who re-submits the login form while over the forgot-password budget is not sent a new code — the previously issued (still valid) code is reused. gRPC `Login` has no issuance throttle beyond the login rate limits, since every `Login` call already costs an Argon2 verification.
 
 ### Custom delivery (`mfa = "custom"`)
 

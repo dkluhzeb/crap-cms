@@ -357,6 +357,47 @@ async fn subscriber_dropped_when_user_locked() {
     }
 }
 
+/// Regression: `SubscribeRequest.token` (the documented alternative to the
+/// `authorization` metadata) was never read — every body-token subscription
+/// silently ran anonymously. The lock-invalidation path only fires for an
+/// authenticated subscriber, so a terminal `PermissionDenied` here proves the
+/// body token established identity.
+#[tokio::test]
+async fn subscriber_authenticated_via_request_token_field() {
+    let ts = setup_service(1024, 1000, vec![make_posts_def(), make_users_def()]);
+
+    let (user_id, token) = create_user_and_login(&ts, "t@test.com", "password1").await;
+
+    let sub_req = Request::new(content::SubscribeRequest {
+        collections: vec!["posts".to_string()],
+        token: token.clone(),
+        ..Default::default()
+    });
+    let mut stream = ts.service.subscribe(sub_req).await.unwrap().into_inner();
+
+    let mut lock_req = Request::new(content::AccountActionRequest {
+        collection: "users".to_string(),
+        id: user_id,
+    });
+    add_auth(&mut lock_req, &token);
+    ts.service.lock_account(lock_req).await.unwrap();
+
+    let result = timeout(Duration::from_secs(3), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(status)) => return Some(status),
+                None => return None,
+            }
+        }
+    })
+    .await
+    .expect("stream must terminate within deadline");
+
+    let status = result.expect("stream ended without a terminal status");
+    assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+}
+
 #[tokio::test]
 async fn subscriber_dropped_when_user_deleted() {
     let ts = setup_service(1024, 1000, vec![make_posts_def(), make_users_def()]);

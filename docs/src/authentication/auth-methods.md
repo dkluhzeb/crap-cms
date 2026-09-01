@@ -90,12 +90,21 @@ auth = {
 
 ## Evaluation order
 
-For each incoming request:
+For every request (admin or gRPC) the evaluator applies a **fixed precedence** — not the order methods are declared:
 
-1. The evaluator walks every auth collection's `methods` in declaration order.
-2. For each method, it checks (a) the surface filter matches and (b) the activation discriminator matches the request.
-3. The first method that matches and produces a principal wins; the request proceeds authenticated as that principal.
-4. If no method matches, the request is anonymous.
+1. **Bearer JWT** (`Authorization: Bearer …` / gRPC metadata) — accepted only if the *issuing* collection (named in the claims) lists `bearer` for the current surface.
+2. **Session cookie** (`crap_session`, admin only) — accepted only if the issuing collection lists `session_cookie` for the surface.
+3. **Always-active strategies** (`activates_on = { always = true }`) whose `surfaces` include the current surface.
+4. **Header-activated strategies** — looked up by the request's header names; only strategies whose `activates_on.header` is present on the request run.
+
+The first credential that authenticates wins. Within one collection, strategies run in declaration order; across collections the order is unspecified (`crap-cms status` warns about strategies that could collide). If no path produces a principal, the request is anonymous.
+
+Two consequences worth knowing:
+
+- A credential that **decodes but is invalid** (bad signature, expired, stale `session_version` after a password change, locked or deleted user, unknown collection) **short-circuits** the evaluation — the request is rejected (gRPC `UNAUTHENTICATED`; admin clears the cookie and redirects to login) and the remaining steps never run. A broken explicit credential is surfaced, not silently bypassed.
+- A credential that is valid but **not accepted** by any method (its collection dropped `bearer`/`session_cookie` for this surface, and no strategy fired) is also rejected rather than treated as anonymous, so a stale cookie cannot loop the browser.
+
+The **login path** (admin form POST, gRPC `Login`) is separate: the submitted email/password go to `password_login` first, then to each strategy whose `surfaces` include the login surface **and** whose `activates_on` matches the request (an `always` strategy, or one whose header is present). A strategy scoped to `surfaces = {"grpc"}` never runs on the admin form.
 
 Bearer JWTs unambiguously identify their issuing collection (claims include the collection slug), so JWTs from collection A never authenticate as collection B even if both have `bearer` in their methods.
 
@@ -163,12 +172,26 @@ end
 
 ## Validation rules (enforced at startup)
 
-- `enabled = true` with `methods = {}` → **error**.
-- More than one `password_login` → **error**.
-- More than one `bearer` → **error**.
-- `strategy` without `activates_on` → **error** (auto-defaults to `always = true` in the parser, but the startup warning fires).
-- Any `strategy` with `activates_on = { always = true }` → **warning** in the logs.
-- Multiple always-active strategies on the same surface → **louder warning** (auth depends on registration order).
+Load errors (the definition file is rejected):
+
+- An explicit empty `methods = {}` (omit the key to get the defaults instead).
+- An unknown key on `auth` or on any method, or an unknown method `type`.
+- A `strategy` without a non-empty `authenticate` hook ref.
+- A `strategy` without `activates_on` (`{ header = "x-..." }` or `{ always = true }`).
+
+Startup errors (boot fails):
+
+- More than one `password_login` or more than one `bearer` on one collection.
+- Any method with an empty `surfaces` list — it could never fire.
+- `activates_on = { header = "" }` — no request carries an empty header name.
+- `mfa = "custom"` without `mfa_deliver` (or `mfa_deliver` without `mfa = "custom"`).
+- A hook ref (`authenticate`, `mfa_when`, `mfa_deliver`) that does not resolve.
+
+Startup warnings (logged, boot continues):
+
+- Any `strategy` with `activates_on = { always = true }` — it runs on every request that reaches its surfaces.
+- Multiple always-active strategies on the same surface, or multiple header-activated strategies bound to the same `(header, surface)` — the winner is unpredictable across collections.
+- A collection with `enabled = true` and no `password_login`, whose only login path is therefore a strategy.
 
 ## See also
 

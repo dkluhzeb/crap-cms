@@ -20,7 +20,10 @@ This reads as: "Show me all documents in the `posts` collection where `posts.aut
 | `on` | string | yes | Field name on the target collection that holds the reference |
 
 Both `collection` and `on` are required non-empty strings — a missing,
-wrong-typed, or empty value is a hard error at load time.
+wrong-typed, or empty value is a hard error at load time. Setting
+`required`, `localized`, or `required_locales` on a join is also a
+**hard load error** (a join is virtual and read-only, so those flags
+are meaningless — they are rejected rather than silently ignored).
 
 ## Behavior
 

@@ -487,6 +487,57 @@ async fn me_valid_token() {
     assert_eq!(get_proto_field(&user, "name").as_deref(), Some("Carol"));
 }
 
+/// Regression: `Me` used to validate the JWT directly and answer even when
+/// the issuing collection had removed `bearer` from its methods. It now runs
+/// through the shared evaluator like every other RPC.
+#[tokio::test]
+async fn me_honors_collection_methods_without_bearer() {
+    let mut def = make_users_def();
+    let mut auth = Auth::new(true);
+    auth.methods = vec![
+        AuthMethod::password_login(),
+        AuthMethod::SessionCookie {
+            surfaces: SurfaceSet::admin_only(),
+        },
+    ];
+    def.auth = Some(auth);
+    let ts = setup_service(vec![def], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "dave@example.com"),
+                ("password", "pw123456"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let token = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "dave@example.com".to_string(),
+            password: "pw123456".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token;
+    assert!(!token.is_empty(), "login should still issue a token");
+
+    let err = ts
+        .service
+        .me(Request::new(content::MeRequest { token }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+}
+
 #[tokio::test]
 async fn me_invalid_token() {
     let ts = setup_service(vec![make_users_def()], vec![]);

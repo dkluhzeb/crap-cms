@@ -13,6 +13,7 @@ use crate::{
 use super::{
     access::{register_access_init, register_access_pool},
     auth::register_auth,
+    cache::register_cache,
     collections::{register_collections_init, register_collections_pool_init},
     config::{register_config, register_locale},
     crypto::register_crypto,
@@ -60,6 +61,7 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     register_jobs_init(lua, Arc::clone(registry))?;
     register_email(lua, config)?;
     register_storage(lua)?;
+    register_cache(lua)?;
     register_richtext_init(lua, Arc::clone(registry))?;
     register_fields(lua)?;
     register_template_data(lua)?;
@@ -117,6 +119,7 @@ pub fn register_api_pool_init(
     register_jobs_pool_init(lua, Arc::clone(&registry))?;
     register_email(lua, config)?;
     register_storage(lua)?;
+    register_cache(lua)?;
     register_richtext_pool_init(lua, registry)?;
     register_fields(lua)?;
     register_template_data(lua)?;
@@ -264,7 +267,7 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
         "restore_version",
         "ref_count",
     ];
-    const GLOBAL_METHODS: &[&str] = &["get", "update"];
+    const GLOBAL_METHODS: &[&str] = &["get", "update", "unpublish", "validate"];
 
     // Typing-helper factories that exist purely so LuaLS can infer
     // callback param types via `Lua.type.inferParamType`. Each is a

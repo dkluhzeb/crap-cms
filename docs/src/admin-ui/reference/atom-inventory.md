@@ -1,11 +1,13 @@
 # Atom Inventory
 
-> **Spec doc, not yet enforced.** This page enumerates every web
-> component in `static/components/` and proposes what its stable public
-> surface should be — the version we'd commit to *not* break. It's the
-> reference for the eventual Phase 3 refactor (atomization, versioned
-> APIs, narrow stable surface). Today's components mostly already obey
-> the proposed contracts; the discrepancies are flagged.
+> **Planning document — NOT a reference.** For the current, normative
+> component reference (tags, attributes, events, what's actually
+> shipped), see **[components.md](components.md)**; where this page and
+> components.md disagree, components.md wins. This page proposes what
+> each component's stable public surface *should* become — the version
+> we'd commit to *not* break in the eventual atomization refactor.
+> Details here (tag names, tier counts, util signatures) may lag the
+> code.
 
 ## Method
 
@@ -93,7 +95,7 @@ stylesheet via `document.adoptedStyleSheets` on first connect (noted).
 | `<crap-theme-picker>`        | Theme switcher (light/dark/auto + tokyo-night etc.)                | 95   |
 | `<crap-tabs>`                | Tab keyboard nav + URL-hash sync                                   | 107  |
 | `<crap-block-picker>`        | Wraps a `<select>` of block types; emits `EV_REQUEST_ADD_BLOCK`     | 222  |
-| `<crap-uploads>`             | Drag-drop upload handler                                           | 128  |
+| `<crap-upload-preview>`      | Drag-drop upload handler                                           | 128  |
 | `<crap-back-refs>`           | Lazy-loaded back-references panel                                  | 134  |
 | `<crap-conditions>`          | Display-conditions evaluator                                       | 276  |
 | `<crap-scroll-restore>`      | Scroll position preservation across htmx swaps                     | 241  |

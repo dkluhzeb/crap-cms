@@ -57,6 +57,11 @@ pub(super) fn setup_lua() -> Lua {
             return { score = { greater_than = "50" } }
         end
 
+        function access.constrained_exists_false(ctx)
+
+            return { tenant = "a", score = { exists = false } }
+        end
+
         function access.constrained_multi_ops(ctx)
 
             return { score = { greater_than = "10", less_than = "100" } }

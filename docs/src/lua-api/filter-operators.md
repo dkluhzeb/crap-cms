@@ -1,6 +1,13 @@
 # Filter Operators
 
-Filters are used in `crap.collections.find()` queries and in access control constraint returns. They map to SQL WHERE clauses.
+Filters are used in `crap.collections.find()` / `count()` / `update_many()` / `delete_many()` queries. They map to SQL WHERE clauses.
+
+> **Access constraints use a subset.** An access function that returns a filter table
+> (`Constrained`) may only use `equals`, `not_equals`, `in`, `not_in`, `exists` and
+> `not_exists` on **flat own columns** — pattern (`like`, `contains`), ordered
+> (`greater_than`, …) and dotted-path constraints are rejected at load/evaluation time,
+> and a constraint table that produces no filters (nil-valued key, `exists = false`) is
+> a fail-closed **deny**. See [Filter Constraints](../access-control/filter-constraints.md).
 
 ## Shorthand: Simple Equality
 
@@ -34,8 +41,8 @@ Use a table to specify an operator:
 | `less_than_or_equal` | `{ less_than_or_equal = "10" }` | `field <= ?` | Less than or equal |
 | `in` | `{ ["in"] = { "a", "b" } }` | `field IN (?, ?)` | Value in list |
 | `not_in` | `{ not_in = { "a", "b" } }` | `field NOT IN (?, ?)` | Value not in list |
-| `exists` | `{ exists = true }` | `field IS NOT NULL` | Field is not null (value is ignored — only the key matters) |
-| `not_exists` | `{ not_exists = true }` | `field IS NULL` | Field is null (value is ignored — use `not_exists` for IS NULL, not `{ exists = false }`) |
+| `exists` | `{ exists = true }` | `field IS NOT NULL` | Field is not null. Only `true` is accepted — `exists = false` is a hard error, not IS NULL |
+| `not_exists` | `{ not_exists = true }` | `field IS NULL` | Field is null. Only `true` is accepted — use this for IS NULL, never `{ exists = false }` |
 
 > **Note:** `in` is a Lua keyword, so use `["in"]` bracket syntax.
 
@@ -191,7 +198,7 @@ type.
 |------------|---------------------|-------|
 | `number` | REAL | Filter value is parsed as a 64-bit float. Invalid input (non-numeric, `NaN`, `Infinity`) falls back to TEXT and logs a warning — the query still runs and will typically return no rows. |
 | `checkbox` | INTEGER (`0` / `1`) | Accepts `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`, `"on"`, `"off"`. Anything else falls back to TEXT with a warning. |
-| `date` | TEXT (normalized ISO) | Stored as ISO-8601 strings; the filter value is normalized via the date coercer (e.g. `"2024-01-15"` → `"2024-01-15T00:00:00.000Z"`) so lexicographic comparison aligns with stored values. |
+| `date` | TEXT (normalized ISO) | Stored as ISO-8601 strings; the filter value is normalized via the date coercer (e.g. `"2024-01-15"` → `"2024-01-15T12:00:00.000Z"`, **UTC noon** — the same normalization used when storing `dayOnly` values) so lexicographic comparison aligns with stored values. A bare-date `equals` therefore matches `dayOnly`-stored rows exactly. For range filters on full-timestamp fields note the noon anchor: `greater_than "2024-01-15"` means *after noon UTC* that day — pass an explicit time (`"2024-01-15T00:00:00Z"`) to bound at midnight. |
 | `text`, `textarea`, `email`, `select`, `radio`, `json`, `code`, `richtext` | TEXT | Bound as-is. |
 | Field type unknown / not resolved | TEXT | Default fallback when the caller cannot determine the field type. |
 

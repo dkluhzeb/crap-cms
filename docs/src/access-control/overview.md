@@ -60,11 +60,14 @@ single-`read`-rule model could not:
 - **Drafts-only reviewer** — grant `draft`, deny `read`: sees unpublished work, not the live site.
 - **Read live but not history** — grant `read`, deny `versions`.
 
-**Reads downgrade; writes deny.** If a caller asks for drafts but lacks `draft`
-access, they silently receive published content only — no error. A denied write
-(`create`/`update`/`delete`) returns a 403 instead. The reasoning: a read asking
-for "more" can safely fall back to "what you're allowed to see", whereas a write
-is a single privileged action with no safe fallback.
+**Reads downgrade on the status axis; everything else denies.** If a caller asks
+for drafts but lacks `draft` access, they silently receive published content only
+— no error — because drafts are a *superset* of the published view, so falling
+back to "what you're allowed to see" loses nothing the caller could have read.
+The `trash` view (`trash = true`) and version history (`list_versions`) are
+*different sets*, not supersets, so a denied `trash`/`versions` gate returns an
+access-denied error rather than silently substituting live rows. A denied write
+(`create`/`update`/`delete`) returns a 403.
 
 You never write a `_status` filter yourself — each key scopes its own view. See
 [Collection-Level](collection-level.md) for the per-key configuration and
@@ -97,6 +100,8 @@ end
 | `user` | table or nil | Always | Full user document from the auth collection. `nil` if no auth or anonymous. |
 | `id` | string or nil | update, delete, find_by_id | Document ID |
 | `data` | table or nil | create, update | The **incoming** data being written — *not* the existing stored row. To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** (e.g. `return { author_id = ctx.user.id }`); the system enforces that the target row matches it. |
+| `options` | table or nil | When the rule was registered as `{ ref = "...", options = { ... } }` | The static options table attached to the hook ref — lets one access function serve several collections with different parameters. |
+| `document` | — | *Never at collection level* | Collection rules see only `data` (the incoming write). `ctx.document` (the stored row) exists **only in field-level rules** — see [Field-Level](field-level.md). To gate on stored values at collection level, return a filter table. |
 | `locale` | string or nil | When localization enabled | The content locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
 | `ui_locale` | string or nil | Authenticated requests | The acting user's admin-UI language preference. Set on every surface for authenticated actors — admin requests use the session's UI locale, API surfaces resolve the user's stored preference — for writes and reads alike; `nil` for anonymous/internal checks. Distinct from `locale` (the content locale). |
 
@@ -155,8 +160,9 @@ end
 ```
 
 `operation` accepts only the CRUD-gate keys: `"read"`, `"create"`, `"update"`,
-`"delete"`, `"trash"` for collections, and `"read"`, `"update"` for globals. Any
-other value (including `"draft"`, `"versions"`, `"find"`, `"count"`) raises an
-error. These are distinct from the broader `ctx.operation` values the engine
+`"delete"`, `"trash"` and `"unlock"` for collections (`trash` and `unlock` fall
+back to the `update` rule when unset, exactly as at enforcement time), and
+`"read"`, `"update"` for globals. Any other value (including `"draft"`,
+`"versions"`, `"find"`, `"count"`) raises an error. These are distinct from the broader `ctx.operation` values the engine
 passes *into* an access function (see the table above) — `crap.access.check`
 re-evaluates a CRUD gate, it does not probe every internal operation.

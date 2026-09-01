@@ -110,12 +110,15 @@ fn collections_schema(
 /// Build the schema map for all globals.
 fn globals_schema(
     registry: &Registry,
+    config: &CrapConfig,
     exposure: &McpExposure,
 ) -> BTreeMap<String, GlobalSchemaEntry> {
     let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.globals {
-        if !exposure.allows(slug) {
+        // Mirrors the tool listing + execution filter: config include/exclude
+        // lists apply to globals by slug as well as `access.mcp`.
+        if !should_include(slug, &config.mcp) || !exposure.allows(slug) {
             continue;
         }
         schemas.insert(
@@ -153,7 +156,7 @@ pub(in crate::mcp) fn read_resource(
             ))
         }
         "crap://schema/globals" => {
-            let schemas = globals_schema(registry, exposure);
+            let schemas = globals_schema(registry, config, exposure);
             Some(json_resource(
                 uri,
                 serialize_pretty(&schemas, "global schemas"),

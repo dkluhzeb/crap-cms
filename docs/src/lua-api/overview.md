@@ -21,9 +21,15 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 | `crap.locale` | Locale configuration queries |
 | `crap.email` | Send/queue email via the configured provider; register a custom provider (`crap.email.register`) |
 | `crap.storage` | Register a custom upload-storage backend (`crap.storage.register`, for `[upload] storage = "custom"`) |
+| `crap.cache` | Register a custom cross-request cache backend (`crap.cache.register`, for `[cache] backend = "custom"`) — see [crap.cache](cache.md) |
 | `crap.crypto` | Cryptographic utilities (HMAC, random bytes, hashing) |
 | `crap.schema` | Runtime schema introspection |
 | `crap.richtext` | Custom rich text node registration |
+| `crap.access` | Re-evaluate a collection/global access gate from Lua (`crap.access.check`) — see [Access Control](../access-control/overview.md#programmatic-access-checks) |
+| `crap.json` | JSON encode/decode — see [crap.json](json.md) |
+| `crap.routes` | Custom HTTP endpoints (`crap.routes.register`, `crap.routes.list`) — see [crap.routes](routes.md) |
+| `crap.pages` | Custom admin pages (`crap.pages.register`) — see [Custom Pages](../admin-ui/scenarios/05-custom-page.md) |
+| `crap.template_data` | Extra data injected into admin templates (`crap.template_data.register`) — see [Template Data](../admin-ui/scenarios/04-dashboard-widget.md) |
 
 ## Typed hook factories
 
@@ -87,24 +93,39 @@ for the full surface of each accessor.
 ## CRUD Availability
 
 CRUD functions (whether called as `crap.collections.<slug>.find(...)` or
-`crap.collections.find(slug, ...)`, and `crap.globals.<slug>.{get,update}(...)`
-or the slug-keyed equivalents) are **only available inside hooks with
-transaction context**:
+`crap.collections.find(slug, ...)`, and the `crap.globals` equivalents) are
+available in every context that carries a database connection:
 
-- `before_validate` hooks — Yes
-- `before_change` hooks — Yes
-- `before_delete` hooks — Yes
-- `after_change` hooks — Yes (runs inside the same transaction via `run_hooks_with_conn`)
-- `after_delete` hooks — Yes (runs inside the same transaction via `run_hooks_with_conn`)
-- `after_read` hooks — No (no transaction)
-- `before_read` hooks — No (no transaction)
-- Collection definition files — No
+**Conn-mode** (shares the parent operation's transaction):
 
-Calling CRUD functions outside of transaction context results in an error:
+- `before_validate` / `before_change` / `before_delete` hooks — Yes
+- `after_change` / `after_delete` hooks — Yes (same transaction via `run_hooks_with_conn`)
+- `on_init` hooks — Yes (one shared startup transaction)
+- Access-control functions — Yes (on the calling operation's connection)
+- Custom auth strategies — Yes (on the request's connection; see
+  [Transaction & CRUD Access](../hooks/transaction-access.md) for the
+  rollback caveat)
+
+**Pool-mode** (opens its own transaction per CRUD call batch):
+
+- Job handlers — Yes
+- Custom route handlers — Yes
+- `crap.transaction(fn)` — Yes (explicit transaction block)
+
+**No CRUD:**
+
+- `before_read` / `after_read` hooks — No (no connection; `after_read` is a
+  per-document transform)
+- `before_render` / `before_broadcast` hooks — No
+- Collection definition files — No (definitions load before the DB is ready)
+
+Calling CRUD functions anywhere else results in an error:
 
 ```
-crap.collections CRUD functions are only available inside hooks
-with transaction context (before_change, before_delete, etc.)
+crap.collections CRUD functions need a database context — call
+them inside a lifecycle hook (before_change, before_delete,
+etc.), a job handler, a custom route handler, or wrap the call
+in crap.transaction(fn)
 ```
 
 ## Lua VM Architecture

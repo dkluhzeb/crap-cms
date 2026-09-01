@@ -77,7 +77,7 @@ Slots can pass per-invocation data the slot file sees at the root:
 
 ```hbs
 {{!-- Built-in template invokes the slot with hash params --}}
-{{slot "field_help" name=field.name kind=field.field_type}}
+{{slot "field_help" name=name kind=field_type label=label}}
 ```
 
 ```hbs
@@ -122,10 +122,12 @@ stable API.
 | `collection_edit_sidebar` | `collections/edit_sidebar.hbs` | edit-form context | extra sidebar panels on collection edit pages (related items, audit log, custom metadata) |
 | `sidebar_bottom` | `layout/sidebar.hbs` | nav context | extra navigation links pinned to the bottom of the left sidebar |
 | `login_extras` | `auth/login.hbs` | minimal auth context | additional content on the login page (compliance notices, SSO links, banner messages) |
-| `list_toolbar_actions` | `collections/items.hbs` | list context (`collection`, `documents`, `pagination`, `user`) | extra buttons in the list toolbar, next to Filters/Columns (export, bulk tools, custom views) |
-| `list_footer` | `collections/items.hbs` | list context | content below the list table/pagination (summaries, legends, totals) |
+| `list_toolbar_actions` | `collections/items.hbs` | list context (`collection`, `docs`, `pagination`, `user`) | extra buttons in the list toolbar, next to Filters/Columns (export, bulk tools, custom views) |
+| `list_footer` | `collections/items.hbs` | list context | content below the list table/pagination (summaries, legends, totals). Rendered **only when the list has rows** — it sits inside the `{{#if docs}}` branch, so an empty (filtered) result shows no footer |
 | `global_edit_toolbar` | `globals/edit.hbs` | global edit context (`global`, `user`) | extra toolbar actions on global edit pages — parity with `collection_edit_toolbar` |
 | `global_edit_sidebar` | `globals/edit_sidebar.hbs` | global edit context | extra sidebar panels on global edit pages — parity with `collection_edit_sidebar` |
+| `breadcrumb_extras` | `partials/breadcrumb.hbs` | page context of the page showing the breadcrumb | extra content at the end of the breadcrumb trail (environment badge, quick links) |
+| `field_help` | `partials/field.hbs` | per-field: `name`, `kind` (field type), `label` | extra help content rendered under a specific field's input — match on `name` or `kind` |
 
 ## Worked example — dashboard weather widget
 

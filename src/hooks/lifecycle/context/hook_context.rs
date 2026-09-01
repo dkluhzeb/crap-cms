@@ -55,9 +55,10 @@ pub struct HookContext {
     /// `true` when this is a draft save (only set for collections with
     /// `versions.drafts` enabled).
     pub draft: Option<bool>,
-    /// Request-scoped shared table that persists from `before_validate`
-    /// through `after_change` within one request. Only JSON-compatible
-    /// values survive (no functions / userdata).
+    /// Operation-scoped shared table that persists from `before_validate`
+    /// through `after_change` within one write operation (or `before_read`
+    /// → `after_read` for one read) — NOT across the whole HTTP request.
+    /// Only JSON-compatible values survive (no functions / userdata).
     #[lua(ty = "table<string, any>")]
     pub context: ReqContext,
     /// Authenticated user document (nil if unauthenticated or no auth

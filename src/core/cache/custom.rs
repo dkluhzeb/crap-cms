@@ -1,95 +1,150 @@
 //! Custom Lua-delegated cache backend.
 //!
-//! Delegates all cache operations to user-provided Lua functions
-//! registered via `crap.cache.register({ get, set, delete, clear, has })`.
+//! Delegates all cache operations to user-provided Lua functions registered
+//! via `crap.cache.register({ get, set, delete, clear, has })` in `init.lua`.
+//! The VM that runs the functions is supplied by a [`LuaVmLease`] — the hook
+//! runner's pooled lease for external callers (the populate cache on the
+//! gRPC/admin/MCP read surfaces), or a `LocalLease` over the current VM when
+//! used from inside a pool VM (write-through `clear_cache` from hooks and job
+//! handlers), mirroring the custom upload-storage backend.
+
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
-use mlua::{Function, Lua};
+use mlua::{Function, Lua, Table, Value};
 
 use crate::core::cache::CacheBackend;
+use crate::core::lua_lease::LuaVmLease;
 
 /// Custom cache backend that delegates to Lua functions.
-///
-/// The Lua functions are stored in `crap._cache` and called
-/// synchronously via the hook runner's Lua VM pool.
 pub struct CustomCache {
-    lua: Lua,
+    lease: Arc<dyn LuaVmLease>,
 }
 
 impl CustomCache {
-    /// Create a new custom cache backend.
-    /// The Lua state must have `crap._cache` functions registered.
+    /// Create a new custom cache backend backed by `lease`. The leased VM
+    /// must have `crap._cache` registered (via `init.lua`).
     #[must_use]
-    pub fn new(lua: Lua) -> Self {
-        Self { lua }
+    pub fn new(lease: Arc<dyn LuaVmLease>) -> Self {
+        Self { lease }
     }
 
-    /// Get a registered cache function from the Lua state.
-    fn get_fn(&self, name: &str) -> Result<Function> {
-        let crap: mlua::Table = self
-            .lua
-            .globals()
-            .get("crap")
-            .map_err(|e| anyhow!("crap global not found: {e}"))?;
-
-        let cache: mlua::Table = crap
-            .get("_cache")
-            .map_err(|e| anyhow!("crap._cache not found: {e}"))?;
-
-        cache
-            .get(name)
-            .map_err(|e| anyhow!("crap._cache.{name} not found: {e}"))
+    /// Verify that `crap.cache.register` was called on the leased VM. Run
+    /// once at startup so a missing registration fails the boot with a clear
+    /// message instead of erroring on the first cached read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no `crap._cache` handler table is registered or
+    /// the lease cannot supply a VM.
+    pub fn verify_registered(&self) -> Result<()> {
+        self.lease.with_vm(&mut |lua| {
+            cache_table(lua)?;
+            Ok(())
+        })
     }
+}
+
+/// Look up the registered `crap._cache` handler table on a VM.
+fn cache_table(lua: &Lua) -> Result<Table> {
+    let crap: Table = lua
+        .globals()
+        .get("crap")
+        .map_err(|e| anyhow!("crap global not found: {e}"))?;
+
+    crap.get("_cache").map_err(|_| {
+        anyhow!(
+            "[cache] backend = \"custom\" but no handler is registered — \
+             call crap.cache.register({{ get, set, delete, clear }}) in init.lua"
+        )
+    })
+}
+
+/// Look up a registered `crap._cache.<name>` function on a VM.
+fn cache_fn(lua: &Lua, name: &str) -> Result<Function> {
+    cache_table(lua)?
+        .get(name)
+        .map_err(|e| anyhow!("crap._cache.{name} not found: {e}"))
 }
 
 impl CacheBackend for CustomCache {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let func = self.get_fn("get")?;
-        let result: mlua::Value = func
-            .call(key.to_string())
-            .map_err(|e| anyhow!("custom cache get error: {e:#}"))?;
+        // Contract: the handler returns the value (a binary-safe string) on
+        // hit, `nil` on miss, and *raises* only on a real failure — which
+        // propagates like a Redis error would.
+        let mut out: Option<Vec<u8>> = None;
 
-        match result {
-            mlua::Value::Nil => Ok(None),
-            mlua::Value::String(s) => Ok(Some(s.as_bytes().to_vec())),
-            other => bail!("custom cache get returned unexpected type: {other:?}"),
-        }
+        self.lease.with_vm(&mut |lua| {
+            let func = cache_fn(lua, "get")?;
+            let result: Value = func
+                .call(key.to_string())
+                .map_err(|e| anyhow!("custom cache get error: {e:#}"))?;
+
+            out = match result {
+                Value::Nil => None,
+                Value::String(s) => Some(s.as_bytes().to_vec()),
+                other => bail!("custom cache get returned unexpected type: {other:?}"),
+            };
+
+            Ok(())
+        })?;
+
+        Ok(out)
     }
 
     fn set(&self, key: &str, value: &[u8]) -> Result<()> {
-        let func = self.get_fn("set")?;
+        self.lease.with_vm(&mut |lua| {
+            let func = cache_fn(lua, "set")?;
+            // Pass binary data as a Lua string (byte-exact, no UTF-8 demand).
+            func.call::<()>((key.to_string(), lua.create_string(value)?))
+                .map_err(|e| anyhow!("custom cache set error: {e:#}"))?;
 
-        func.call::<()>((key.to_string(), self.lua.create_string(value)?))
-            .map_err(|e| anyhow!("custom cache set error: {e:#}"))
+            Ok(())
+        })
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let func = self.get_fn("delete")?;
+        self.lease.with_vm(&mut |lua| {
+            let func = cache_fn(lua, "delete")?;
+            func.call::<()>(key.to_string())
+                .map_err(|e| anyhow!("custom cache delete error: {e:#}"))?;
 
-        func.call::<()>(key.to_string())
-            .map_err(|e| anyhow!("custom cache delete error: {e:#}"))
+            Ok(())
+        })
     }
 
     fn clear(&self) -> Result<()> {
-        let func = self.get_fn("clear")?;
+        self.lease.with_vm(&mut |lua| {
+            let func = cache_fn(lua, "clear")?;
+            func.call::<()>(())
+                .map_err(|e| anyhow!("custom cache clear error: {e:#}"))?;
 
-        func.call::<()>(())
-            .map_err(|e| anyhow!("custom cache clear error: {e:#}"))
+            Ok(())
+        })
     }
 
     fn has(&self, key: &str) -> Result<bool> {
-        match self.get_fn("has") {
-            Ok(func) => {
-                let result: bool = func
+        let mut out = false;
+
+        self.lease.with_vm(&mut |lua| {
+            let tbl = cache_table(lua)?;
+
+            // `has` is optional: fall back to a `get` probe when absent.
+            out = if let Ok(Value::Function(func)) = tbl.get::<Value>("has") {
+                func.call(key.to_string())
+                    .map_err(|e| anyhow!("custom cache has error: {e:#}"))?
+            } else {
+                let get: Function = cache_fn(lua, "get")?;
+                let result: Value = get
                     .call(key.to_string())
-                    .map_err(|e| anyhow!("custom cache has error: {e:#}"))?;
-                Ok(result)
-            }
-            Err(_) => {
-                // Fallback: use get and check for nil
-                Ok(self.get(key)?.is_some())
-            }
-        }
+                    .map_err(|e| anyhow!("custom cache get error: {e:#}"))?;
+                !matches!(result, Value::Nil)
+            };
+
+            Ok(())
+        })?;
+
+        Ok(out)
     }
 
     fn kind(&self) -> &'static str {
@@ -100,59 +155,54 @@ impl CacheBackend for CustomCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::cache::CacheBackend;
+    use crate::core::lua_lease::LocalLease;
 
-    /// Create a Lua state with an in-memory cache implementation.
-    fn setup_lua() -> Lua {
+    /// Create a Lua state with an in-memory cache handler registered as
+    /// `crap._cache` (the shape `crap.cache.register` stores).
+    fn setup_lua(with_has: bool) -> Lua {
         let lua = Lua::new();
-        lua.load(
+        lua.load(format!(
             r"
-            crap = {}
-            crap._cache = {}
-
-            local store = {}
-
-            crap._cache.get = function(key)
-                return store[key]
-            end
-
-            crap._cache.set = function(key, value)
-                store[key] = value
-            end
-
-            crap._cache.delete = function(key)
-                store[key] = nil
-            end
-
-            crap._cache.clear = function()
-                store = {}
-            end
-
-            crap._cache.has = function(key)
-                return store[key] ~= nil
-            end
+            crap = {{}}
+            local store = {{}}
+            crap._cache = {{
+                get = function(key) return store[key] end,
+                set = function(key, value) store[key] = value end,
+                delete = function(key) store[key] = nil end,
+                clear = function() store = {{}} end,
+                {}
+            }}
             ",
-        )
+            if with_has {
+                "has = function(key) return store[key] ~= nil end,"
+            } else {
+                ""
+            }
+        ))
         .exec()
         .expect("Lua setup failed");
         lua
     }
 
+    fn cache_over(lua: &Lua) -> CustomCache {
+        CustomCache::new(Arc::new(LocalLease::new(lua)))
+    }
+
     #[test]
-    fn get_set_roundtrip() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
+    fn get_set_roundtrip_is_binary_safe() {
+        let lua = setup_lua(true);
+        let cache = cache_over(&lua);
 
         assert!(cache.get("k1").unwrap().is_none());
-
-        cache.set("k1", b"hello").unwrap();
-        assert_eq!(cache.get("k1").unwrap().unwrap(), b"hello");
+        cache.set("k1", b"hello\x00\xffworld").unwrap();
+        assert_eq!(cache.get("k1").unwrap().unwrap(), b"hello\x00\xffworld");
+        assert_eq!(cache.kind(), "custom");
     }
 
     #[test]
     fn delete_removes_key() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
+        let lua = setup_lua(true);
+        let cache = cache_over(&lua);
 
         cache.set("k1", b"v1").unwrap();
         cache.delete("k1").unwrap();
@@ -161,8 +211,8 @@ mod tests {
 
     #[test]
     fn clear_removes_all() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
+        let lua = setup_lua(true);
+        let cache = cache_over(&lua);
 
         cache.set("k1", b"v1").unwrap();
         cache.set("k2", b"v2").unwrap();
@@ -172,68 +222,45 @@ mod tests {
     }
 
     #[test]
-    fn has_returns_correct_state() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
+    fn has_uses_handler_or_get_fallback() {
+        for with_has in [true, false] {
+            let lua = setup_lua(with_has);
+            let cache = cache_over(&lua);
 
-        assert!(!cache.has("k1").unwrap());
-        cache.set("k1", b"v1").unwrap();
-        assert!(cache.has("k1").unwrap());
+            assert!(!cache.has("k").unwrap(), "with_has={with_has}");
+            cache.set("k", b"v").unwrap();
+            assert!(cache.has("k").unwrap(), "with_has={with_has}");
+        }
     }
 
     #[test]
-    fn kind_returns_custom() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
-        assert_eq!(cache.kind(), "custom");
+    fn missing_registration_errors_with_register_hint() {
+        let lua = Lua::new();
+        lua.load("crap = {}").exec().unwrap();
+        let cache = cache_over(&lua);
+
+        let err = cache.verify_registered().unwrap_err().to_string();
+        assert!(err.contains("crap.cache.register"), "{err}");
+        let err = cache.get("k").unwrap_err().to_string();
+        assert!(err.contains("crap.cache.register"), "{err}");
     }
 
     #[test]
-    fn binary_data_roundtrip() {
-        let lua = setup_lua();
-        let cache = CustomCache::new(lua);
-
-        let binary: Vec<u8> = (0..=255).collect();
-        cache.set("bin", &binary).unwrap();
-        assert_eq!(cache.get("bin").unwrap().unwrap(), binary);
-    }
-
-    #[test]
-    fn has_fallback_without_has_function() {
+    fn handler_error_propagates() {
         let lua = Lua::new();
         lua.load(
             r"
-            crap = {}
-            crap._cache = {}
-            local store = {}
-
-            crap._cache.get = function(key) return store[key] end
-            crap._cache.set = function(key, value) store[key] = value end
-            crap._cache.delete = function(key) store[key] = nil end
-            crap._cache.clear = function() store = {} end
-            -- No has function — should fall back to get
+            crap = { _cache = {
+                get = function(key) error('backend down') end,
+                set = function() end, delete = function() end, clear = function() end,
+            } }
             ",
         )
         .exec()
-        .expect("Lua setup failed");
+        .unwrap();
+        let cache = cache_over(&lua);
 
-        let cache = CustomCache::new(lua);
-        assert!(!cache.has("nope").unwrap());
-
-        cache.set("yes", b"data").unwrap();
-        assert!(cache.has("yes").unwrap());
-    }
-
-    #[test]
-    fn missing_cache_functions_return_error() {
-        let lua = Lua::new();
-        lua.load("crap = { _cache = {} }")
-            .exec()
-            .expect("Lua setup failed");
-
-        let cache = CustomCache::new(lua);
-        assert!(cache.set("k", b"v").is_err());
-        assert!(cache.delete("k").is_err());
-        assert!(cache.clear().is_err());
+        let err = cache.get("k").unwrap_err().to_string();
+        assert!(err.contains("backend down"), "{err}");
     }
 }

@@ -75,8 +75,9 @@ is bound; return values are typed against the per-collection
 `crap.doc.X` / `crap.find_result.X` classes — full IDE narrowing
 without `---@type` ceremony.
 
-All operations below are **only available inside hooks with
-transaction context**.
+All operations below need a database context — a lifecycle hook,
+a job handler, a custom route handler, or a `crap.transaction(fn)`
+block (see [CRUD Availability](overview.md#crud-availability)).
 
 > **Dynamic-slug dispatch.** For the rare case where the slug isn't
 > known until runtime (auth strategies handed `context.collection`,
@@ -109,9 +110,9 @@ for _, doc in ipairs(result.documents) do
 end
 ```
 
-`result.pagination` carries `totalDocs`, `limit`, `page`, `totalPages`,
-`pageStart`, `hasNextPage`, `hasPrevPage`, `prevPage`, `nextPage`,
-`startCursor`, `endCursor` (cursor fields only when
+`result.pagination` carries `total_docs`, `limit`, `page`, `total_pages`,
+`page_start`, `has_next_page`, `has_prev_page`, `prev_page`, `next_page`,
+`start_cursor`, `end_cursor` (cursor fields only when
 `[pagination] mode = "cursor"` in `crap.toml`).
 
 **Query fields:**
@@ -122,7 +123,7 @@ end
 | `order_by` | string | `nil` | Sort field. Prefix with `-` for descending. |
 | `limit` | integer | `nil` | Max results to return. |
 | `page` | integer | `1` | Page number (1-based). Converted to offset internally. |
-| `offset` | integer | `nil` | Number of results to skip (alias for `page`). |
+| `offset` | integer | `nil` | Number of results to skip (row-offset alternative to `page`; mutually exclusive with it). |
 | `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.end_cursor`. Mutually exclusive with `page`/`offset`/`before_cursor`. Cursor-mode only. |
 | `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.start_cursor`. Mutually exclusive with `page`/`offset`/`after_cursor`. Cursor-mode only. |
 | `depth` | integer | `0` | Population depth for relationship fields. |
@@ -475,7 +476,7 @@ local all = crap.collections.posts.find({
 
 Count documents matching a query. Returns an integer count.
 
-**Only available inside hooks with transaction context.**
+**Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 
 ```lua
 local n = crap.collections.posts.count()
@@ -505,7 +506,7 @@ Runs the full per-document lifecycle by default: `before_validate` → field val
 
 Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update.
 
-**Only available inside hooks with transaction context.**
+**Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 
 ```lua
 local result = crap.collections.posts.update_many({
@@ -545,14 +546,14 @@ The `data` table contains fields to update on all matched documents (partial upd
 
 ## crap.collections.list_versions(collection, id, opts?)
 
-List version snapshots for a document, newest first. Returns a table with `docs` (an array of version summaries) and `pagination` metadata matching the standard pagination shape. Only available on collections with `versions` enabled.
+List version snapshots for a document, newest first. Returns a table with `documents` (an array of version summaries) and `pagination` metadata matching the standard pagination shape. Only available on collections with `versions` enabled.
 
-**Only available inside hooks with transaction context.**
+**Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 
 ```lua
 -- List the 10 most recent versions for a document
 local result = crap.collections.posts.list_versions("abc123", { limit = 10 })
-for _, v in ipairs(result.docs) do
+for _, v in ipairs(result.documents) do
     print(v.version, v.status, v.created_at, v.latest)
 end
 
@@ -573,7 +574,7 @@ local all = crap.collections.posts.list_versions("abc123", { override_access = t
 
 ### Version summary shape
 
-Each entry in `result.docs` has:
+Each entry in `result.documents` has:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -587,7 +588,7 @@ Each entry in `result.docs` has:
 
 Restore a previous version: copies the snapshot data back onto the parent document and writes a new version row. Returns the restored document. Only available on collections with `versions` enabled.
 
-**Only available inside hooks with transaction context.**
+**Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 
 ```lua
 -- Restore version "v2-abc" of document "post-1"
@@ -612,7 +613,7 @@ Delete multiple documents matching a query. Returns `{ deleted = N, skipped = N 
 
 Fires per-document lifecycle hooks (`before_delete`, `after_delete`) by default. Set `hooks = false` in opts to skip for performance on large batch operations.
 
-**Only available inside hooks with transaction context.**
+**Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 
 ```lua
 local result = crap.collections.posts.delete_many({

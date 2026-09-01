@@ -1,6 +1,6 @@
 //! Me handler — return the currently authenticated user.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use serde_json::{Map, Value};
 use tokio::task;
@@ -12,22 +12,26 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{CollectionDefinition, Document},
+    core::Document,
     db::query,
     hooks::lifecycle::access::ReadStripInput,
-    service::{self, AppInfra, ServiceContext, helpers::collect_api_hidden_field_names},
+    service::{AppInfra, helpers::collect_api_hidden_field_names},
 };
 
 /// Owned bundle for the `Me` spawn-blocking body. Process-stable dependencies
 /// come from the shared [`AppInfra`]; the rest is per-call.
 struct MeBlockingInput {
     infra: Arc<AppInfra>,
-    collection: String,
-    id: String,
-    def: Arc<CollectionDefinition>,
+    token: Option<String>,
+    headers: HashMap<String, String>,
 }
 
-fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool), Status> {
+/// Resolve the caller through the shared auth evaluator (so `Me` honors the
+/// issuing collection's `methods` / `surfaces` and custom strategies exactly
+/// like every other RPC — it used to validate the JWT directly, answering
+/// even when the collection had removed `bearer`), then load, hydrate and
+/// access-strip the user document.
+fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
     let conn = input
         .infra
         .pool
@@ -35,56 +39,60 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
         .inspect_err(|e| error!("Me DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
-    // Auth infrastructure — direct query for user lookup, not a user-facing read.
-    let mut doc = query::find_by_id(&conn, &input.collection, &input.def, &input.id, None)
+    let auth_user = ContentService::resolve_auth_user(
+        input.token.as_deref(),
+        &input.headers,
+        &*input.infra.token_provider,
+        &input.infra.hook_runner,
+        &input.infra.registry,
+        &conn,
+    )?
+    .ok_or_else(|| Status::unauthenticated("Missing token"))?;
+
+    let collection = auth_user.claims.collection.to_string();
+    let id = auth_user.claims.sub.to_string();
+    let def = input
+        .infra
+        .registry
+        .get_collection(&collection)
+        .ok_or_else(|| Status::unauthenticated("Invalid or expired token"))?;
+
+    let mut doc = query::find_by_id(&conn, &collection, def, &id, None)
         .inspect_err(|e| error!("Me find_by_id error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?
+        .ok_or_else(|| Status::not_found("User not found"))?;
+
+    query::hydrate_document(&conn, &collection, &def.fields, &mut doc, None, None)
+        .inspect_err(|e| error!("Me hydrate_document error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
-    if let Some(ref mut d) = doc {
-        query::hydrate_document(&conn, &input.collection, &input.def.fields, d, None, None)
-            .inspect_err(|e| error!("Me hydrate_document error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
+    let user_snapshot = doc.clone();
+    let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
+        .into_inner()
+        .into_iter()
+        .collect();
+    input.infra.hook_runner.strip_read_access(
+        &def.fields,
+        &mut level,
+        &ReadStripInput {
+            document: &user_snapshot.fields,
+            collection: &collection,
+            user: Some(&user_snapshot),
+            locale: None,
+        },
+        &conn,
+    );
+    doc.fields = level.into_iter().collect();
+    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
-        // Apply the same field stripping every other read path does, even for a
-        // self-read: data-aware field-level read denials (a field an access hook
-        // hides even from its owner — e.g. an admin-only flag) AND `api_hidden`
-        // fields (e.g. a stored secret). `Me` queries raw, so do it here. The
-        // user reading is the document itself, so snapshot it for `ctx.user` /
-        // `ctx.document` before mutating the live copy.
-        let user_snapshot = d.clone();
-        let mut level: Map<String, Value> = std::mem::take(&mut d.fields)
-            .into_inner()
-            .into_iter()
-            .collect();
-
-        input.infra.hook_runner.strip_read_access(
-            &input.def.fields,
-            &mut level,
-            &ReadStripInput {
-                document: &user_snapshot.fields,
-                collection: &input.collection,
-                user: Some(&user_snapshot),
-                locale: None,
-            },
-            &conn,
-        );
-
-        d.fields = level.into_iter().collect();
-        d.strip_fields(&collect_api_hidden_field_names(&input.def.fields, ""));
-    }
-
-    let ctx = ServiceContext::slug_only(&input.collection)
-        .conn(&conn)
-        .build();
-    let sv = service::auth::get_session_version(&ctx, &input.id).map_err(Status::from)?;
-    let locked = service::auth::is_locked(&ctx, &input.id).map_err(Status::from)?;
-
-    Ok((doc, sv, locked))
+    Ok((doc, collection))
 }
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
-    /// Return the currently authenticated user from a JWT token.
+    /// Return the currently authenticated user. The credential is the
+    /// `authorization` metadata (Bearer), the legacy `token` request field, or
+    /// any custom strategy matched by the request headers.
     pub(in crate::api::handlers) async fn me_impl(
         &self,
         request: Request<content::MeRequest>,
@@ -93,46 +101,22 @@ impl ContentService {
         let req = request.into_inner();
 
         let token = Self::extract_token(&metadata)
-            .or_else(|| {
-                let t = &req.token;
-                if t.is_empty() { None } else { Some(t.clone()) }
-            })
-            .ok_or_else(|| Status::unauthenticated("Missing token"))?;
-
-        let claims = self
-            .infra
-            .token_provider
-            .validate_token(&token)
-            .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
-
-        let def = self.get_collection_def(&claims.collection)?;
+            .or_else(|| (!req.token.is_empty()).then(|| req.token.clone()));
+        let headers = Self::extract_metadata_headers(&metadata);
 
         let input = MeBlockingInput {
             infra: Arc::clone(&self.infra),
-            collection: claims.collection.to_string(),
-            id: claims.sub.to_string(),
-            def,
+            token,
+            headers,
         };
-        let session_version = claims.session_version;
 
-        let (doc, db_session_version, is_locked) =
-            task::spawn_blocking(move || me_blocking(&input))
-                .await
-                .inspect_err(|e| error!("Me task error: {}", e))
-                .map_err(|_| Status::internal("Internal error"))??;
-
-        let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
-
-        if session_version != db_session_version {
-            return Err(Status::unauthenticated("Session invalidated"));
-        }
-
-        if is_locked {
-            return Err(Status::unauthenticated("Account is locked"));
-        }
+        let (doc, collection) = task::spawn_blocking(move || me_blocking(&input))
+            .await
+            .inspect_err(|e| error!("Me task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::MeResponse {
-            user: Some(document_to_proto(&doc, &claims.collection)),
+            user: Some(document_to_proto(&doc, &collection)),
         }))
     }
 }

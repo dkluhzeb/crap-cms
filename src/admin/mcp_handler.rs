@@ -62,9 +62,14 @@ fn validate_api_key(
     ))
 }
 
-/// Parse the JSON-RPC request body.
-async fn parse_rpc_body(request: Request<Body>) -> Result<JsonRpcRequest, Response> {
-    let body_bytes = body::to_bytes(request.into_body(), 1024 * 1024)
+/// Parse the JSON-RPC request body. `max_body_bytes` comes from
+/// `[mcp] http_max_body_bytes` (default 1 MiB).
+async fn parse_rpc_body(
+    request: Request<Body>,
+    max_body_bytes: u64,
+) -> Result<JsonRpcRequest, Response> {
+    let limit = usize::try_from(max_body_bytes).unwrap_or(usize::MAX);
+    let body_bytes = body::to_bytes(request.into_body(), limit)
         .await
         .map_err(|_| {
             Json(JsonRpcResponse::error(
@@ -114,7 +119,7 @@ pub(super) async fn mcp_http_handler(
         return *resp;
     }
 
-    let rpc_request = match parse_rpc_body(request).await {
+    let rpc_request = match parse_rpc_body(request, state.config.mcp.http_max_body_bytes).await {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -194,5 +199,42 @@ mod tests {
         let req = request_with_auth(Some("Bearer short"));
 
         assert!(validate_api_key(&req, &key, None).is_err());
+    }
+
+    fn rpc_request_with_body(body: String) -> Request<Body> {
+        Request::builder()
+            .uri("/mcp")
+            .method("POST")
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    /// Regression: the body cap used to be hardcoded to 1 MiB; it now comes
+    /// from `[mcp] http_max_body_bytes`.
+    #[tokio::test]
+    async fn parse_rpc_body_enforces_configured_cap() {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"x","params":{{"pad":"{}"}}}}"#,
+            "a".repeat(256)
+        );
+
+        let over = parse_rpc_body(rpc_request_with_body(body.clone()), 64).await;
+        assert!(
+            over.is_err(),
+            "body over the configured cap must be rejected"
+        );
+
+        let under = parse_rpc_body(rpc_request_with_body(body), 4096).await;
+        assert!(under.is_ok(), "body under the configured cap must parse");
+    }
+
+    #[test]
+    fn mcp_config_body_cap_default_and_filesize_string() {
+        let cfg = crate::config::McpConfig::default();
+        assert_eq!(cfg.http_max_body_bytes, 1_048_576);
+
+        let parsed: crate::config::McpConfig =
+            toml::from_str(r#"http_max_body_bytes = "16MB""#).unwrap();
+        assert_eq!(parsed.http_max_body_bytes, 16 * 1024 * 1024);
     }
 }

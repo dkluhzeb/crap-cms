@@ -334,6 +334,7 @@ Get a global's current value.
 message GetGlobalRequest {
   string slug = 1;
   optional string locale = 2;           // locale code for localized fields
+  optional bool draft = 3;              // read the unpublished draft (drafts-enabled globals)
 }
 
 message GetGlobalResponse {

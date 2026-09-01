@@ -17,7 +17,8 @@ See [Multi-Server Deployment](../deployment/multi-server.md) for the full multi-
 ```toml
 [database]
 path = "data/crap.db"       # relative to config dir, or absolute
-pool_max_size = 64           # connection pool size
+pool_max_size = 64           # READ pool size
+write_pool_max_size = 4      # WRITE pool size (SQLite only)
 cache_size = -16384          # page cache in KB (16MB)
 mmap_size = 268435456        # memory-mapped I/O (256MB)
 ```
@@ -125,11 +126,16 @@ Schema sync runs in a single transaction. If anything fails, all changes are rol
 
 ## Connection Pool
 
-The connection pool (r2d2 on SQLite, deadpool on PostgreSQL) provides
-connections for both reads and writes:
+On **SQLite** there are two pools (both r2d2): a **read pool**
+(`pool_max_size`, default 64) and a small **write pool**
+(`write_pool_max_size`, default 4). Writes take `BEGIN IMMEDIATE` and
+serialize on SQLite's single writer, so excess writers queue on write-pool
+checkout instead of consuming read connections and starving readers. On
+**PostgreSQL** a single deadpool pool (`pool_max_size`) serves both;
+`write_pool_max_size` is ignored.
 
-- **Read operations** — `db/ops.rs` gets a connection from the pool, calls `query::*` functions
-- **Write operations** — callers get a connection, open a transaction, call `query::*`, then commit
+- **Read operations** — `db/ops.rs` gets a connection from the read pool, calls `query::*` functions
+- **Write operations** — callers get a connection from the write pool, open a transaction, call `query::*`, then commit
 - **Hook CRUD** — hooks share the caller's transaction via the TxContext pattern
 
 ## Transaction Pattern

@@ -119,7 +119,7 @@ Auth collections support a `_locked` system field. When a user's `_locked` field
 - **`Me` RPC** — returns an `unauthenticated` error for locked users.
 - **Admin UI** — the session is rejected and the user is redirected to the login page.
 
-Locking takes effect immediately — no token refresh or logout is needed. Use the CLI to lock/unlock users:
+Locking takes effect immediately — no token refresh or logout is needed: locking bumps the user's `session_version` (revoking every issued token and cookie) and tears down the user's live event streams. A locked user can also no longer log in through any strategy, and cannot consume password-reset or email-verification tokens. Un-verifying an account (`UnverifyAccount` / `user unverify`) bumps `session_version` the same way. Use the CLI to lock/unlock users:
 
 ```bash
 crap-cms -C ./my-project user lock -e admin@example.com

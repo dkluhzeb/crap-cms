@@ -32,7 +32,7 @@ Multiple fields are combined with AND.
 | `exists` | `{"field": {"exists": true}}` | `field IS NOT NULL` |
 | `not_exists` | `{"field": {"not_exists": true}}` | `field IS NULL` |
 
-> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. A bare scalar shorthand is treated as `equals`, and JSON numbers and booleans are accepted as well as strings: `{"count": 42}`, `{"active": true}`, and `{"title": "hello"}` all mean `equals`. An unknown operator name is rejected with an `INVALID_ARGUMENT` error (it is never silently dropped).
+> **Note:** `exists`/`not_exists` accept only the boolean `true`; `{"exists": false}` (or a non-boolean value) is an `INVALID_ARGUMENT` error, never IS NOT NULL. A bare scalar shorthand is treated as `equals`, and JSON numbers and booleans are accepted as well as strings: `{"count": 42}`, `{"active": true}`, and `{"title": "hello"}` all mean `equals`. An unknown operator name is rejected with an `INVALID_ARGUMENT` error (it is never silently dropped).
 
 ## Field-Type-Aware Coercion
 

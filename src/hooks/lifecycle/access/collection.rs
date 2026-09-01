@@ -168,9 +168,9 @@ fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult
             continue;
         }
 
-        match FilterValue::from_lua_value(lua, &value) {
-            Ok(fv) => {
-                for op in fv.into_filter_ops() {
+        match FilterValue::from_lua_value(lua, &value).and_then(FilterValue::into_filter_ops) {
+            Ok(ops) => {
+                for op in ops {
                     clauses.push(FilterClause::Single(Filter {
                         field: field.clone(),
                         op,
@@ -737,6 +737,23 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Constrained(_)));
+    }
+
+    /// Regression: `{ score = { exists = false } }` used to be silently
+    /// dropped, leaving only the `tenant` clause — a widened constraint. The
+    /// parser now rejects it and the access path fails CLOSED (`Denied`).
+    #[test]
+    fn check_collection_access_exists_false_denies_instead_of_dropping() {
+        let lua = setup_lua();
+        let result = check_collection_access(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.constrained_exists_false")),
+                None,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(result, AccessResult::Denied), "{result:?}");
     }
 
     /// `Allowed` / `Denied` results carry no filters and pass through untouched.

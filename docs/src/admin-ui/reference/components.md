@@ -97,9 +97,9 @@ to `window.confirm()` when no dialog is mounted.
 
 ### `<crap-delete-dialog>` — `instance.open({ slug, id, title, softDelete, canPermanentlyDelete? })`
 
-Backs all `[data-delete-id]` buttons in the admin. Dispatches
-`crap:document-deleted` after a successful delete so list pages can
-refresh.
+Backs all `[data-delete-id]` buttons in the admin. After a successful
+delete it toasts and navigates back to the collection list (no DOM
+event is dispatched — list pages refresh via the navigation).
 
 ### `<crap-create-panel>` — `instance.open({ collection, title, onCreated })`
 
@@ -124,6 +124,7 @@ Some also dispatch a bubbling `crap:change` event on edit so
 | `<crap-upload-preview>`      | hidden `<input>` + slot     | Drag-and-drop upload + preview                          |
 | `<crap-block-picker>`        | hidden `<select>`           | Used inside blocks-field add-row UI                     |
 | `<crap-array-field>`         | wraps an array-row container | Coordinates drag-reorder, add/remove, validation badge |
+| `<crap-array-row>`           | wraps one row inside `<crap-array-field>` | Row boundary: mirrors the configured `label_field` / row-label sub-field into the row header; the stable hook point for per-row behaviour |
 | `<crap-validate-form>`       | wraps a `<form>`            | Live server-side validation via `validate-url` attr     |
 | `<crap-dirty-form>`          | wraps a `<form>`            | Warns on navigation away with unsaved edits             |
 | `<crap-conditions>`          | wraps a `<form>`            | Show/hide fields based on `data-condition` JSON         |
@@ -149,6 +150,9 @@ Tag-only enhancements that auto-init on connect; no public API.
 | ---------------------------- | ---------------------------------------------------------- |
 | `<crap-sticky-header>`       | Sticky page-title bar with shadow on scroll                |
 | `<crap-list-settings>`       | Column picker + filter builder for list pages              |
+| `<crap-pill-list>`           | Chip cluster from a `data-items` JSON array; fires `crap:pill-removed` (`{ id }`). Self-styled, reusable in any has-many UI |
+| `<crap-column-picker>`       | Column checkbox list for list pages (`data-collection`, `data-options`); fires `crap:column-picker-saved`. Mounted by `<crap-list-settings>` |
+| `<crap-filter-builder>`      | Row-per-condition filter UI (`data-collection`, `data-fields`); fires `crap:filter-builder-applied`; exports `OPS_BY_TYPE` for subclassing. Mounted by `<crap-list-settings>` |
 | `<crap-back-refs>`           | Lazy-loaded incoming-references panel                      |
 | `<crap-collapsible>`         | Collapsible group/fieldset (uses `<details>` semantics)    |
 | `<crap-tabs>`                | Tab switcher inside group fields                           |
@@ -273,7 +277,7 @@ block-call syntax and reference the slot via `{{> @partial-block }}`.
 
 | Layout              | Role                                                                  |
 | ------------------- | --------------------------------------------------------------------- |
-| `layout/base.hbs`   | Authenticated admin chrome: head + sidebar + header + main slot       |
+| `layout/base.hbs`   | Authenticated admin chrome: head + sidebar + header + main slot. Contains the `{{#if htmx_partial}}` branch that serves partial navigations (`#main` swaps) — overrides must keep it |
 | `layout/auth.hbs`   | Unauthenticated chrome: head + auth-card + slot for the form/content  |
 | `layout/header.hbs` | Page header partial rendered by `base.hbs`                            |
 | `layout/sidebar.hbs`| Left navigation rendered by `base.hbs`                                |

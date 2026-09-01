@@ -40,8 +40,13 @@ html[data-theme="acme"] {
   /* Optional — adjust shadows for your brand vibe */
   --shadow-md: 0 4px 12px rgba(255, 85, 0, 0.10);
 
-  /* Optional — your font stack */
-  --font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+/* Optional — your font stack. There is no --font-family token; the
+   family is set directly on html in styles/base/reset.css, so
+   override the rule itself: */
+html {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
 }
 ```
 
@@ -109,7 +114,8 @@ your colors.
 To make `acme` the default for new visitors (instead of `light`),
 override the theme bootstrap script that runs in `<head>` before
 paint. Drop `<config_dir>/templates/layout/base.hbs` (extracted from
-upstream) and change the bootstrap line:
+upstream — extract fresh and keep the `{{#if htmx_partial}}` branch
+intact, or partial navigation breaks) and change the bootstrap line:
 
 ```hbs
 <script nonce="{{crap.csp_nonce}}">

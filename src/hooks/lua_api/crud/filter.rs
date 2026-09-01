@@ -90,16 +90,24 @@ pub(crate) struct FilterOperators {
     /// Value not in list (`field NOT IN (...)`).
     #[lua(ty = "crap.FilterScalar[]", optional)]
     pub(crate) not_in: Option<Vec<FilterScalar>>,
-    /// Field is not null (`IS NOT NULL`).
+    /// Field is not null (`IS NOT NULL`). Only `true` is accepted — `false` is an error.
     #[lua(optional)]
     pub(crate) exists: Option<bool>,
-    /// Field is null (`IS NULL`).
+    /// Field is null (`IS NULL`). Only `true` is accepted — `false` is an error.
     #[lua(optional)]
     pub(crate) not_exists: Option<bool>,
 }
 
 impl FilterOperators {
-    fn into_filter_ops(self) -> Vec<FilterOp> {
+    /// Expand the active operator slots into `FilterOp`s.
+    ///
+    /// # Errors
+    ///
+    /// `exists = false` / `not_exists = false` is an error, never a silently
+    /// dropped slot: a dropped slot widens the match set (dangerous on
+    /// `delete_many` / `update_many` and in access constraints), and the wire
+    /// decoder (`db::query::filter::decode`) applies the identical rule.
+    fn into_filter_ops(self) -> LuaResult<Vec<FilterOp>> {
         let mut out = Vec::new();
         if let Some(v) = self.equals {
             out.push(FilterOp::Equals(v.to_filter_string()));
@@ -135,14 +143,27 @@ impl FilterOperators {
                 vs.iter().map(FilterScalar::to_filter_string).collect(),
             ));
         }
-        if matches!(self.exists, Some(true)) {
-            out.push(FilterOp::Exists);
+        if let Some(v) = self.exists {
+            out.push(exists_op("exists", v, FilterOp::Exists)?);
         }
-        if matches!(self.not_exists, Some(true)) {
-            out.push(FilterOp::NotExists);
+        if let Some(v) = self.not_exists {
+            out.push(exists_op("not_exists", v, FilterOp::NotExists)?);
         }
-        out
+
+        Ok(out)
     }
+}
+
+/// `exists` / `not_exists` accept only `true` — see
+/// [`FilterOperators::into_filter_ops`].
+fn exists_op(name: &str, value: bool, op: FilterOp) -> LuaResult<FilterOp> {
+    if value {
+        return Ok(op);
+    }
+
+    Err(RuntimeError(format!(
+        "filter operator '{name}' takes only `true` (got false); use `not_exists = true` for IS NULL and `exists = true` for IS NOT NULL"
+    )))
 }
 
 /// One value in a `where` map: either a scalar (implicit `equals`) or
@@ -186,9 +207,14 @@ impl FilterValue {
     /// Flatten this filter value into one or more `FilterOp`s. A
     /// scalar becomes a single `Equals` op; an operator table becomes
     /// one op per active operator slot.
-    pub(crate) fn into_filter_ops(self) -> Vec<FilterOp> {
+    ///
+    /// # Errors
+    ///
+    /// Propagates the `exists = false` / `not_exists = false` rejection from
+    /// [`FilterOperators::into_filter_ops`].
+    pub(crate) fn into_filter_ops(self) -> LuaResult<Vec<FilterOp>> {
         match self {
-            Self::Scalar(s) => vec![FilterOp::Equals(s.to_filter_string())],
+            Self::Scalar(s) => Ok(vec![FilterOp::Equals(s.to_filter_string())]),
             Self::Operators(ops) => (*ops).into_filter_ops(),
         }
     }
@@ -302,7 +328,7 @@ mod tests {
 
     fn ops_from(json_obj: serde_json::Value) -> Vec<FilterOp> {
         let ops: FilterOperators = serde_json::from_value(json_obj).unwrap();
-        ops.into_filter_ops()
+        ops.into_filter_ops().unwrap()
     }
 
     #[test]
@@ -360,11 +386,20 @@ mod tests {
         let ops = ops_from(json!({ "exists": true }));
         assert!(matches!(ops[0], FilterOp::Exists));
 
-        let ops = ops_from(json!({ "exists": false }));
-        assert!(ops.is_empty(), "exists=false should produce no op");
-
         let ops = ops_from(json!({ "not_exists": true }));
         assert!(matches!(ops[0], FilterOp::NotExists));
+    }
+
+    /// Regression: `exists = false` used to be silently dropped (no op at
+    /// all), widening the match set. It is now a hard error on both slots,
+    /// matching the wire decoder.
+    #[test]
+    fn operators_exists_false_is_an_error_not_a_dropped_slot() {
+        for key in ["exists", "not_exists"] {
+            let ops: FilterOperators = serde_json::from_value(json!({ key: false })).unwrap();
+            let err = ops.into_filter_ops().unwrap_err().to_string();
+            assert!(err.contains("takes only `true`"), "{key}: {err}");
+        }
     }
 
     #[test]

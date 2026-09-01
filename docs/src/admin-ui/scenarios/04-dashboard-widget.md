@@ -198,13 +198,16 @@ traffic is low. Skip caching unless you measure a problem.
   For a card that updates without a full reload, use HTMX:
 
   ```hbs
-  <div hx-get="/admin/p/widgets/weather" hx-trigger="every 600s" hx-swap="innerHTML">
+  <div hx-get="/admin/p/weather-widget" hx-trigger="every 600s" hx-swap="innerHTML">
     {{#with (data "weather_now")}}...{{/with}}
   </div>
   ```
 
-  This requires a separate custom page at `/admin/p/widgets/weather`
-  that returns just the inner HTML. See [Scenario 5](05-custom-page.md).
+  This requires a separate custom page at `/admin/p/weather-widget`
+  that returns just the inner HTML (custom-page slugs are a single
+  path segment — lowercase letters, digits, `-`, `_`; nested paths
+  like `widgets/weather` are rejected). See
+  [Scenario 5](05-custom-page.md).
 - **Per-user widgets** — the slot renders for everyone. Filter
   inside the slot template using `{{user.role}}` if you want
   role-gated widgets.

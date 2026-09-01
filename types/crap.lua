@@ -585,7 +585,7 @@ function crap.fields.join(config) end
 --- @class crap.AuthMethodPasswordLogin
 --- @field type "password_login"
 --- @field mfa? "email"|"custom"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook; `false` (or omit) disables.
---- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Only meaningful with `mfa = "email"`; no hook = MFA always required. A hook error fails CLOSED (requires MFA).
+--- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode (`"email"` or `"custom"`); no hook = MFA always required. A hook error fails CLOSED (requires MFA).
 --- @field mfa_deliver? string | crap.HookRef Delivery hook for `mfa = "custom"`: called after credential verification with `{ collection, user, code, expires_in }` — send the code via your channel (SMS, push, …). The code is SENSITIVE: never log it. Errors are logged server-side; the previously issued code (if any) stays valid. Required with `mfa = "custom"`, rejected otherwise (startup error).
 --- @field verify_email? boolean Require email verification before login (default `false`).
 --- @field forgot_password? boolean Enable the forgot-password flow (default `true`).
@@ -786,8 +786,8 @@ function crap.fields.join(config) end
 --- @field less_than_or_equal? crap.FilterScalar Less than or equal (`field <= value`).
 --- @field ["in"]? crap.FilterScalar[] Value in list (`field IN (...)`).
 --- @field not_in? crap.FilterScalar[] Value not in list (`field NOT IN (...)`).
---- @field exists? boolean Field is not null (`IS NOT NULL`).
---- @field not_exists? boolean Field is null (`IS NULL`).
+--- @field exists? boolean Field is not null (`IS NOT NULL`). Only `true` is accepted — `false` is an error.
+--- @field not_exists? boolean Field is null (`IS NULL`). Only `true` is accepted — `false` is an error.
 
 --- One filter value in a `where` clause: scalar (treated as
 --- `equals`) or operator table.
@@ -807,7 +807,7 @@ function crap.fields.join(config) end
 --- @field limit? integer Max results to return.
 --- @field page? integer Page number (1-based). Converted to offset internally.
 --- @field offset? integer Number of results to skip (raw row offset, for batch iteration). Ignored when `page` is set — `page` takes precedence.
---- @field depth? integer Population depth for relationship fields (default: `0`).
+--- @field depth? integer Population depth for relationship fields (default: `[depth] default_depth` from `crap.toml`, which defaults to 1).
 --- @field locale? string Locale code for localized fields (`"en"`, `"de"`, `"all"`).
 --- @field select? string[] Fields to return. Nil/empty = all fields.
 --- @field draft? boolean Include draft documents (versioned collections only).
@@ -842,7 +842,7 @@ function crap.fields.join(config) end
 --- @field data table<string, any> Document data. For read hooks, contains document fields including `id` / timestamps. For `before_delete` / `after_delete` hooks, contains the deleted document's fields plus `id` (and `soft_delete` for a soft delete) — so a hook can inspect what is being removed; a hard delete leaves no row to re-fetch, so `after_delete` relies on this snapshot. In `after_change` hooks, `data.id` carries the new document ID.
 --- @field locale? string The content locale this operation targets (e.g. `"en"`, `"de"`) — the requested locale, or the default locale when none was given. Nil when localization is disabled (and on the locale-agnostic `before_delete` / `after_delete` hooks, which remove the whole row across all locales). Otherwise the same resolved value every hook surface sees (field hooks, validators, access functions).
 --- @field draft? boolean `true` when this is a draft save (only set for collections with `versions.drafts` enabled).
---- @field context table<string, any> Request-scoped shared table that persists from `before_validate` through `after_change` within one request. Only JSON-compatible values survive (no functions / userdata).
+--- @field context table<string, any> Operation-scoped shared table that persists from `before_validate` through `after_change` within one write operation (or `before_read` → `after_read` for one read) — NOT across the whole HTTP request. Only JSON-compatible values survive (no functions / userdata).
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or called from gRPC without locale context.
 --- @field id? string The id of the document this event targets, exposed to Lua as `ctx.id` (matching the field-hook, validator, and access contexts). Populated across the write lifecycle — `update`/`delete` before- and after-hooks, `after_change` on create (the freshly assigned id; `nil` in create's before-hooks, where no row exists yet), `after_read`, and `"default"` for globals. Also set on live-broadcast hooks (`before_broadcast`). (The Rust field stays `document_id`; only the Lua-facing key is `id`.)

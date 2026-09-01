@@ -20,7 +20,7 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 
 ## Document ID in Hook Context
 
-Every hook context exposes the affected document's id as the top-level `ctx.id` (consistent with the field-hook, validator, and access contexts) — `nil` only in create's before-hooks, where no row exists yet. In `after_change` and `after_delete` hooks the id is *also* present as `context.data.id`. This is useful for queuing jobs or looking up the document after it's been written. In `before_delete` hooks, `context.data.id` is likewise available.
+Every **write** hook context (and `after_read`, which runs per document) exposes the affected document's id as the top-level `ctx.id` (consistent with the field-hook, validator, and access contexts) — `nil` in create's before-hooks, where no row exists yet. `before_read` has no `ctx.id`: it fires once per read *operation* (a `find` matches many documents), before any specific document is known. In `after_change` and `after_delete` hooks the id is *also* present as `context.data.id`. This is useful for queuing jobs or looking up the document after it's been written. In `before_delete` hooks, `context.data.id` is likewise available.
 
 `before_delete` and `after_delete` additionally receive the deleted document's full field data in `context.data` (captured before the row is removed), so you don't need to re-fetch — and on a hard delete you couldn't, since the row is already gone by `after_delete`.
 

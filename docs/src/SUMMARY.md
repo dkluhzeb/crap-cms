@@ -108,6 +108,7 @@
 - [crap.http](lua-api/http.md)
 - [crap.config](lua-api/config.md)
 - [crap.email](lua-api/email.md)
+- [crap.cache](lua-api/cache.md)
 - [crap.locale](lua-api/locale.md)
 - [crap.crypto](lua-api/crypto.md)
 - [crap.schema](lua-api/schema.md)

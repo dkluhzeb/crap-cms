@@ -1,4 +1,4 @@
-# Scenario 7: Upgrade crap-cms — what breaks?
+# Scenario 8: Upgrade crap-cms — what breaks?
 
 **Goal**: upgrade crap-cms to a new release; understand what your
 overrides need re-porting and what changed in the embedded

@@ -16,6 +16,27 @@ max_entries = 10000
 
 **When to use:** Single-server deployments, development, or when you don't need cross-server cache coherence.
 
+### Custom (Lua-delegated)
+
+Delegates every cache operation to a Lua handler registered with
+[`crap.cache.register`](../lua-api/cache.md) in `init.lua` — for shared
+stores the built-in backends don't cover (an HTTP KV service, a
+company-internal tier). Selecting it without a registration is a startup
+error. External callers lease a pooled Lua VM per operation; write-through
+clears fired from *inside* a hook or job handler reuse the current VM
+(the same per-VM `LocalLease` mechanism as custom upload storage), so
+they can never deadlock on pool acquisition. TTL and cluster-wide `clear`
+semantics are the handler's concern.
+
+```toml
+[cache]
+backend = "custom"
+```
+
+**When to use:** you need a shared cache and Redis isn't an option. Each
+operation costs a Lua round-trip plus the handler's own work — for most
+deployments `memory` or `redis` is the better choice.
+
 ### Redis
 
 Shared cache via Redis. All servers read and write to the same cache, so a write on one server invalidates the cache for all. Requires building with `--features redis`.
@@ -65,11 +86,12 @@ too). A cold or freshly-invalidated key costs one database fetch — not
 one per concurrent reader. Nested document fetches during relationship
 population go through the same deduplication.
 
-Lua CRUD reads that run **inside a hook transaction** are excluded from
-both the cache and the singleflight: sharing mid-transaction state would
-broadcast uncommitted rows to concurrent requests (or hand the
-transaction another connection's stale fetch). Those reads populate
-un-deduplicated on the hook transaction's own connection.
+Lua CRUD reads never touch the cache or the singleflight. In conn mode
+(hooks) that's because sharing mid-transaction state would broadcast
+uncommitted rows to concurrent requests (or hand the transaction another
+connection's stale fetch); in pool mode (job handlers, custom routes,
+`crap.transaction`) each CRUD batch opens its own transaction and reads
+on it directly. The cache accelerates the gRPC/MCP/admin read surfaces.
 
 What singleflight does **not** remove:
 
@@ -95,6 +117,8 @@ The cache uses two invalidation strategies:
 1. **Write-through invalidation** — every write operation clears the entire cache: collection create / update / delete / undelete / unpublish, the bulk variants (create-many / update-many / delete-many), global update / unpublish, and version restore (collection and global). This is the primary invalidation mechanism.
 
 2. **Periodic full clear** — when `max_age_secs > 0`, a background task clears the entire cache on a timer. This handles external database mutations that bypass the API.
+
+On the Redis backend, `clear` runs `SCAN` + batched `DEL` and is **not atomic** — a key written between scan iterations can survive one clear. That's acceptable for invalidation: survivors are removed by the next write-triggered or periodic clear (and by their own `max_age_secs` TTL).
 
 ## Configuration Reference
 

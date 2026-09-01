@@ -10,14 +10,15 @@
 use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig, PasswordPolicy};
+use crap_cms::core::cache::{CacheBackend, MemoryCache, SharedCache};
 use crap_cms::core::collection::{Auth, CollectionDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::{self, lifecycle::HookRunner};
 use crap_cms::service::{
-    CreateManyItem, CreateManyOptions, DeleteManyOptions, ServiceContext, ServiceError,
-    UpdateManyOptions, create_many, delete_many, update_many,
+    CreateManyItem, CreateManyOptions, DeleteManyOptions, RunnerWriteHooks, ServiceContext,
+    ServiceError, UpdateManyOptions, create_many, delete_many, update_many,
 };
 use serde_json::json;
 
@@ -688,4 +689,112 @@ fn create_many_override_access_bypasses_default_deny() {
     let result = create_many(&override_ctx, &[one("Allowed")], &bulk_opts())
         .expect("override_access must bypass default-deny on bulk create");
     assert_eq!(result.created, 1);
+}
+
+/// Regression (cache invalidation parity): the Lua conn-mode bulk paths
+/// (`create_many`/`update_many`/`delete_many` on an existing connection)
+/// must clear the populate cache exactly like the single-document conn
+/// paths and the pool-mode bulk paths do — cache.md documents "every write
+/// operation clears the entire cache". Previously the three `*_conn`
+/// functions skipped the clear, serving stale populated reads after a Lua
+/// bulk write.
+#[test]
+fn bulk_conn_paths_clear_cache() {
+    let s = setup(3);
+    let cache: std::sync::Arc<MemoryCache> = std::sync::Arc::new(MemoryCache::new(64));
+    let shared: SharedCache = cache.clone();
+
+    let seed = |c: &MemoryCache| c.set("k", b"v").expect("seed cache");
+    let cleared = |c: &MemoryCache| !c.has("k").expect("has");
+
+    // create_many on conn
+    seed(&cache);
+    {
+        let mut conn = s.pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        let wh = RunnerWriteHooks::new(&s.runner)
+            .with_conn(&tx)
+            .with_override_access();
+        let ctx = ServiceContext::collection("posts", &s.def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .override_access(true)
+            .cache(Some(shared.clone()))
+            .build();
+        create_many(&ctx, &[item("Conn A")], &bulk_opts()).expect("create_many conn");
+        drop(ctx);
+        drop(wh);
+        tx.commit().expect("commit");
+    }
+    assert!(
+        cleared(&cache),
+        "create_many conn path must clear the cache"
+    );
+
+    // update_many on conn
+    seed(&cache);
+    {
+        let mut conn = s.pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        let wh = RunnerWriteHooks::new(&s.runner)
+            .with_conn(&tx)
+            .with_override_access();
+        let ctx = ServiceContext::collection("posts", &s.def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .override_access(true)
+            .cache(Some(shared.clone()))
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("status".to_string(), json!("published"));
+        update_many(
+            &ctx,
+            &[],
+            &data,
+            &LocaleConfig::default(),
+            &update_opts(100),
+        )
+        .expect("update_many conn");
+        drop(ctx);
+        drop(wh);
+        tx.commit().expect("commit");
+    }
+    assert!(
+        cleared(&cache),
+        "update_many conn path must clear the cache"
+    );
+
+    // delete_many on conn
+    seed(&cache);
+    {
+        let mut conn = s.pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        let wh = RunnerWriteHooks::new(&s.runner)
+            .with_conn(&tx)
+            .with_override_access();
+        let ctx = ServiceContext::collection("posts", &s.def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .override_access(true)
+            .cache(Some(shared.clone()))
+            .build();
+        delete_many(
+            &ctx,
+            &[],
+            &LocaleConfig::default(),
+            &DeleteManyOptions {
+                run_hooks: false,
+                include_deleted: false,
+                max_documents: 100,
+            },
+        )
+        .expect("delete_many conn");
+        drop(ctx);
+        drop(wh);
+        tx.commit().expect("commit");
+    }
+    assert!(
+        cleared(&cache),
+        "delete_many conn path must clear the cache"
+    );
 }

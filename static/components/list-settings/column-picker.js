@@ -30,6 +30,7 @@
 
 import { clear, h } from '../_internal/h.js';
 import { t } from '../_internal/i18n.js';
+import { EV_COLUMN_PICKER_SAVED } from '../events.js';
 
 /** @typedef {{ key: string, label: string, selected: boolean }} ColumnOption */
 
@@ -177,9 +178,7 @@ export class CrapColumnPicker extends HTMLElement {
     // the drawer / refresh / etc. on its own terms. Plus the
     // window.location.reload() guarantees the new column selection is
     // visible even if no listener picks the event up.
-    this.dispatchEvent(
-      new CustomEvent('crap:column-picker-saved', { bubbles: true, composed: true }),
-    );
+    this.dispatchEvent(new CustomEvent(EV_COLUMN_PICKER_SAVED, { bubbles: true, composed: true }));
     window.location.reload();
   }
 }

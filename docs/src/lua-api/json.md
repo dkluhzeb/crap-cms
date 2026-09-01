@@ -35,7 +35,7 @@ print(data.count)  -- 42
 
 - **Integer precision** — JSON numbers are decoded into Lua number (`f64` under the hood). Integers larger than 2^53 (~9 × 10^15) lose precision. If you need to preserve large IDs exactly, encode them as strings before serializing.
 - **Nesting depth** — encoder rejects tables nested more than 64 levels deep to guard against runaway recursion. A self-referential Lua table (`t.a = t`) will exceed this limit and error rather than looping forever.
-- **Decode of untrusted input** — decoding is permissive and does not currently enforce a maximum depth on the input side. Keep that in mind when processing large attacker-controlled payloads.
+- **Decode of untrusted input** — decoding enforces serde_json's recursion limit (128 nesting levels): deeper input errors instead of overflowing the stack. Size is not limited — cap attacker-controlled payload sizes upstream (e.g. via `[hooks] http_max_response_bytes` for fetched bodies).
 
 ## Common Patterns
 

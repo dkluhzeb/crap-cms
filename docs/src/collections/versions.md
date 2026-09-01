@@ -152,7 +152,16 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/RestoreVersion
 ```
 
-This overwrites the main table with the snapshot data, sets `_status` to `"published"`, and creates a new version entry for the restore.
+This overwrites the main table with the snapshot data and creates a new
+version entry for the restore. The document's `_status` is restored to
+**the snapshot's status** — a draft snapshot restores as a draft, a
+published one as published (restore never force-publishes).
+
+> **Restore clears translations.** On a localized collection, restore
+> writes the snapshot value to the **default locale** column and sets
+> every non-default-locale column to `NULL` — existing translations are
+> lost and must be re-entered. Take this into account before restoring
+> documents with translated content.
 
 Restore is gated by `access.update` (and the `access.versions` toggle) for the
 collection, and it also honors **field-level write access**: a field the caller

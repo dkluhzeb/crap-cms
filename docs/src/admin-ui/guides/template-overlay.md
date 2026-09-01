@@ -80,6 +80,27 @@ my-project/
         └── richtext.hbs   # overrides the default richtext field template
 ```
 
+> **Overriding `layout/base.hbs`? Keep the partial-nav branch.** Admin
+> navigation partial-swaps `#main` via htmx: the server renders only the
+> page body (plus a `<title>`) when the request is a partial navigation,
+> selected by the `{{#if htmx_partial}}` branch at the top of the default
+> `base.hbs`. An override that drops this branch nests a full HTML
+> document inside `#main` on every nav click. Always start from a fresh
+> `crap-cms templates extract layout/base.hbs` of the current version and
+> re-apply your changes around the branch.
+
+### Navigation partials
+
+The partial-swap contract is carried by a small family of layout templates
+that every override must keep intact: `layout/sidebar.hbs` with its per-entry
+partials `layout/sidebar_item.hbs` and `layout/sidebar_global_item.hbs` (one
+entry per collection / global), `layout/header.hbs` (the top bar), and
+`partials/htmx-nav-link.hbs` — the `<a>` wrapper that adds the `hx-*`
+attributes targeting `#main`. Render nav links through `htmx-nav-link` rather
+than hand-writing `hx-get` so the target/select/push-url triple stays
+consistent; a link that bypasses it does a full page load, which still works
+but drops the partial-nav speedup.
+
 ## Available Template Variables
 
 Templates receive context data from the Axum handlers. Common variables include:

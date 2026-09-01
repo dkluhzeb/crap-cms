@@ -21,9 +21,13 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 | Exists | `{ exists = true }` | `{"exists": true}` | `field IS NOT NULL` |
 | Not exists | `{ not_exists = true }` | `{"not_exists": true}` | `field IS NULL` |
 
-> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. Use `not_exists` for IS NULL (not `{ exists = false }`).
+> **Note:** `exists`/`not_exists` accept only the boolean `true`. `{ exists = false }` (or any non-boolean value) is rejected with an error on every surface — it is never silently dropped or read as IS NOT NULL. Use `not_exists = true` for IS NULL.
 >
-> **gRPC shorthand limitation:** In Lua, bare values like `{ count = 42 }` or `{ active = true }` are coerced to string equals. The gRPC `where` JSON only accepts string or operator object values — numeric/boolean shorthand is not supported.
+> **Ranges:** one operator object may carry several operators, ANDed together — `{ greater_than_or_equal = "2024-01-01", less_than = "2025-01-01" }`.
+>
+> **`in`/`not_in` element rules:** elements must be scalars — a nested array/object element is a **hard error** (never silently dropped); mixed scalar types are coerced to their string forms. An empty `in = {}` matches **nothing**; an empty `not_in = {}` matches **everything** — take care when the list is built dynamically (an accidentally-empty `not_in` combined with a bulk delete selects every document).
+>
+> **Scalar shorthand works on every surface:** bare values like `{ count = 42 }` or `{ active = true }` (Lua) and `{"count": 42}` / `{"active": true}` (gRPC/MCP `where` JSON) are coerced to a string `equals` — numbers via their decimal form, booleans as `"true"`/`"false"`. All surfaces share one filter grammar, so shorthand, operator objects, and `or` groups behave identically everywhere.
 
 ### Matching semantics
 
@@ -46,6 +50,8 @@ admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
 ## Sorting
 
 Prefix a field name with `-` for descending order. When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.
+
+On a **drafts-enabled** collection, `_status ASC` is prepended to every sort (on all surfaces) so draft rows group before published ones in mixed reads; when the read is pinned to a single status (a normal published-only read, or `draft = true`) the prepend is a no-op and your sort applies exactly.
 
 **Lua:**
 
@@ -97,9 +103,9 @@ grpcurl -plaintext -d '{
 
 ## Cursor-Based Pagination
 
-Cursor-based pagination is opt-in via `[pagination] mode = "cursor"` in `crap.toml`. When enabled, the `pagination` object includes opaque `startCursor` and `endCursor` tokens instead of `page`/`totalPages`. These represent the cursors of the first and last documents in the result set. Pass `after_cursor` (forward) or `before_cursor` (backward) on the next request to navigate from any cursor position.
+Cursor-based pagination is opt-in via `[pagination] mode = "cursor"` in `crap.toml`. When enabled, the `pagination` object includes opaque `start_cursor` and `end_cursor` tokens instead of `page`/`total_pages`. These represent the cursors of the first and last documents in the result set. Pass `after_cursor` (forward) or `before_cursor` (backward) on the next request to navigate from any cursor position.
 
-`after_cursor`/`before_cursor` and `page` are mutually exclusive. `after_cursor` and `before_cursor` are also mutually exclusive with each other.
+`after_cursor`/`before_cursor` and an explicit `page` **greater than 1** are mutually exclusive (an error); `page = 1` is the default and is tolerated alongside a cursor. `after_cursor` and `before_cursor` are mutually exclusive with each other. In page mode (`[pagination] mode = "page"`, the default), cursor parameters are **silently ignored** rather than rejected.
 
 **Lua:**
 
@@ -157,7 +163,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Find
 ```
 
-Cursors encode the position of a document in the sorted result set. They are opaque — do not parse or construct them manually. `startCursor` and `endCursor` are always present when the result set is non-empty.
+Cursors encode the position of a document in the sorted result set. They are opaque — do not parse or construct them manually. `start_cursor` and `end_cursor` are always present when the result set is non-empty.
 
 ## Combining Filters
 
@@ -282,7 +288,8 @@ grpcurl -plaintext -d '{
 
 **Behavior:**
 - `select` is optional. When omitted or empty, all fields are returned (backward compatible).
-- System fields (`id`, `created_at`, `updated_at`) are always included.
+- `id` is always included. `created_at`, `updated_at` and `_status` are returned **only when named** in `select` (they are still fetched internally so cursor pagination keeps its composite order, but they are stripped from the response).
+- A name that matches no field is silently ignored (it selects nothing) — it is not an error.
 - Selecting a group field name (e.g., `"seo"`) includes all its sub-fields.
 - Relationship fields not in `select` are skipped during population (saves N+1 queries).
 
@@ -444,7 +451,7 @@ All filter operators (equals, contains, like, in, greater_than, etc.) work with 
 
 ## Full-Text Search
 
-Use the `search` parameter for fast full-text search powered by SQLite FTS5. This searches across all text-like fields (text, textarea, richtext, email, code) — including text-like fields inside groups, indexed under their `group__field` column name — or the fields specified in `list_searchable_fields` in the collection's admin config (which may also reference group sub-fields by their `group__field` name).
+Use the `search` parameter for fast full-text search — powered by SQLite FTS5 or Postgres `tsvector`, depending on the backend. This searches across all text-like fields (text, textarea, richtext, email, code) — including text-like fields inside groups, indexed under their `group__field` column name — or the fields specified in `list_searchable_fields` in the collection's admin config (which may also reference group sub-fields by their `group__field` name).
 
 **Lua:**
 
@@ -466,8 +473,8 @@ grpcurl -plaintext -d '{
 ```
 
 **Behavior:**
-- Each whitespace-separated word is treated as a literal search term (implicit AND).
-- Results are ranked by relevance (FTS5 `rank`).
+- Each whitespace-separated word is treated as a **prefix** search term (implicit AND): `search = "hel wor"` matches "hello world".
+- `search` acts as an additional **filter** on the result set (`id IN (FTS matches)`); ordering follows `order_by` / the default sort as usual — results are **not** re-ranked by FTS relevance.
 - `search` can be combined with `where` filters, pagination, sorting, and all other query parameters.
 - Collections without text fields silently ignore the `search` parameter.
 - The `search` parameter also works with `Count` to get the total number of matching documents.

@@ -30,6 +30,7 @@
 
 import { clear, h } from '../_internal/h.js';
 import { t } from '../_internal/i18n.js';
+import { EV_FILTER_BUILDER_APPLIED } from '../events.js';
 
 /**
  * Operator options per field type. Tuple shape: `[opValue, labelKey]`.
@@ -474,7 +475,7 @@ export class CrapFilterBuilder extends HTMLElement {
    */
   _applyFilters(rowsEl) {
     this.dispatchEvent(
-      new CustomEvent('crap:filter-builder-applied', { bubbles: true, composed: true }),
+      new CustomEvent(EV_FILTER_BUILDER_APPLIED, { bubbles: true, composed: true }),
     );
     navigate(this._buildFilterUrl(rowsEl));
   }

@@ -3,19 +3,19 @@
 //! Auth strategies let a collection plug in non-password
 //! authentication: the Lua function receives `{ headers,
 //! collection }` and returns a user document (or nil to defer).
-//! `service::auth::login` tries them after email/password fails.
-//!
-//! For the gRPC Login path the headers map is always empty (the
-//! handler doesn't surface metadata to strategies — a real
-//! limitation worth knowing about), so the strategy can only
-//! authenticate based on collection + DB lookup. The tests below
-//! pin:
+//! `service::auth::login` tries them after email/password fails —
+//! but only strategies whose `surfaces` include the login's surface
+//! and whose `activates_on` matches the request (gRPC metadata
+//! headers are passed through, so header-activated strategies can
+//! fire on `Login` too). The tests below pin:
 //!   - happy path: a strategy that returns a user → Login succeeds
 //!     even with the wrong password
 //!   - deny path: a strategy that always returns nil → Login still
 //!     fails when the password is wrong
 //!   - non-interference: a passing strategy must not break the
 //!     normal email/password path
+//!   - scoping: an admin-only strategy never fires on the gRPC
+//!     Login path (the A7 security fix)
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -89,6 +89,14 @@ fn proto_struct(pairs: &[(&str, &str)]) -> DataMap {
 }
 
 fn users_def_with_strategy(name: &str, authenticate: &str) -> CollectionDefinition {
+    users_def_with_scoped_strategy(name, authenticate, SurfaceSet::grpc_only())
+}
+
+fn users_def_with_scoped_strategy(
+    name: &str,
+    authenticate: &str,
+    surfaces: SurfaceSet,
+) -> CollectionDefinition {
     let mut def = CollectionDefinition::new("users");
     def.labels = Labels {
         singular: Some(LocalizedString::Plain("User".to_string())),
@@ -107,10 +115,60 @@ fn users_def_with_strategy(name: &str, authenticate: &str) -> CollectionDefiniti
         name: name.to_string(),
         authenticate: authenticate.into(),
         activates_on: Activation::always(),
-        surfaces: SurfaceSet::admin_only(),
+        surfaces,
     });
     def.auth = Some(auth);
     def
+}
+
+// ── admin_scoped_strategy_does_not_fire_on_grpc ──────────────────────────
+//
+// Regression for the login-path scoping fix: a strategy declared
+// `surfaces = {"admin"}` (the parse default) must NOT run on the gRPC
+// Login path — before the fix every strategy on the collection executed
+// regardless of its declared surfaces/activation.
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_scoped_strategy_does_not_fire_on_grpc() {
+    let def = users_def_with_scoped_strategy(
+        "admin-only",
+        "hooks.any_user.authenticate",
+        SurfaceSet::admin_only(),
+    );
+
+    let ctx = spawn_grpc_server_with_lua(
+        vec![def],
+        vec![],
+        &[("hooks/any_user.lua", ANY_USER_STRATEGY)],
+    )
+    .await;
+    let mut client = ContentApiClient::new(ctx.channel.clone());
+
+    client
+        .create(CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(proto_struct(&[
+                ("email", "scoped@x.com"),
+                ("name", "Scoped"),
+                ("password", "real-password-12345"),
+            ])),
+            ..Default::default()
+        })
+        .await
+        .expect("create user");
+
+    let err = client
+        .login(LoginRequest {
+            collection: "users".to_string(),
+            email: "scoped@x.com".to_string(),
+            password: "wrong-password".to_string(),
+        })
+        .await
+        .expect_err("admin-scoped strategy must not rescue a gRPC login");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+
+    ctx.shutdown.cancel();
+    let _ = ctx.server_handle.await;
 }
 
 // ── strategy_authenticates_when_password_is_wrong ────────────────────────

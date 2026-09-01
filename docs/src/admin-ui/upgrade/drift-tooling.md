@@ -7,7 +7,8 @@ Or upstream restructures a partial, your override stops being
 invoked.
 
 The `crap-cms templates` family of subcommands is the toolkit for
-keeping forks healthy. Four read-only commands:
+keeping forks healthy. Five commands (four read-only; `extract`
+writes the extracted file into your config dir):
 
 | Command | What it does |
 |---|---|
@@ -17,9 +18,8 @@ keeping forks healthy. Four read-only commands:
 | `crap-cms templates diff` | Shows a unified diff between one of your overrides and its upstream counterpart. |
 | `crap-cms templates layout` | Reports old-layout files in your config dir and recommends `git mv` commands to migrate. |
 
-All five run against your config dir; none of them mutate any file
-they don't have to (the table below is precise about which commands
-do and don't touch the filesystem).
+All five run against your config dir; only `extract` writes (the
+file it extracts), the rest never touch the filesystem.
 
 ## `templates list` — discover override targets
 

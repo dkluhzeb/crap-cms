@@ -23,7 +23,7 @@ use mlua::{Table, Value};
 
 use crate::core::collection::{Activation, Auth, AuthMethod, MfaMode, Surface, SurfaceSet};
 
-use super::helpers::{deny_unknown_keys, get_optional_hook_ref, get_table};
+use super::helpers::{deny_unknown_keys, get_bool, get_optional_hook_ref, get_table};
 
 /// Keys accepted on the top-level `auth = { ... }` table.
 const AUTH_KEYS: &[&str] = &["enabled", "token_expiry", "methods"];
@@ -39,12 +39,54 @@ pub(super) fn validate_auth_keys(config: &Table) -> Result<()> {
 
     deny_unknown_keys(&auth_tbl, "auth", AUTH_KEYS)?;
 
+    // Strict boolean (nil → default, non-boolean → error). NEVER
+    // `get::<bool>` here: mlua coerces a missing key to `false`, which
+    // silently turned `auth = { methods = {...} }` into a DISABLED auth
+    // collection before this helper was used.
+    let enabled = get_bool(&auth_tbl, "enabled", true)?;
+
     let Ok(methods_tbl) = get_table(&auth_tbl, "methods") else {
         return Ok(());
     };
 
-    for method in methods_tbl.sequence_values::<Table>().flatten() {
-        validate_method_keys(&method)?;
+    let methods: Vec<Table> = methods_tbl.sequence_values::<Table>().flatten().collect();
+
+    // An explicit empty list is a mistake, not a request for the defaults
+    // (omit the key for those) — and `enabled = true` with zero methods
+    // would otherwise silently gain password_login + bearer + session_cookie.
+    if methods.is_empty() && enabled {
+        bail!(
+            "auth.methods is empty — list at least one method, or omit `methods` to use the defaults (password_login, bearer, session_cookie)"
+        );
+    }
+
+    for method in &methods {
+        validate_method_keys(method)?;
+    }
+
+    Ok(())
+}
+
+/// A `strategy` method needs a callable `authenticate` and an explicit
+/// `activates_on`. Both used to be tolerated: a missing/empty
+/// `authenticate` silently DROPPED the method, and a missing
+/// `activates_on` silently became `always = true` (a strategy that fires
+/// on every request). Both are hard load errors now.
+fn validate_strategy_shape(method: &Table) -> Result<()> {
+    let name = method.get::<String>("name").unwrap_or_default();
+
+    match method.get::<Value>("authenticate")? {
+        Value::String(s) if !s.to_str()?.is_empty() => {}
+        Value::Table(_) => {}
+        _ => bail!(
+            "auth strategy '{name}': `authenticate` is required (a hook ref string or {{ ref, options }})"
+        ),
+    }
+
+    if parse_activation(method).is_none() {
+        bail!(
+            "auth strategy '{name}': `activates_on` is required — {{ header = \"x-...\" }} or {{ always = true }}"
+        );
     }
 
     Ok(())
@@ -80,6 +122,15 @@ fn validate_method_keys(method: &Table) -> Result<()> {
         deny_unknown_keys(&activation, "activates_on", &["header", "always"])?;
     }
 
+    if ty == "strategy" {
+        validate_strategy_shape(method)?;
+    }
+
+    if ty == "password_login" {
+        get_bool(method, "verify_email", false)?;
+        get_bool(method, "forgot_password", true)?;
+    }
+
     Ok(())
 }
 
@@ -96,7 +147,10 @@ pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
         }
         Value::Table(tbl) => {
             let token_expiry = tbl.get::<u64>("token_expiry").unwrap_or(7200);
-            let enabled = tbl.get::<bool>("enabled").unwrap_or(true);
+            // `get_bool`, not `get::<bool>`: mlua reads a missing key as
+            // `false`, which made every `auth = { methods = {...} }` table
+            // without an explicit `enabled = true` parse as disabled.
+            let enabled = get_bool(&tbl, "enabled", true).unwrap_or(true);
             let mut methods = parse_methods(&tbl);
 
             // If `enabled = true` but no `methods` listed, fall back
@@ -146,8 +200,10 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
                 .ok()
                 .flatten()
                 .filter(|h| !h.reference().is_empty()),
-            verify_email: tbl.get::<bool>("verify_email").unwrap_or(false),
-            forgot_password: tbl.get::<bool>("forgot_password").unwrap_or(true),
+            verify_email: get_bool(tbl, "verify_email", false).unwrap_or(false),
+            // Same nil-is-false trap as `enabled`: a missing key must mean
+            // the documented default (`true`), not "disabled".
+            forgot_password: get_bool(tbl, "forgot_password", true).unwrap_or(true),
         }),
         "bearer" => Some(AuthMethod::Bearer {
             surfaces: parse_surfaces(tbl).unwrap_or_else(SurfaceSet::all),
@@ -353,6 +409,9 @@ mod tests {
         }
     }
 
+    /// Parser-layer fallback only: `validate_auth_keys` rejects a strategy
+    /// without `activates_on` before `parse_collection_auth` ever runs, so
+    /// this default is unreachable from a real definition file.
     #[test]
     fn parse_strategy_without_activates_on_defaults_to_always() {
         let lua = Lua::new();
@@ -381,6 +440,111 @@ mod tests {
         build(&auth);
         config.set("auth", auth).unwrap();
         validate_auth_keys(&config)
+    }
+
+    /// Regression: `auth = { methods = {...} }` without an explicit
+    /// `enabled` parsed as DISABLED (and `password_login` without
+    /// `forgot_password` as forgot-password-off) because `get::<bool>`
+    /// reads a missing key as `false`. Both must take their documented
+    /// `true` default; a non-boolean value is a load error.
+    #[test]
+    fn auth_table_without_enabled_key_is_enabled() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap();
+        assert!(auth.enabled, "missing `enabled` must default to true");
+        assert!(
+            auth.password_login().is_some_and(|p| p.forgot_password),
+            "missing `forgot_password` must default to true"
+        );
+
+        let err = auth_config(&lua, |a| {
+            a.set("enabled", "yes").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("expected a boolean"), "{err}");
+    }
+
+    fn strategy_method(lua: &Lua, authenticate: Option<&str>, activates_on: bool) -> Table {
+        let m = lua.create_table().unwrap();
+        m.set("type", "strategy").unwrap();
+        m.set("name", "sso").unwrap();
+        if let Some(a) = authenticate {
+            m.set("authenticate", a).unwrap();
+        }
+        if activates_on {
+            let act = lua.create_table().unwrap();
+            act.set("header", "x-sso").unwrap();
+            m.set("activates_on", act).unwrap();
+        }
+        m
+    }
+
+    fn methods_config(lua: &Lua, methods: Vec<Table>) -> Result<()> {
+        auth_config(lua, |a| {
+            let list = lua.create_table().unwrap();
+            for (i, m) in methods.into_iter().enumerate() {
+                list.set(i + 1, m).unwrap();
+            }
+            a.set("methods", list).unwrap();
+        })
+    }
+
+    /// Regression: `methods = {}` used to silently gain the default method
+    /// set (`password_login` + `bearer` + `session_cookie`).
+    #[test]
+    fn validate_rejects_explicit_empty_methods() {
+        let lua = Lua::new();
+        let err = methods_config(&lua, vec![]).unwrap_err().to_string();
+        assert!(err.contains("auth.methods is empty"), "{err}");
+
+        // `enabled = false` with an empty list is fine (nothing to run).
+        auth_config(&lua, |a| {
+            a.set("enabled", false).unwrap();
+            a.set("methods", lua.create_table().unwrap()).unwrap();
+        })
+        .unwrap();
+    }
+
+    /// Regression: a strategy with a missing/empty `authenticate` used to be
+    /// silently dropped by the parser.
+    #[test]
+    fn validate_rejects_strategy_without_authenticate() {
+        let lua = Lua::new();
+        for auth in [None, Some("")] {
+            let err = methods_config(&lua, vec![strategy_method(&lua, auth, true)])
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("`authenticate` is required"), "{err}");
+        }
+    }
+
+    /// Regression: a strategy without `activates_on` used to default to
+    /// `always = true` (fires on every request) with only a warning.
+    #[test]
+    fn validate_rejects_strategy_without_activates_on() {
+        let lua = Lua::new();
+        let err = methods_config(
+            &lua,
+            vec![strategy_method(&lua, Some("hooks.auth.sso"), false)],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("`activates_on` is required"), "{err}");
+
+        methods_config(
+            &lua,
+            vec![strategy_method(&lua, Some("hooks.auth.sso"), true)],
+        )
+        .unwrap();
     }
 
     #[test]

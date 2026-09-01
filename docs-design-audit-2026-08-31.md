@@ -286,6 +286,20 @@ looks conceptually wrong; the architecture is over-delivering for an alpha.
 
 **Verified accurate**: `reference/routes.md` (route-by-route), `guides/display-conditions.md`, `guides/static-files.md`, scenarios 03/05/06/07.
 
+**✔ Disposition (2026-08-31): section COMPLETE.** All HIGH/MED/LOW items fixed:
+phantom aliases rewritten (index + scenario 08); partial-nav documented in
+template-overlay.md warning box + components.md base.hbs row + scenario 01
+caution; session tag corrected; CSS paths modernized (index, css-variables,
+themes); formatter example → `#main`; slots context key → `docs` (+
+breadcrumb_extras/field_help rows added); atom-inventory demoted to planning
+doc (components.md declared normative) + uploads tag fixed; themes.md step-1
+path unified + swatch example moved to CSS (CSP); restyle font token →
+`html { font-family }` override; scenario 02 → list_helpers.rs; scenario 04 →
+single-segment slug; document-deleted event claim corrected (navigates, no
+event); index route table replaced by pointer to normative reference/routes.md;
+drift-tooling 4→5 commands; tier count 20→21; scenario 08 title; both stale
+code-side comments (htmx-nav-link.hbs header, tokens.css pointer).
+
 
 ### A-Auth/Access (agent-reported; ★ = personally verified in code)
 
@@ -334,6 +348,29 @@ overview.md still speaks the pre-`methods` "strategy chain" vocabulary. One REVE
 `mfa_when`'s Rust doc-comment says "only meaningful with mfa=email" but code runs the gate
 for any non-Off mode — the DOCS are right, the code comment is stale.
 
+**✔ Disposition (2026-08-31): COMPLETE.** Code-side: **A7 → CODE FIX (Security)** —
+`login_flow::strategy_applies` filters login-path strategies by surface + activation
+(unit-tested); **A2 → CODE FIX (Security)** — `gate_passes` makes both admin gates
+boolean (Constrained = logged error + deny; unit-tested); **M9 → CODE FIX (Security)** —
+`Me` resolves through `resolve_auth_user` (gRPC regression `me_honors_collection_methods_without_bearer`);
+**A5 → doc** (trash/versions are different sets, not supersets — hard-deny is the right
+design; overview.md narrowed to "downgrade on the status axis"); **A6 → doc** (Login
+→ PERMISSION_DENIED only when no strategies; strategies now scoped by A7).
+Doc-side HIGH: field-level `hidden` fixed earlier; `crap.access.check` now lists
+`unlock`. MED: fixed-precedence evaluation order (bearer → cookie → always → header,
+short-circuit on decodable-invalid, login-path scoping) written once and reused on
+custom-strategies.md + auth-methods.md; admin login = explicit `collection` field;
+custom-strategies.md MFA example → methods shape; validation-rules list rewritten
+(load errors / startup errors / warnings) — and made TRUE: **CODE FIX (Breaking)**
+`methods = {}`, strategy without `authenticate`, strategy without `activates_on` are
+now load errors. STALE: grpc-api/authentication.md rewritten (MFA + VerifyMfa, claims
+table incl. session_version/token_use/auth_time, Me via metadata/strategy, revocation);
+login-flow.md public routes (+/admin/mfa, callbacks, /health, /ready) + request-auth
+paragraph; overview.md "strategy chain" → methods vocabulary; `mfa_when` Rust comment
+fixed. **Bonus bug found by the new validator test: `auth = { methods = {...} }`
+without `enabled = true` parsed as DISABLED (mlua reads a missing bool as `false`),
+and `forgot_password` defaulted to off — fixed via strict `get_bool` (Fixed entry).**
+
 ### A-Collections/Fields (agent-reported; ★ = personally verified)
 
 **HIGH**
@@ -373,6 +410,23 @@ checkbox PG SMALLINT unmentioned.
 **Verified accurate**: group/row/collapsible storage docs, date.md (fully), email
 injection, versions DDL, globals access-key rejection, delete-protection semantics.
 
+**✔ Disposition (2026-08-31): COMPLETE except one Tier-4 item.** Depth table
+fixed earlier + all THREE stale code comments fixed (depth.rs, wire_proto/proto
+pair, Lua find.rs — regen gates at final pass). MEDs: restore status+
+translation-wipe documented in versions.md (restore-from-snapshot escalated to
+Tier 4); unknown-field-type → hard-error doc; number step → "any"/integer-"1";
+hook refs `{ref,options}` documented (definition-schema, hooks overview,
+validate ctx.options row); soft-delete partial-unique + rebuild documented;
+slug rules section added to definition-schema; required_locales rows added to
+both schema pages; join required/localized hard-error documented; admin key
+table completed 11→16 keys (all FieldAdmin fields). LOWs: tab label now a
+LOAD ERROR (code fix + regression test + Breaking CHANGELOG — matches the
+documented contract); width→any-CSS; select option label LocalizedString;
+array/blocks DDL tables +_locale/_tz rows; depth cap warns at startup (doc);
+checkbox PG SMALLINT noted. Dismissed: delete-protection error-text variants
+are INTENTIONAL (admin toast omits the id — context already shows the doc;
+service/gRPC include it). Remaining: has_many parse-time rejection → Tier 4.
+
 ### A-Query/Locale/Cache (agent-reported; ★ = personally verified)
 
 **HIGH**
@@ -409,6 +463,25 @@ in/not_in semantics (not_in:[] matches everything — bulk-delete foot-gun), cur
 silently dropped in page mode, admin URL grammar is a third dialect, select retains
 _status, redis clear non-atomic. Drafts collections silently prepend `_status ASC` to
 every sort (MED, all surfaces).
+
+**✔ Disposition (2026-08-31): COMPLETE except 3 Tier-4 items.** HIGH: date-noon +
+gRPC-shorthand text fixed (overview + filter-operators); locale-lock silent drop →
+documented as-is in locale/overview.md, **decision open (Tier 4)**. MED: search re-framed
+as a prefix *filter* (ranked mode = **Tier 4** decision); ★ bulk `*_conn` cache clear →
+**CODE FIX** (`clear_cache()` in create_many/update_many/delete_many conn paths +
+regression `bulk_conn_paths_clear_cache`); api-surface rows fixed; filter-operators.md
+re-scoped to CRUD with an access-subset callout; **`exists=false` → CODE FIX (Breaking)**:
+both parsers (`decode.rs` + Lua `FilterOperators`) now reject any value but `true` —
+previously wire = IS NOT NULL (inverted), Lua = silently dropped; access path fails
+closed (Denied) with regression tests on all three; in/not_in element rules + error
+grammar documented. LOW: page=1+cursor, Lua-reads-no-cache, ranges, empty in/not_in,
+cursor-drop-in-page-mode, `_status ASC` prepend, redis non-atomic — all documented;
+select: doc bullet was WRONG (only `id` is unconditional; created_at/updated_at/_status
+stripped unless named; unknown select names silently ignored) → fixed; admin URL
+grammar → **internal, not a public contract** (admin list URLs are a UI concern; full
+unification onto `decode_where_map` is rec #17, tracked as a post-tag refactor).
+**New Tier-4 question**: should an unknown `select` name be a hard error (strict-input
+policy) instead of silently selecting nothing?
 
 ### A-Setup/Config/CLI (agent-reported; ★ = personally verified)
 
@@ -448,6 +521,28 @@ understated (6+ not 1), scaffold tree/wizard lists incomplete, distro-path list 
 **Verified accurate**: single-server.md (fully), multi-server.md (fully),
 installation.md (nearly), serve/user/migrate/backup/trash/typegen/update CLI docs.
 
+**✔ Disposition (2026-08-31): COMPLETE except the `[cache] custom` decision.** HIGH ×3
+(quickstart reflection/default_deny, `[auth]` rate-limit keys, trust_proxy/trusted_proxies)
+were fixed earlier and re-verified. MED: `[cache] backend = "custom"` → **user discussion
+open** (implement via `LuaVmLease` like storage/email vs remove the dead limb; code
+untouched pending the call); validation-rules section rewritten as a full table (all
+`bail!` sites in validate.rs + 7 warnings, `deny_unknown_fields` noted); mcp `api_key`
+32-char minimum in the table; `[jobs.queues]` example `emails`→`email` + framework-queue
+note + typo-is-only-a-warning note; CLI: RUST_LOG table (dev_mode-conditional, work/mcp),
+`make job --retries` = queue default, `init --no-input` requires DIR, **`jobs healthcheck`
+→ CODE FIX** (exit 0/2/1 like `status --check`, `JobHealth` + `classify_health` unit
+test), `import` documented as raw per-collection-transaction upsert skipping
+hooks/validation/access/events (+ **CODE FIX**: all slugs validated before any write),
+7 `make` subcommands (page/route/slot/node/field/theme/component) documented with
+flags + output paths, container/blocks/tabs shorthand grammar documented;
+config-directory: tree (routes/, pages/, slots/, components/, themes/), init-created
+dirs, load order (jobs/ 4th, init.lua last, hooks/access/routes lazy via refs);
+database/overview: read/write pool split. LOW: dev_mode scaffold claim corrected (`false`),
+`bulk_max_documents` added to the full-reference block, `busy_timeout` ms exception in
+the duration note, auth system columns (6 + 3 verify + 2 MFA) listed, scaffold tree +
+wizard "Project path" prompt, distro paths (+`/bin/`, `/sbin/`, symlink-resolved),
+**`db console` on PG → CODE FIX** (launches `psql <database.url>`, unit-tested).
+
 ### A-Uploads/MCP/gRPC/Live/Lua-CRUD (agent-reported; ★ = personally verified)
 
 **HIGH**
@@ -486,6 +581,21 @@ undocumented.
 admin-sse.md, image-processing.md (except the prefix claim), type-safety.md (minus 2
 FieldInfo fields).
 
+**✔ Disposition (2026-08-31, code fixes landed 2026-09-01): COMPLETE.** `Subscribe` now honors `SubscribeRequest.token` (regression `subscriber_authenticated_via_request_token_field`); MCP globals obey include/exclude in listing + schema resources (regression `global_tools_obey_include_exclude_in_listing`). Original note follows.
+Fixed: list_versions → `result.documents` (3 spots); globals accessor now BINDS
+unpublish+validate (code fix + regression test + typegen + CHANGELOG — doc
+example was made true instead of removed); pagination casing (4 files);
+upload-API auth/status table (401/403/409/503 + anonymous note); MCP
+write_config_file scope + trust warning; reserved-args table +events +hooks
+(with the single-vs-bulk default asymmetry); list_versions/restore_version
+args; GetGlobalRequest draft field; image filename → nanoid prefix; "only in
+hooks" stale claims (8 spots, incl. the runtime error text); SSE-disabled
+behavior corrected (200 empty stream vs gRPC UNAVAILABLE); offset row fixed;
+webp/avif default qualities noted; custom-storage `exists` documented; MCP
+HTTP 1 MiB cap + 204-notification documented. Dismissed: uploads
+hidden-fields claim (overview.md:55 verified CORRECT — admin.hidden only).
+Remaining (Tier 1): Subscribe token field; MCP globals list/execute asymmetry.
+
 ### A-Hooks/Jobs/Lua (agent-reported)
 
 **HIGH**
@@ -513,6 +623,18 @@ FieldInfo fields).
 for only 4 of 9 events (overview implies all), ctx.context request-vs-operation scope
 (prose right, Rust doc-comment + typegen wording stale — fix Rust side).
 
+**✔ Disposition (2026-08-31): all MED+LOW items FIXED.** transaction-access.md
+rewritten honestly (access = caller's conn, strategies = no tx + rollback
+caveat + idempotency guidance); CRUD availability rewritten across overview/
+collections/globals/jobs + the runtime error text itself updated in
+tx_conn.rs (pool-mode contexts enumerated); max_concurrent → cluster-global
+(jobs.md table + crap-toml row); crap.metrics row → crap.log.warn; ctx.slug →
+ctx.job.slug; `[hooks] http_max_response_bytes` key fixed; JSON decode
+depth-limit note un-inverted (serde_json 128-level cap); before_read ctx.id
+scoped; elastic-pool wording fixed; field-hook tier scoped to its 4 events;
+hook_context.rs doc-comment → operation-scoped (regen types/crap.lua at
+gate). HIGH before_broadcast-inline → Tier 4 (user decision, pending).
+
 ## Part B — Code lacking docs *(sweep results)*
 
 ### B-Hooks/Jobs/Lua + APIs (agent-reported)
@@ -532,6 +654,19 @@ for only 4 of 9 events (overview implies all), ctx.context request-vs-operation 
 - `public_url`/`[upload.s3] public_url_base`/Lua `url` handler: documented, complete,
   and DEAD (no production caller; everything routes through the /uploads proxy) —
   ties into the signed-URL backlog item.
+
+**✔ Disposition (2026-08-31): COMPLETE except 2 Tier-4 items.** `ctx.edited_by` was
+already documented (live-updates/hooks.md); field-hook `ctx.options` row, job-handler
+`ctx.options` line, route `ctx.ui_locale` row added; `crap.any.route_handler` section
+added to typing-factories.md; 5 missing namespaces (access/json/routes/pages/
+template_data) added to the overview table; `crap.hooks.list` was already documented;
+schema.md field table = the `crap.schema` *FieldInfo* view (deliberately narrower than
+the definition schema — not a gap); jobs CLI list +cancel/+healthcheck; email/images
+queue seeded defaults documented in crap-toml; `crap.jobs.define` strictness +
+`crap.email.register` init-only/strict noted; **upload validation chain** (size, MIME
+allowlist, magic bytes, extension↔content, SVG XXE scan, EXIF orientation + metadata
+strip) now has its own section on uploads/overview.md. Remaining **Tier 4**:
+EventOperation vocabulary for undelete/unpublish/restore; dead `public_url` limb.
 
 ### B-Auth/Access (agent-reported)
 - `ctx.options` on access functions undocumented; collection-level table doesn't say
@@ -554,12 +689,30 @@ for only 4 of 9 events (overview implies all), ctx.context request-vs-operation 
 **Verified accurate**: access-control/filter-constraints.md (every claim),
 authentication/cli-user-creation.md.
 
+**✔ Disposition (2026-08-31): COMPLETE.** `ctx.options` + "`ctx.document` is field-level
+only" rows added to the access ctx table; sliding refresh + `session_absolute_max_age`
+documented (login-flow.md "Session lifetime" + crap-toml `[auth]` row); field-level
+filter-table = allowed noted on field-level.md; startup validation rules rewritten on
+auth-methods.md (and the silent-drop of a strategy with missing `authenticate` is now a
+**load error**, see A-Auth); `Invalid(Unaccepted)` clears cookie vs `Lookup` keeps it
+documented in login-flow.md; MFA guess/issuance throttles + gRPC asymmetry documented in
+custom-strategies.md; account-state guards (lock/unverify bump `session_version`, stream
+teardown, locked users can't consume reset/verification tokens) on auth-collections.md.
+
 ### B-AdminUI (agent-reported)
 - **Slots guide table lists 12 of 14 built-ins** — `breadcrumb_extras` and `field_help` are declared in templates (and pinned by the new stable-API test) but absent from the guide's table; `field_help` even serves as the guide's own hash-params example without being listed.
 - **`list_footer` renders only when the list is non-empty** (`items.hbs:159-164` — slot inside `{{#if docs}}`) — undocumented conditional; legends/totals vanish exactly on empty filter results. *(behavioral nuance of yesterday's slot)*
 - Four `@stability stable` components missing from `components.md` tables: `crap-array-row`, `crap-pill-list`, `crap-column-picker`, `crap-filter-builder` (only in the explicitly non-normative atom-inventory).
 - Three shipped events (`crap:column-picker-saved`, `crap:filter-builder-applied`, `crap:pill-removed`) have no `EV_*` constants — events.md's own rule classifies them "internal", while atom-inventory presents them as stable subclass surface. Contradictory classification.
 - The sidebar/nav partial family (`sidebar_item.hbs`, `sidebar_global_item.hbs`, `header.hbs`) — where the `#main` contract now lives — is referenced by no docs page.
+
+**✔ Disposition (2026-08-31): COMPLETE.** Slots table 14/14 (fixed earlier);
+`list_footer` non-empty-only condition noted; 4 stable components added to
+components.md; the 3 events got `EV_PILL_REMOVED` / `EV_COLUMN_PICKER_SAVED` /
+`EV_FILTER_BUILDER_APPLIED` constants (dispatch + listener sites switched, events.md
+sections added) so the "internal" classification contradiction is gone; nav-partial
+family documented on template-overlay.md (note: they live in `templates/layout/`, not
+`partials/` as the finding said — `partials/htmx-nav-link.hbs` is the only partial).
 
 
 ## Part D — Recommendations *(accumulating)*
@@ -623,11 +776,33 @@ the locale page, transaction-access.md, the misplaced [auth] keys,
 trust_proxy, partial-nav in the admin-ui guides, the camelCase pagination
 remnants, `crap.metrics`).
 
+**✔ Recommendations disposition (2026-09-01).** Collections/Query/Config: #10 done
+(docs + 3 stale comments; "should Find default to 0" stays Tier 4 with the depth
+table); #11, #12, #14 → Tier 4; #13 done; #15 → user discussion (implement via
+`LuaVmLease` vs remove); #16, #18 done; #17 → post-tag refactor (admin URL grammar is
+internal; access-constraint parser already shares `FilterValue` with Lua CRUD — the
+`exists=false` divergence it caused is fixed on both parsers). Auth/Access: #5, #6, #7,
+#8 done (two fixed precedences documented once, all "declaration order" language
+dropped); #9 (`surfaces = "all"` sentinel) → **Tier 4** (additive; decide before a third
+surface exists). Admin UI: #1 = Tier 2 generation wave (not started — decision: pre-tag
+or post-tag); #2 partially (partial-nav warning + nav-partial family documented; a
+config key/slot for the theme bootstrap → Tier 4); #3 done (atom-inventory demoted);
+#4 → backlog (custom-page POST handlers via `crap.routes.register`).
+
 **Tier 4 — design decisions surfaced by the audit** (deliberate choices to
 make, not bugs): locale-lock silent-drop vs error; before_broadcast inline vs
 background; search=filter framing vs wiring ranked mode; EventOperation
 vocabulary for undelete/restore; dead `public_url` limb vs signed-URL plan;
-`has_many` parse-time rejection; strategy-transaction semantics.
+`has_many` parse-time rejection; strategy-transaction semantics;
+**restore-wipes-translations** (snapshots DO carry `__xx` locale values but
+`restore_locale_columns` NULLs all non-default locales — restore-from-snapshot
+would be strictly better; documented as-is for now, versions.md);
+**`[cache] backend = "custom"`** — ✔ DECIDED + IMPLEMENTED 2026-09-01 (user chose
+implement): `crap.cache.register` + lease-backed `CustomCache` + per-VM `LocalLease`
+for in-VM clears + boot check, tests, docs (`lua-api/cache.md`);
+**unknown `select` names** silently select nothing — hard error under the strict-input
+policy? *Resolved by reasoning (no user decision needed): trash/versions hard-deny
+(different sets, not supersets — documented).*
 
 **A meta-observation for the freeze**: every doc-vs-code divergence found
 here predates the generated-contract machinery. The subsystems that went

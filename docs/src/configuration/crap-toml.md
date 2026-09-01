@@ -34,7 +34,7 @@ This allows keeping secrets out of config files and varying configuration across
 
 ## Duration Values
 
-Most time-related fields accept an integer (seconds), a human-readable string with a suffix, or a bare number string:
+Most time-related fields accept an integer (seconds), a human-readable string with a suffix, or a bare number string. The one exception is `database.busy_timeout`, whose bare integer is **milliseconds** (SQLite's own unit) — the suffixed forms (`"30s"`, `"1m"`) work the same everywhere:
 
 ```toml
 # These are all equivalent:
@@ -72,20 +72,40 @@ Fields that support this: `max_file_size` (global and per-collection), `max_memo
 
 `crap.toml` is validated at startup. Fatal validation errors prevent the server from starting with a descriptive error message. Non-fatal issues log warnings.
 
+Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo never silently falls back to a default.
+
 **Fatal errors:**
-- `database.pool_max_size = 0`
-- `database.write_pool_max_size = 0`
-- `database.connection_timeout = 0`
-- `hooks.vm_pool_size = 0`
-- `hooks.max_vm_pool_size = 0`
-- `server.admin_port` or `server.grpc_port` is `0`
-- `server.admin_port == server.grpc_port` (ports must be distinct)
-- `auth.password_policy.min_length > auth.password_policy.max_length`
+
+| Section | Rule |
+|---------|------|
+| `[database]` | `pool_max_size`, `write_pool_max_size` and `connection_timeout` must be `> 0` |
+| `[server]` | `admin_port` and `grpc_port` must be `> 0` and distinct |
+| `[server]` | `request_timeout` / `grpc_timeout`, when set, must be `> 0` |
+| `[server]` | `grpc_rate_limit_window > 0` when `grpc_rate_limit_requests > 0` |
+| `[server]` | `bulk_max_documents >= 0` |
+| `[server]` | `public_url`, when set, must be non-blank and start with `http://` or `https://` |
+| `[server]` | `trust_proxy = true` requires a non-empty `trusted_proxies`; every entry must be an IP, a CIDR, or `"*"` |
+| `[cors]` | `"*"` must be the only origin and cannot be combined with `allow_credentials = true`; every origin needs a scheme and a host and no path; header names and methods must be valid tokens |
+| `[pagination]` | `default_limit > 0`, `max_limit > 0`, `default_limit <= max_limit` |
+| `[depth]` | `default_depth >= 0`, `max_depth >= 0`, `max_nesting_depth >= 1` |
+| `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0` |
+| `[jobs]` | `poll_interval`, `cron_interval`, `heartbeat_interval` must be `> 0` |
+| `[auth]` | `password_policy.min_length <= password_policy.max_length` |
+| `[email]` | `smtp_port > 0` when `smtp_host` is set |
+| `[logging]` | `path` must not be empty when file logging is enabled |
+| `[mcp]` | `http = true` requires `api_key`, and the key must be at least **32 characters** |
+| `[live]` | `channel_capacity > 0` when live events are enabled |
 
 **Warnings (server starts but logs a warning):**
 - `jobs.max_concurrent = 0` — no jobs will execute
 - `auth.secret` is set but shorter than 32 characters
 - `depth.max_depth = 0` — all population requests capped to 0
+- `depth.max_nesting_depth < depth.max_depth`
+- `server.trusted_proxies = ["*"]` — every peer may set `X-Forwarded-For`
+- `logging.max_files = 0`
+- `cache.max_entries = 0` with the memory backend — equivalent to `backend = "none"`
+
+Definition-level checks (hook refs, table-name and locale-column collisions, `required_locales`, auth methods, custom routes) run after the Lua files load and are described on their own pages.
 
 ## Full Reference
 
@@ -109,6 +129,7 @@ host = "0.0.0.0"        # Bind address
 # request_timeout = "30s"        # Admin HTTP request timeout (none by default)
 # grpc_timeout = "30s"           # gRPC request timeout (none by default)
 # public_schema_introspection = true  # ListCollections/DescribeCollection without auth (default true)
+# bulk_max_documents = 0         # Cap per create_many/update_many/delete_many (0 = no limit)
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
@@ -159,7 +180,7 @@ default_depth = 1        # Default population depth for FindByID (Find always de
 max_depth = 10           # Hard cap on population depth (prevents abuse)
 
 [cache]
-backend = "memory"       # Cache backend: "memory" (default), "redis", "none", "custom"
+backend = "memory"       # "memory" (default), "redis", "none", "custom" (crap.cache.register)
 # max_entries = 10000    # Soft cap for memory backend (default: 10000)
 # max_age_secs = 0       # Periodic full clear interval (0 = disabled)
 # redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
@@ -260,6 +281,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 # http = false            # Mount POST /mcp on admin server
 # config_tools = false    # Enable config read/write tools
 # api_key = ""            # API key for HTTP transport
+# http_max_body_bytes = "1MB" # Max POST /mcp body size
 # include_collections = [] # Only expose these collections
 # exclude_collections = [] # Hide these collections
 
@@ -307,9 +329,9 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request. The scaffold sets this to `true` for new projects. Set to `false` in production for cached templates. |
+| `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request, Lua/hook types are regenerated on every `serve`, the session cookie drops its `Secure` flag, and the default log filter becomes `crap_cms=debug,info`. The scaffold writes `dev_mode = false`; flip it to `true` while developing. |
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
-| `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). |
+| `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). The gate is boolean: a returned filter table is logged as an error and denies. |
 | `default_timezone` | string | `""` | Default IANA timezone for date fields with `timezone = true` that don't specify their own `default_timezone`. Pre-selects the timezone in the admin dropdown. Example: `"America/New_York"`. |
 | `csp` | table | *(see below)* | Content-Security-Policy header configuration. See `[admin.csp]`. |
 
@@ -360,6 +382,7 @@ nonce applies to `script-src` only).
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
 | `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
 | `session_cookie_samesite` | string | `"lax"` | `SameSite` attribute for the `crap_session` admin cookie. Accepts `"lax"` (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), `"strict"` (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or `"none"` (reserved; currently falls back to `"lax"` at runtime). |
+| `session_absolute_max_age` | duration | `2592000` (`"30d"`) | Hard ceiling on an admin session measured from the original login, regardless of sliding refreshes via `/admin/api/session-refresh`. `0` disables the cap (a session then lives until `token_expiry` passes without a refresh). Values above 30 days log a startup warning. |
 | `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
 | `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
 | `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
@@ -388,7 +411,7 @@ Password strength requirements applied to all password-setting paths (create, up
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated, planned). |
+| `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated — requires a [`crap.cache.register`](../lua-api/cache.md) call in `init.lua`, otherwise the server refuses to start; the other `[cache]` keys don't apply to it). |
 | `max_entries` | integer | `10000` | Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear. |
 | `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. |
 | `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL. Only used when `backend = "redis"`. |
@@ -400,7 +423,7 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `default_limit` | integer | `20` | Default page size applied to `Find` queries when no `limit` is specified. |
 | `max_limit` | integer | `1000` | Hard cap on `limit`. Requests above this value are clamped to `max_limit`. |
-| `mode` | string | `"page"` | Pagination mode: `"page"` (offset-based with `page`/`totalPages`) or `"cursor"` (keyset-based with `startCursor`/`endCursor`). In cursor mode, pass `after_cursor` (forward) or `before_cursor` (backward) instead of `page`. |
+| `mode` | string | `"page"` | Pagination mode: `"page"` (offset-based with `page`/`total_pages`) or `"cursor"` (keyset-based with `start_cursor`/`end_cursor`). In cursor mode, pass `after_cursor` (forward) or `before_cursor` (backward) instead of `page`. |
 
 ### `[upload]`
 
@@ -486,7 +509,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_concurrent` | integer | `10` | Maximum concurrent job executions across all queues. |
+| `max_concurrent` | integer | `10` | Maximum concurrent job executions across all queues, **cluster-wide** (counted via the shared DB — not per server). |
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
@@ -496,13 +519,19 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 ### `[jobs.queues]`
 
 Per-queue aggregate concurrency caps, keyed by queue name. Used to
-throttle resource-shared work (a `emails` queue with a shared SMTP
+throttle resource-shared work (an `email` queue with a shared SMTP
 pool, an `images` queue limited by CPU, …) independent of per-job
 caps.
 
+The framework's own jobs run on two built-in queues — **`images`**
+(image processing) and **`email`** (mail delivery) — and any entry
+keyed by exactly those names overrides their defaults. A key that
+matches no queue (a typo such as `emails`) is accepted but only
+logged as a startup warning, so double-check the spelling.
+
 ```toml
 [jobs.queues]
-emails  = { concurrency = 4, timeout = "1m" }
+email   = { concurrency = 4, timeout = "1m" }  # overrides the framework mail queue
 images  = { concurrency = 2 }                  # keeps framework timeout + retries defaults
 reports = { concurrency = 1, timeout = "30m", retries = 0 }
 ```
@@ -511,7 +540,14 @@ reports = { concurrency = 1, timeout = "30m", retries = 0 }
 |-------|------|---------|-------------|
 | `concurrency` | integer | `0` (unlimited) | Max concurrent runs across all slugs in this queue. `0` means no per-queue cap; only the global `[jobs] max_concurrent` and per-slug `JobDefinition::concurrency` apply. |
 | `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. Accepts seconds or human-readable (`"5m"`, `"30s"`). |
-| `retries` | integer | unset (worker default) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+| `retries` | integer | unset (worker default, see below) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+
+The two framework queues are **seeded** with defaults at startup so the
+built-in system jobs never run with `timeout = 0` / `retries = 0`:
+`images` → `concurrency = 2, timeout = "5m", retries = 2`; `email` →
+`concurrency = 5, timeout = "30s", retries = 3`. Seeding is per field: a
+`[jobs.queues.images] concurrency = 4` entry keeps the seeded timeout and
+retries, and an explicit `0` is honoured as "unlimited / no retries".
 
 Each field is independent — supplying only `concurrency` leaves the
 framework's `timeout` / `retries` defaults intact for that queue.
@@ -582,9 +618,10 @@ from the allowlist.
 | `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
 | `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
 | `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
-| `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server will refuse to start without one. Requests must include `Authorization: Bearer <key>`. |
-| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. Enforced at both tool listing and execution time. |
-| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. Enforced at both tool listing and execution time. |
+| `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server refuses to start without one, and the key must be **at least 32 characters** (MCP bypasses collection/field ACLs; generate one with `openssl rand -hex 32`). Requests must include `Authorization: Bearer <key>`. |
+| `http_max_body_bytes` | integer/string | `1048576` (1 MiB) | Maximum request-body size for `POST /mcp`. Accepts integer bytes or a filesize string (`"16MB"`). Raise for large bulk payloads or `write_config_file` assets. |
+| `include_collections` | string[] | `[]` (empty) | Only expose these slugs via MCP (collections **and** globals). Empty = everything. Enforced identically in tool listing, execution and schema resources. |
+| `exclude_collections` | string[] | `[]` (empty) | Hide these slugs (collections **and** globals) from MCP. Takes precedence over `include_collections`. Enforced identically in tool listing, execution and schema resources. |
 
 See [MCP Overview](../mcp/overview.md) for usage details.
 

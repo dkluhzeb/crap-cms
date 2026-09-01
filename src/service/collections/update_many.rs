@@ -238,6 +238,10 @@ fn update_many_conn(
         invalidate_user_streams_if_auth(ctx, id);
     }
 
+    // Parity with the single-document conn path (and the pool path's
+    // orchestrator): every write clears the populate cache.
+    ctx.clear_cache();
+
     Ok(UpdateManyResult {
         modified,
         updated_ids,

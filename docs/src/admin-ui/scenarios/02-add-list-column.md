@@ -130,10 +130,10 @@ If `dev_mode = false`, restart crap-cms.
 
 The list view respects user-saved column selections. By default,
 crap-cms shows all columns; users can hide some via the column
-picker. To make `word_count` part of the default selection, look at
-the [list-settings handler](https://github.com/dkluhs/crap-cms/blob/main/src/admin/handlers/collections/list_settings.rs)
-for how default columns are computed — you may need to register
-`word_count` as a known column.
+picker. Default columns are computed by `resolve_columns` in
+`src/admin/handlers/collections/list_helpers.rs` (per-user saved
+selections come from the user-settings store) — you may need to
+register `word_count` as a known column.
 
 ## What this scenario *doesn't* cover
 

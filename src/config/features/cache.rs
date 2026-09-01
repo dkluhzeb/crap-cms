@@ -26,7 +26,10 @@ pub enum CacheBackend {
     Redis,
     /// Caching disabled.
     None,
-    /// Backend registered from Lua via `crap.cache.register`.
+    /// Lua-delegated backend registered via `crap.cache.register` in
+    /// `init.lua`. Boot fails when selected without a registration.
+    /// TTL/expiry and cluster-wide `clear` are the handler's concern;
+    /// `max_entries`, `max_age_secs`, `redis_url` and `prefix` do not apply.
     Custom,
 }
 

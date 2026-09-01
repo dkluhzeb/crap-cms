@@ -173,6 +173,16 @@ crap.storage.register({
   url = function(key)
     return "https://cdn.example.com/" .. key
   end,
+  -- Optional: fast existence probe. When omitted, the CMS probes via
+  -- `get` (downloading the object), so providing `exists` (e.g. a HEAD
+  -- request) is cheaper for large files.
+  exists = function(key)
+    local resp = crap.http.request({
+      method = "HEAD",
+      url = "https://storage.example.com/" .. key,
+    })
+    return resp.status ~= 404
+  end,
 })
 ```
 
@@ -223,6 +233,18 @@ The `sizes` field in API responses is a structured object assembled from the per
 | `"*/*"` or `"*"` | Any file type |
 
 Empty `mime_types` array also accepts any file.
+
+## Upload Validation
+
+Every upload passes a fixed validation chain before anything is written to storage:
+
+1. **Size** — the file must not exceed the collection's `max_file_size` (or the global `[upload] max_file_size`).
+2. **MIME allowlist** — the claimed `Content-Type` must match the collection's `mime_types` patterns.
+3. **Magic-byte verification** — the file's leading bytes are sniffed; when the content is recognisable, the detected type must agree with the claimed type (`File content does not match claimed type 'image/png' (detected 'text/html')`), and the detected type is what every later check uses. A renamed `.html` cannot pass as `image/*`.
+4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
+5. **SVG sanitising** — SVG uploads are scanned once for `<!DOCTYPE>` / `<!ENTITY>` declarations and external `xlink:href` loads (XXE and data-exfiltration vectors) and rejected if any are present, so only clean SVGs ever reach storage. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP.
+
+For processed images, the EXIF `Orientation` tag is applied before resizing so phone photos come out upright, and the re-encoded outputs (generated sizes and format conversions) carry **no EXIF metadata** — camera details and GPS coordinates are stripped as a side effect of re-encoding. The original upload is stored byte-for-byte.
 
 ## Error Cleanup
 

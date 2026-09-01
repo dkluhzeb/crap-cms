@@ -14,6 +14,7 @@ The join table has columns:
 | `parent_id` | TEXT NOT NULL | Foreign key to the parent document |
 | `_order` | INTEGER NOT NULL | Sort order (0-indexed) |
 | `_block_type` | TEXT NOT NULL | Block type identifier |
+| `_locale` | TEXT | Only when the blocks field is [localized](../locale/overview.md#localized-arraysblocksrelationships): the locale each row belongs to |
 | `data` | TEXT NOT NULL | JSON object containing the block's field values |
 
 Unlike arrays (which have typed columns per sub-field), blocks use a single JSON `data` column because each block type can have a different schema.

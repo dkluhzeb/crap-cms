@@ -10,7 +10,11 @@ File uploads in Crap CMS use dedicated HTTP endpoints that accept multipart form
 | `PATCH` | `/api/upload/{slug}/{id}` | Replace file on existing document |
 | `DELETE` | `/api/upload/{slug}/{id}` | Delete document + files |
 
-All endpoints require authentication via `Authorization: Bearer <jwt>` header and return JSON responses.
+Endpoints authenticate via an `Authorization: Bearer <jwt>` header and return
+JSON responses. The header is optional: a request **without** it proceeds
+anonymously and is then subject to the collection's access rules (which deny
+anonymous writes unless explicitly opened up). A **present but invalid** token
+is rejected with `401` — it never falls back to anonymous.
 
 ## Upload Flow
 
@@ -170,9 +174,12 @@ All error responses follow the same format:
 | Status | Cause |
 |--------|-------|
 | `400` | Bad request (no file, invalid MIME type, file too large, validation error) |
-| `403` | Access denied (missing or invalid token, access control denied) |
+| `401` | Invalid or expired token, locked account, unverified email |
+| `403` | Access control denied |
 | `404` | Collection or document not found |
+| `409` | Refused by data state: unique-field violation, document referenced elsewhere, limit exceeded |
 | `500` | Server error |
+| `503` | Transient database error — safe to retry |
 
 ## Server Processing
 

@@ -143,6 +143,25 @@ selects an item. The parent search field listens to set its value.
 Emitted by `<crap-block-picker>` when a block type is chosen. Picked
 up by the surrounding `<crap-array-field>` to insert a new block row.
 
+### `EV_PILL_REMOVED` — `crap:pill-removed`
+
+Emitted by `<crap-pill-list>` (bubbling, composed) when a chip's remove
+button is clicked, with `detail: { id }`. `<crap-relationship-search>`
+listens on its chip container to drop the corresponding reference; a
+custom has-many UI can listen the same way.
+
+### `EV_COLUMN_PICKER_SAVED` — `crap:column-picker-saved`
+
+Emitted by `<crap-column-picker>` (bubbling, composed) once the column
+selection has been persisted. `<crap-list-settings>` closes its drawer
+on it.
+
+### `EV_FILTER_BUILDER_APPLIED` — `crap:filter-builder-applied`
+
+Emitted by `<crap-filter-builder>` (bubbling, composed) when the user
+applies the filter set (the builder navigates via htmx itself).
+`<crap-list-settings>` closes its drawer on it.
+
 ## Server-sent events (SSE)
 
 Live document updates arrive over `GET /admin/events` (consumed by

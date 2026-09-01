@@ -103,7 +103,7 @@ $ find static/components -name "*.js" -exec grep -l "@stability stable" {} \; | 
 $ find static/components -name "*.js" -exec grep -l "@stability experimental" {} \; | wc -l
 3
 $ find static/components -name "*.js" -exec grep -l "@stability internal" {} \; | wc -l
-20
+21
 ```
 
 Run these yourself to see the current split — the numbers shift as

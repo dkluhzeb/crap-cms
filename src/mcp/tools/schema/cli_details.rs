@@ -374,7 +374,7 @@ pub(super) static CLI_DETAIL_DB: CliCommandDetail = CliCommandDetail {
         CliSubcommand {
             name: "console",
             usage: "crap-cms db console",
-            description: "Open an interactive SQLite console",
+            description: "Open an interactive database console (sqlite3 for SQLite, psql for PostgreSQL)",
             flags: None,
             examples: None,
         },
@@ -598,7 +598,7 @@ pub(super) static CLI_DETAIL_JOBS: CliCommandDetail = CliCommandDetail {
         CliSubcommand {
             name: "healthcheck",
             usage: "crap-cms jobs healthcheck",
-            description: "Check job system health",
+            description: "Check job system health (exit 0 healthy, 2 warning, 1 unhealthy)",
             flags: None,
             examples: None,
         },

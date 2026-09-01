@@ -76,6 +76,8 @@ function M.hide_cost_on_public_rows(ctx)
 end
 ```
 
+A field-level rule is **boolean**: `true` keeps the field, `false`/`nil` (or a hook error) strips it. A returned filter table is treated as **allowed** — there is no row to constrain at field granularity — so express data-dependent field rules with `ctx.data` / `ctx.document` instead.
+
 Because the rule is evaluated against each level, an array/blocks field rule runs **per row** — the field can be stripped from some rows and kept in others within the same document. Reads, writes (`create`/`update`), populated targets, version snapshots, and the live event stream all evaluate field access the same way, so a rule reading `ctx.data` / `ctx.document` behaves identically everywhere.
 
 > **Performance.** When *any* field in a collection configures `access.read` (or `create`/`update`), that collection's field-access functions are evaluated **per returned document** on list reads (and per row for array/blocks rules). The work is gated to **zero** when no field configures the relevant access function — the common case pays nothing. On the live event stream, field-read rules are evaluated **per event per subscriber**; a rule that performs a CRUD query there is treated as denied (the live path has no transaction), so keep live-streamed collections' field-read rules pure (`ctx.user` / `ctx.data` / `ctx.document` only).

@@ -7,6 +7,15 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 > `timestamp` (for `timestamps`) or `version` (for `versions`) fails loudly at
 > load time rather than being silently ignored.
 
+## Slug Rules
+
+The collection slug (the first argument to `define`) must be lowercase
+ASCII letters, digits, and underscores, must not be empty or start with
+an underscore, and **may not begin with `many_` or `by_id_`** (those
+prefixes would make generated MCP tool names like `create_many_…`
+ambiguous). The same rules apply to global, field, job, and richtext
+node slugs. Invalid slugs are rejected at load time.
+
 ## Top-Level Properties
 
 | Property | Type | Default | Description |
@@ -23,6 +32,7 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `access` | table | `{}` | Access control function refs |
 | `versions` | boolean or table | `nil` | Versioning and drafts config (see [Versions & Drafts](versions.md)) |
 | `soft_delete` | boolean | `false` | Enable soft deletes (see [Soft Deletes](soft-deletes.md)) |
+| `required_locales` | `"all"` or string[] | `nil` | Collection-level default for per-field `required_locales` (see [Locale](../locale/overview.md#required-across-locales)) |
 | `soft_delete_retention` | string | `nil` | Auto-purge retention period (e.g., `"30d"`). Requires `soft_delete = true`. |
 | `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
 | `mcp` | table | `{}` | MCP tool config. `description` is appended to every generated tool; `operations` is an optional `{ op = "..." }` map of per-operation description overrides (see [MCP overview](../mcp/overview.md#per-operation-descriptions)). |
@@ -40,7 +50,11 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 
 ## `hooks`
 
-All hook values are arrays of string references in `module.function` format.
+All hook values are arrays of hook refs. A hook ref is either a plain
+string in `module.function` format or a `{ ref = "module.function",
+options = { ... } }` table — the `options` table is surfaced to the hook
+as `ctx.options` (see [Per-Config Options](../hooks/hook-context.md#per-config-options-ctxoptions)),
+so one function can be reused with different parameters.
 
 | Property | Type | Description |
 |----------|------|-------------|

@@ -567,8 +567,9 @@ message FindRequest {
   // Defaults to 1 when neither page nor cursors are specified.
   optional int64 page = 5;
 
-  // Relationship population depth. 0 = IDs only (default for Find).
+  // Relationship population depth. 0 = IDs only.
   // 1 = populate immediate relationship fields with full documents.
+  // Defaults to the server's default_depth config (1 unless changed).
   // Higher values recurse further; capped by server max_depth config.
   // See crap.toml [depth] section.
   optional int32 depth = 6;

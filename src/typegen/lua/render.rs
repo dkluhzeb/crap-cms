@@ -673,11 +673,11 @@ function crap.globals.{slug}.row_label(fn) end
     );
 }
 
-/// Per-global accessor at `crap.globals.<slug>`. Single-arg
-/// `get(opts?)` / `update(data, opts?)` with typed return — no slug
-/// param, no overload narrowing concerns. Runtime-registered in
-/// `hooks/init.rs` to dispatch to `crap.globals.{get,update}(slug,
-/// ...)`.
+/// Per-global accessor at `crap.globals.<slug>`. Slug-less
+/// `get(opts?)` / `update(data, opts?)` / `unpublish(opts?)` /
+/// `validate(data, opts?)` with typed returns — no overload
+/// narrowing concerns. Runtime-registered in `hooks/init.rs` to
+/// dispatch to the slug-keyed `crap.globals.*` functions.
 fn render_global_accessor(out: &mut String, slug: &str, pascal: &str) {
     let local = format!("_glob_{slug}");
     w!(out, "---@class crap.globals.{pascal}");
@@ -695,6 +695,19 @@ fn render_global_accessor(out: &mut String, slug: &str, pascal: &str) {
     w!(out, "---@param opts? crap.GlobalUpdateOptions");
     w!(out, "---@return crap.global_doc.{pascal}");
     w!(out, "function {local}.update(data, opts) end");
+    out.push('\n');
+
+    // unpublish — versioned globals only (runtime-errors otherwise)
+    w!(out, "---@param opts? crap.GlobalUnpublishOptions");
+    w!(out, "---@return crap.global_doc.{pascal}");
+    w!(out, "function {local}.unpublish(opts) end");
+    out.push('\n');
+
+    // validate — dry-run against the singleton row
+    w!(out, "---@param data crap.global_partial.{pascal}");
+    w!(out, "---@param opts? crap.GlobalValidateOptions");
+    w!(out, "---@return crap.ValidateResult");
+    w!(out, "function {local}.validate(data, opts) end");
     out.push('\n');
 
     w!(out, "crap.globals.{slug} = {local}");
@@ -855,6 +868,13 @@ mod tests {
         assert!(out.contains("---@class crap.global_doc.SiteSettings : crap.Document"));
         assert!(out.contains("---@class crap.hook.global_site_settings"));
         assert!(out.contains("---@class crap.field_hook.global_site_settings"));
+
+        // Accessor binds all four CRUD-ish methods, matching the runtime
+        // GLOBAL_METHODS list (get/update/unpublish/validate).
+        assert!(out.contains("function _glob_site_settings.get(opts) end"));
+        assert!(out.contains("function _glob_site_settings.update(data, opts) end"));
+        assert!(out.contains("function _glob_site_settings.unpublish(opts) end"));
+        assert!(out.contains("function _glob_site_settings.validate(data, opts) end"));
     }
 
     #[test]

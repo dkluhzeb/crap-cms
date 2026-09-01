@@ -498,6 +498,29 @@ fn lua_globals_unpublish_sets_draft_status() {
     assert_eq!(result, "draft", "unpublish must set _status to draft");
 }
 
+/// Parity: the per-slug accessor binds `unpublish` and `validate` exactly
+/// like the collections accessor does (`crap.globals.<slug>.unpublish()` ==
+/// `crap.globals.unpublish(slug)`). Regression: the accessor used to bind
+/// only `get`/`update`, so the sugared form was a nil call.
+#[test]
+fn lua_globals_accessor_binds_unpublish_and_validate() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        crap.globals.versioned_banner.update({ headline = "Live" })
+        local d = crap.globals.versioned_banner.unpublish()
+        if d._status ~= "draft" then return "BAD_STATUS:" .. tostring(d._status) end
+
+        local v = crap.globals.versioned_banner.validate({ headline = "ok" })
+        if v.valid ~= true then return "INVALID" end
+        return "ok"
+    "#,
+    );
+    assert_eq!(result, "ok", "accessor must bind unpublish + validate");
+}
+
 /// Parity: `crap.globals.unpublish` errors on a global without versioning.
 #[test]
 fn lua_globals_unpublish_errors_without_versioning() {

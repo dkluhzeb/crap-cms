@@ -31,6 +31,7 @@ end
 | `user` | table/nil | Authenticated user document (nil if unauthenticated) |
 | `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |
 | `locale` | string/nil | Content locale this operation targets (nil when localization is disabled). Distinct from `ui_locale` — this is the locale of the data being written or read |
+| `options` | table/nil | Per-config options when the hook was registered as `{ ref = "...", options = {...} }`; `nil` for a bare-string ref (see [Per-Config Options](hook-context.md#per-config-options-ctxoptions)) |
 
 ### Typed Contexts
 

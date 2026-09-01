@@ -22,7 +22,7 @@ this document.
 | Password hash + store | Yes | Yes | Yes |
 | Versioning (status + snapshot + prune) | Yes | Yes | Yes |
 | after_change (field + collection + registered) | Yes | Yes | Yes |
-| Publish event (SSE/WebSocket) | Yes | Yes | No (in-transaction) |
+| Publish event (SSE/WebSocket) | Yes | Yes | Queued (flushes post-commit; `events = false` opts out) |
 | Verification email (auth + verify_email) | Yes | Yes | Queued (flushed by the caller after commit) |
 
 ## UPDATE Lifecycle
@@ -41,7 +41,7 @@ this document.
 | Password hash + store (normal path) | Yes | Yes | Yes |
 | Versioning (status + snapshot + prune) | Yes | Yes | Yes |
 | after_change (field + collection + registered) | Yes | Yes | Yes |
-| Publish event | Yes | Yes | No (in-transaction) |
+| Publish event | Yes | Yes | Queued (flushes post-commit; `events = false` opts out) |
 
 ## DELETE Lifecycle
 
@@ -52,7 +52,7 @@ this document.
 | DB delete | Yes | Yes | Yes |
 | after_delete (collection + registered) | Yes | Yes | Yes |
 | Upload file cleanup | Yes | Yes | Yes |
-| Publish event | Yes | Yes | No (in-transaction) |
+| Publish event | Yes | Yes | Queued (flushes post-commit; `events = false` opts out) |
 
 ## FIND Lifecycle
 
@@ -103,9 +103,9 @@ full operation set per surface:
 
 | Feature | Admin | gRPC | Lua CRUD | Reason |
 |---------|-------|------|----------|--------|
-| Event publishing | Yes | Yes | No | Lua runs inside the caller's transaction; event publishing is fire-and-forget after commit. The caller (admin/gRPC) publishes the event. |
+| Event publishing | Yes | Yes | Queued | Lua runs inside the caller's transaction; events are enqueued and flushed after that transaction commits (default on; per-call `events = false` opts out). |
 | Upload file cleanup on delete | Yes | Yes | Yes | Lua CRUD reads ConfigDir from Lua app_data; admin/gRPC clean up after commit. |
 | Verification email on create | Yes | Yes | Queued | Email sending is async, post-commit. Lua runs inside the caller's transaction, so it pushes the email onto a verification queue that the caller flushes after commit. |
 | Invalid filter / sort input | 400 page | INVALID_ARGUMENT | Lua error | All surfaces hard-error on unknown operators, unknown fields, and malformed clauses — nothing is silently dropped. |
 | Locale from request | Yes | Yes | Explicit opt | Admin/gRPC infer from request; Lua passes explicitly via opts.locale. |
-| Default depth | Varies | Config | 0 | Lua defaults to 0 to avoid N+1 in hooks. Callers pass depth explicitly. |
+| Default depth | Config | Config | Config | All surfaces default to `[depth] default_depth` (1 unless changed) via the shared `clamp_depth`; pass `depth = 0` explicitly for IDs-only reads in hot hook paths. |

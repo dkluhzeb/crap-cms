@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Auth strategies must declare `authenticate` and `activates_on`; `methods = {}` is
+  rejected.** A `strategy` method with a missing/empty `authenticate` used to be
+  silently dropped, a missing `activates_on` silently became `always = true` (fires
+  on every request, warning only), and an explicit empty `methods = {}` silently
+  gained the default method set. All three are now load errors: `auth strategy
+  'x': \`authenticate\` is required`, `\`activates_on\` is required — { header =
+  "x-..." } or { always = true }`, `auth.methods is empty — list at least one
+  method, or omit \`methods\` to use the defaults`.
+- **Filter `exists` / `not_exists` accept only `true`.** `{ exists = false }` (and any
+  non-boolean value) is now rejected with an error on every surface — Lua `where`
+  tables, gRPC/MCP JSON where-clauses, and Lua access-constraint returns. Previously
+  the wire decoder ignored the value (so `exists: false` meant `IS NOT NULL`, the
+  opposite of the caller's intent) while the Lua parser silently dropped the slot,
+  widening the match set — dangerous under `delete_many` / `update_many` and, in an
+  access rule, a leak. An access function returning `{ x = { exists = false } }` now
+  fails closed (deny). Write `not_exists = true` for IS NULL.
+- **Tab definitions require a `label`.** A tab inside a `tabs` field that
+  omits `label` (or sets it to an empty string) is now rejected at load time
+  with `tab definition missing required key 'label'`. Previously it loaded
+  silently and rendered a blank tab button. Add a label to any affected tab.
+
+
 - **Stricter load-time validation for auth email fields, custom pages, and
   block types.** Three previously-silent config mistakes are load errors now:
   an auth collection's `email` field must be `type = "email"` and
@@ -579,6 +601,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Login-path custom strategies honor `surfaces` and `activates_on`.** The admin
+  login form and the gRPC `Login` RPC used to run *every* strategy on the
+  collection with the submitted credentials, ignoring the method's scoping — a
+  strategy declared `surfaces = {"grpc"}, activates_on = { header = "x-api-key" }`
+  still executed on an admin form POST. Both login paths now apply the same
+  filter as request-time authentication: the strategy must list the login's
+  surface and its activation header must be present (`always` strategies still
+  run on their surfaces).
+- **`admin.access` / `access.admin` are boolean gates.** A rule that returned a
+  filter table used to pass the admin gate (`Allowed | Constrained` were treated
+  alike). It is now logged as an error and treated as a **denial**, matching the
+  documented "boolean rule" contract and the fail-closed `access.mcp` twin.
+- **`Me` RPC goes through the shared auth evaluator.** It used to validate the JWT
+  directly, so it still answered for a collection whose `methods` no longer
+  listed `bearer`. `Me` now resolves the caller exactly like every other RPC —
+  honoring `methods`/`surfaces`, session revocation, account locks, and custom
+  header-activated strategies (an API-key user can call `Me` without a JWT).
 - **Validate dry-runs follow the target operation's access rules.** The
   `Validate`/`ValidateGlobal` endpoints ran validators — including `unique`
   checks — without any collection-level access gate, so an anonymous caller
@@ -1364,6 +1403,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **gRPC `Subscribe` honors `SubscribeRequest.token`.** The proto documents the
+  `token` field as the way to authenticate a stream (metadata is sent once at
+  stream open), but only the `authorization` metadata was read — every body-token
+  subscription silently ran anonymously. The field is now used as the fallback
+  when no `authorization` metadata is present.
+- **MCP globals obey `include_collections` / `exclude_collections` in listing and
+  resources.** Execution already rejected an excluded global, but `tools/list` and
+  the `crap://globals` schema resource still advertised it — a tool that could never
+  run. The three surfaces now apply the same slug filter (the lists match globals as
+  well as collections).
+- **`auth = { methods = {...} }` without `enabled` parsed as disabled, and
+  `password_login` without `forgot_password` parsed as forgot-password-off.** The
+  Lua reader coerced a *missing* boolean key to `false`, so the documented `true`
+  defaults never applied unless the key was written out. Both now default to `true`
+  when absent; a non-boolean value (`enabled = "yes"`) is a load error instead of
+  being read by truthiness.
+- **`import` validates every collection slug before writing.** An export file
+  containing a collection that no longer exists in the Lua definitions is now
+  rejected up front (`Collection(s) 'x' exist in the import file but not in the
+  schema — nothing was imported`). Previously the check ran lazily per collection,
+  after earlier collections had already committed — a partial import.
+- **Lua bulk writes on the hook-transaction path now clear the populate
+  cache.** `create_many` / `update_many` / `delete_many` invoked from Lua
+  inside a hook transaction (conn mode) skipped the write-through cache
+  clear that the single-document operations and the pool-mode bulk paths
+  perform, so populated reads could serve stale relationship data until the
+  next unrelated write or the periodic `max_age_secs` clear. All three now
+  clear the cache, matching the documented "every write clears the cache"
+  contract.
+
 
 - **Admin media/upload forms validated as broken (`validation.invalid_number`
   on every metadata field).** The validate dry-run injected the string
@@ -2611,6 +2681,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`[cache] backend = "custom"` is now functional.** Register a Lua cache handler
+  with `crap.cache.register({ get, set, delete, clear, has? })` in `init.lua` and the
+  populate cache delegates every operation to it — for shared stores the built-in
+  backends don't cover (HTTP KV services and the like). Previously the option was
+  accepted but silently backed by a no-op placeholder (`get` always missed) with no
+  registration API at all. Selecting the backend without a registration now **fails
+  startup** with a message naming the fix. The handler runs in pooled Lua VMs
+  (register handlers that talk to a shared external store — per-VM Lua state won't
+  work); write-through clears from inside hooks/job handlers reuse the current VM
+  via the same per-VM lease mechanism as custom upload storage. Values are opaque
+  binary strings; handler errors propagate like Redis errors; TTL is the handler's
+  concern.
+- **`db console` on PostgreSQL.** The command now launches `psql` with the configured
+  `database.url` (a libpq conninfo string or URI); previously it errored with "No
+  interactive console available for 'postgres' backend". SQLite still opens `sqlite3`.
+- **`[mcp] http_max_body_bytes`** — the `POST /mcp` request-body cap
+  (previously hardcoded to 1 MiB) is now configurable, accepting integer
+  bytes or a filesize string (`"16MB"`). The default stays 1 MiB. Useful
+  for large bulk-create payloads and `write_config_file` with big assets.
+- **Globals accessor binds `unpublish` and `validate`** — the typed
+  per-slug accessor (`crap.globals.<slug>`) now exposes all four runtime
+  operations (`get` / `update` / `unpublish` / `validate`), matching the
+  collections accessor. Previously only `get`/`update` were bound, so
+  `crap.globals.banner.unpublish()` was a nil call and the sugared form
+  shown in the docs did not work. Generated LuaLS types include the new
+  signatures.
 - **Four new template slots** — drop-in extension points so common admin
   customizations no longer require forking whole templates:
   `list_toolbar_actions` and `list_footer` on the collection list page
@@ -3025,6 +3121,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`jobs healthcheck` exit code now follows the result.** `0` healthy, `2` warning
+  (failed jobs in the last 24h, jobs pending > 5 min, scheduled jobs that never ran),
+  `1` unhealthy (stale running jobs). It previously always exited `0`, so a CI or
+  monitoring gate on it could never fire. Mirrors `status --check` (`2` on warnings).
 - **Admin navigation swaps `#main` instead of the whole page.** All admin
   nav links (sidebar, breadcrumbs, list rows, sort headers, version
   sidebar, …) now target `#main` with an htmx partial swap: the server

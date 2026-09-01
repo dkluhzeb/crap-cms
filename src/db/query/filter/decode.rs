@@ -134,14 +134,29 @@ fn decode_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, String> {
 
             return Ok(FilterOp::NotIn(vals?));
         }
-        "exists" => return Ok(FilterOp::Exists),
-        "not_exists" => return Ok(FilterOp::NotExists),
+        "exists" => return exists_op(op_name, value, FilterOp::Exists),
+        "not_exists" => return exists_op(op_name, value, FilterOp::NotExists),
         _ => {}
     }
 
     // Scalar operators — the shared canonical grammar.
     FilterOp::scalar_from_name(op_name, scalar_to_string(value)?)
         .ok_or_else(|| format!("unknown operator '{op_name}'"))
+}
+
+/// `exists` / `not_exists` take exactly the boolean `true`. `false` (and any
+/// non-boolean) is an ERROR: silently ignoring the value would turn
+/// `{ exists: false }` into `IS NOT NULL` — the opposite of what the caller
+/// meant — and the Lua parser (`hooks::lua_api::crud::filter`) applies the
+/// identical rule so every surface agrees.
+fn exists_op(op_name: &str, value: &Value, op: FilterOp) -> Result<FilterOp, String> {
+    if value == &Value::Bool(true) {
+        return Ok(op);
+    }
+
+    Err(format!(
+        "'{op_name}' operator takes only `true` (got {value}); use 'not_exists' for IS NULL and 'exists' for IS NOT NULL"
+    ))
 }
 
 /// Convert a scalar JSON value to its canonical filter string. Booleans
@@ -304,6 +319,19 @@ mod tests {
 
         let nex = decode_filter_op("not_exists", &json!(true)).unwrap();
         assert!(matches!(nex, FilterOp::NotExists));
+    }
+
+    /// Regression: `exists: false` used to decode as `IS NOT NULL` (value
+    /// ignored) — the opposite of the caller's intent. Any value other than
+    /// the boolean `true` is now a hard error on both operators.
+    #[test]
+    fn decode_filter_op_exists_rejects_false_and_non_bool() {
+        for op in ["exists", "not_exists"] {
+            for bad in [json!(false), json!("true"), json!(1), json!(null)] {
+                let err = decode_filter_op(op, &bad).unwrap_err();
+                assert!(err.contains("takes only `true`"), "{op} {bad}: {err}");
+            }
+        }
     }
 
     #[test]

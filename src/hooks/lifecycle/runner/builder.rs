@@ -8,7 +8,11 @@ use tracing::{debug, info};
 
 use crate::{
     config::{CrapConfig, UploadStorage},
-    core::{LocalLease, Registry, SharedInvalidationTransport, upload},
+    core::{
+        LocalLease, Registry, SharedInvalidationTransport,
+        cache::{CustomCache, SharedCache},
+        upload,
+    },
     hooks::{
         self, HookRunner,
         lifecycle::{
@@ -266,10 +270,18 @@ fn init_app_data(
             .context("Failed to create storage backend for Lua VM")?
     };
 
+    // Same per-VM treatment for a custom cache: write-through `clear_cache`
+    // from inside this VM must reuse THIS VM via a `LocalLease`, never
+    // re-acquire from the pool.
+    let cache: Option<SharedCache> =
+        matches!(config.cache.backend, crate::config::CacheBackend::Custom)
+            .then(|| Arc::new(CustomCache::new(Arc::new(LocalLease::new(lua)))) as SharedCache);
+
     lua.set_app_data(LuaVmInfra {
         registry: Arc::clone(registry),
         locale_config: config.locale.clone(),
         storage: Some(storage),
+        cache,
         invalidation_transport,
         max_hook_depth: config.hooks.max_depth,
         default_deny: config.access.default_deny,

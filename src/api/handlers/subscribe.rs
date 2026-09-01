@@ -295,7 +295,11 @@ impl ContentService {
             .as_ref()
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
-        let token = Self::extract_token(&metadata);
+        // Streaming metadata is sent once at stream open, so the proto also
+        // offers `SubscribeRequest.token` — honor it as the documented
+        // fallback (the metadata header wins when both are present).
+        let token = Self::extract_token(&metadata)
+            .or_else(|| (!req.token.is_empty()).then(|| req.token.clone()));
         let headers = self.metadata_headers(&metadata);
 
         let requested_ops: HashSet<String> = if req.operations.is_empty() {

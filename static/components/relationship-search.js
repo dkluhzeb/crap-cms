@@ -25,7 +25,13 @@
 import { css } from './_internal/css.js';
 import { clear, h } from './_internal/h.js';
 import { t } from './_internal/i18n.js';
-import { EV_CHANGE, EV_CREATE_PANEL_REQUEST, EV_DRAWER_REQUEST, EV_PICK } from './events.js';
+import {
+  EV_CHANGE,
+  EV_CREATE_PANEL_REQUEST,
+  EV_DRAWER_REQUEST,
+  EV_PICK,
+  EV_PILL_REMOVED,
+} from './events.js';
 
 /** Debounce window for the inline search input. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -556,7 +562,7 @@ class CrapRelationshipSearch extends HTMLElement {
    */
   _setupPillRemoval() {
     if (!this._chipsContainer || this._readonly) return;
-    this._chipsContainer.addEventListener('crap:pill-removed', (e) => {
+    this._chipsContainer.addEventListener(EV_PILL_REMOVED, (e) => {
       const id = /** @type {CustomEvent<{ id: string }>} */ (e).detail.id;
       this._selected = this._selected.filter((s) => s.id !== id);
       this._renderChips();

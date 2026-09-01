@@ -65,20 +65,39 @@ pub(crate) async fn check_admin_gate_for_doc(
     })
     .await;
 
-    match result {
-        // Allowed (or constrained — the admin gate has no row scope to filter)
-        // is the ONLY outcome that lets the request through.
-        Ok(Some(Ok(query::AccessResult::Allowed | query::AccessResult::Constrained(_)))) => None,
-        Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
-        Ok(Some(Err(e))) => {
-            error!("admin.access check failed: {}", e);
-            Some(admin_denied_response(state))
+    // A spawn-join failure (`Err`) flattens to `None` — fails CLOSED below.
+    if gate_passes(result.ok().flatten(), "admin.access") {
+        return None;
+    }
+
+    Some(admin_denied_response(state))
+}
+
+/// Map an `admin.access` / `access.admin` outcome to pass (`true`) or deny.
+///
+/// The gate is **boolean**: `Allowed` is the ONLY pass. A `Constrained`
+/// filter table is a rule-author mistake — there is no row scope to filter at
+/// the admin gate — and is treated as a denial (logged as an error), matching
+/// `access.mcp`, instead of silently admitting. A hook error, pool exhaustion
+/// (`None`) or a task-join failure also deny: never admit when the gate could
+/// not run.
+fn gate_passes(outcome: Option<Result<query::AccessResult, anyhow::Error>>, what: &str) -> bool {
+    match outcome {
+        Some(Ok(query::AccessResult::Allowed)) => true,
+        Some(Ok(query::AccessResult::Denied)) => false,
+        Some(Ok(query::AccessResult::Constrained(_))) => {
+            error!(
+                "{what} returned a filter table — the admin gate is boolean (return true/false); denying"
+            );
+            false
         }
-        // Pool exhaustion (`Ok(None)`) or a spawn-join failure (`Err`) must
-        // fail CLOSED — never silently admit when the gate could not run.
-        Ok(None) | Err(_) => {
-            error!("admin.access gate could not run (pool exhausted or task join failed); denying");
-            Some(admin_denied_response(state))
+        Some(Err(e)) => {
+            error!("{what} check failed: {e}");
+            false
+        }
+        None => {
+            error!("{what} gate could not run (pool exhausted or task join failed); denying");
+            false
         }
     }
 }
@@ -114,18 +133,11 @@ pub(crate) async fn check_collection_admin_gate(
     })
     .await;
 
-    match result {
-        Ok(Some(Ok(query::AccessResult::Allowed | query::AccessResult::Constrained(_)))) => None,
-        Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
-        Ok(Some(Err(e))) => {
-            error!("collection access.admin check failed for '{slug}': {e}");
-            Some(admin_denied_response(state))
-        }
-        Ok(None) | Err(_) => {
-            error!("collection access.admin gate could not run for '{slug}'; denying");
-            Some(admin_denied_response(state))
-        }
+    if gate_passes(result.ok().flatten(), &format!("access.admin for '{slug}'")) {
+        return None;
     }
+
+    Some(admin_denied_response(state))
 }
 
 /// `spawn_blocking` body for [`check_collection_admin_gate`]: run the
@@ -151,4 +163,25 @@ fn check_collection_admin_access_blocking(
             &conn,
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::query::AccessResult;
+
+    /// Regression: a `Constrained` filter table used to PASS the admin gate
+    /// (`Allowed | Constrained(_)`), contradicting the documented "boolean
+    /// rule" and the fail-closed `access.mcp` twin.
+    #[test]
+    fn admin_gate_is_boolean_and_fails_closed() {
+        assert!(gate_passes(Some(Ok(AccessResult::Allowed)), "t"));
+        assert!(!gate_passes(Some(Ok(AccessResult::Denied)), "t"));
+        assert!(!gate_passes(
+            Some(Ok(AccessResult::Constrained(vec![]))),
+            "t"
+        ));
+        assert!(!gate_passes(Some(Err(anyhow::anyhow!("boom"))), "t"));
+        assert!(!gate_passes(None, "t"));
+    }
 }

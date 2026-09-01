@@ -148,3 +148,17 @@ end)
 | Access function (always uniform context) | `crap.any.access(fn)` or `crap.collections.<slug>.access(fn)` for discoverability |
 | Auth strategy | `crap.any.auth_strategy(fn)` or `crap.collections.<slug>.auth_strategy(fn)` |
 | Job handler | `crap.any.job_handler(fn)` |
+
+### `crap.any.route_handler(fn)`
+
+Identity pass-through that types `ctx` as `crap.RouteContext` for a custom
+HTTP route handler (`routes/<name>.lua`), so the editor completes
+`ctx.method`, `ctx.params`, `ctx.json`, `ctx.user`, … See
+[`crap.routes`](routes.md).
+
+```lua
+-- routes/health.lua
+return crap.any.route_handler(function(ctx)
+    return { status = 200, json = { ok = true, method = ctx.method } }
+end)
+```

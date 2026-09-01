@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DepthConfig {
-    /// Default population depth when request doesn't specify one.
-    /// Used as default for `FindByID`. Find defaults to 0 regardless.
+    /// Default population depth when the request doesn't specify one.
+    /// Applies to every read surface — `Find`, `FindByID`, Lua `find` /
+    /// `find_by_id`, MCP — via the shared `clamp_depth` helper.
     pub default_depth: i32,
     /// Maximum allowed depth application-wide. Prevents abuse.
     pub max_depth: i32,

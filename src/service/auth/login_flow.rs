@@ -19,7 +19,7 @@ use crate::{
     core::{
         CollectionDefinition, Document,
         auth::PasswordProvider,
-        collection::{Auth, MfaMode, Surface},
+        collection::{Activation, Auth, MfaMode, StrategyCfg, Surface},
     },
     db::BoxedConnection,
     hooks::{
@@ -240,7 +240,10 @@ fn try_strategy_auth(
         remote_addr: req.remote_addr,
     };
 
-    for strategy in auth.strategies() {
+    for strategy in auth
+        .strategies()
+        .filter(|s| strategy_applies(s, req.surface, req.headers))
+    {
         match hook_runner.run_auth_strategy(strategy.authenticate, &strategy_input, conn) {
             Ok(Some(doc)) => return Some(doc),
             Ok(None) => {}
@@ -256,4 +259,88 @@ fn try_strategy_auth(
     }
 
     None
+}
+
+/// Does `strategy` apply to this login attempt? Mirrors the request-time
+/// evaluator's scoping: the strategy must list the login's surface, and its
+/// `activates_on` discriminator must match the request (`always`, or the
+/// named header present — compared case-insensitively). A strategy declared
+/// `surfaces = {"grpc"}, activates_on = { header = "x-api-key" }` therefore
+/// never runs on an admin form POST, exactly as documented.
+fn strategy_applies(
+    strategy: &StrategyCfg<'_>,
+    surface: Surface,
+    headers: &HashMap<String, String>,
+) -> bool {
+    if !strategy.surfaces.contains(surface) {
+        return false;
+    }
+
+    match strategy.activates_on {
+        Activation::Always { .. } => true,
+        Activation::Header { header } => headers.keys().any(|k| k.eq_ignore_ascii_case(header)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{HookRef, collection::SurfaceSet};
+
+    fn cfg<'a>(
+        activates_on: &'a Activation,
+        surfaces: &'a SurfaceSet,
+        authenticate: &'a HookRef,
+    ) -> StrategyCfg<'a> {
+        StrategyCfg {
+            name: "t",
+            authenticate,
+            activates_on,
+            surfaces,
+        }
+    }
+
+    /// Regression: the login path used to run EVERY strategy on the
+    /// collection regardless of `surfaces` / `activates_on`.
+    #[test]
+    fn login_path_strategy_scoping_honors_surface_and_activation() {
+        let hook = HookRef::new("hooks.auth.key");
+        let header = Activation::header("x-api-key");
+        let always = Activation::always();
+        let grpc = SurfaceSet::grpc_only();
+        let admin = SurfaceSet::admin_only();
+        let none: HashMap<String, String> = HashMap::new();
+        let with_key: HashMap<String, String> =
+            HashMap::from([("X-Api-Key".to_string(), "k".to_string())]);
+
+        // Wrong surface → never, even with the header present.
+        assert!(!strategy_applies(
+            &cfg(&header, &grpc, &hook),
+            Surface::Admin,
+            &with_key
+        ));
+        // Right surface, header absent → no.
+        assert!(!strategy_applies(
+            &cfg(&header, &grpc, &hook),
+            Surface::Grpc,
+            &none
+        ));
+        // Right surface, header present (case-insensitive) → yes.
+        assert!(strategy_applies(
+            &cfg(&header, &grpc, &hook),
+            Surface::Grpc,
+            &with_key
+        ));
+        // Always-active on its surface → yes; off its surface → no.
+        assert!(strategy_applies(
+            &cfg(&always, &admin, &hook),
+            Surface::Admin,
+            &none
+        ));
+        assert!(!strategy_applies(
+            &cfg(&always, &admin, &hook),
+            Surface::Grpc,
+            &none
+        ));
+    }
 }

@@ -103,6 +103,42 @@ pub async fn wait_for_element_count(page: &Page, selector: &str, count: usize) -
     last
 }
 
+/// Click `click_sel`, then poll for `expect_sel` to match exactly `count`
+/// elements — re-clicking when the expected state hasn't appeared yet.
+///
+/// Exists for handlers bound on custom-element *upgrade* (e.g. the
+/// `<crap-collapsible>` toggle): a click dispatched before the component's
+/// module has loaded is silently swallowed. Re-clicking is safe even for
+/// toggles, because a swallowed click leaves the observable state unchanged
+/// and the loop stops on the first click that lands.
+pub async fn click_until_element_count(
+    page: &Page,
+    click_sel: &str,
+    expect_sel: &str,
+    count: usize,
+) -> Vec<Element> {
+    let mut last = Vec::new();
+
+    for _ in 0..20 {
+        if let Ok(el) = page.find_element(click_sel).await {
+            let _ = el.click().await;
+        }
+
+        // Give the click a short window to take effect before re-clicking.
+        for _ in 0..6 {
+            if let Some(els) = poll_find(page, expect_sel).await {
+                if els.len() == count {
+                    return els;
+                }
+                last = els;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    last
+}
+
 /// Poll until `selector` matches at least one element, or a ~3s budget runs
 /// out. Returns whether it appeared. Use for "this element should show up after
 /// an async action" where the caller doesn't need the element handle itself

@@ -182,5 +182,6 @@ images = { concurrency = 2 }
 # config_tools = false           # enable config generation tools (write access to config dir)
 # api_key = ""                   # required when http = true; minimum 32 chars
                                   # generate with: openssl rand -hex 32
+# http_max_body_bytes = "1MB"    # max POST /mcp body size (int bytes or "16MB" string)
 # include_collections = []       # whitelist (empty = all)
 # exclude_collections = []       # blacklist (takes precedence over include)

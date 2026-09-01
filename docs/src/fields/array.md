@@ -13,7 +13,9 @@ The join table has columns:
 | `id` | TEXT PRIMARY KEY | Nanoid for each row |
 | `parent_id` | TEXT NOT NULL | Foreign key to the parent document |
 | `_order` | INTEGER NOT NULL | Sort order (0-indexed) |
+| `_locale` | TEXT | Only when the array is [localized](../locale/overview.md#localized-arraysblocksrelationships): the locale each row belongs to |
 | *sub-fields* | varies | One column per sub-field |
+| `{name}_tz` | TEXT | Companion column for each date sub-field with `timezone = true` |
 
 ## Definition
 

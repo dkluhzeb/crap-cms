@@ -74,7 +74,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "depth",
                 ty: "optional int32",
                 tag: 6,
-                doc: "Relationship population depth. 0 = IDs only (default for Find).\n1 = populate immediate relationship fields with full documents.\nHigher values recurse further; capped by server max_depth config.\nSee crap.toml [depth] section.",
+                doc: "Relationship population depth. 0 = IDs only.\n1 = populate immediate relationship fields with full documents.\nDefaults to the server's default_depth config (1 unless changed).\nHigher values recurse further; capped by server max_depth config.\nSee crap.toml [depth] section.",
             },
             ProtoField {
                 name: "locale",
