@@ -10,7 +10,7 @@ use crate::mcp::{
     access::McpExposure,
     protocol::{ResourceContent, ResourceDefinition},
     schema::{CrudOp, collection_input_schema, global_input_schema},
-    tools::should_include,
+    tools::slug_exposed,
 };
 use crate::{config::CrapConfig, core::Registry};
 
@@ -87,7 +87,7 @@ fn collections_schema(
     let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.collections {
-        if !should_include(slug, &config.mcp) || !exposure.allows(slug) {
+        if !slug_exposed(slug, &config.mcp, exposure) {
             continue;
         }
 
@@ -118,7 +118,7 @@ fn globals_schema(
     for (slug, def) in &registry.globals {
         // Mirrors the tool listing + execution filter: config include/exclude
         // lists apply to globals by slug as well as `access.mcp`.
-        if !should_include(slug, &config.mcp) || !exposure.allows(slug) {
+        if !slug_exposed(slug, &config.mcp, exposure) {
             continue;
         }
         schemas.insert(

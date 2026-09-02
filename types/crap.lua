@@ -1306,6 +1306,11 @@ function crap.globals.config.list() end
 --- @field draft? boolean When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft version snapshot is created). Matches `crap.collections.update`'s `draft`.
 --- @field events? boolean Emit a live-update event for the updated global (default: `true`). Set `false` for a quiet write.
 
+--- Optional options for `crap.globals.unpublish`.
+--- @class crap.GlobalUnpublishOptions
+--- @field override_access? boolean Skip access control checks (default: `false`).
+--- @field hooks? boolean Run lifecycle hooks (default: `true`).
+
 --- Optional options for `crap.globals.validate`. Globals are a singleton
 --- row, so there is no `id` to exclude — validation always runs in update
 --- mode against the fixed `default` row.
@@ -1326,6 +1331,14 @@ function crap.globals.get(slug, opts) end
 --- @param opts crap.GlobalUpdateOptions?  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.globals.update(slug, data_table, opts) end
+
+--- Unpublish a global — sets `_status` to `"draft"` without modifying the
+--- stored field data. Only available on globals with `versions` enabled.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param slug string  Global slug.
+--- @param opts crap.GlobalUnpublishOptions?  Optional options.
+--- @return crap.Document
+function crap.globals.unpublish(slug, opts) end
 
 --- Validate global field data without persisting. Returns
 --- `{ valid = true }` on success, or `{ valid = false, errors = {...} }`

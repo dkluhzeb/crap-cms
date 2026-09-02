@@ -12,8 +12,8 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::Document,
-    db::query,
+    core::{CollectionDefinition, Document},
+    db::{BoxedConnection, query},
     hooks::lifecycle::access::ReadStripInput,
     service::{AppInfra, helpers::collect_api_hidden_field_names},
 };
@@ -66,26 +66,40 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
         .inspect_err(|e| error!("Me hydrate_document error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
+    strip_for_response(&input.infra, def, &collection, &mut doc, &conn);
+
+    Ok((doc, collection))
+}
+
+/// Apply field-read access rules (with the user's own document as context)
+/// and the API-hidden strip to the user document before it leaves the server.
+fn strip_for_response(
+    infra: &AppInfra,
+    def: &CollectionDefinition,
+    collection: &str,
+    doc: &mut Document,
+    conn: &BoxedConnection,
+) {
     let user_snapshot = doc.clone();
     let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
         .into_inner()
         .into_iter()
         .collect();
-    input.infra.hook_runner.strip_read_access(
+
+    infra.hook_runner.strip_read_access(
         &def.fields,
         &mut level,
         &ReadStripInput {
             document: &user_snapshot.fields,
-            collection: &collection,
+            collection,
             user: Some(&user_snapshot),
             locale: None,
         },
-        &conn,
+        conn,
     );
+
     doc.fields = level.into_iter().collect();
     doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
-
-    Ok((doc, collection))
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -100,9 +114,8 @@ impl ContentService {
         let metadata = request.metadata().clone();
         let req = request.into_inner();
 
-        let token = Self::extract_token(&metadata)
-            .or_else(|| (!req.token.is_empty()).then(|| req.token.clone()));
-        let headers = Self::extract_metadata_headers(&metadata);
+        let token = Self::bearer_or_body_token(&metadata, &req.token);
+        let headers = self.metadata_headers(&metadata);
 
         let input = MeBlockingInput {
             infra: Arc::clone(&self.infra),

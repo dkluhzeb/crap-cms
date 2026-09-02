@@ -79,6 +79,8 @@ crap.cache.register({
 - **TTL is yours.** `max_entries`, `max_age_secs`, `redis_url` and
   `prefix` do not apply to the custom backend; give entries a TTL in the
   external store if you want expiry beyond the write-through clears.
-- **Performance.** Every operation is a Lua call (plus whatever the
-  handler does). The populate cache exists to avoid database work, so a
-  handler that is slower than the database defeats the point — measure.
+- **Performance.** Every operation checks a Lua VM out of the hook
+  runner's pool (growing the pool under contention) and then runs the
+  handler. The populate cache exists to avoid database work, so a handler
+  that is slower than the database defeats the point — measure, and
+  include a cached-read scenario in any load test.

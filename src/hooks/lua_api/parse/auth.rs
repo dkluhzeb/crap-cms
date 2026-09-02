@@ -45,11 +45,30 @@ pub(super) fn validate_auth_keys(config: &Table) -> Result<()> {
     // collection before this helper was used.
     let enabled = get_bool(&auth_tbl, "enabled", true)?;
 
-    let Ok(methods_tbl) = get_table(&auth_tbl, "methods") else {
-        return Ok(());
+    // `methods` must be absent (defaults apply) or a list of tables. A
+    // wrong-typed value or a non-table entry is a hard error — both used to
+    // be silently discarded, and a discarded-to-empty list then gained the
+    // FULL default method set.
+    let methods_tbl = match auth_tbl.get::<Value>("methods")? {
+        Value::Nil => return Ok(()),
+        Value::Table(t) => t,
+        other => bail!(
+            "auth.methods must be a list of method tables (got {})",
+            other.type_name()
+        ),
     };
 
-    let methods: Vec<Table> = methods_tbl.sequence_values::<Table>().flatten().collect();
+    let mut methods: Vec<Table> = Vec::new();
+    for (i, entry) in methods_tbl.sequence_values::<Value>().enumerate() {
+        match entry? {
+            Value::Table(t) => methods.push(t),
+            other => bail!(
+                "auth.methods[{}] must be a method table (got {})",
+                i + 1,
+                other.type_name()
+            ),
+        }
+    }
 
     // An explicit empty list is a mistake, not a request for the defaults
     // (omit the key for those) — and `enabled = true` with zero methods
@@ -75,12 +94,15 @@ pub(super) fn validate_auth_keys(config: &Table) -> Result<()> {
 fn validate_strategy_shape(method: &Table) -> Result<()> {
     let name = method.get::<String>("name").unwrap_or_default();
 
-    match method.get::<Value>("authenticate")? {
-        Value::String(s) if !s.to_str()?.is_empty() => {}
-        Value::Table(_) => {}
-        _ => bail!(
-            "auth strategy '{name}': `authenticate` is required (a hook ref string or {{ ref, options }})"
+    // Parse the ref for real (string or `{ ref, options }` table) so an
+    // empty/missing `ref` inside the table form errors here instead of
+    // being silently dropped by `parse_method` later.
+    match get_optional_hook_ref(method, "authenticate", "auth strategy") {
+        Ok(Some(h)) if !h.reference().is_empty() => {}
+        Ok(_) => bail!(
+            "auth strategy '{name}': `authenticate` is required (a hook ref string or {{ ref, options }} with a non-empty ref)"
         ),
+        Err(e) => return Err(e),
     }
 
     if parse_activation(method).is_none() {
@@ -545,6 +567,56 @@ mod tests {
             vec![strategy_method(&lua, Some("hooks.auth.sso"), true)],
         )
         .unwrap();
+    }
+
+    /// Regression: a wrong-typed `methods` value (string, number) used to
+    /// pass validation, parse to an empty list, and silently gain the FULL
+    /// default method set.
+    #[test]
+    fn validate_rejects_non_table_methods_value() {
+        let lua = Lua::new();
+        for bad in ["\"password_login\"", "5"] {
+            let src = format!("crap = {{}}; return {{ auth = {{ methods = {bad} }} }}");
+            let config: Table = lua.load(&src).eval().unwrap();
+            let err = validate_auth_keys(&config).unwrap_err().to_string();
+            assert!(
+                err.contains("must be a list of method tables"),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    /// Regression: a non-table entry inside `methods` (e.g. the string
+    /// shorthand `"bearer"`) was silently skipped by the sequence iterator.
+    #[test]
+    fn validate_rejects_non_table_method_entry() {
+        let lua = Lua::new();
+        let config: Table = lua
+            .load(r#"return { auth = { methods = { { type = "password_login" }, "bearer" } } }"#)
+            .eval()
+            .unwrap();
+        let err = validate_auth_keys(&config).unwrap_err().to_string();
+        assert!(err.contains("auth.methods[2]"), "{err}");
+    }
+
+    /// Regression: `authenticate = { ref = "" }` (or `{}`) passed the
+    /// validator's blanket table-accept and was then silently dropped by the
+    /// parser — with a single strategy, the collection fell back to the full
+    /// default method set.
+    #[test]
+    fn validate_rejects_strategy_with_empty_table_ref() {
+        let lua = Lua::new();
+        let m = strategy_method(&lua, None, true);
+        let auth_tbl = lua.create_table().unwrap();
+        auth_tbl.set("ref", "").unwrap();
+        m.set("authenticate", auth_tbl).unwrap();
+        let err = methods_config(&lua, vec![m]).unwrap_err().to_string();
+        assert!(err.contains("authenticate"), "{err}");
+
+        let m = strategy_method(&lua, None, true);
+        m.set("authenticate", lua.create_table().unwrap()).unwrap();
+        let err = methods_config(&lua, vec![m]).unwrap_err().to_string();
+        assert!(err.contains("authenticate"), "{err}");
     }
 
     #[test]

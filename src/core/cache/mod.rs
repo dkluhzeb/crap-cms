@@ -18,6 +18,6 @@ mod redis;
 
 pub use backend::{CacheBackend, SharedCache};
 pub use custom::CustomCache;
-pub use factory::{create_cache, create_cache_with_lease};
+pub use factory::{create_cache, create_cache_with_lease, warn_if_custom_cache_multi_vm};
 pub use memory::MemoryCache;
 pub use none::NoneCache;

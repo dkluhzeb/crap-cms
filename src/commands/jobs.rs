@@ -153,7 +153,6 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
     Ok(())
 }
 
-/// Check job system health: stale, failed, pending, never-completed.
 /// Overall job-system health, in ascending severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JobHealth {

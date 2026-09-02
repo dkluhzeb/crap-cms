@@ -75,6 +75,7 @@ use crate::hooks::lua_api::{
         filter::{FilterOperators, FilterScalar, FilterValue, OrCondition},
         globals::{
             get::{GlobalGetOptions, render_crap_globals_get_lua},
+            unpublish::{GlobalUnpublishOptions, render_crap_globals_unpublish_lua},
             update::{GlobalUpdateOptions, render_crap_globals_update_lua},
             validate::{GlobalValidateOptions, render_crap_globals_validate_lua},
         },
@@ -453,9 +454,11 @@ fn render_crap_globals(out: &mut String) {
     render_crap_globals_init_config_lua(out);
     GlobalGetOptions::render_lua_annotation(out);
     GlobalUpdateOptions::render_lua_annotation(out);
+    GlobalUnpublishOptions::render_lua_annotation(out);
     GlobalValidateOptions::render_lua_annotation(out);
     render_crap_globals_get_lua(out);
     render_crap_globals_update_lua(out);
+    render_crap_globals_unpublish_lua(out);
     render_crap_globals_validate_lua(out);
 }
 fn render_crap_hooks(out: &mut String) {

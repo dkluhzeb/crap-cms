@@ -487,6 +487,65 @@ async fn me_valid_token() {
     assert_eq!(get_proto_field(&user, "name").as_deref(), Some("Carol"));
 }
 
+/// Pin the `Me` outcome for a locked account. Locking bumps
+/// `session_version`, so a token issued before the lock hits the shared
+/// evaluator's stale-session mapping: `UNAUTHENTICATED` ("Session
+/// invalidated") — previously `Me` answered `UNAUTHENTICATED` ("Account is
+/// locked") from its own check. The `Locked → PERMISSION_DENIED` mapping
+/// (reachable only while the session version still matches) is pinned by
+/// the `auth_failure_status` unit table.
+#[tokio::test]
+async fn me_locked_account_token_is_invalidated() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    let created = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "locked@example.com"),
+                ("password", "pw123456"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .expect("created doc");
+
+    let token = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "locked@example.com".to_string(),
+            password: "pw123456".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token;
+
+    let mut lock_req = Request::new(content::AccountActionRequest {
+        collection: "users".to_string(),
+        id: created.id,
+    });
+    lock_req
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    ts.service.lock_account(lock_req).await.unwrap();
+
+    let err = ts
+        .service
+        .me(Request::new(content::MeRequest { token }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("Session invalidated"), "{err}");
+}
+
 /// Regression: `Me` used to validate the JWT directly and answer even when
 /// the issuing collection had removed `bearer` from its methods. It now runs
 /// through the shared evaluator like every other RPC.

@@ -7,6 +7,7 @@ use mlua::{Lua, LuaOptions, StdLib};
 use tracing::{debug, info};
 
 use crate::{
+    config::CacheBackend as CacheBackendCfg,
     config::{CrapConfig, UploadStorage},
     core::{
         LocalLease, Registry, SharedInvalidationTransport,
@@ -273,9 +274,8 @@ fn init_app_data(
     // Same per-VM treatment for a custom cache: write-through `clear_cache`
     // from inside this VM must reuse THIS VM via a `LocalLease`, never
     // re-acquire from the pool.
-    let cache: Option<SharedCache> =
-        matches!(config.cache.backend, crate::config::CacheBackend::Custom)
-            .then(|| Arc::new(CustomCache::new(Arc::new(LocalLease::new(lua)))) as SharedCache);
+    let cache: Option<SharedCache> = matches!(config.cache.backend, CacheBackendCfg::Custom)
+        .then(|| Arc::new(CustomCache::new(Arc::new(LocalLease::new(lua)))) as SharedCache);
 
     lua.set_app_data(LuaVmInfra {
         registry: Arc::clone(registry),

@@ -98,6 +98,15 @@ pub(in crate::mcp) fn should_include(slug: &str, config: &McpConfig) -> bool {
     config.include_collections.contains(&slug.to_string())
 }
 
+/// One predicate for every MCP enumeration surface (tool listing, schema
+/// resources, `list_collections`, `describe_collection`): a slug is visible
+/// iff the config include/exclude lists allow it AND its `access.mcp` rule
+/// does. Execution applies the same two checks (separately, since it
+/// resolves `access.mcp` lazily per slug).
+pub(in crate::mcp) fn slug_exposed(slug: &str, config: &McpConfig, exposure: &McpExposure) -> bool {
+    should_include(slug, config) && exposure.allows(slug)
+}
+
 /// Build an [`McpExposure`] from a tool-execution context (resolves `access.mcp`
 /// for every collection/global that sets it; cheap when none do).
 fn mcp_exposure(ctx: &ToolExecCtx<'_>) -> Result<McpExposure> {
@@ -123,7 +132,7 @@ pub(in crate::mcp) fn generate_tools(
     let mut tools = Vec::new();
 
     for (slug, def) in &registry.collections {
-        if should_include(slug, config) && exposure.allows(slug) {
+        if slug_exposed(slug, config, exposure) {
             tools.extend(collection_tools(slug, def));
         }
     }
@@ -132,7 +141,7 @@ pub(in crate::mcp) fn generate_tools(
     // every parsed slug): a global excluded by config must not be listed as
     // a tool it can never run.
     for (slug, def) in &registry.globals {
-        if should_include(slug, config) && exposure.allows(slug) {
+        if slug_exposed(slug, config, exposure) {
             tools.extend(global_tools(slug, def));
         }
     }

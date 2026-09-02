@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::config::{CacheBackend, CacheConfig};
+use crate::config::{CacheBackend, CacheConfig, CrapConfig};
 use crate::core::lua_lease::LuaVmLease;
 
 use super::{CustomCache, MemoryCache, NoneCache, SharedCache};
@@ -53,7 +53,8 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
         // this arm means a caller without a runner asked for it.
         CacheBackend::Custom => {
             bail!(
-                "[cache] backend = \"custom\" requires the Lua runtime —                  constructed via create_cache_with_lease at startup"
+                "[cache] backend = \"custom\" requires the Lua runtime — \
+                 constructed via create_cache_with_lease at startup"
             );
         }
     }
@@ -87,9 +88,29 @@ pub fn create_cache_with_lease(
     create_cache(config)
 }
 
+/// Log the custom cache's per-VM statelessness contract when the hook-VM
+/// pool can exceed one VM (the normal case). `init.lua` runs once *per*
+/// pool VM, so a handler holding state in a Lua table keeps one store per
+/// VM — a read cached on one VM survives a write-through clear that ran on
+/// another, serving stale documents indefinitely. This can't be detected
+/// mechanically through the lease (there is no way to pick which VM serves
+/// a call), so it is surfaced loudly at boot instead.
+pub fn warn_if_custom_cache_multi_vm(config: &CrapConfig) {
+    if config.cache.backend == CacheBackend::Custom && config.hooks.max_vm_pool_size > 1 {
+        warn!(
+            max_vms = config.hooks.max_vm_pool_size,
+            "custom cache handlers run across up to {} pooled Lua VMs — the handler must \
+             delegate to a shared external store (per-VM Lua state serves stale data after \
+             write-through clears); see the crap.cache docs",
+            config.hooks.max_vm_pool_size
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::lua_lease::LocalLease;
 
     #[test]
     fn create_memory_cache_default() {
@@ -126,8 +147,6 @@ mod tests {
 
     #[test]
     fn create_custom_with_lease_verifies_registration() {
-        use crate::core::lua_lease::LocalLease;
-
         let config = CacheConfig {
             backend: CacheBackend::Custom,
             ..Default::default()

@@ -670,8 +670,9 @@ message FindByIDRequest {
   // The document's nanoid ID.
   string id = 2;
 
-  // Relationship population depth. Defaults to the server's default_depth
-  // config value (typically 1 for FindByID, unlike Find which defaults to 0).
+  // Relationship population depth. 0 = IDs only.
+  // Defaults to the server's default_depth config (1 unless changed) — the
+  // same default as Find.
   optional int32 depth = 3;
 
   // BCP-47 locale code for localized fields.

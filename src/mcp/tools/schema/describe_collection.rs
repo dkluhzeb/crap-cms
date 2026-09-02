@@ -10,7 +10,7 @@ use crate::{
     mcp::{
         access::McpExposure,
         schema::{CrudOp, collection_input_schema, global_input_schema},
-        tools::should_include,
+        tools::slug_exposed,
     },
 };
 
@@ -47,16 +47,15 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
         .and_then(|v| v.as_str())
         .context("Missing 'slug' argument")?;
 
-    // A collection/global hidden by `access.mcp` is reported as unknown — the
-    // same opaque error as exclude, so MCP can't even confirm it exists.
-    if !exposure.allows(slug) {
+    // A collection/global hidden by `access.mcp` OR the include/exclude
+    // lists is reported as unknown — the same opaque error for both, so MCP
+    // can't even confirm it exists. One predicate for collections AND
+    // globals (globals used to skip the include/exclude half here).
+    if !slug_exposed(slug, mcp_config, exposure) {
         bail!("Unknown collection or global: {slug}");
     }
 
     if let Some(def) = registry.collections.get(slug) {
-        if !should_include(slug, mcp_config) {
-            bail!("Unknown collection or global: {slug}");
-        }
         let response = DescribeResponse::Collection {
             slug,
             label: def.display_name().to_string(),

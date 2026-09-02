@@ -15,10 +15,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   gained the default method set. All three are now load errors: `auth strategy
   'x': \`authenticate\` is required`, `\`activates_on\` is required — { header =
   "x-..." } or { always = true }`, `auth.methods is empty — list at least one
-  method, or omit \`methods\` to use the defaults`.
+  method, or omit \`methods\` to use the defaults`. The same strictness covers the
+  shapes that used to slip through: a wrong-typed `methods` value, a non-table
+  entry inside the list, and `authenticate = { ref = "" }` are all load errors
+  (each previously parsed to "no methods" and silently fell back to the FULL
+  default method set).
 - **Filter `exists` / `not_exists` accept only `true`.** `{ exists = false }` (and any
   non-boolean value) is now rejected with an error on every surface — Lua `where`
-  tables, gRPC/MCP JSON where-clauses, and Lua access-constraint returns. Previously
+  tables, gRPC/MCP JSON where-clauses, admin list-URL filters
+  (`where[field][exists]=false` is a 400), and Lua access-constraint returns. Previously
   the wire decoder ignored the value (so `exists: false` meant `IS NOT NULL`, the
   opposite of the caller's intent) while the Lua parser silently dropped the slot,
   widening the match set — dangerous under `delete_many` / `update_many` and, in an
@@ -618,6 +623,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   listed `bearer`. `Me` now resolves the caller exactly like every other RPC —
   honoring `methods`/`surfaces`, session revocation, account locks, and custom
   header-activated strategies (an API-key user can call `Me` without a JWT).
+  Error details changed with the unification (codes now come from the shared
+  mapping every RPC uses, pinned by a unit test): a token invalidated by locking
+  answers `UNAUTHENTICATED` ("Session invalidated" — locking bumps the session
+  version; the message was "Account is locked"), and a **deleted** user answers
+  `UNAUTHENTICATED` ("User no longer exists") instead of `NOT_FOUND`.
 - **Validate dry-runs follow the target operation's access rules.** The
   `Validate`/`ValidateGlobal` endpoints ran validators — including `unique`
   checks — without any collection-level access gate, so an anonymous caller
@@ -1409,11 +1419,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   stream open), but only the `authorization` metadata was read — every body-token
   subscription silently ran anonymously. The field is now used as the fallback
   when no `authorization` metadata is present.
-- **MCP globals obey `include_collections` / `exclude_collections` in listing and
-  resources.** Execution already rejected an excluded global, but `tools/list` and
-  the `crap://globals` schema resource still advertised it — a tool that could never
-  run. The three surfaces now apply the same slug filter (the lists match globals as
-  well as collections).
+- **MCP globals obey `include_collections` / `exclude_collections` on every
+  enumeration surface.** Execution already rejected an excluded global, but
+  `tools/list`, the `crap://globals` schema resource, `list_collections`, and
+  `describe_collection` still advertised it (the last one with its complete field
+  schema). All surfaces now share one exposure predicate, so an excluded slug is
+  uniformly reported as unknown.
 - **`auth = { methods = {...} }` without `enabled` parsed as disabled, and
   `password_login` without `forgot_password` parsed as forgot-password-off.** The
   Lua reader coerced a *missing* boolean key to `false`, so the documented `true`

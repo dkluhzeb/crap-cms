@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::to_string_pretty;
 
 use crate::{
-    config::McpConfig, core::Registry, mcp::access::McpExposure, mcp::tools::should_include,
+    config::McpConfig, core::Registry, mcp::access::McpExposure, mcp::tools::slug_exposed,
 };
 
 /// One entry in the `list_collections` MCP tool response.
@@ -40,7 +40,7 @@ pub(in crate::mcp::tools) fn exec_list_collections(
 ) -> Result<String> {
     let mut result = Vec::new();
     for (slug, def) in &registry.collections {
-        if !should_include(slug, mcp_config) || !exposure.allows(slug) {
+        if !slug_exposed(slug, mcp_config, exposure) {
             continue;
         }
         result.push(ListEntry::Collection {
@@ -53,7 +53,9 @@ pub(in crate::mcp::tools) fn exec_list_collections(
         });
     }
     for (slug, def) in &registry.globals {
-        if !exposure.allows(slug) {
+        // Same filter as collections — an excluded global used to be listed
+        // here (and described below) while being uncallable.
+        if !slug_exposed(slug, mcp_config, exposure) {
             continue;
         }
         result.push(ListEntry::Global {

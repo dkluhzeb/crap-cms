@@ -120,6 +120,18 @@ impl ContentService {
     }
 
     /// Extract Bearer token string from gRPC metadata (pure, no I/O).
+    /// Bearer from the `authorization` metadata, else the request body's
+    /// `token` field (the documented fallback for surfaces where metadata is
+    /// awkward — `Me`'s legacy form, `Subscribe`'s stream-open form) when
+    /// non-empty. Metadata wins when both are present.
+    pub(in crate::api::handlers) fn bearer_or_body_token(
+        metadata: &MetadataMap,
+        body_token: &str,
+    ) -> Option<String> {
+        Self::extract_token(metadata)
+            .or_else(|| (!body_token.is_empty()).then(|| body_token.to_string()))
+    }
+
     pub(in crate::api::handlers) fn extract_token(metadata: &MetadataMap) -> Option<String> {
         metadata
             .get("authorization")
@@ -696,5 +708,32 @@ mod tests {
         meta.insert("authorization", "bearer abc123".parse().unwrap());
         // "bearer" (lowercase) should not match "Bearer " prefix
         assert_eq!(ContentService::extract_token(&meta), None);
+    }
+}
+
+#[cfg(test)]
+mod auth_status_tests {
+    use super::*;
+
+    /// Pin the wire mapping every RPC (including `Me` since its evaluator
+    /// unification) uses for auth failures — a silent change here is a
+    /// breaking change for client retry logic.
+    #[test]
+    fn auth_failure_status_mapping_is_stable() {
+        use tonic::Code;
+
+        let cases = [
+            (AuthFailure::Locked, Code::PermissionDenied),
+            (AuthFailure::StaleSession, Code::Unauthenticated),
+            (AuthFailure::UserMissing, Code::Unauthenticated),
+            (AuthFailure::UnknownCollection, Code::Unauthenticated),
+            (AuthFailure::Lookup, Code::Unavailable),
+            (AuthFailure::BadToken, Code::Unauthenticated),
+            (AuthFailure::Unaccepted, Code::Unauthenticated),
+        ];
+
+        for (failure, code) in cases {
+            assert_eq!(auth_failure_status(failure).code(), code);
+        }
     }
 }

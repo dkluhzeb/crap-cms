@@ -701,7 +701,7 @@ fn create_many_override_access_bypasses_default_deny() {
 #[test]
 fn bulk_conn_paths_clear_cache() {
     let s = setup(3);
-    let cache: std::sync::Arc<MemoryCache> = std::sync::Arc::new(MemoryCache::new(64));
+    let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new(64));
     let shared: SharedCache = cache.clone();
 
     let seed = |c: &MemoryCache| c.set("k", b"v").expect("seed cache");

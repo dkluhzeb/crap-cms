@@ -23,7 +23,7 @@ use crate::{
     core::{
         Registry, SharedPasswordProvider, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
-        cache::create_cache_with_lease,
+        cache::{create_cache_with_lease, warn_if_custom_cache_multi_vm},
         email::{EmailRenderer, create_email_provider_with_lease},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
@@ -476,6 +476,7 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
     // handlers, image-convert jobs) get concurrency via the hook-runner
     // VM pool. In-VM callers use a LocalLease set up in the pool builder.
     let storage = create_storage_with_lease(&config_dir, &config.upload, hook_runner.lua_lease())?;
+    warn_if_custom_cache_multi_vm(&config);
     let cache = create_cache_with_lease(&config.cache, hook_runner.lua_lease())?;
     let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new(&jwt_secret));
     let password_provider: SharedPasswordProvider = Arc::new(Argon2PasswordProvider);

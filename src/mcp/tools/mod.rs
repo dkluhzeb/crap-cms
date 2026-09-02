@@ -8,7 +8,7 @@ mod schema;
 
 pub(in crate::mcp) use exec_ctx::ToolExecCtx;
 
-pub(in crate::mcp) use dispatch::{execute_tool, generate_tools, should_include};
+pub(in crate::mcp) use dispatch::{execute_tool, generate_tools, slug_exposed};
 
 #[cfg(test)]
 mod test_helpers;

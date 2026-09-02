@@ -32,11 +32,28 @@ const VALID_OPS: &str = "equals, not_equals, contains, like, greater_than, less_
 /// Parse an operator string and value into a `FilterOp` — the canonical grammar
 /// shared with the gRPC/MCP surfaces (`in`/`not_in` are synthesized post-hoc
 /// from repeated `equals`/`not_equals`, so they aren't parsed here).
-fn parse_filter_op(op_str: &str, value: String) -> Option<FilterOp> {
+///
+/// `exists`/`not_exists` accept the admin UI's canonical valueless form
+/// (`where[field][exists]=`) or the literal `true` — anything else is a 400,
+/// matching the wire and Lua parsers: `where[field][exists]=false` used to
+/// silently read as the inverted `IS NOT NULL`.
+fn parse_filter_op(op_str: &str, value: String) -> Result<FilterOp, String> {
     match op_str {
-        "exists" => Some(FilterOp::Exists),
-        "not_exists" => Some(FilterOp::NotExists),
-        _ => FilterOp::scalar_from_name(op_str, value),
+        "exists" | "not_exists" => {
+            if !value.is_empty() && value != "true" {
+                return Err(format!(
+                    "'{op_str}' accepts only the value 'true' (got '{value}'); use 'not_exists' for IS NULL and 'exists' for IS NOT NULL"
+                ));
+            }
+
+            Ok(if op_str == "exists" {
+                FilterOp::Exists
+            } else {
+                FilterOp::NotExists
+            })
+        }
+        _ => FilterOp::scalar_from_name(op_str, value)
+            .ok_or_else(|| format!("Unknown filter operator '{op_str}' (valid: {VALID_OPS})")),
     }
 }
 
@@ -127,11 +144,7 @@ fn parse_one_entry(part: &str, valid_cols: &HashSet<String>) -> Result<Option<Pa
         return Err(format!("Unknown filter field '{field}'"));
     }
 
-    let Some(op) = parse_filter_op(&op_str, value) else {
-        return Err(format!(
-            "Unknown filter operator '{op_str}' (valid: {VALID_OPS})"
-        ));
-    };
+    let op = parse_filter_op(&op_str, value)?;
 
     Ok(Some(ParsedRow {
         or_position,
@@ -816,5 +829,42 @@ mod tests {
             "where[_status][equals]=draft&where[or][0][0][_status][equals]=draft",
         );
         assert_eq!(got, Some(vec!["draft".to_string()]));
+    }
+}
+
+#[cfg(test)]
+mod exists_value_tests {
+    use super::*;
+
+    /// Regression: `exists=false` in a list URL used to decode as
+    /// `FilterOp::Exists` (IS NOT NULL) — the inversion the wire/Lua
+    /// parsers reject as a hard error.
+    #[test]
+    fn exists_accepts_only_the_literal_true() {
+        assert!(matches!(
+            parse_filter_op("exists", "true".to_string()),
+            Ok(FilterOp::Exists)
+        ));
+        assert!(matches!(
+            parse_filter_op("not_exists", "true".to_string()),
+            Ok(FilterOp::NotExists)
+        ));
+
+        // The admin UI serializes these ops valueless (`where[x][exists]=`).
+        assert!(matches!(
+            parse_filter_op("not_exists", String::new()),
+            Ok(FilterOp::NotExists)
+        ));
+
+        for (op, val) in [("exists", "false"), ("not_exists", "0"), ("exists", "1")] {
+            let err = parse_filter_op(op, val.to_string()).unwrap_err();
+            assert!(
+                err.contains("accepts only the value 'true'"),
+                "{op}={val}: {err}"
+            );
+        }
+
+        let err = parse_filter_op("banana", "x".to_string()).unwrap_err();
+        assert!(err.contains("Unknown filter operator"), "{err}");
     }
 }

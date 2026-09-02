@@ -140,7 +140,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "depth",
                 ty: "optional int32",
                 tag: 3,
-                doc: "Relationship population depth. Defaults to the server's default_depth\nconfig value (typically 1 for FindByID, unlike Find which defaults to 0).",
+                doc: "Relationship population depth. 0 = IDs only.\nDefaults to the server's default_depth config (1 unless changed) — the\nsame default as Find.",
             },
             ProtoField {
                 name: "locale",

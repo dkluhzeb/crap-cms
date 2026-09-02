@@ -120,6 +120,16 @@ pub async fn click_until_element_count(
     let mut last = Vec::new();
 
     for _ in 0..20 {
+        // Never re-click a satisfied toggle: the previous click may have
+        // landed after its poll window closed, and clicking again would
+        // toggle the state back.
+        if let Some(els) = poll_find(page, expect_sel).await {
+            if els.len() == count {
+                return els;
+            }
+            last = els;
+        }
+
         if let Ok(el) = page.find_element(click_sel).await {
             let _ = el.click().await;
         }
