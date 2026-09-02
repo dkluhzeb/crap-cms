@@ -370,15 +370,17 @@ run_grpc_write() {
                 n=$((n + 1))
                 slug="loadtest-${i}-${n}-$(date +%s%N)"
                 # Create (posts requires: title, slug, post_type, author)
+                # alpha.10 wire shape: data is a DataMap ({fields:{name:{string_value:..}}}),
+                # NOT flat JSON — a flat payload fails silently (0.0 req/s, "0 errors").
                 resp=$(grpcurl -plaintext -H "authorization: Bearer ${auth}" -d "{
                     \"collection\": \"posts\",
-                    \"data\": {
-                        \"title\": \"Load Test ${slug}\",
-                        \"slug\": \"${slug}\",
-                        \"post_type\": \"article\",
-                        \"author\": \"${USER_ID}\",
-                        \"content\": \"Load test document.\"
-                    }
+                    \"data\": { \"fields\": {
+                        \"title\": { \"string_value\": \"Load Test ${slug}\" },
+                        \"slug\": { \"string_value\": \"${slug}\" },
+                        \"post_type\": { \"string_value\": \"article\" },
+                        \"author\": { \"string_value\": \"${USER_ID}\" },
+                        \"content\": { \"string_value\": \"Load test document.\" }
+                    } }
                 }" "$GRPC_ADDR" crap.ContentAPI/Create 2>&1)
 
                 doc_id=$(echo "$resp" | jq -r '.document.id // empty' 2>/dev/null)
