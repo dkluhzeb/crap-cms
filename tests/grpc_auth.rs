@@ -1420,6 +1420,37 @@ async fn login_mfa_challenge_and_verify_round_trip() {
     );
     let challenge = resp.mfa_challenge.expect("challenge token");
 
+    // The challenge spawns `deliver_mfa_code` in the BACKGROUND, which
+    // stores a random code. Wait for that write to land before touching MFA
+    // state — the manual `set_mfa_code` below used to race it (the
+    // historical flake in this test: under full-suite load the background
+    // write landed between the manual set and the verify, overwriting
+    // "123456" → "Invalid MFA code").
+    {
+        let conn = ts.pool.get().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        loop {
+            let p1 = conn.placeholder(1);
+            let stored = conn
+                .query_one(
+                    &format!("SELECT _mfa_code FROM \"users\" WHERE id = {p1}"),
+                    &[crap_cms::db::DbValue::Text(user_id.clone())],
+                )
+                .unwrap()
+                .and_then(|row| row.opt_text_at(0));
+
+            if stored.is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background MFA delivery never stored a code"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
     // Wrong code → unauthenticated.
     let err = ts
         .service
@@ -1433,7 +1464,8 @@ async fn login_mfa_challenge_and_verify_round_trip() {
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
 
     // Store a known code (the emailed one isn't observable in tests) and
-    // complete the login.
+    // complete the login. Safe now: the single background delivery for this
+    // login has already landed and was cleared by the wrong-code attempt.
     {
         let conn = ts.pool.get().unwrap();
         let ctx = crap_cms::service::ServiceContext::slug_only("users")
@@ -1709,4 +1741,112 @@ async fn login_mfa_custom_delivery_round_trip() {
         .unwrap()
         .into_inner();
     assert!(!resp.token.is_empty(), "delivered code completes the login");
+}
+
+// ── TOTP MFA flow (review follow-up: exercises the gRPC handlers, not ──
+// ── just the service chokepoint) ─────────────────────────────────────
+
+fn make_users_def_totp() -> CollectionDefinition {
+    let mut def = make_users_def();
+    def.auth = Some(
+        Auth::enabled().map_password_login(|b| b.mfa(crap_cms::core::collection::MfaMode::Totp)),
+    );
+    def
+}
+
+#[tokio::test]
+async fn totp_login_provisions_verifies_and_confirms() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ts = setup_service(vec![make_users_def_totp()], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "totp@example.com"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // Login 1: challenge with in-band provisioning (unenrolled).
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "totp@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.mfa_required, Some(true));
+    assert!(resp.token.is_empty(), "no session before the second factor");
+    let challenge = resp.mfa_challenge.expect("challenge token");
+    let uri = resp
+        .totp_provisioning_uri
+        .expect("unenrolled login must carry the provisioning uri");
+    assert!(uri.starts_with("otpauth://totp/"), "{uri}");
+
+    let secret: String = uri
+        .split("secret=")
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+
+    // Wrong code is rejected (and does not consume anything).
+    let err = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: challenge.clone(),
+            code: "000000".to_string(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // The real authenticator code completes the login AND confirms.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let code = crap_cms::core::auth::totp_code_at(&secret, now).unwrap();
+
+    let ok = ts
+        .service
+        .verify_mfa(Request::new(content::VerifyMfaRequest {
+            collection: "users".to_string(),
+            mfa_challenge: challenge,
+            code,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!ok.token.is_empty(), "verified TOTP must mint a session");
+
+    // Login 2: still MFA-gated, but confirmed — no provisioning any more.
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "totp@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.mfa_required, Some(true));
+    assert!(
+        resp.totp_provisioning_uri.is_none(),
+        "confirmed enrollment must not re-expose provisioning"
+    );
 }

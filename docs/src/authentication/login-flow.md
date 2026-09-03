@@ -111,16 +111,33 @@ Response:
 
 ### MFA collections
 
-On an MFA-enabled collection (`mfa = "email"` or `"custom"`), `Login`
-verifies the password, delivers the 6-digit code (email, or your
-`mfa_deliver` hook), and returns a challenge instead of a token:
+(Full mode comparison, TOTP enrollment lifecycle, and security model:
+[Multi-Factor Authentication](mfa.md).)
+
+On an MFA-enabled collection, `Login` verifies the password and returns a
+challenge instead of a token. For `mfa = "email"` / `"custom"` the 6-digit
+code is delivered (email, or your `mfa_deliver` hook):
 
 ```json
 { "mfaRequired": true, "mfaChallenge": "eyJhbGciOi..." }
 ```
 
+For `mfa = "totp"` nothing is delivered — the code comes from the user's
+authenticator app. While enrollment is unconfirmed the response also
+carries the provisioning URI (add it to the app; the first successful
+verification confirms enrollment and the field disappears):
+
+```json
+{
+  "mfaRequired": true,
+  "mfaChallenge": "eyJhbGciOi...",
+  "totpProvisioningUri": "otpauth://totp/crap-cms:admin%40example.com?secret=..."
+}
+```
+
 Complete the login with `VerifyMfa` (the challenge token is single-purpose
-and expires after 5 minutes; codes are single-use):
+and expires after 5 minutes; delivered codes are single-use, TOTP codes are
+replay-guarded per time step):
 
 ```bash
 grpcurl -plaintext -d '{

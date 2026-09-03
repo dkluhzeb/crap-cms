@@ -122,6 +122,20 @@ fn validate_method_keys(method: &Table) -> Result<()> {
         .flatten()
         .unwrap_or_default();
 
+    // Fail closed on an unknown mfa string: silently mapping a typo
+    // ("emial", "TOTP") to Off would disable a second factor the operator
+    // believes is on. `false` arrives as a boolean (not a string) and means
+    // Off by design.
+    if ty == "password_login"
+        && let Ok(Some(mode)) = method.get::<Option<String>>("mfa")
+        && !matches!(mode.as_str(), "email" | "custom" | "totp")
+    {
+        bail!(
+            "password_login method: unknown mfa mode '{mode}' \
+             (expected \"email\", \"custom\", \"totp\", or false)"
+        );
+    }
+
     let allowed: &[&str] = match ty.as_str() {
         "password_login" => &[
             "type",
@@ -214,6 +228,9 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
             mfa: match tbl.get::<String>("mfa").ok().as_deref() {
                 Some("email") => MfaMode::Email,
                 Some("custom") => MfaMode::Custom,
+                Some("totp") => MfaMode::Totp,
+                // Unknown strings were rejected by `validate_method_keys`
+                // before this runs; anything else (`false`, absent) is Off.
                 _ => MfaMode::Off,
             },
             mfa_when: get_optional_hook_ref(tbl, "mfa_when", "password_login method")
@@ -373,6 +390,47 @@ mod tests {
         assert!(matches!(auth.methods[0], AuthMethod::PasswordLogin { .. }));
         assert!(matches!(auth.methods[1], AuthMethod::Bearer { .. }));
         assert!(matches!(auth.methods[2], AuthMethod::SessionCookie { .. }));
+    }
+
+    /// `mfa = "totp"` parses into the typed mode.
+    #[test]
+    fn parses_totp_mode() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+        m.set("mfa", "totp").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+
+        let auth = parse_collection_auth(&tbl).unwrap();
+        let AuthMethod::PasswordLogin { mfa, .. } = &auth.methods[0] else {
+            panic!("expected PasswordLogin");
+        };
+        assert_eq!(*mfa, MfaMode::Totp);
+    }
+
+    /// Regression: an unknown mfa string used to be silently mapped to
+    /// `Off` — disabling a second factor the operator believes is on. The
+    /// method validator now fails closed.
+    #[test]
+    fn unknown_mfa_mode_is_rejected() {
+        let lua = Lua::new();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+        m.set("mfa", "TOTP").unwrap();
+
+        let err = validate_method_keys(&m).unwrap_err().to_string();
+        assert!(err.contains("unknown mfa mode 'TOTP'"), "{err}");
+
+        // The valid spellings pass.
+        for mode in ["email", "custom", "totp"] {
+            m.set("mfa", mode).unwrap();
+            validate_method_keys(&m).unwrap_or_else(|e| panic!("{mode}: {e}"));
+        }
     }
 
     /// `mfa = "custom"` + `mfa_deliver` parse into the typed pair (the

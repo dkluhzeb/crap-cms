@@ -12,6 +12,8 @@
 //!   accessors used by middleware to decide whether to accept a
 //!   token (session version, `is_locked`, `user_exists`).
 //! - [`mfa`] — email MFA code persistence + verification.
+//! - [`totp_flow`] — TOTP challenge/enrollment + the mode-dispatching
+//!   [`totp_flow::verify_second_factor`] chokepoint both login surfaces use.
 //! - [`evaluator`] — the unified per-request auth resolver shared
 //!   by admin middleware and the gRPC service.
 
@@ -21,6 +23,7 @@ pub mod local;
 pub mod login_flow;
 pub mod mfa;
 pub mod tokens;
+pub mod totp_flow;
 
 #[cfg(test)]
 mod test_support;
@@ -43,3 +46,4 @@ pub use tokens::{
     ResetTokenResult, consume_reset_token, consume_verification_token, find_by_reset_token,
     generate_reset_token, generate_security_token,
 };
+pub use totp_flow::{TotpProvisioning, totp_challenge, verify_second_factor};

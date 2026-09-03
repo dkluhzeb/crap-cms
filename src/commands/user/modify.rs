@@ -206,6 +206,67 @@ pub(super) fn user_unverify(
     Ok(())
 }
 
+/// Reset a user's TOTP enrollment: clears the sealed secret, the confirmed
+/// flag, and the replay guard — the next MFA challenge re-provisions from
+/// scratch (trust-on-first-login re-opens, so confirm interactively).
+///
+/// # Errors
+///
+/// Returns an error if the user can't be resolved, the collection doesn't
+/// use `mfa = "totp"`, the prompt fails, or the DB update fails.
+#[cfg(not(tarpaulin_include))]
+pub fn user_reset_totp(
+    pool: &DbPool,
+    registry: &Registry,
+    collection: &str,
+    email: Option<String>,
+    id: Option<String>,
+    confirm: bool,
+) -> Result<()> {
+    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+
+    let uses_totp = def
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp);
+    if !uses_totp {
+        return Err(anyhow!(
+            "Collection '{collection}' does not use mfa = \"totp\""
+        ));
+    }
+
+    let user_email = get_user_email(&doc);
+
+    if !confirm {
+        let proceed = Confirm::with_theme(&crap_theme())
+            .with_prompt(format!(
+                "Reset TOTP enrollment for {} ({})? They re-enroll on their next login \
+                 — anyone holding their password could enroll during that window.",
+                doc.id, user_email
+            ))
+            .default(false)
+            .interact()
+            .context("Failed to read confirmation")?;
+
+        if !proceed {
+            cli::info("Aborted.");
+
+            return Ok(());
+        }
+    }
+
+    let conn = pool.get().context("Failed to get database connection")?;
+
+    query::reset_totp(&conn, collection, &doc.id).context("Failed to reset TOTP enrollment")?;
+
+    cli::success(&format!(
+        "Reset TOTP enrollment for user {} ({}) in '{}' — they re-enroll on next login",
+        doc.id, user_email, collection
+    ));
+
+    Ok(())
+}
+
 /// Args for [`user_change_password`].
 pub struct UserChangePasswordParams<'a> {
     pub pool: &'a DbPool,

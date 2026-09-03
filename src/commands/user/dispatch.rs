@@ -14,7 +14,7 @@ use super::{
     list::user_list,
     modify::{
         UserChangePasswordParams, UserDeleteParams, user_change_password, user_delete, user_lock,
-        user_unlock, user_unverify, user_verify,
+        user_reset_totp, user_unlock, user_unverify, user_verify,
     },
 };
 
@@ -27,6 +27,8 @@ use super::{
 /// validation, DB constraint violations, etc.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
+    let (pool, registry) = load_config_and_sync(config_dir)?;
+
     match action {
         UserAction::Create {
             collection,
@@ -35,8 +37,6 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             fields,
         } => {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
             user_create(UserCreateParams {
                 pool: &pool,
                 registry: &registry,
@@ -47,20 +47,12 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
                 password_policy: &cfg.auth.password_policy,
             })
         }
-        UserAction::List { collection } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_list(&pool, &registry, &collection)
-        }
+        UserAction::List { collection } => user_list(&pool, &registry, &collection),
         UserAction::Info {
             collection,
             email,
             id,
-        } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_info(&pool, &registry, &collection, email, id)
-        }
+        } => user_info(&pool, &registry, &collection, email, id),
         UserAction::Delete {
             collection,
             email,
@@ -68,8 +60,6 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             confirm,
         } => {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
             user_delete(UserDeleteParams {
                 pool: &pool,
                 registry: &registry,
@@ -84,38 +74,28 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             collection,
             email,
             id,
-        } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_lock(&pool, &registry, &collection, email, id)
-        }
+        } => user_lock(&pool, &registry, &collection, email, id),
         UserAction::Unlock {
             collection,
             email,
             id,
-        } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_unlock(&pool, &registry, &collection, email, id)
-        }
+        } => user_unlock(&pool, &registry, &collection, email, id),
         UserAction::Verify {
             collection,
             email,
             id,
-        } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_verify(&pool, &registry, &collection, email, id)
-        }
+        } => user_verify(&pool, &registry, &collection, email, id),
         UserAction::Unverify {
             collection,
             email,
             id,
-        } => {
-            let (pool, registry) = load_config_and_sync(config_dir)?;
-
-            user_unverify(&pool, &registry, &collection, email, id)
-        }
+        } => user_unverify(&pool, &registry, &collection, email, id),
+        UserAction::ResetTotp {
+            collection,
+            email,
+            id,
+            confirm,
+        } => user_reset_totp(&pool, &registry, &collection, email, id, confirm),
         UserAction::ChangePassword {
             collection,
             email,
@@ -123,7 +103,6 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             password,
         } => {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            let (pool, registry) = load_config_and_sync(config_dir)?;
 
             user_change_password(UserChangePasswordParams {
                 pool: &pool,

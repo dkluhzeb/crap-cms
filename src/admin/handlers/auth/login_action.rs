@@ -16,7 +16,8 @@ use crate::{
         handlers::{
             auth::{
                 LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
-                login_error, mfa_pending_cookie, scoped_limiter, session_redirect,
+                is_totp_collection, login_error, mfa_pending_cookie, scoped_limiter,
+                session_redirect,
             },
             shared::paths,
         },
@@ -95,33 +96,40 @@ fn handle_mfa_challenge(
         }
     };
 
-    // Throttle MFA-code EMAIL ISSUANCE per user. The login limiter is cleared
-    // on each successful password, so without this a password-holder could loop
-    // /admin/login to flood the victim's inbox with codes and rack up send cost.
-    // When over budget we skip regenerating/sending — the previously issued code
-    // stays valid — but still set the pending cookie so the flow isn't broken.
-    let issue_blocked = scoped_limiter(
-        state,
-        "mfa_issue",
-        state.config.auth.max_forgot_password_attempts,
-        state.config.auth.forgot_password_window_seconds,
-    )
-    .check_and_block(user.id.as_ref());
-
-    if issue_blocked {
-        warn!(user = %user.id, "MFA code issuance throttled — reusing the prior code");
+    if is_totp_collection(state, &form.collection) {
+        // TOTP: nothing to generate or deliver — the user verifies against
+        // their authenticator app; enrollment (if still unconfirmed) is
+        // resolved when the MFA page renders.
     } else {
-        // Generate a 6-digit code, store it, and deliver it (built-in email
-        // or the collection's `mfa_deliver` hook) in the background — the
-        // shared body the gRPC challenge flow also uses.
-        let code = auth::generate_mfa_code();
-        let infra = Arc::clone(&state.infra);
-        let slug = form.collection.clone();
-        let user_owned = user.clone();
+        // Throttle MFA-code EMAIL ISSUANCE per user. The login limiter is
+        // cleared on each successful password, so without this a
+        // password-holder could loop /admin/login to flood the victim's inbox
+        // with codes and rack up send cost. When over budget we skip
+        // regenerating/sending — the previously issued code stays valid — but
+        // still set the pending cookie so the flow isn't broken.
+        let issue_blocked = scoped_limiter(
+            state,
+            "mfa_issue",
+            state.config.auth.max_forgot_password_attempts,
+            state.config.auth.forgot_password_window_seconds,
+        )
+        .check_and_block(user.id.as_ref());
 
-        task::spawn_blocking(move || {
-            auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
-        });
+        if issue_blocked {
+            warn!(user = %user.id, "MFA code issuance throttled — reusing the prior code");
+        } else {
+            // Generate a 6-digit code, store it, and deliver it (built-in
+            // email or the collection's `mfa_deliver` hook) in the
+            // background — the shared body the gRPC challenge flow also uses.
+            let code = auth::generate_mfa_code();
+            let infra = Arc::clone(&state.infra);
+            let slug = form.collection.clone();
+            let user_owned = user.clone();
+
+            task::spawn_blocking(move || {
+                auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
+            });
+        }
     }
 
     // Set MFA pending cookie and redirect to MFA page

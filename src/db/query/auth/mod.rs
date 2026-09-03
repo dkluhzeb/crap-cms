@@ -4,6 +4,7 @@ mod mfa;
 mod password;
 mod status;
 mod tokens;
+mod totp;
 
 pub use mfa::{set_mfa_code, verify_mfa_code};
 pub use password::{
@@ -18,3 +19,4 @@ pub use tokens::{
     clear_reset_token, clear_verification_token, find_by_reset_token, find_by_verification_token,
     mark_unverified, mark_verified, set_reset_token, set_verification_token,
 };
+pub use totp::{TotpState, get_totp_state, record_totp_success, reset_totp, set_totp_secret};

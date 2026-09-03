@@ -175,3 +175,180 @@ fn login_request(email: &str, password: &str) -> Request<Body> {
         )))
         .unwrap()
 }
+
+// ── mfa_totp_enrollment_and_login_flow ───────────────────────────────────
+//
+// Auth collection with `mfa = "totp"`. First login shows the provisioning
+// link on /admin/mfa; the test extracts the secret, computes a real TOTP
+// code, completes the login, then re-logs-in and verifies enrollment is
+// confirmed (no provisioning block).
+
+#[tokio::test]
+async fn mfa_totp_enrollment_and_login_flow() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let app = setup_app(vec![make_users_def_mfa_totp()], vec![]);
+    create_test_user(&app, "totp@test.com", "pass1234");
+
+    let mfa_cookie_value = login_and_get_mfa_cookie(&app, "totp@test.com").await;
+
+    // Enrollment page: provisioning link + manual key.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/mfa")
+                .header(
+                    "Cookie",
+                    format!("crap_csrf={TEST_CSRF}; {mfa_cookie_value}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body.contains("otpauth://totp/"),
+        "first challenge must show the provisioning link"
+    );
+
+    let secret: String = body
+        .split("secret=")
+        .nth(1)
+        .expect("provisioning uri carries the secret")
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let code = crap_cms::core::auth::totp_code_at(&secret, now).expect("computable code");
+
+    // Wrong code during enrollment: the re-rendered form must show the
+    // SAME provisioning secret, or the user could never finish setup.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/mfa")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header(
+                    "Cookie",
+                    format!("crap_csrf={TEST_CSRF}; {mfa_cookie_value}"),
+                )
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from("code=000000"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body.contains(&secret),
+        "enrollment re-render after a wrong code must keep the same secret"
+    );
+
+    // Submit the authenticator code — completes login AND confirms enrollment.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/mfa")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header(
+                    "Cookie",
+                    format!("crap_csrf={TEST_CSRF}; {mfa_cookie_value}"),
+                )
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(format!("code={code}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_redirection(),
+        "valid TOTP code should complete login, got: {}",
+        resp.status()
+    );
+    let saw_session = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .any(|v| v.starts_with("crap_session="));
+    assert!(saw_session, "TOTP success must set crap_session cookie");
+
+    // Second login: enrollment is confirmed — no provisioning block.
+    let mfa_cookie_value = login_and_get_mfa_cookie(&app, "totp@test.com").await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/mfa")
+                .header(
+                    "Cookie",
+                    format!("crap_csrf={TEST_CSRF}; {mfa_cookie_value}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        !body.contains("otpauth://totp/"),
+        "confirmed enrollment must not re-show the provisioning link"
+    );
+}
+
+fn make_users_def_mfa_totp() -> crap_cms::core::collection::CollectionDefinition {
+    let mut def = make_users_def();
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.mfa(MfaMode::Totp)));
+    def
+}
+
+async fn login_and_get_mfa_cookie(app: &crap_cms_e2e::helpers::TestApp, email: &str) -> String {
+    let resp = app
+        .router
+        .clone()
+        .oneshot(login_request(email, "pass1234"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .find(|v| v.starts_with("crap_mfa_pending="))
+        .expect("login should set crap_mfa_pending cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .trim()
+        .to_string()
+}

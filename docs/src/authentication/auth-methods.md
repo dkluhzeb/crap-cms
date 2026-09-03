@@ -158,8 +158,12 @@ auth = {
 ```
 
 gRPC password logins on this collection get the MFA challenge too (`Login`
-returns `mfa_challenge`, completed via `VerifyMfa`). To require MFA on one
-surface only — or per user — add an `mfa_when` gate:
+returns `mfa_challenge`, completed via `VerifyMfa`). Beside `"email"` and
+`"custom"` there is `mfa = "totp"` — authenticator-app codes with no
+delivery at all; see [Multi-Factor Authentication](mfa.md) for the mode
+comparison, the TOTP enrollment lifecycle, sealed-secret storage, and the
+security model. To require MFA on one surface only — or per user — add an
+`mfa_when` gate:
 
 ```lua
 { type = "password_login", mfa = "email", mfa_when = "hooks.auth.mfa_when" },

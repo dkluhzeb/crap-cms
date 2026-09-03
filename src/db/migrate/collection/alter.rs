@@ -19,7 +19,8 @@ use crate::{
 
 use super::create::{append_default_value_for, create_collection_table};
 use super::system_columns::{
-    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, VERIFY_EMAIL_COLUMNS,
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
+    VERIFY_EMAIL_COLUMNS,
 };
 use crate::core::collection::Auth;
 
@@ -196,6 +197,17 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         }
     }
 
+    if ctx
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.mfa() == MfaMode::Totp)
+    {
+        for col in TOTP_COLUMNS {
+            ensure_column(ctx, col)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -275,6 +287,9 @@ const SYSTEM_COLUMNS: &[&str] = &[
     "_verification_token_exp",
     "_mfa_code",
     "_mfa_code_exp",
+    "_totp_secret",
+    "_totp_confirmed",
+    "_totp_last_step",
     "_locked",
     "_status",
     "_settings",

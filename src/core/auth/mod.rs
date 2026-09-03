@@ -18,6 +18,7 @@ pub mod jwt_secret;
 pub mod password;
 /// Token provider trait + JWT implementation.
 pub mod token;
+pub mod totp;
 /// Authenticated user context for request extensions.
 pub mod user;
 
@@ -32,5 +33,9 @@ pub use password::{
 };
 pub use token::{
     JwtTokenProvider, SharedTokenProvider, TokenProvider, create_token, validate_token,
+};
+pub use totp::{
+    TOTP_STEP_SECS, generate_totp_secret, open_totp_secret, provisioning_uri, seal_totp_secret,
+    totp_code_at, verify_totp,
 };
 pub use user::AuthUser;

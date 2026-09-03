@@ -144,6 +144,10 @@
   "mfa_enter_code": "Geben Sie den 6-stelligen Verifizierungscode ein, der Ihnen gesendet wurde.",
   "mfa_code_label": "Verifizierungscode",
   "mfa_verify": "Verifizieren",
+  "mfa_totp_enter_code": "Geben Sie den 6-stelligen Code aus Ihrer Authenticator-App ein.",
+  "mfa_totp_setup": "Scannen oder \u00f6ffnen Sie diesen Link in Ihrer Authenticator-App und geben Sie dann den aktuellen Code ein, um die Einrichtung abzuschlie\u00dfen.",
+  "mfa_totp_open_app": "In Authenticator-App \u00f6ffnen",
+  "mfa_totp_manual_key": "Manueller Schl\u00fcssel",
   "error_mfa_invalid_code": "Ungültiger oder abgelaufener Code. Bitte versuchen Sie es erneut.",
   "error_mfa_too_many_attempts": "Zu viele Verifizierungsversuche. Bitte versuchen Sie es später erneut.",
 

@@ -68,6 +68,8 @@ pub struct ContentService {
     pub(in crate::api::handlers) mfa_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_mfa_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) reset_token_expiry: u64,
+    /// `[auth] secret` — keys the sealed TOTP secrets (domain-separated).
+    pub(in crate::api::handlers) auth_secret: String,
     pub(in crate::api::handlers) forgot_password_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::handlers) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     /// The password provider for hashing and verification.
@@ -228,6 +230,7 @@ impl ContentService {
         let max_depth = deps.config.depth.max_depth;
         let pagination_ctx = query::PaginationCtx::from_config(&deps.config.pagination);
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
+        let auth_secret: String = AsRef::<str>::as_ref(&deps.config.auth.secret).to_string();
         let db_kind = deps.infra.pool.kind().to_string();
         let max_subscribe_connections = deps.config.live.max_subscribe_connections;
         let subscriber_send_timeout_ms = deps.config.live.subscriber_send_timeout_ms;
@@ -269,6 +272,7 @@ impl ContentService {
             mfa_limiter: deps.mfa_limiter,
             ip_mfa_limiter: deps.ip_mfa_limiter,
             reset_token_expiry,
+            auth_secret,
             forgot_password_limiter: deps.forgot_password_limiter,
             ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
             password_provider: deps.password_provider,

@@ -2742,6 +2742,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **TOTP MFA: `mfa = "totp"` on the `password_login` method.** Authenticator-app
+  second factor (RFC 6238: SHA-1, 30-second steps, 6 digits, ±1 step of clock
+  tolerance) with no code delivery. Enrollment is challenge-driven: the first
+  MFA challenge generates a per-user secret — stored sealed with AES-256-GCM
+  keyed from `[auth] secret` — and shows the `otpauth://` provisioning link
+  (admin MFA page, or the new `totp_provisioning_uri` field on the gRPC
+  `LoginResponse`) until the first successful code confirms enrollment. Codes
+  are replay-guarded per time step; both login surfaces verify through one
+  mode-dispatching chokepoint (`verify_second_factor`), sharing the existing
+  MFA guess limiters, pending-token binding, and `mfa_when` gating. Rotating
+  `[auth] secret` restarts enrollment on the next challenge; operators reset a
+  user's enrollment with the new `crap-cms user reset-totp` command.
+  Hardened by an adversarial review round: the replay-guard record and the
+  secret install are race-safe conditional updates (a concurrent double-submit
+  of one code has exactly one winner, and the guard can never regress across
+  the skew window), and provisioning/confirmation emit audit log lines so a
+  hijacked trust-on-first-login enrollment is detectable. Also fixed along
+  the way: an unknown `mfa` string in a definition file is now a load error
+  instead of silently disabling MFA.
+
 - **Signed upload URLs for cross-origin private media.** The
   `/uploads/{collection}/{filename}` serve route accepts a third auth source
   beside the session cookie and Bearer token: `?exp=<unix>&sig=<hex>` query

@@ -340,6 +340,8 @@ pub(in crate::admin::handlers) fn extract_mfa_token(headers: &HeaderMap) -> Opti
 pub(in crate::admin::handlers) fn render_mfa_form(
     state: &AdminState,
     error: Option<&str>,
+    totp: bool,
+    provisioning: Option<&crate::service::auth::TotpProvisioning>,
 ) -> Response {
     let ctx = MfaPage {
         base: AuthBasePageContext::for_state(
@@ -347,9 +349,71 @@ pub(in crate::admin::handlers) fn render_mfa_form(
             PageMeta::new(PageType::AuthMfa, "mfa_page_title"),
         ),
         error: error.map(str::to_string),
+        totp,
+        totp_provisioning_uri: provisioning.map(|p| p.uri.clone()),
+        totp_secret: provisioning.map(|p| p.secret.clone()),
     };
 
     render_page(state, HxNav::full(), "auth/mfa", &ctx)
+}
+
+/// Whether `slug`'s password login uses `mfa = "totp"`.
+pub(in crate::admin::handlers) fn is_totp_collection(state: &AdminState, slug: &str) -> bool {
+    state
+        .infra
+        .registry
+        .get_collection(slug)
+        .and_then(|d| d.auth.as_ref())
+        .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp)
+}
+
+/// Blocking body: resolve the TOTP page state for the pending user — the
+/// mode flag plus provisioning material while enrollment is unconfirmed.
+fn totp_state_blocking(
+    state: &AdminState,
+    claims: &crate::core::auth::Claims,
+) -> (bool, Option<crate::service::auth::TotpProvisioning>) {
+    let slug: &str = claims.collection.as_ref();
+
+    if !is_totp_collection(state, slug) {
+        return (false, None);
+    }
+
+    let Some(auth_user) = crate::admin::server::load_auth_user(
+        &state.infra.pool,
+        &state.infra.registry,
+        claims,
+        &state.config.locale,
+    ) else {
+        return (true, None);
+    };
+
+    let secret: &str = state.config.auth.secret.as_ref();
+
+    match crate::service::auth::totp_challenge(&state.infra, secret, slug, &auth_user.user_doc) {
+        Ok(p) => (true, p),
+        Err(e) => {
+            tracing::error!("TOTP challenge: {e:?}");
+            (true, None)
+        }
+    }
+}
+
+/// Render the MFA form with the TOTP state resolved — async because the
+/// enrollment lookup (and first-challenge secret generation) hits the DB.
+pub(in crate::admin::handlers) async fn render_mfa(
+    state: &AdminState,
+    claims: &crate::core::auth::Claims,
+    error: Option<&str>,
+) -> Response {
+    let s = state.clone();
+    let c = claims.clone();
+
+    let (totp, provisioning) = tokio::task::spawn_blocking(move || totp_state_blocking(&s, &c))
+        .await
+        .unwrap_or((false, None));
+
+    render_mfa_form(state, error, totp, provisioning.as_ref())
 }
 
 #[cfg(test)]

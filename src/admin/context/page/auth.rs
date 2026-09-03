@@ -48,6 +48,18 @@ pub struct MfaPage {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+
+    /// TOTP mode: the entry-form wording switches to authenticator-app.
+    pub totp: bool,
+
+    /// TOTP enrollment (shown only while unconfirmed): the `otpauth://`
+    /// link an authenticator app consumes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub totp_provisioning_uri: Option<String>,
+
+    /// The base32 secret for manual entry (unconfirmed enrollment only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub totp_secret: Option<String>,
 }
 
 /// Password-reset page (the form a user sees via the email link).

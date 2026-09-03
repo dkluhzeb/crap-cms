@@ -69,6 +69,11 @@ pub enum MfaMode {
     /// `mfa_deliver` hook sends it (SMS, push, chat, …) instead of the
     /// built-in email. Verification is identical to `email`.
     Custom,
+    /// Authenticator-app TOTP (RFC 6238): no code delivery at all — the user
+    /// verifies against a per-user shared secret. The secret is generated on
+    /// the first MFA challenge, shown as an `otpauth://` provisioning URI
+    /// until the first successful verification confirms enrollment.
+    Totp,
 }
 
 /// Which host surfaces a method can fire on. Surface filtering is
@@ -249,9 +254,10 @@ pub enum AuthMethod {
     /// scattered across the collection.
     PasswordLogin {
         /// MFA mode. `"email"` sends the code by email, `"custom"` hands it
-        /// to the `mfa_deliver` hook; `false` (or omit) disables.
+        /// to the `mfa_deliver` hook, `"totp"` verifies against an
+        /// authenticator app (no delivery); `false` (or omit) disables.
         #[serde(default)]
-        #[lua(ty = "\"email\"|\"custom\"|false", optional)]
+        #[lua(ty = "\"email\"|\"custom\"|\"totp\"|false", optional)]
         mfa: MfaMode,
         /// Optional Lua gate deciding WHETHER a verified login must complete
         /// the second factor — called after credential verification with

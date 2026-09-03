@@ -80,6 +80,7 @@
 - [Auth Collections](authentication/auth-collections.md)
 - [Auth Methods](authentication/auth-methods.md)
 - [Login Flow](authentication/login-flow.md)
+- [Multi-Factor Authentication](authentication/mfa.md)
 - [Custom Strategies](authentication/custom-strategies.md)
 - [CLI User Creation](authentication/cli-user-creation.md)
 - [Access Control Overview](access-control/overview.md)

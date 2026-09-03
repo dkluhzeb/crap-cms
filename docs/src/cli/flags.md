@@ -332,6 +332,19 @@ crap-cms user lock [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 crap-cms user unlock [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 ```
 
+#### `user reset-totp`
+
+```
+crap-cms user reset-totp [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
+```
+
+Clears a user's TOTP enrollment (secret, confirmation, replay guard); they
+re-enroll on their next login. Requires `mfa = "totp"` on the collection;
+prompts for confirmation unless `-y` is passed.
+
+```
+```
+
 #### `user verify` / `user unverify`
 
 ```bash

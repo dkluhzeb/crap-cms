@@ -54,6 +54,7 @@ fn method_to_lua(lua: &Lua, m: &AuthMethod) -> mlua::Result<Table> {
             match mfa {
                 MfaMode::Email => t.set("mfa", "email")?,
                 MfaMode::Custom => t.set("mfa", "custom")?,
+                MfaMode::Totp => t.set("mfa", "totp")?,
                 MfaMode::Off => {}
             }
             if let Some(hook) = mfa_when {

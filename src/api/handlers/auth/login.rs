@@ -137,7 +137,9 @@ impl ContentService {
             // admin twin uses a dedicated issuance limiter because it clears
             // the login limiter on password success; this surface doesn't).
             LoginOutcome::MfaRequired(v) => {
-                return self.issue_mfa_challenge(&req.collection, &req.email, &v);
+                return self
+                    .issue_mfa_challenge(&req.collection, &req.email, &v)
+                    .await;
             }
             LoginOutcome::Denied => {
                 // Attempt already recorded up front by check_and_block.
@@ -186,13 +188,14 @@ impl ContentService {
             user: Some(document_to_proto(&user, &req.collection)),
             mfa_required: None,
             mfa_challenge: None,
+            totp_provisioning_uri: None,
         }))
     }
 
     /// Issue the MFA challenge for a credential-verified but MFA-gated login:
     /// mint the pending token, store + email a fresh 6-digit code (background,
     /// best-effort), and encode the challenge response (no session token).
-    fn issue_mfa_challenge(
+    async fn issue_mfa_challenge(
         &self,
         collection: &str,
         fallback_email: &str,
@@ -216,20 +219,51 @@ impl ContentService {
         .inspect_err(|e| error!("MFA pending token error: {e}"))
         .map_err(|_| Status::internal("Internal error"))?;
 
-        let code = auth::generate_mfa_code();
-        let infra = Arc::clone(&self.infra);
-        let slug = collection.to_string();
-        let user_owned = verified.user.clone();
+        let is_totp = self
+            .infra
+            .registry
+            .get_collection(collection)
+            .and_then(|d| d.auth.as_ref())
+            .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp);
 
-        task::spawn_blocking(move || {
-            auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
-        });
+        let totp_provisioning_uri = if is_totp {
+            // TOTP: nothing to deliver — resolve the enrollment state so an
+            // unconfirmed user receives the provisioning URI in-band.
+            let infra = Arc::clone(&self.infra);
+            let secret = self.auth_secret.clone();
+            let slug = collection.to_string();
+            let user_owned = verified.user.clone();
+
+            task::spawn_blocking(move || auth::totp_challenge(&infra, &secret, &slug, &user_owned))
+                .await
+                .map_err(|e| {
+                    error!("TOTP challenge task error: {e}");
+                    Status::internal("Internal error")
+                })?
+                .map_err(|e| {
+                    error!("TOTP challenge error: {e:?}");
+                    Status::internal("Internal error")
+                })?
+                .map(|p| p.uri)
+        } else {
+            let code = auth::generate_mfa_code();
+            let infra = Arc::clone(&self.infra);
+            let slug = collection.to_string();
+            let user_owned = verified.user.clone();
+
+            task::spawn_blocking(move || {
+                auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
+            });
+
+            None
+        };
 
         Ok(Response::new(content::LoginResponse {
             token: String::new(),
             user: None,
             mfa_required: Some(true),
             mfa_challenge: Some(mfa_challenge),
+            totp_provisioning_uri,
         }))
     }
 }

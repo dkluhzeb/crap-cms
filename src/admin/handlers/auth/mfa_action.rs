@@ -18,32 +18,40 @@ use crate::{
         handlers::{
             auth::{
                 MfaForm, append_cookies, clear_mfa_pending_cookie, client_ip, create_session_token,
-                extract_mfa_token, render_mfa_form, session_redirect,
+                extract_mfa_token, render_mfa, session_redirect,
             },
             shared::paths,
         },
     },
     core::auth::Claims,
-    db::DbPool,
-    service::{self, ServiceContext},
+    service,
 };
 
-/// Pull a connection from the pool and run MFA-code verification. Extracted so
-/// the `spawn_blocking` body is a single named call.
-fn verify_mfa_blocking(
-    pool: &DbPool,
-    slug: &str,
-    user_id: &str,
-    code: &str,
-) -> anyhow::Result<bool> {
-    let conn = pool.get()?;
-    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-    service::auth::verify_mfa_code(&ctx, user_id, code)
-        .map_err(crate::service::ServiceError::into_anyhow)
+/// Owned inputs for the second-factor verification `spawn_blocking` body.
+struct VerifyMfaInput {
+    infra: std::sync::Arc<service::AppInfra>,
+    auth_secret: String,
+    slug: String,
+    user_id: String,
+    code: String,
+}
+
+/// Run second-factor verification (TOTP or stored code, dispatched on the
+/// collection's MFA mode). Extracted so the `spawn_blocking` body is a
+/// single named call.
+fn verify_mfa_blocking(input: &VerifyMfaInput) -> anyhow::Result<bool> {
+    service::auth::verify_second_factor(
+        &input.infra,
+        &input.auth_secret,
+        &input.slug,
+        &input.user_id,
+        &input.code,
+    )
+    .map_err(service::ServiceError::into_anyhow)
 }
 
 /// Build the final session response after successful MFA verification.
-fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response {
+async fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response {
     let session = match create_session_token(
         state,
         pending.sub.to_string(),
@@ -55,7 +63,7 @@ fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response 
         Ok(s) => s,
         Err(e) => {
             error!("MFA session: {}", e);
-            return render_mfa_form(state, Some("error_internal"));
+            return render_mfa(state, pending, Some("error_internal")).await;
         }
     };
 
@@ -110,35 +118,36 @@ pub async fn verify_mfa_action(
     let user_blocked = state.mfa_limiter.check_and_block(&user_id);
     let ip_blocked = state.ip_mfa_limiter.check_and_block(&ip);
     if user_blocked || ip_blocked {
-        return render_mfa_form(&state, Some("error_mfa_too_many_attempts"));
+        return render_mfa(&state, &pending_claims, Some("error_mfa_too_many_attempts")).await;
     }
 
-    // Verify the MFA code against the database.
-    let pool = state.infra.pool.clone();
-    let slug = pending_claims.collection.to_string();
-    let code = form.code.clone();
-
-    let verify_result = {
-        let user_id = user_id.clone();
-        task::spawn_blocking(move || verify_mfa_blocking(&pool, &slug, &user_id, &code)).await
+    // Verify the second factor (TOTP or stored code, per the collection).
+    let input = VerifyMfaInput {
+        infra: std::sync::Arc::clone(&state.infra),
+        auth_secret: AsRef::<str>::as_ref(&state.config.auth.secret).to_string(),
+        slug: pending_claims.collection.to_string(),
+        user_id: user_id.clone(),
+        code: form.code.clone(),
     };
+
+    let verify_result = task::spawn_blocking(move || verify_mfa_blocking(&input)).await;
 
     let verified = match verify_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             error!("MFA verification error: {}", e);
 
-            return render_mfa_form(&state, Some("error_internal"));
+            return render_mfa(&state, &pending_claims, Some("error_internal")).await;
         }
         Err(e) => {
             error!("MFA verification task error: {}", e);
 
-            return render_mfa_form(&state, Some("error_internal"));
+            return render_mfa(&state, &pending_claims, Some("error_internal")).await;
         }
     };
 
     if !verified {
-        return render_mfa_form(&state, Some("error_mfa_invalid_code"));
+        return render_mfa(&state, &pending_claims, Some("error_mfa_invalid_code")).await;
     }
 
     // MFA verified — login is now fully complete, so clear the MFA limiters
@@ -147,5 +156,5 @@ pub async fn verify_mfa_action(
     state.mfa_limiter.clear(&user_id);
     state.ip_mfa_limiter.clear(&ip);
 
-    build_mfa_session_response(&state, &pending_claims)
+    build_mfa_session_response(&state, &pending_claims).await
 }

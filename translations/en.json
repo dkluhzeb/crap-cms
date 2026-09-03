@@ -144,6 +144,10 @@
   "mfa_enter_code": "Enter the 6-digit verification code that was sent to you.",
   "mfa_code_label": "Verification code",
   "mfa_verify": "Verify",
+  "mfa_totp_enter_code": "Enter the 6-digit code from your authenticator app.",
+  "mfa_totp_setup": "Scan or open this link in your authenticator app, then enter the current code to finish setup.",
+  "mfa_totp_open_app": "Open in authenticator app",
+  "mfa_totp_manual_key": "Manual key",
   "error_mfa_invalid_code": "Invalid or expired code. Please try again.",
   "error_mfa_too_many_attempts": "Too many verification attempts. Please try again later.",
 

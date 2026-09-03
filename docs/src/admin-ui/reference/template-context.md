@@ -39,6 +39,9 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
 - **`error`** (Option&lt;string&gt;) _(optional)_
+- **`totp`** (boolean) — TOTP mode: the entry-form wording switches to authenticator-app.
+- **`totp_provisioning_uri`** (Option&lt;string&gt;) _(optional)_ — TOTP enrollment (shown only while unconfirmed): the `otpauth://` link an authenticator app consumes.
+- **`totp_secret`** (Option&lt;string&gt;) _(optional)_ — The base32 secret for manual entry (unconfirmed enrollment only).
 
 ## Forgot password page
 

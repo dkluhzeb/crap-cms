@@ -32,3 +32,11 @@ pub(super) const VERIFY_EMAIL_COLUMNS: &[&str] = &[
 
 /// MFA columns, present when the auth config enables an MFA mode.
 pub(super) const MFA_COLUMNS: &[&str] = &["_mfa_code TEXT", "_mfa_code_exp INTEGER"];
+
+/// TOTP columns, present when `mfa = "totp"`: the sealed shared secret, the
+/// enrollment-confirmed flag, and the last accepted time step (replay guard).
+pub(super) const TOTP_COLUMNS: &[&str] = &[
+    "_totp_secret TEXT",
+    "_totp_confirmed INTEGER DEFAULT 0",
+    "_totp_last_step INTEGER",
+];

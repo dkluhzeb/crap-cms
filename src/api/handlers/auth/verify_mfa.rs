@@ -19,21 +19,30 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{Slug, auth::ClaimsBuilder},
-    db::DbPool,
-    service::{AppInfra, ServiceContext, auth},
+    service::{AppInfra, auth},
 };
 
-/// Verify the code against the stored (single-use, expiring) MFA code.
-fn verify_code_blocking(
-    pool: &DbPool,
-    slug: &str,
-    user_id: &str,
-    code: &str,
-) -> anyhow::Result<bool> {
-    let conn = pool.get()?;
-    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+/// Owned inputs for the second-factor verification `spawn_blocking` body.
+struct VerifyCodeInput {
+    infra: Arc<AppInfra>,
+    auth_secret: String,
+    slug: String,
+    user_id: String,
+    code: String,
+}
 
-    auth::verify_mfa_code(&ctx, user_id, code).map_err(crate::service::ServiceError::into_anyhow)
+/// Verify the second factor: TOTP against the sealed shared secret, or the
+/// stored (single-use, expiring) code — dispatched on the collection's MFA
+/// mode by the shared service chokepoint.
+fn verify_code_blocking(input: &VerifyCodeInput) -> anyhow::Result<bool> {
+    auth::verify_second_factor(
+        &input.infra,
+        &input.auth_secret,
+        &input.slug,
+        &input.user_id,
+        &input.code,
+    )
+    .map_err(crate::service::ServiceError::into_anyhow)
 }
 
 /// Re-load the user post-verification. Fails CLOSED: a user that was locked,
@@ -89,18 +98,20 @@ impl ContentService {
             ));
         }
 
-        let pool = self.infra.pool.clone();
-        let slug = req.collection.clone();
-        let code = req.code.clone();
-        let uid = user_id.clone();
+        let input = VerifyCodeInput {
+            infra: Arc::clone(&self.infra),
+            auth_secret: self.auth_secret.clone(),
+            slug: req.collection.clone(),
+            user_id: user_id.clone(),
+            code: req.code.clone(),
+        };
 
-        let verified =
-            task::spawn_blocking(move || verify_code_blocking(&pool, &slug, &uid, &code))
-                .await
-                .inspect_err(|e| error!("VerifyMfa task error: {e}"))
-                .map_err(|_| Status::internal("Internal error"))?
-                .inspect_err(|e| error!("VerifyMfa error: {e:#}"))
-                .map_err(|_| Status::internal("Internal error"))?;
+        let verified = task::spawn_blocking(move || verify_code_blocking(&input))
+            .await
+            .inspect_err(|e| error!("VerifyMfa task error: {e}"))
+            .map_err(|_| Status::internal("Internal error"))?
+            .inspect_err(|e| error!("VerifyMfa error: {e:#}"))
+            .map_err(|_| Status::internal("Internal error"))?;
 
         if !verified {
             return Err(Status::unauthenticated("Invalid MFA code"));
@@ -152,6 +163,7 @@ impl ContentService {
             user: Some(document_to_proto(&resolved.user_doc, &req.collection)),
             mfa_required: None,
             mfa_challenge: None,
+            totp_provisioning_uri: None,
         }))
     }
 }

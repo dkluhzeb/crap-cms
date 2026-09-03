@@ -584,7 +584,7 @@ function crap.fields.join(config) end
 --- scattered across the collection.
 --- @class crap.AuthMethodPasswordLogin
 --- @field type "password_login"
---- @field mfa? "email"|"custom"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook; `false` (or omit) disables.
+--- @field mfa? "email"|"custom"|"totp"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook, `"totp"` verifies against an authenticator app (no delivery); `false` (or omit) disables.
 --- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode (`"email"` or `"custom"`); no hook = MFA always required. A hook error fails CLOSED (requires MFA).
 --- @field mfa_deliver? string | crap.HookRef Delivery hook for `mfa = "custom"`: called after credential verification with `{ collection, user, code, expires_in }` — send the code via your channel (SMS, push, …). The code is SENSITIVE: never log it. Errors are logged server-side; the previously issued code (if any) stays valid. Required with `mfa = "custom"`, rejected otherwise (startup error).
 --- @field verify_email? boolean Require email verification before login (default `false`).

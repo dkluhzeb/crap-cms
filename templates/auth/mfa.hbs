@@ -4,7 +4,26 @@
     <div class="auth-card__error">{{t error}}</div>
   {{/if}}
 
-  <p class="auth-card__message">{{t "mfa_enter_code"}}</p>
+  {{#if totp}}
+    <p class="auth-card__message">{{t "mfa_totp_enter_code"}}</p>
+    {{#if totp_provisioning_uri}}
+      <div class="auth-card__totp-setup">
+        <p>{{t "mfa_totp_setup"}}</p>
+        <p>
+          {{! Triple-stash: the URI is fully server-constructed (percent-encoded
+          account, base32 secret); default escaping would mangle its `=`
+          separators into &#x3D;. }}
+          <a href='{{{totp_provisioning_uri}}}'>{{t "mfa_totp_open_app"}}</a>
+        </p>
+        <p>
+          {{t "mfa_totp_manual_key"}}:
+          <code>{{totp_secret}}</code>
+        </p>
+      </div>
+    {{/if}}
+  {{else}}
+    <p class="auth-card__message">{{t "mfa_enter_code"}}</p>
+  {{/if}}
 
   <form
     class="auth-card__form"

@@ -7,7 +7,8 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use super::system_columns::{
-    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, VERIFY_EMAIL_COLUMNS,
+    AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
+    VERIFY_EMAIL_COLUMNS,
 };
 use crate::core::collection::Auth;
 use crate::{
@@ -156,6 +157,10 @@ fn collect_system_columns(
         // challenge email never gets queued.
         if def.auth.as_ref().is_some_and(|a| a.mfa() != MfaMode::Off) {
             columns.extend(MFA_COLUMNS.iter().map(|c| (*c).to_string()));
+        }
+
+        if def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Totp) {
+            columns.extend(TOTP_COLUMNS.iter().map(|c| (*c).to_string()));
         }
     }
 

@@ -297,6 +297,7 @@ fn check_one_collection_methods(
                             MfaMode::Email => "email",
                             MfaMode::Off => "false",
                             MfaMode::Custom => unreachable!(),
+                            MfaMode::Totp => "totp",
                         }
                     ));
                 }

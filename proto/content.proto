@@ -911,14 +911,21 @@ message LoginResponse {
   Document user = 2;
 
   // True when the collection requires a second factor for this login: the
-  // password was verified, a 6-digit code was emailed to the user, and NO
-  // token was issued. Complete the login with the VerifyMfa RPC.
+  // password was verified, NO token was issued, and (for mfa = "email" /
+  // "custom") a 6-digit code was delivered to the user. Complete the login
+  // with the VerifyMfa RPC.
   optional bool mfa_required = 3;
 
   // Short-lived challenge token binding this pending login (present only
   // when mfa_required is true). Pass it to VerifyMfa together with the
-  // emailed code.
+  // second-factor code.
   optional string mfa_challenge = 4;
+
+  // TOTP enrollment (mfa = "totp" only): present while the user's
+  // authenticator enrollment is unconfirmed — an otpauth:// provisioning
+  // URI to add to the app (also carries the base32 secret for manual
+  // entry). Absent once enrollment is confirmed.
+  optional string totp_provisioning_uri = 5;
 }
 
 // VerifyMfaRequest completes an MFA-gated login: the challenge token from
@@ -930,8 +937,9 @@ message VerifyMfaRequest {
   // The challenge token returned by Login when mfa_required was true.
   string mfa_challenge = 2;
 
-  // The 6-digit code emailed to the user. Codes are single-use and expire
-  // after 5 minutes.
+  // The 6-digit second-factor code: from the authenticator app for
+  // mfa = "totp", otherwise the delivered code (single-use, 5-minute
+  // expiry).
   string code = 3;
 }
 

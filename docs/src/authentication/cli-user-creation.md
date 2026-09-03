@@ -97,6 +97,9 @@ crap-cms user unverify -e user@example.com
 # Change password
 crap-cms user change-password -e user@example.com
 
+# Reset TOTP enrollment (requires mfa = "totp" on the collection)
+crap-cms user reset-totp -e user@example.com
+
 # Delete a user (with confirmation skip)
 crap-cms user delete -e user@example.com -y
 ```

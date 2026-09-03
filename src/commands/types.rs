@@ -363,6 +363,25 @@ pub enum UserAction {
         id: Option<String>,
     },
 
+    /// Reset a user's TOTP enrollment (they re-enroll on next login)
+    ResetTotp {
+        /// Auth collection slug
+        #[arg(short, long, default_value = "users")]
+        collection: String,
+
+        /// User email
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// User ID
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        confirm: bool,
+    },
+
     /// Unverify a user account (mark email as unverified)
     Unverify {
         /// Auth collection slug
