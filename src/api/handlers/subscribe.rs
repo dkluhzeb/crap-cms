@@ -23,7 +23,7 @@ use crate::{
     },
     core::{
         Document, EventReceiver, MutationEvent, Registry, SharedTokenProvider,
-        event::{InvalidationReceiver, RecvError},
+        event::{InvalidationReceiver, MAX_DRAIN, RecvError, drain_and_coalesce},
     },
     db::DbPool,
     hooks::HookRunner,
@@ -154,31 +154,52 @@ async fn forward(
     }
 }
 
-/// Handle one recv from the event transport.
+/// Handle one recv from the event transport: drain-and-coalesce everything
+/// already queued (bursts collapse latest-wins per document, so the gate +
+/// `after_read` pipeline runs once per document), then forward the survivors.
 async fn handle_event(
     tx: &mpsc::Sender<OutboundItem>,
     ctx: &SubscriberCtx,
     recv: Result<MutationEvent, RecvError>,
+    event_rx: &mut EventReceiver,
     send_timeout_dur: Duration,
 ) -> Result<(), ()> {
-    match recv {
-        Ok(event) => {
-            let Some(out) = process_event(&event, ctx) else {
-                return Ok(());
-            };
-
-            forward(tx, Ok(out), send_timeout_dur).await
-        }
+    let event = match recv {
+        Ok(event) => event,
         Err(RecvError::Lagged(n)) => {
-            warn!(
-                "Subscribe stream lagged by {} events — dropping subscriber \
-                 (forces reconnect); consider increasing [live] channel_capacity",
-                n
-            );
-            Err(())
+            warn_subscribe_lag(n);
+            return Err(());
         }
-        Err(RecvError::Closed) => Err(()),
+        Err(RecvError::Closed) => return Err(()),
+    };
+
+    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
+
+    for event in &outcome.events {
+        if let Some(out) = process_event(event, ctx) {
+            forward(tx, Ok(out), send_timeout_dur).await?;
+        }
     }
+
+    // Mid-sweep lag/close: the survivors above were still delivered; now
+    // apply the same fail-safe as a lagged recv — drop the subscriber.
+    if let Some(n) = outcome.lagged {
+        warn_subscribe_lag(n);
+        return Err(());
+    }
+    if outcome.closed {
+        return Err(());
+    }
+
+    Ok(())
+}
+
+fn warn_subscribe_lag(n: u64) {
+    warn!(
+        "Subscribe stream lagged by {} events — dropping subscriber \
+         (forces reconnect); consider increasing [live] channel_capacity",
+        n
+    );
 }
 
 /// Handle an invalidation signal. Sends a terminal `PermissionDenied` before
@@ -243,7 +264,10 @@ fn spawn_pump(
         loop {
             tokio::select! {
                 recv = event_rx.recv() => {
-                    if handle_event(&tx, &ctx, recv, send_timeout_dur).await.is_err() {
+                    if handle_event(&tx, &ctx, recv, &mut event_rx, send_timeout_dur)
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }

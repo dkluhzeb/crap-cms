@@ -34,7 +34,7 @@ use crate::{
     },
     core::{
         AuthUser, Document, EventReceiver, MutationEvent, Registry,
-        event::{InvalidationReceiver, RecvError},
+        event::{InvalidationReceiver, MAX_DRAIN, RecvError, drain_and_coalesce},
     },
     hooks::HookRunner,
 };
@@ -126,36 +126,57 @@ async fn forward_event(
     }
 }
 
-/// Handle one event recv result. Returns `Err(())` if the subscriber should
-/// be dropped.
+/// Handle one event recv result: drain-and-coalesce everything already
+/// queued (bursts collapse latest-wins per document, so the gate +
+/// `after_read` pipeline runs once per document), then forward the
+/// survivors. Returns `Err(())` if the subscriber should be dropped.
 async fn handle_broadcast_recv(
     tx: &mpsc::Sender<Result<Event, Infallible>>,
     ctx: &PumpCtx,
     recv: Result<MutationEvent, RecvError>,
+    event_rx: &mut EventReceiver,
 ) -> Result<(), ()> {
-    match recv {
-        Ok(event) => {
-            let Some(sse_event) = event_to_sse(
-                &event,
-                &ctx.access,
-                &ctx.hook_runner,
-                &ctx.registry,
-                ctx.user_doc.as_ref(),
-            ) else {
-                return Ok(());
-            };
-
-            forward_event(tx, sse_event, ctx.send_timeout).await
-        }
+    let event = match recv {
+        Ok(event) => event,
         Err(RecvError::Lagged(n)) => {
-            warn!(
-                "SSE subscriber lagged by {} events — dropping client (forces reconnect)",
-                n
-            );
-            Err(())
+            warn_sse_lag(n);
+            return Err(());
         }
-        Err(RecvError::Closed) => Err(()),
+        Err(RecvError::Closed) => return Err(()),
+    };
+
+    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
+
+    for event in &outcome.events {
+        if let Some(sse_event) = event_to_sse(
+            event,
+            &ctx.access,
+            &ctx.hook_runner,
+            &ctx.registry,
+            ctx.user_doc.as_ref(),
+        ) {
+            forward_event(tx, sse_event, ctx.send_timeout).await?;
+        }
     }
+
+    // Mid-sweep lag/close: survivors were delivered; apply the same
+    // fail-safe as a lagged recv — drop the subscriber.
+    if let Some(n) = outcome.lagged {
+        warn_sse_lag(n);
+        return Err(());
+    }
+    if outcome.closed {
+        return Err(());
+    }
+
+    Ok(())
+}
+
+fn warn_sse_lag(n: u64) {
+    warn!(
+        "SSE subscriber lagged by {} events — dropping client (forces reconnect)",
+        n
+    );
 }
 
 /// Handle a user-invalidation signal. Returns `Err(())` if it matches this
@@ -195,7 +216,7 @@ fn spawn_pump(
         loop {
             tokio::select! {
                 recv = event_rx.recv() => {
-                    if handle_broadcast_recv(&tx, &ctx, recv).await.is_err() {
+                    if handle_broadcast_recv(&tx, &ctx, recv, &mut event_rx).await.is_err() {
                         break;
                     }
                 }

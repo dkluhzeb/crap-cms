@@ -32,6 +32,27 @@ impl std::fmt::Display for RecvError {
 
 impl std::error::Error for RecvError {}
 
+/// Reasons [`EventReceiver::try_recv`] could fail to return an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryRecvError {
+    /// No event is currently queued.
+    Empty,
+    /// The subscriber fell behind — one or more events were dropped.
+    Lagged(u64),
+    /// The transport has been closed; no further events will be delivered.
+    Closed,
+}
+
+impl From<broadcast::error::TryRecvError> for TryRecvError {
+    fn from(err: broadcast::error::TryRecvError) -> Self {
+        match err {
+            broadcast::error::TryRecvError::Empty => TryRecvError::Empty,
+            broadcast::error::TryRecvError::Lagged(n) => TryRecvError::Lagged(n),
+            broadcast::error::TryRecvError::Closed => TryRecvError::Closed,
+        }
+    }
+}
+
 impl From<broadcast::error::RecvError> for RecvError {
     fn from(err: broadcast::error::RecvError) -> Self {
         match err {
@@ -100,6 +121,27 @@ impl EventReceiver {
             },
         }
     }
+
+    /// Return the next event without waiting. Used by the stream pumps to
+    /// drain everything already queued after a successful `recv` (see
+    /// `core::event::coalesce`).
+    ///
+    /// # Errors
+    ///
+    /// `TryRecvError::Empty` when nothing is queued, `Lagged(n)` when the
+    /// subscriber fell behind, `Closed` when the transport shut down.
+    pub fn try_recv(&mut self) -> Result<MutationEvent, TryRecvError> {
+        match &mut self.inner {
+            RecvKind::Broadcast(rx) => rx.try_recv().map_err(TryRecvError::from),
+            #[cfg(feature = "redis")]
+            RecvKind::Mpsc(rx) => match rx.try_recv() {
+                Ok(RemoteMessage::Event(ev)) => Ok(ev),
+                Ok(RemoteMessage::Lagged(n)) => Err(TryRecvError::Lagged(n)),
+                Err(mpsc::error::TryRecvError::Empty) => Err(TryRecvError::Empty),
+                Err(mpsc::error::TryRecvError::Disconnected) => Err(TryRecvError::Closed),
+            },
+        }
+    }
 }
 
 /// A receiver for user-invalidation signals. Same shape as [`EventReceiver`],
@@ -156,6 +198,22 @@ mod tests {
     fn recv_error_from_broadcast_closed() {
         let err: RecvError = broadcast::error::RecvError::Closed.into();
         assert_eq!(err, RecvError::Closed);
+    }
+
+    #[test]
+    fn try_recv_error_from_broadcast() {
+        assert_eq!(
+            TryRecvError::from(broadcast::error::TryRecvError::Empty),
+            TryRecvError::Empty
+        );
+        assert_eq!(
+            TryRecvError::from(broadcast::error::TryRecvError::Lagged(4)),
+            TryRecvError::Lagged(4)
+        );
+        assert_eq!(
+            TryRecvError::from(broadcast::error::TryRecvError::Closed),
+            TryRecvError::Closed
+        );
     }
 
     #[test]

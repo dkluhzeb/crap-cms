@@ -492,10 +492,14 @@ alpha.10 on:
 
 Named here so later fixes are improvements, not breaking changes:
 
-- **Live-event delivery granularity under lag.** Sequence numbers already
+- **Live-event delivery granularity under load.** Sequence numbers already
   make delivery best-effort (a lagging subscriber drops events and detects
-  the gap); coalescing/batching of events under load stays within that
-  contract.
+  the gap). Since alpha.10 the stream pumps implement burst coalescing —
+  each sweep collapses queued events latest-wins per document — and that
+  granularity remains explicitly non-contractual: a subscriber is guaranteed
+  an event carrying each changed document's *latest* state, never every
+  intermediate event. Further batching (subscriber grouping, windowing)
+  stays within this contract.
 - **Upload URL storage IS frozen — which makes signed URLs additive.** The
   value stored in a document's `url` / `{size}_url` columns is the
   `/uploads/…` proxy path, permanently. A future signed-URL scheme signs at

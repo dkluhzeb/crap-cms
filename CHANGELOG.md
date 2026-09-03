@@ -3200,6 +3200,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Live-event streams coalesce bursts (latest-wins per document).** Both the
+  admin SSE stream and gRPC `Subscribe` now drain everything queued for a
+  subscriber in one non-blocking sweep and collapse it to the newest event per
+  document before running the per-event access gate and `after_read` hooks —
+  a burst of N updates to one document costs one processing pass and delivers
+  one event carrying the latest state. Subscribers that keep up see every
+  event exactly as before; only already-queued backlogs coalesce. This also
+  makes lag force-disconnects far rarer, since the broadcast buffer is
+  emptied in one sweep. Delivery granularity under load is explicitly
+  non-contractual (documented in the live-updates guide and
+  `docs/src/internals/frozen-contracts.md`).
+
 - **Removed the dead ranked-search path.** `fts_search` (ORDER BY relevance) had no
   production caller — every search request runs the FTS **filter** path
   (`id IN (...)` with normal ordering), as the docs describe. Ranked search would

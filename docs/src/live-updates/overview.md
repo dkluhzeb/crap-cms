@@ -52,6 +52,18 @@ Each collection can control what data events carry:
 
 **Performance note:** In `full` mode, `after_read` hooks run once per event per subscriber. For collections with expensive hooks and many subscribers, use `metadata` mode and let clients re-fetch.
 
+**Burst coalescing:** each subscriber's stream drains everything already
+queued in one sweep and collapses it **latest-wins per document** before
+processing — a burst of ten updates to one document costs one gate +
+`after_read` pass and delivers one event carrying the newest state (with
+that event's own sequence/operation). A subscriber that keeps up sees every
+event unchanged; coalescing only ever touches events that were already
+queued behind it. Delivery granularity under load is deliberately
+non-contractual (see the frozen-contracts internals doc): you always
+receive the latest state, but intermediate events may collapse. This also
+makes lag force-drops rare — a subscriber is disconnected only when even
+the drained sweep cannot keep up with the broadcast buffer.
+
 ## Per-Collection Control
 
 ```lua

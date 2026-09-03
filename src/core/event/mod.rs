@@ -11,6 +11,7 @@
 //! The same two-variant shape (in-process default + Redis) also applies to
 //! the user-invalidation stream via [`InvalidationTransport`].
 
+mod coalesce;
 mod factory;
 mod in_process;
 mod receiver;
@@ -20,9 +21,10 @@ mod sequence;
 mod transport;
 mod types;
 
+pub use coalesce::{DrainOutcome, MAX_DRAIN, coalesce_events, drain_and_coalesce};
 pub use factory::{create_event_transport, create_invalidation_transport};
 pub use in_process::{InProcessEventBus, InProcessInvalidationBus};
-pub use receiver::{EventReceiver, InvalidationReceiver, RecvError};
+pub use receiver::{EventReceiver, InvalidationReceiver, RecvError, TryRecvError};
 pub use transport::{
     EventTransport, InvalidationTransport, SharedEventTransport, SharedInvalidationTransport,
 };
