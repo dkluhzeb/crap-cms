@@ -25,7 +25,8 @@ use anyhow::{Context as _, anyhow};
 use crate::{
     hooks::LuaCrudInfra,
     service::{
-        Def, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, flush_verification_queue,
+        Def, DeferredQueue, EffectOutcome, RunnerWriteHooks, ServiceContext, ServiceError,
+        flush_deferred_effects, flush_queue, flush_verification_queue,
     },
 };
 
@@ -66,7 +67,12 @@ pub(crate) fn run_pool_write<T>(
     let queue = Rc::new(RefCell::new(Vec::new()));
     let vqueue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
+    // Transaction-outcome effects (`crap.tx.on_commit` / `on_rollback`)
+    // registered by hooks at any nesting depth inside this transaction.
+    let dq: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
+
+    let mut infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
+    infra.deferred = Some(dq.clone());
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -99,12 +105,29 @@ pub(crate) fn run_pool_write<T>(
         .locale_config(ctx.locale_config)
         .build();
 
-    let result = body(&inner_ctx)?;
+    let result = body(&inner_ctx);
 
-    // Release the borrows of `tx` before committing it.
+    // Release the borrows of `tx` before resolving it.
     drop(inner_ctx);
     drop(wh);
-    tx.commit().context("Commit transaction")?;
+
+    let result = match result {
+        Ok(v) => v,
+        Err(e) => {
+            // Roll back (and release the write lock) BEFORE compensations
+            // run — their pool-mode CRUD needs the write path.
+            drop(tx);
+            flush_deferred_effects(ctx, &dq, EffectOutcome::Rollback);
+
+            return Err(e);
+        }
+    };
+
+    if let Err(e) = tx.commit().context("Commit transaction") {
+        flush_deferred_effects(ctx, &dq, EffectOutcome::Rollback);
+
+        return Err(e.into());
+    }
 
     ctx.clear_cache();
 
@@ -112,6 +135,7 @@ pub(crate) fn run_pool_write<T>(
 
     flush_queue(ctx, &queue);
     flush_verification_queue(ctx, &vqueue);
+    flush_deferred_effects(ctx, &dq, EffectOutcome::Commit);
 
     Ok(result)
 }

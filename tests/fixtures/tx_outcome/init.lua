@@ -1,0 +1,1 @@
+-- tx-outcome test fixture: no init-time registrations needed.

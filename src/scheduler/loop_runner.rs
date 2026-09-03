@@ -200,6 +200,7 @@ fn job_crud_infra(infra: &AppInfra) -> LuaCrudInfra {
         cache: Some(infra.cache.clone()),
         event_queue: None,
         verification_queue: None,
+        deferred: None,
     }
 }
 

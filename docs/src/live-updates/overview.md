@@ -95,6 +95,11 @@ The `live = { ... }` table form is strict: `mode` must be `"full"` or `"metadata
 
 ## Access Control
 
+> **Timing guarantee:** mutation events are published only after the
+> originating transaction commits — on every surface, including
+> hook-initiated (conn-mode) writes and `crap.transaction(fn)` blocks. A
+> rolled-back write never emits an event.
+
 Event streams enforce the same access rules as normal read operations:
 
 | Layer | metadata | full | Description |

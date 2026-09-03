@@ -78,11 +78,14 @@ pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, EmailContext, EventQueue, FindByIdInput, FindDocumentsInput,
-    GetGlobalInput, ListVersionsInput, PaginatedResult, PersistOptions, SearchDocumentsInput,
-    VerificationQueue, WriteInput, WriteResult, values_from_strings,
+    CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
+    FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, PaginatedResult,
+    PersistOptions, SearchDocumentsInput, VerificationQueue, WriteInput, WriteResult,
+    values_from_strings,
 };
-pub(crate) use types::{flush_queue, flush_verification_queue, invalidate_user_streams_if_auth};
+pub(crate) use types::{
+    flush_deferred_effects, flush_queue, flush_verification_queue, invalidate_user_streams_if_auth,
+};
 
 pub use collections::{
     CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,

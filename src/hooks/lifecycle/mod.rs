@@ -15,6 +15,7 @@ pub use context::{
     LiveFilterContext, MfaDeliverContext, MfaDeliverInput, MfaWhenContext, MfaWhenInput,
     RouteContext, RouteHandlerInput, ValidateContext,
 };
+pub(crate) use runner::run_effects_on_vm;
 pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
     PublishEventInput,

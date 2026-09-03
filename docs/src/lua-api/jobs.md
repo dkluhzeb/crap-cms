@@ -222,8 +222,12 @@ end
 
 `crap.transaction` follows Lua's normal exception model: any error
 inside the block triggers a rollback and the error propagates to the
-caller. There is no `on_rollback` callback — use Lua's built-in
-`pcall` to react to rollbacks:
+caller. To tie a side effect to the outcome, register it from inside
+the block with [`crap.tx.on_commit` /
+`crap.tx.on_rollback`](../hooks/transaction-access.md#transaction-outcome-effects) —
+the effect runs only after the transaction actually committed (or
+rolled back). For inline control flow, Lua's built-in `pcall` works
+as always:
 
 ```lua
 function M.run(ctx)
@@ -258,7 +262,7 @@ Common patterns:
 |---|---|
 | Re-enqueue the work on failure | `if not ok then crap.jobs.queue(ctx.job.slug, ctx.data) end` |
 | Log every rollback | `if not ok then crap.log.warn("tx rolled back: " .. tostring(err)) end` |
-| Compensate external side-effects | Run the side-effect inside the `if not ok` branch (after rollback) |
+| Compensate external side-effects | `crap.tx.on_rollback("hooks.x.compensate", {...})` inside the block, or run it in the `if not ok` branch |
 | Stop the job from being marked failed | Catch with `pcall` and return success from `M.run`; the framework will treat it as completed |
 
 ## Concurrency model

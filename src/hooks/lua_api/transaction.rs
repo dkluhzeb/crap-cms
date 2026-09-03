@@ -16,9 +16,10 @@
 //! - Install `TxContext` (conn-mode) in Lua `app_data` for the
 //!   duration of the closure call — `with_lua_db` sees `TxContext`
 //!   first and reuses the shared tx for nested CRUD ops.
-//! - On `Ok` return: remove `TxContext`, `COMMIT`.
+//! - On `Ok` return: remove `TxContext`, `COMMIT`, then run any
+//!   `crap.tx.on_commit` effects registered inside the closure.
 //! - On `Err` return: remove `TxContext`, drop the tx → automatic
-//!   rollback.
+//!   rollback, then run any `crap.tx.on_rollback` compensations.
 //!
 //! Inside a hook (already conn-mode with the parent's write tx),
 //! `crap.transaction(fn)` is a pass-through: call `fn` directly so the
@@ -26,10 +27,15 @@
 //! aren't supported (no `SAVEPOINT` mechanism in this alpha — defer
 //! until a real use case surfaces).
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 
-use crate::hooks::lifecycle::{PoolContext, TxContext};
+use crate::{
+    hooks::lifecycle::{LuaCrudInfra, PoolContext, TxContext, run_effects_on_vm},
+    service::{DeferredEffect, DeferredQueue, EffectOutcome},
+};
 
 /// Wrap a Lua closure in a single IMMEDIATE transaction.
 ///
@@ -63,6 +69,23 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
         .transaction_immediate()
         .map_err(|e| RuntimeError(format!("crap.transaction: begin: {e}")))?;
 
+    // Per-transaction queue for `crap.tx.on_commit` / `on_rollback`
+    // registrations inside the closure. Installed by swapping a modified
+    // `LuaCrudInfra` into app_data (snapshot/restore — the same stack
+    // discipline as `TxContextGuard`).
+    let dq: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
+    let prev_infra = lua.app_data_ref::<LuaCrudInfra>().map(|r| (*r).clone());
+
+    let mut infra = prev_infra.clone().unwrap_or(LuaCrudInfra {
+        event_transport: None,
+        cache: None,
+        event_queue: None,
+        verification_queue: None,
+        deferred: None,
+    });
+    infra.deferred = Some(dq.clone());
+    lua.set_app_data(infra);
+
     // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on
     // this function's stack until just below — `remove_app_data` runs
     // before `tx.commit()` / drop, so the pointer is never
@@ -72,14 +95,39 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     let call_result = fn_arg.call::<Value>(());
     lua.remove_app_data::<TxContext>();
 
+    match prev_infra {
+        Some(p) => {
+            lua.set_app_data(p);
+        }
+        None => {
+            lua.remove_app_data::<LuaCrudInfra>();
+        }
+    }
+
+    let effects: Vec<DeferredEffect> = dq.borrow_mut().drain(..).collect();
+
     match call_result {
         Ok(value) => {
-            tx.commit()
-                .map_err(|e| RuntimeError(format!("crap.transaction: commit: {e}")))?;
+            if let Err(e) = tx.commit() {
+                // A failed commit is a rollback outcome.
+                run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
+
+                return Err(RuntimeError(format!("crap.transaction: commit: {e}")));
+            }
+
+            // Effects run in THIS VM: `PoolContext` is live again (job
+            // context), so effect CRUD is pool-mode, and events queue into
+            // the job's own event queue (flushed post-handler).
+            run_effects_on_vm(lua, &effects, EffectOutcome::Commit);
+
             Ok(value)
         }
         Err(e) => {
-            // `tx` drops → automatic rollback.
+            // Roll back (and release the write lock) BEFORE compensations
+            // run — their pool-mode CRUD needs the write path.
+            drop(tx);
+            run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
+
             Err(e)
         }
     }

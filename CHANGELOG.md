@@ -2734,6 +2734,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Transaction-outcome effects: `crap.tx.on_commit` / `crap.tx.on_rollback`.**
+  Lifecycle hooks and `crap.transaction(fn)` blocks can defer a side effect
+  until the surrounding write transaction has committed, or register a
+  compensation that runs only on rollback. Effects are hook references plus a
+  JSON payload (validated at registration: an unresolvable ref or
+  unserializable payload fails the transaction), run post-outcome in
+  pool-mode with full CRUD access, and are fail-open (an effect error is
+  logged and skipped). Registrations from hooks fired by nested CRUD attach
+  to the outermost transaction. The post-commit-only event timing guarantee
+  is now recorded in `docs/src/internals/frozen-contracts.md`.
+
 - **Ranked search: `order_by = "_rank"`.** Together with `search`, sorts results by
   relevance (SQLite FTS5 `bm25()`, Postgres `ts_rank`), best first, flowing through
   the normal read pipeline — access rules, the status axis, soft-delete filtering,

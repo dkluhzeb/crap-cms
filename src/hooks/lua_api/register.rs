@@ -32,6 +32,7 @@ use super::{
     storage::register_storage,
     template_data::register_template_data,
     transaction::register_transaction,
+    tx_hooks::register_tx_hooks,
     utils::{REGISTRY_LOCK_POISONED, load_lua_helpers, register_util},
 };
 
@@ -81,6 +82,7 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     // gives a descriptive runtime error ("requires a job or pool
     // context") instead of "nil is not callable".
     register_transaction(lua)?;
+    register_tx_hooks(lua)?;
 
     // Load pure Lua helpers onto crap.util (after crap global is set)
     load_lua_helpers(lua)?;
@@ -126,6 +128,7 @@ pub fn register_api_pool_init(
     register_pages(lua)?;
     register_routes(lua)?;
     register_transaction(lua)?;
+    register_tx_hooks(lua)?;
 
     load_lua_helpers(lua)?;
 

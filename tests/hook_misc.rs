@@ -807,6 +807,8 @@ async fn run_job_handler_infra_publishes_crud_events() {
         cache: None,
         event_queue: None,
         verification_queue: None,
+
+        deferred: None,
     };
 
     runner

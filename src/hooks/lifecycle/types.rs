@@ -11,7 +11,7 @@ use crate::{
         SharedInvalidationTransport, SharedStorage,
     },
     db::{DbConnection, DbPool},
-    service::{EventQueue, ServiceContext, VerificationQueue},
+    service::{DeferredQueue, EventQueue, ServiceContext, VerificationQueue},
     typegen::lua::LuaAlias,
 };
 
@@ -222,6 +222,11 @@ pub struct LuaCrudInfra {
     pub cache: Option<SharedCache>,
     pub event_queue: Option<EventQueue>,
     pub verification_queue: Option<VerificationQueue>,
+    /// Per-transaction queue for `crap.tx.on_commit` / `on_rollback`
+    /// registrations. Set by the pool-write envelope (and temporarily by
+    /// `crap.transaction(fn)`); `None` in contexts with no enclosing
+    /// transaction to attach to — registration then errors (fail-closed).
+    pub deferred: Option<DeferredQueue>,
 }
 
 impl LuaCrudInfra {
@@ -238,13 +243,14 @@ impl LuaCrudInfra {
             cache: ctx.cache.clone(),
             event_queue,
             verification_queue,
+            deferred: None,
         }
     }
 }
 
 // Safety: LuaCrudInfra contains Arc (Send+Sync) and Rc<RefCell> (not Send).
-// The Rc<RefCell<Vec>> (EventQueue) is only accessed on the same thread that
-// owns the Lua VM — mlua's `send` feature enforces this at the type level.
+// The Rc<RefCell<Vec>> queues (EventQueue, VerificationQueue, DeferredQueue)
+// are only accessed on the same thread that owns the Lua VM — mlua's `send` feature enforces this at the type level.
 // We need Send+Sync for `set_app_data` but the Rc never crosses threads.
 unsafe impl Send for LuaCrudInfra {}
 unsafe impl Sync for LuaCrudInfra {}

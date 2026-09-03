@@ -49,6 +49,48 @@ This applies to **all write hooks**: `before_validate`, `before_change`, `after_
 
 If any hook (before or after) returns an error or throws a Lua error, the entire transaction is rolled back and the operation fails with an error message. This includes after-hooks — an `after_change` error will roll back the main DB operation too.
 
+## Transaction-Outcome Effects
+
+A hook runs *inside* the write transaction, but its external side effects
+(HTTP calls, third-party APIs) are not transactional: they fire even when the
+transaction later rolls back, and they fire before the data is durable.
+`crap.tx` ties side effects to the transaction outcome:
+
+```lua
+function M.before_change(ctx)
+    -- Runs only AFTER the transaction committed:
+    crap.tx.on_commit("hooks.notify.webhook", { id = ctx.id, title = ctx.data.title })
+    -- Runs only if the transaction rolled back:
+    crap.tx.on_rollback("hooks.notify.cleanup", { id = ctx.id })
+    return ctx
+end
+```
+
+Semantics:
+
+- **Refs + plain data, not closures.** The first argument is a hook
+  reference (like every other handler surface); the optional second argument
+  is captured immediately and must be JSON-serializable. The handler
+  receives it as `ctx.data`, together with `ctx.outcome` (`"commit"` or
+  `"rollback"`).
+- **Registration is fail-closed.** An unresolvable ref or an unserializable
+  payload raises in the registering hook — rolling the transaction back.
+- **Execution is fail-open.** Effects run after the outcome is final; a
+  failing effect is logged and skipped, later effects still run.
+- **Effects run in pool-mode.** Like a job handler: CRUD is available, each
+  call opens its own short transaction; there is no user identity. Events
+  published by effect CRUD flush after all effects ran.
+- **Nesting attaches to the outermost transaction.** A hook fired by nested
+  CRUD (a create inside another document's hook) registers into the same
+  transaction as the outer write.
+- **Ordering.** On commit, effects run after the operation's own mutation
+  events were published.
+
+Valid anywhere a write transaction is active: write lifecycle hooks
+(`before_validate`, `before_change`, `after_change`, `before_delete`,
+`after_delete`) and inside `crap.transaction(fn)` in a job. Registering
+without an active transaction raises a descriptive error.
+
 ## Calling CRUD Outside Hooks
 
 Calling `crap.collections.find()` etc. in a context with no database

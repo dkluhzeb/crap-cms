@@ -471,3 +471,33 @@ alpha.10 on:
   a bypass returns only as an explicit signed-URL design.
 - **Search is a prefix filter.** The ranked FTS mode was removed as dead
   code; ranked search would return as an additive feature.
+
+## Event timing & transaction-outcome effects (frozen 2026-09-03)
+
+- **Mutation events are published only for committed writes.** Every write
+  path queues events during its transaction and flushes them strictly after
+  a successful commit — the pool-write envelope, job handlers (per-op
+  transactions, flushed post-handler), and `crap.transaction(fn)`. A
+  rolled-back write never emits an event.
+- **`crap.tx.on_commit` / `crap.tx.on_rollback` contract.** Effects are hook
+  refs plus JSON payloads. Registration is fail-closed (an unresolvable ref
+  or unserializable payload fails the registering hook, and with it the
+  transaction); execution is fail-open (an effect error is logged and
+  skipped — the outcome is final). `on_commit` runs only after commit,
+  `on_rollback` only after rollback; effects run *outside* the transaction
+  in pool-mode with `ctx = { data, outcome }`. Registrations from hooks
+  fired by nested CRUD attach to the outermost transaction.
+
+## Explicitly NOT frozen (carve-outs recorded before the alpha.10 tag)
+
+Named here so later fixes are improvements, not breaking changes:
+
+- **Live-event delivery granularity under lag.** Sequence numbers already
+  make delivery best-effort (a lagging subscriber drops events and detects
+  the gap); coalescing/batching of events under load stays within that
+  contract.
+- **Upload URL storage IS frozen — which makes signed URLs additive.** The
+  value stored in a document's `url` / `{size}_url` columns is the
+  `/uploads/…` proxy path, permanently. A future signed-URL scheme signs at
+  *read/serve* time (e.g. a short-lived query token accepted by the serve
+  route) and never changes stored values.

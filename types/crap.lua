@@ -2125,3 +2125,35 @@ function crap.template_data.list() end
 function crap.transaction(fn) end
 
 
+-- ── crap.tx — transaction-outcome effects ──────────────────────────
+
+--- @class crap.tx
+crap.tx = {}
+
+--- Defer a side effect until the surrounding write transaction has
+--- **committed**. `ref` is a hook reference (`"hooks.module.fn"`);
+--- `data` is captured immediately (plain, JSON-serializable values
+--- only) and passed to the handler as `ctx.data` together with
+--- `ctx.outcome = "commit"`. The handler runs post-commit in
+--- pool-mode: CRUD works, each call in its own short transaction.
+--- Handler errors are logged, never propagated (the commit already
+--- happened). Registering with an unresolvable ref or an
+--- unserializable payload raises immediately, rolling the
+--- transaction back.
+---
+--- Only valid inside a write lifecycle hook or `crap.transaction(fn)`.
+---
+--- @param ref string
+--- @param data? table
+function crap.tx.on_commit(ref, data) end
+
+--- Register a compensation that runs only if the surrounding write
+--- transaction **rolls back** (hook error, validation failure, or
+--- failed commit). Same contract as `crap.tx.on_commit`, with
+--- `ctx.outcome = "rollback"`.
+---
+--- @param ref string
+--- @param data? table
+function crap.tx.on_rollback(ref, data) end
+
+
