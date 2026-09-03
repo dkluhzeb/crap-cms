@@ -2157,3 +2157,26 @@ function crap.tx.on_commit(ref, data) end
 function crap.tx.on_rollback(ref, data) end
 
 
+-- ── crap.uploads ─────────────────────────────────────────────
+
+--- Upload helpers: signed serve-URL minting for cross-origin private media.
+--- @class crap.uploads
+crap.uploads = {}
+
+--- Mint a time-boxed signed URL for a stored upload proxy path, so a browser
+--- on another origin (or behind a CDN) can fetch a **private** file without a
+--- session cookie or Bearer token. The returned URL is a capability: whoever
+--- holds it can fetch the file until it expires — authorize first (typically
+--- you sign values from a document that already passed the read pipeline,
+--- e.g. inside an `after_read` hook) and keep TTLs short (capped at 30 days).
+---
+--- **Never sign a client-supplied path.** This function is a signing oracle:
+--- whatever it signs becomes fetchable by anyone holding the URL. Passing
+--- `ctx.query`/`ctx.body` values from a custom route hands out capabilities
+--- for arbitrary private uploads.
+--- @param url string  A stored upload URL — the `/uploads/…` proxy path from `doc.url` or a `{size}_url` column.
+--- @param expires_in integer?  Seconds until expiry (default 300). Must be positive.
+--- @return string # The path with `exp` and `sig` query parameters appended.
+function crap.uploads.sign_url(url, expires_in) end
+
+

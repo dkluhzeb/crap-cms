@@ -15,6 +15,10 @@ mod local;
 #[cfg(feature = "s3-storage")]
 mod s3;
 
+mod sign;
+
+pub use sign::{sign_upload_path, signed_upload_url, verify_upload_sig};
+
 pub use crate::config::UploadConfig;
 pub use backend::{SharedStorage, StorageBackend, StorageNotFound};
 pub use custom::CustomStorage;

@@ -33,6 +33,7 @@ use super::{
     template_data::register_template_data,
     transaction::register_transaction,
     tx_hooks::register_tx_hooks,
+    uploads::register_uploads,
     utils::{REGISTRY_LOCK_POISONED, load_lua_helpers, register_util},
 };
 
@@ -411,6 +412,7 @@ fn register_common(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) ->
     register_log(lua)?;
     register_util(lua)?;
     register_crypto(lua, config.auth.secret.as_ref())?;
+    register_uploads(lua, config.auth.secret.as_ref())?;
     register_schema_init(lua, Arc::clone(registry))?;
     register_hooks(lua)?;
     register_auth(lua)?;
@@ -440,6 +442,7 @@ fn register_common_with_arc(
     register_log(lua)?;
     register_util(lua)?;
     register_crypto(lua, config.auth.secret.as_ref())?;
+    register_uploads(lua, config.auth.secret.as_ref())?;
     register_schema_pool(lua, Arc::clone(registry))?;
     register_hooks(lua)?;
     register_auth(lua)?;

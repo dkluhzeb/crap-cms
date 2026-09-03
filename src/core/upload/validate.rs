@@ -248,7 +248,21 @@ pub(super) fn sanitize_filename(name: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    match ext {
+    // Extension: ASCII alphanumerics only. Anything else ("?", "&", "#",
+    // "%", CRLF, …) is dropped — a crafted extension used to survive
+    // verbatim, breaking every consumer that embeds the stored filename in
+    // a URL (signed upload URLs would mint a self-truncating link) or a
+    // header (Content-Disposition keeps its own belt-and-braces guard for
+    // files stored by older versions).
+    let clean_ext: Option<String> = ext
+        .map(|e| {
+            e.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .collect::<String>()
+        })
+        .filter(|e| !e.is_empty());
+
+    match clean_ext {
         Some(e) => format!("{clean_stem}.{e}"),
         None => clean_stem,
     }
@@ -379,6 +393,20 @@ mod tests {
     fn sanitize_filename_leading_trailing_special() {
         // Leading special chars become hyphens that get filtered as empty segments
         assert_eq!(sanitize_filename("---file---.png"), "file.png");
+    }
+
+    /// Regression: the extension used to survive verbatim — a crafted
+    /// upload could smuggle "?", "&", "#" or CRLF into the stored filename,
+    /// silently breaking signed upload URLs minted from it (the link
+    /// self-truncates at the "?") and relying on the Content-Disposition
+    /// guard for header safety.
+    #[test]
+    fn sanitize_filename_extension_charset() {
+        assert_eq!(sanitize_filename("report.pd?f"), "report.pdf");
+        assert_eq!(sanitize_filename("photo.j\r\npg"), "photo.jpg");
+        assert_eq!(sanitize_filename("x.a&b#c"), "x.abc");
+        assert_eq!(sanitize_filename("evil.???"), "evil");
+        assert_eq!(sanitize_filename("archive.tar.gz"), "archive-tar.gz");
     }
 
     #[test]

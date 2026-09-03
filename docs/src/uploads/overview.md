@@ -197,6 +197,11 @@ Files are served at `/uploads/<collection>/<filename>`:
 /uploads/media/a1b2c3_my-photo_thumbnail.webp
 ```
 
+Access-gated files can additionally be served via short-lived **signed
+URLs** (`?exp=…&sig=…`, minted with `crap.uploads.sign_url`) for
+cross-origin or CDN delivery — see
+[Downloading Files](client-uploads.md#signed-urls).
+
 ## API Response
 
 The `sizes` field in API responses is a structured object assembled from the per-size columns:

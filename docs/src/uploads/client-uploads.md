@@ -218,6 +218,52 @@ curl http://localhost:3000/uploads/media/a1b2c3_photo.jpg \
 |--------|--------------|
 | Public (no `access.read`) | `public, max-age=31536000, immutable` |
 | Protected (`access.read` configured) | `private, no-store` |
+| Signed URL (valid `exp`/`sig`) | `private, max-age=<remaining validity>` |
+
+### Signed URLs
+
+A browser on **another origin** (or a CDN in front of `/uploads`) can load a
+*protected* file with neither the session cookie nor a Bearer header. For
+that case the backend mints a **signed URL** — the stored proxy path plus
+`exp` (unix seconds) and `sig` (HMAC, keyed by `[auth] secret`) query
+parameters:
+
+```lua
+-- e.g. in an after_read hook or a custom route, on data that already
+-- passed the read pipeline:
+local signed = crap.uploads.sign_url(doc.url, 300)  -- valid for 5 minutes
+-- "/uploads/media/a1b2c3_photo.jpg?exp=1790000000&sig=9f2c…"
+```
+
+```bash
+# No cookie, no Bearer — the signature is the credential:
+curl "http://localhost:3000/uploads/media/a1b2c3_photo.jpg?exp=1790000000&sig=9f2c..."
+```
+
+A valid signature is a **capability**: authorization happened at mint time,
+so whoever holds the URL can fetch the file until `exp` — sign only values
+the current viewer was allowed to read, and keep TTLs short. An invalid or
+expired signature grants nothing: the request falls through to the normal
+cookie/Bearer resolution. Stored `url` values never change — signing is
+read-time only.
+
+**Never sign a client-supplied path.** `crap.uploads.sign_url` is a signing
+oracle: whatever it signs becomes fetchable by anyone holding the URL.
+Passing `ctx.query` / `ctx.body` values from a custom route hands out
+capabilities for arbitrary private uploads. Sign only URL values read from
+documents the current viewer was allowed to see (e.g. inside `after_read`).
+
+Properties worth knowing:
+
+- `expires_in` is capped at **30 days**.
+- The capability outlives later document-state changes: a soft-deleted
+  (trashed) or unpublished document's files keep serving until `exp`. A
+  hard delete or file replacement removes the files, so stale URLs 404.
+- Revoking a leaked URL before `exp` means rotating `[auth] secret` —
+  which also invalidates every session and `crap.crypto.encrypt` payload.
+  Short TTLs are the real mitigation.
+- Cross-origin `fetch()` additionally needs `[cors]` configured; a plain
+  `<img>` / `<video>` tag does not.
 
 ## Using Uploads in Other Collections
 

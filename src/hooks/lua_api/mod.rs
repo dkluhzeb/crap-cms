@@ -47,6 +47,7 @@ pub(crate) mod storage;
 pub(crate) mod template_data;
 pub(crate) mod transaction;
 pub(crate) mod tx_hooks;
+pub(crate) mod uploads;
 pub(crate) mod utils;
 mod vm_label;
 

@@ -1452,6 +1452,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Upload filenames: the extension is now sanitized to ASCII alphanumerics**
+  (the stem always was). Previously a crafted upload could smuggle `?`, `&`,
+  `#`, `%` or control bytes into the stored filename's extension — surviving
+  into every place the stored name is embedded (URLs, headers). Existing
+  files are unaffected; the Content-Disposition guard for legacy names
+  remains. Found by the signed-URL security review: a signed URL minted from
+  such a filename would self-truncate and never verify.
+
 - **Version restore no longer wipes translations.** Restoring a snapshot used to
   NULL every non-default locale column even though snapshots carry the decorated
   `field__xx` values; each locale is now restored from the snapshot (locales the
@@ -2733,6 +2741,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **Signed upload URLs for cross-origin private media.** The
+  `/uploads/{collection}/{filename}` serve route accepts a third auth source
+  beside the session cookie and Bearer token: `?exp=<unix>&sig=<hex>` query
+  parameters carrying a time-boxed HMAC-SHA256 capability keyed by
+  `[auth] secret` (domain-separated, no new configuration). Mint from Lua
+  with `crap.uploads.sign_url(doc.url, expires_in)` — typically in an
+  `after_read` hook or custom route, on data that already passed the read
+  pipeline — so a browser on another origin (or behind a CDN) can load a
+  private file that neither cookies nor Bearer headers can reach. A valid
+  signature serves with `Cache-Control: private, max-age=<remaining>`;
+  invalid or expired signatures fall through to the normal auth + gate and
+  never remove access. Stored `url` values are unchanged (they remain proxy
+  paths — frozen contract); the signature wire format is recorded in
+  `docs/src/internals/frozen-contracts.md`.
 
 - **Transaction-outcome effects: `crap.tx.on_commit` / `crap.tx.on_rollback`.**
   Lifecycle hooks and `crap.transaction(fn)` blocks can defer a side effect

@@ -29,7 +29,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         AuthUser, CollectionDefinition, Document,
-        upload::{SharedStorage, StorageNotFound, served_url},
+        upload::{SharedStorage, StorageNotFound, served_url, verify_upload_sig},
     },
     db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::HookRunner,
@@ -48,6 +48,56 @@ async fn storage_get_blocking(storage: &SharedStorage, key: String) -> anyhow::R
 /// Check if a path segment contains traversal characters.
 fn has_path_traversal(segment: &str) -> bool {
     segment.contains("..") || segment.contains('/') || segment.contains('\\')
+}
+
+/// Extract the signed-URL query parameters (`exp` + `sig`), ignoring any
+/// other parameters. `None` unless both are present and `exp` parses.
+fn signed_query_params(query: Option<&str>) -> Option<(i64, String)> {
+    let query = query?;
+
+    let mut exp: Option<i64> = None;
+    let mut sig: Option<String> = None;
+
+    for pair in query.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+
+        match k {
+            "exp" => exp = v.parse().ok(),
+            "sig" => sig = Some(v.to_string()),
+            _ => {}
+        }
+    }
+
+    Some((exp?, sig?))
+}
+
+/// Signed-URL capability check: a valid `exp`/`sig` pair for this exact path
+/// authorizes the request without re-running the per-document gate — the
+/// authorization happened server-side at mint time (`crap.uploads.sign_url`).
+/// Returns the cache policy (`private`, bounded by the remaining validity) on
+/// success; `None` falls through to the normal cookie/Bearer resolution (an
+/// invalid or expired signature grants nothing).
+fn check_signed_url(
+    state: &AdminState,
+    collection_slug: &str,
+    filename: &str,
+    query: Option<&str>,
+) -> Option<String> {
+    let (exp, sig) = signed_query_params(query)?;
+
+    let path = served_url(&format!("{collection_slug}/{filename}"));
+    let now = chrono::Utc::now().timestamp();
+
+    let secret: &str = state.config.auth.secret.as_ref();
+    if !verify_upload_sig(secret, &path, exp, &sig, now) {
+        return None;
+    }
+
+    // Cacheable by this viewer for the signature's remaining lifetime; never
+    // by shared caches (the URL, not the viewer, is the capability).
+    Some(format!("private, max-age={}", (exp - now).max(0)))
 }
 
 /// Owned inputs for [`upload_doc_visible`]'s `spawn_blocking` call.
@@ -219,19 +269,28 @@ pub async fn serve_upload(
         .unwrap_or("")
         .to_string();
 
-    let auth_user = extract_auth_user(&request, &state);
+    // Signed URL first: a valid capability serves without cookie/Bearer.
+    // Anything less than valid falls through to the normal auth + gate.
+    let signed_cache = check_signed_url(&state, &collection_slug, &filename, request.uri().query());
 
-    let Some(cache_control) =
-        check_upload_access(&state, &collection_slug, &filename, auth_user).await
-    else {
-        return StatusCode::NOT_FOUND.into_response();
+    let cache_control: String = if let Some(cache) = signed_cache {
+        cache
+    } else {
+        let auth_user = extract_auth_user(&request, &state);
+
+        let Some(cache) = check_upload_access(&state, &collection_slug, &filename, auth_user).await
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+
+        cache.to_string()
     };
 
     serve_file(
         &state,
         &collection_slug,
         &filename,
-        cache_control,
+        &cache_control,
         accept.contains("image/avif"),
         accept.contains("image/webp"),
         request,
@@ -420,9 +479,10 @@ fn content_disposition(mime: &str, filename: Option<&str>) -> String {
     match original {
         Some(name) => {
             // Replace `"` (would break out of the quoted-string) and any control
-            // character (`\r`/`\n`/… — an invalid `HeaderValue` byte). The stored
-            // filename's extension is not sanitized upstream, so a crafted upload
-            // can carry a CRLF here; without this the header build would panic.
+            // character (`\r`/`\n`/… — an invalid `HeaderValue` byte). Extensions
+            // are sanitized to alphanumerics on upload since alpha.10, but files
+            // stored by older versions can still carry raw bytes — keep this
+            // guard; without it the header build would panic.
             let safe: String = name
                 .chars()
                 .map(|c| if c == '"' || c.is_control() { '_' } else { c })
@@ -509,6 +569,26 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use std::fs;
+
+    #[test]
+    fn signed_query_params_extracts_pair() {
+        let q = signed_query_params(Some("exp=1300&sig=abc123"));
+        assert_eq!(q, Some((1300, "abc123".to_string())));
+    }
+
+    #[test]
+    fn signed_query_params_ignores_extra_params() {
+        let q = signed_query_params(Some("foo=1&exp=99&bar&sig=aa&baz=2"));
+        assert_eq!(q, Some((99, "aa".to_string())));
+    }
+
+    #[test]
+    fn signed_query_params_requires_both() {
+        assert!(signed_query_params(Some("exp=1300")).is_none());
+        assert!(signed_query_params(Some("sig=abc")).is_none());
+        assert!(signed_query_params(Some("exp=notanum&sig=abc")).is_none());
+        assert!(signed_query_params(None).is_none());
+    }
 
     #[test]
     fn negotiate_no_accept_returns_empty() {

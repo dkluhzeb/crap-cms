@@ -500,8 +500,16 @@ Named here so later fixes are improvements, not breaking changes:
   an event carrying each changed document's *latest* state, never every
   intermediate event. Further batching (subscriber grouping, windowing)
   stays within this contract.
-- **Upload URL storage IS frozen — which makes signed URLs additive.** The
+- **Upload URL storage IS frozen — which made signed URLs additive.** The
   value stored in a document's `url` / `{size}_url` columns is the
-  `/uploads/…` proxy path, permanently. A future signed-URL scheme signs at
-  *read/serve* time (e.g. a short-lived query token accepted by the serve
-  route) and never changes stored values.
+  `/uploads/…` proxy path, permanently. The signed-URL scheme (shipped in
+  alpha.10) signs at read/serve time and never changes stored values. Its
+  wire contract is frozen: `?exp=<unix-seconds>&sig=<hex>` query parameters
+  on the serve path; `sig` = HMAC-SHA256 over
+  `"crap-cms:upload-url:v1\n{path}\n{exp}"` keyed by `[auth] secret`
+  (the `v1` context is the versioning seam for any future scheme); a valid
+  pair is a mint-time capability that serves without the per-document gate;
+  anything less than valid falls through to normal cookie/Bearer resolution
+  and never removes access. Minting: `crap.uploads.sign_url(url,
+  expires_in?)`; `expires_in` is capped at 30 days (relaxing the cap later
+  is additive; the cap itself is not a frozen minimum).
