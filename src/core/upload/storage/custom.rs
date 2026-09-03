@@ -124,24 +124,6 @@ impl StorageBackend for CustomStorage {
         Ok(out)
     }
 
-    fn public_url(&self, key: &str) -> String {
-        // `public_url` can't return an error, so fall back to the served
-        // path on any failure. A lease failure (e.g. pool-acquire timeout)
-        // is logged rather than silently swallowed, to aid diagnosis.
-        let mut url = format!("/uploads/{key}");
-        if let Err(e) = self.lease.with_vm(&mut |lua| {
-            if let Ok(func) = storage_fn(lua, "url")
-                && let Ok(u) = func.call::<String>(key.to_string())
-            {
-                url = u;
-            }
-            Ok(())
-        }) {
-            tracing::debug!("custom storage public_url lease failed for '{key}': {e:#}");
-        }
-        url
-    }
-
     fn kind(&self) -> &'static str {
         "custom"
     }
@@ -295,17 +277,6 @@ mod tests {
 
         storage.put("media/yes.txt", b"data", "text/plain").unwrap();
         assert!(storage.exists("media/yes.txt").unwrap());
-    }
-
-    #[test]
-    fn public_url_delegates_to_lua() {
-        let (_lua, lease) = setup_lease();
-        let storage = CustomStorage::new(lease);
-
-        assert_eq!(
-            storage.public_url("media/photo.jpg"),
-            "https://cdn.test/media/photo.jpg"
-        );
     }
 
     #[test]

@@ -300,11 +300,19 @@ impl ContentService {
         let token = Self::bearer_or_body_token(&metadata, &req.token);
         let headers = self.metadata_headers(&metadata);
 
+        // Empty = ALL operations, including the lifecycle ones.
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
-            ["create", "update", "delete"]
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect()
+            [
+                "create",
+                "update",
+                "delete",
+                "undelete",
+                "unpublish",
+                "restore",
+            ]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
         } else {
             req.operations.into_iter().collect()
         };

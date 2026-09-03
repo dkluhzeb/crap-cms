@@ -231,34 +231,58 @@ fn collect_locale_restore_fields(
                 resolve_snapshot_value(obj, &base, prefix, &field.name)
             };
 
-            restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx)
+            // Per-locale snapshot lookup: the default locale uses the plain
+            // key; every other locale looks up the decorated `key__xx` form
+            // the snapshot carries (top-level or nested in a group object).
+            let value_for = |locale: &str| {
+                if *locale == locale_config.default_locale {
+                    return val;
+                }
+
+                let decorated_base = format!("{base}__{locale}");
+                if prefix.is_empty() {
+                    obj.get(&decorated_base)
+                } else {
+                    let decorated_field = format!("{}__{locale}", field.name);
+                    resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
+                }
+            };
+
+            restore_locale_columns(
+                conn,
+                &base,
+                locale_config,
+                set_clauses,
+                params,
+                idx,
+                &value_for,
+            )
         },
     )
 }
 
-/// Emit SET clauses that NULL all locale columns for a field, then set the
-/// default locale column to the snapshot value.
-fn restore_locale_columns(
+/// Emit SET clauses restoring every locale column of a field from the
+/// snapshot: each locale takes the snapshot's value for that locale
+/// (`value_for(locale)`), and a locale the snapshot has no value for is set
+/// to NULL. Restoring used to NULL every non-default locale even though
+/// snapshots carry the decorated `__xx` values — wiping translations.
+fn restore_locale_columns<'a>(
     conn: &dyn DbConnection,
-    snapshot_val: Option<&Value>,
     field_name: &str,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
     params: &mut Vec<DbValue>,
     idx: &mut usize,
+    value_for: &dyn Fn(&str) -> Option<&'a Value>,
 ) -> Result<()> {
     for locale in &locale_config.locales {
         let col = locale_column(field_name, locale)?;
 
-        let db_val = if *locale == locale_config.default_locale {
-            match snapshot_val {
-                Some(Value::String(s)) => Some(DbValue::Text(s.clone())),
-                Some(Value::Number(n)) => Some(DbValue::Text(n.to_string())),
-                Some(Value::Bool(b)) => Some(DbValue::Integer(i64::from(*b))),
-                _ => None,
-            }
-        } else {
-            None
+        let db_val = match value_for(locale) {
+            Some(Value::String(s)) => Some(DbValue::Text(s.clone())),
+            Some(Value::Number(n)) => Some(DbValue::Text(n.to_string())),
+            Some(Value::Bool(b)) => Some(DbValue::Integer(i64::from(*b))),
+            _ => None,
         };
 
         let quoted = quote_ident(&col);

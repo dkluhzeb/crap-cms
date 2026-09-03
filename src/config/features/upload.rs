@@ -56,10 +56,6 @@ pub struct S3Config {
     /// Optional key prefix prepended to all storage keys.
     #[serde(default)]
     pub prefix: String,
-    /// Base URL for public file URLs (e.g., CDN URL).
-    /// If empty, generates S3 URLs.
-    #[serde(default)]
-    pub public_url_base: String,
     /// Use path-style addressing (required for `MinIO` and some providers).
     #[serde(default)]
     pub path_style: bool,

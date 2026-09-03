@@ -144,6 +144,8 @@ fn validate_method_keys(method: &Table) -> Result<()> {
         deny_unknown_keys(&activation, "activates_on", &["header", "always"])?;
     }
 
+    validate_surfaces(method)?;
+
     if ty == "strategy" {
         validate_strategy_shape(method)?;
     }
@@ -252,6 +254,16 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
 }
 
 fn parse_surfaces(tbl: &Table) -> Option<SurfaceSet> {
+    // `surfaces = "all"` — every current AND future surface. Spelled as a
+    // sentinel so existing configs aren't silently excluded from a third
+    // surface added later. (Strict entry validation lives in
+    // `validate_surfaces`, which runs first; this parser stays lenient.)
+    if let Ok(s) = tbl.get::<String>("surfaces")
+        && s == "all"
+    {
+        return Some(SurfaceSet::all());
+    }
+
     let surfaces_tbl: Table = tbl.get("surfaces").ok()?;
     let mut out = Vec::new();
     for s in surfaces_tbl.sequence_values::<String>().flatten() {
@@ -265,6 +277,41 @@ fn parse_surfaces(tbl: &Table) -> Option<SurfaceSet> {
         None
     } else {
         Some(SurfaceSet::from_list(out))
+    }
+}
+
+/// Strict `surfaces` validation: absent is fine (type-specific default), the
+/// string `"all"` is the every-surface sentinel, and a list may only contain
+/// known surface names — an unknown entry (a typo like `"gprc"`) used to be
+/// silently skipped, silently shrinking the method's reach.
+fn validate_surfaces(method: &Table) -> Result<()> {
+    match method.get::<Value>("surfaces")? {
+        Value::Nil => Ok(()),
+        Value::String(s) if s.to_str()? == "all" => Ok(()),
+        Value::String(other) => bail!(
+            "auth method `surfaces` must be \"all\" or a list of surface names (got the string \"{}\")",
+            other.to_str()?
+        ),
+        Value::Table(t) => {
+            for entry in t.sequence_values::<Value>() {
+                match entry? {
+                    Value::String(s) if matches!(&*s.to_str()?, "admin" | "grpc") => {}
+                    Value::String(s) => bail!(
+                        "auth method `surfaces`: unknown surface \"{}\" (valid: admin, grpc — or the string \"all\")",
+                        s.to_str()?
+                    ),
+                    other => bail!(
+                        "auth method `surfaces` entries must be strings (got {})",
+                        other.type_name()
+                    ),
+                }
+            }
+            Ok(())
+        }
+        other => bail!(
+            "auth method `surfaces` must be \"all\" or a list of surface names (got {})",
+            other.type_name()
+        ),
     }
 }
 
@@ -617,6 +664,53 @@ mod tests {
         m.set("authenticate", lua.create_table().unwrap()).unwrap();
         let err = methods_config(&lua, vec![m]).unwrap_err().to_string();
         assert!(err.contains("authenticate"), "{err}");
+    }
+
+    /// `surfaces = "all"` is the every-surface sentinel; unknown surface
+    /// names are load errors (they used to be silently skipped).
+    #[test]
+    fn surfaces_all_sentinel_and_strict_entries() {
+        let lua = Lua::new();
+
+        let m = strategy_method(&lua, Some("hooks.auth.sso"), true);
+        m.set("surfaces", "all").unwrap();
+        methods_config(&lua, vec![m]).unwrap();
+
+        let m = strategy_method(&lua, Some("hooks.auth.sso"), true);
+        m.set("surfaces", "grpc").unwrap();
+        let err = methods_config(&lua, vec![m]).unwrap_err().to_string();
+        assert!(err.contains("must be \"all\" or a list"), "{err}");
+
+        let m = strategy_method(&lua, Some("hooks.auth.sso"), true);
+        let list = lua.create_table().unwrap();
+        list.set(1, "gprc").unwrap();
+        m.set("surfaces", list).unwrap();
+        let err = methods_config(&lua, vec![m]).unwrap_err().to_string();
+        assert!(err.contains("unknown surface \"gprc\""), "{err}");
+    }
+
+    /// The parser maps the sentinel to `SurfaceSet::all()`.
+    #[test]
+    fn parse_surfaces_all_sentinel() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "bearer").unwrap();
+        m.set("surfaces", "all").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+
+        let auth = parse_collection_auth(&tbl).unwrap();
+        match &auth.methods[0] {
+            AuthMethod::Bearer { surfaces } => {
+                assert!(surfaces.contains(Surface::Admin));
+                assert!(surfaces.contains(Surface::Grpc));
+            }
+            other => panic!("expected Bearer, got {other:?}"),
+        }
     }
 
     #[test]

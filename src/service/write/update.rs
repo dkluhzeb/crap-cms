@@ -1,5 +1,11 @@
 //! Core update operation for collections.
 
+use crate::core::validate::{FieldError, ValidationError};
+use crate::core::{
+    CollectionDefinition, DocumentFields, flatten_group_fields, prefixed_name, walk_leaf_fields,
+};
+use crate::db::LocaleMode;
+
 use crate::{
     db::{AccessResult, LocaleContext, query},
     hooks::{AccessCheckInput, HookContext, ValidationCtx},
@@ -56,6 +62,58 @@ pub(crate) fn check_update_access(
     Ok(())
 }
 
+/// Reject a non-default-locale write that includes locale-locked fields.
+///
+/// A field that is not localized has exactly one (default-locale) column, so a
+/// write under `locale = "de"` cannot store it. These fields used to be
+/// **silently dropped** — the write succeeded while discarding data, the worst
+/// possible outcome. They are now a validation error naming each field; write
+/// shared fields under the default locale instead.
+pub(crate) fn reject_locale_locked_fields(
+    def: &CollectionDefinition,
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    let Some(lctx) = locale_ctx else {
+        return Ok(());
+    };
+    let LocaleMode::Single(locale) = &lctx.mode else {
+        return Ok(());
+    };
+    if *locale == lctx.config.default_locale {
+        return Ok(());
+    }
+
+    // Data arrives nested-canonical; flatten so presence checks use the same
+    // `group__sub` names the leaf walker produces.
+    let flat = flatten_group_fields(data, &def.fields);
+
+    let mut errors = Vec::new();
+    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, inherited| {
+        if query::is_locale_locked_write(field, Some(lctx), inherited) {
+            let key = prefixed_name(prefix, &field.name);
+
+            if flat.contains_key(&key) {
+                errors.push(FieldError::new(
+                    key,
+                    format!(
+                        "not localized — this field only exists under the default locale \
+                         ('{}'); drop it from the '{locale}' write or mark it localized",
+                        lctx.config.default_locale
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    });
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    Err(ValidationError::new(errors).into())
+}
+
 /// Update a document on an existing connection/transaction.
 ///
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
@@ -74,6 +132,8 @@ pub(crate) fn update_document_in_conn(
     // Canonicalize incoming data to nested groups up front (idempotent); the
     // whole pipeline sees one shape, the DB edge flattens to columns.
     input.data = nest_group_fields(&input.data, &def.fields);
+
+    reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
 
     check_update_access(
         ctx,
@@ -192,4 +252,62 @@ pub(crate) fn update_document_in_conn(
     doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
     Ok((doc, after_ctx))
+}
+
+#[cfg(test)]
+mod locale_lock_tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        config::LocaleConfig,
+        core::{CollectionDefinition, DocumentFields, FieldDefinition, field::FieldType},
+    };
+
+    fn def_with_shared_and_localized() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("slug", FieldType::Text).build(),
+        ];
+        def
+    }
+
+    fn ctx(locale: &str) -> LocaleContext {
+        LocaleContext {
+            mode: LocaleMode::Single(locale.to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: true,
+            },
+        }
+    }
+
+    /// Regression: a non-default-locale write carrying a non-localized field
+    /// used to succeed while silently discarding that field.
+    #[test]
+    fn non_default_locale_write_rejects_locale_locked_fields() {
+        let def = def_with_shared_and_localized();
+        let data: DocumentFields = [
+            ("title".to_string(), json!("Titel")),
+            ("slug".to_string(), json!("neu")),
+        ]
+        .into_iter()
+        .collect();
+
+        let err = reject_locale_locked_fields(&def, &data, Some(&ctx("de"))).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("slug"), "{msg}");
+        assert!(msg.contains("not localized"), "{msg}");
+
+        let localized_only: DocumentFields = [("title".to_string(), json!("Titel"))]
+            .into_iter()
+            .collect();
+        assert!(reject_locale_locked_fields(&def, &localized_only, Some(&ctx("de"))).is_ok());
+        assert!(reject_locale_locked_fields(&def, &data, Some(&ctx("en"))).is_ok());
+        assert!(reject_locale_locked_fields(&def, &data, None).is_ok());
+    }
 }

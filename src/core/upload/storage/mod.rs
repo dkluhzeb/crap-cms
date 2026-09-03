@@ -25,10 +25,9 @@ pub use local::LocalStorage;
 ///
 /// The value stored in a document's `url` / `{size}_url` columns is always
 /// `served_url(key)` — this backend-agnostic proxy path — regardless of storage
-/// backend, because every backend serves bytes through this route. In contrast
-/// [`StorageBackend::public_url`] is a *direct* link (S3 object / CDN) and must
-/// **not** be used to reconstruct the stored value (doing so 404s access-gated
-/// uploads on S3/custom, where the direct URL differs from the proxy path).
+/// backend, because every backend serves bytes through this route. (Direct
+/// S3/CDN links were removed with the dead `public_url` limb; a signed-URL
+/// scheme is the planned way to bypass the proxy.)
 pub const SERVED_URL_PREFIX: &str = "/uploads/";
 
 /// The canonical served URL for a storage `key`, as stored in a document's

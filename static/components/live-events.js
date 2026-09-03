@@ -206,7 +206,8 @@ class CrapLiveEvents extends HTMLElement {
    */
   _isStaleEvent(event, ctx) {
     const op = event.operation;
-    if (op !== 'update' && op !== 'delete') return false;
+    // Everything except `create` mutates the doc the form is showing.
+    if (op === 'create') return false;
     if (!eventTargetsCurrentDoc(event, ctx)) return false;
     // `self` is computed server-side (the event payload carries no editor
     // identity) — true when the subscriber made the change.
@@ -221,6 +222,9 @@ class CrapLiveEvents extends HTMLElement {
       create: t('op_created'),
       update: t('op_updated'),
       delete: t('op_deleted'),
+      undelete: t('op_restored'),
+      unpublish: t('op_unpublished'),
+      restore: t('op_restored'),
     };
     toast({
       message: `${event.collection} ${labels[event.operation] || event.operation}`,

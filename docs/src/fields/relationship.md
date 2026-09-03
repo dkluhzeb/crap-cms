@@ -69,7 +69,7 @@ crap.fields.relationship({
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `collection` | string \| string[] | **required** | Target collection slug, or an array of slugs for polymorphic relationships |
-| `has_many` | boolean | `false` | Use a junction table for many-to-many |
+| `has_many` | boolean | `false` | Use a junction table for many-to-many. Lives **inside** the `relationship` table — a top-level `has_many` next to it is a load error (it would silently store a plain JSON array: no junction table, no populate, no ref-counting) |
 | `max_depth` | integer | `nil` | Per-field cap on population depth |
 
 ### Legacy Flat Syntax (Deprecated)

@@ -106,12 +106,6 @@ pub trait StorageBackend: Send + Sync {
     /// Returns an error if the backend fails.
     fn exists(&self, key: &str) -> Result<bool>;
 
-    /// Return the public-facing URL for a key.
-    ///
-    /// For local storage: `/uploads/{key}`
-    /// For S3: `https://bucket.s3.region.amazonaws.com/{key}` or CDN URL
-    fn public_url(&self, key: &str) -> String;
-
     /// Return the backend identifier (`"local"`, `"s3"`, `"custom"`).
     fn kind(&self) -> &'static str;
 

@@ -110,7 +110,6 @@ endpoint = "https://s3.amazonaws.com"    # or MinIO/R2 URL
 access_key = "${AWS_ACCESS_KEY}"
 secret_key = "${AWS_SECRET_KEY}"
 prefix = ""                              # optional key prefix
-public_url_base = ""                     # CDN URL (empty = S3 URLs)
 path_style = false                       # true for MinIO
 ```
 
@@ -122,7 +121,6 @@ path_style = false                       # true for MinIO
 | `access_key` | Yes | AWS access key ID |
 | `secret_key` | Yes | AWS secret access key |
 | `prefix` | No | Key prefix prepended to all storage keys |
-| `public_url_base` | No | Base URL for public file links (e.g., CDN) |
 | `path_style` | No | Use path-style URLs (required for MinIO) |
 
 Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage.
@@ -169,9 +167,6 @@ crap.storage.register({
       method = "DELETE",
       url = "https://storage.example.com/" .. key,
     })
-  end,
-  url = function(key)
-    return "https://cdn.example.com/" .. key
   end,
   -- Optional: fast existence probe. When omitted, the CMS probes via
   -- `get` (downloading the object), so providing `exists` (e.g. a HEAD

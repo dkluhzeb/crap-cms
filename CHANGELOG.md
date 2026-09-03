@@ -8,6 +8,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Locale-locked fields in a non-default-locale write are now a validation
+  error.** `update(id, { title = x, slug = y }, { locale = "de" })` with a
+  non-localized `slug` used to succeed while silently discarding `slug` — a
+  success response that dropped data. Every write surface now rejects it,
+  naming each offending field; write shared fields under the default locale.
+- **Lifecycle mutations publish their own event operations.** `undelete`,
+  `unpublish` (collections and globals) and version `restore` events used to arrive
+  as plain `update`s, so subscribers could not tell them apart. They now carry
+  dedicated operations end-to-end: the gRPC `MutationOperation` enum gains
+  `UNDELETE`/`UNPUBLISH`/`RESTORE`, the SSE payload and the Lua `live` /
+  `before_broadcast` contexts see `"undelete"`/`"unpublish"`/`"restore"`, and an
+  empty `SubscribeRequest.operations` now means *all* operations including the new
+  ones. Subscribers that switch on the operation must handle the new values.
+- **The dead public-URL limb is gone.** `[upload.s3] public_url_base`, the
+  `StorageBackend::public_url` method, and the custom-storage `url` handler had no
+  production caller — every URL stored and served goes through the `/uploads/…`
+  proxy. A custom storage handler that still registers `url` now fails to load
+  (unknown key); remove it. Direct/CDN links return later as the signed-URL design.
+- **Top-level `has_many` beside a `relationship` table is a load error.** On a
+  relationship/upload field using `relationship = { ... }`, the flag belongs inside
+  that table; the top-level spelling silently stored a plain JSON array (no junction
+  table, no populate, no ref-counting) while reading like the real switch. The legacy
+  flat `relation_to` syntax keeps its top-level flag.
+- **Custom auth strategies run in a transaction that commits only on success.** Writes
+  a strategy makes while it fails to authenticate (or errors) are rolled back —
+  failed attempts are unauthenticated, attacker-controlled input, so persisting their
+  side effects let anyone grow the database from the login endpoint. Use the built-in
+  rate limiters for attempt counters and `crap.log` for observability; both live
+  outside this transaction.
+- **Unknown `select` names are rejected.** `select = { "titel" }` used to silently
+  select nothing; it now errors naming the unknown entry, on every read surface.
+  Valid names: top-level field names (a group name selects its sub-fields) plus
+  `id`, `created_at`, `updated_at`, `_status`.
+- **Auth method `surfaces` entries are strict, and `surfaces = "all"` is accepted.**
+  An unknown surface name (a typo like `"gprc"`) used to be silently skipped,
+  shrinking the method's reach; it is now a load error. The new `"all"` sentinel means
+  every current *and future* surface — list surfaces explicitly only when you mean to
+  exclude some.
 - **Auth strategies must declare `authenticate` and `activates_on`; `methods = {}` is
   rejected.** A `strategy` method with a missing/empty `authenticate` used to be
   silently dropped, a missing `activates_on` silently became `always = true` (fires
@@ -1414,6 +1452,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Version restore no longer wipes translations.** Restoring a snapshot used to
+  NULL every non-default locale column even though snapshots carry the decorated
+  `field__xx` values; each locale is now restored from the snapshot (locales the
+  snapshot has no value for are still cleared).
 - **gRPC `Subscribe` honors `SubscribeRequest.token`.** The proto documents the
   `token` field as the way to authenticate a stream (metadata is sent once at
   stream open), but only the `authorization` metadata was read — every body-token
@@ -3132,6 +3174,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Removed the dead ranked-search path.** `fts_search` (ORDER BY relevance) had no
+  production caller — every search request runs the FTS **filter** path
+  (`id IN (...)` with normal ordering), as the docs describe. Ranked search would
+  return as an additive feature, not by silently swapping semantics.
 - **`jobs healthcheck` exit code now follows the result.** `0` healthy, `2` warning
   (failed jobs in the last 24h, jobs pending > 5 min, scheduled jobs that never ran),
   `1` unhealthy (stale running jobs). It previously always exited `0`, so a CI or

@@ -94,7 +94,7 @@ fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
         None,
         |inner| undelete_document_in_conn(inner, id),
         |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+            ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, &doc.fields);
             // Restoring an auth document changes that user's effective access.
             invalidate_user_streams_if_auth(ctx, &doc.id);
         },
@@ -107,7 +107,7 @@ fn undelete_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, &doc.fields);
     invalidate_user_streams_if_auth(ctx, &doc.id);
 
     Ok(doc)

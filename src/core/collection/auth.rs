@@ -287,14 +287,14 @@ pub enum AuthMethod {
     Bearer {
         /// Surfaces this method fires on (default: `{"admin", "grpc"}`).
         #[serde(default = "SurfaceSet::all")]
-        #[lua(ty = "crap.Surface[]", optional)]
+        #[lua(ty = "crap.Surface[]|\"all\"", optional)]
         surfaces: SurfaceSet,
     },
     /// Accept the `crap_session` cookie. Default surfaces: admin.
     SessionCookie {
         /// Surfaces this method fires on (default: `{"admin"}`).
         #[serde(default = "SurfaceSet::admin_only")]
-        #[lua(ty = "crap.Surface[]", optional)]
+        #[lua(ty = "crap.Surface[]|\"all\"", optional)]
         surfaces: SurfaceSet,
     },
     /// Custom Lua-driven authentication. `authenticate` is a
@@ -316,7 +316,7 @@ pub enum AuthMethod {
         activates_on: Activation,
         /// Surfaces this method fires on (default: `{"admin"}`).
         #[serde(default = "SurfaceSet::admin_only")]
-        #[lua(ty = "crap.Surface[]", optional)]
+        #[lua(ty = "crap.Surface[]|\"all\"", optional)]
         surfaces: SurfaceSet,
     },
 }

@@ -62,15 +62,14 @@ fn custom_email_config() -> CrapConfig {
 #[test]
 fn custom_storage_round_trips_through_the_pool() {
     let tmp = config_dir_with(
-        r#"
+        r"
         local files = {}
         crap.storage.register({
             put = function(key, data, content_type) files[key] = data end,
             get = function(key) return files[key] end,
             delete = function(key) files[key] = nil end,
-            url = function(key) return "https://cdn.test/" .. key end,
         })
-        "#,
+        ",
     );
     let config = custom_storage_config();
     let runner = build_runner(tmp.path(), &config);
@@ -89,10 +88,6 @@ fn custom_storage_round_trips_through_the_pool() {
         .expect("put");
     assert_eq!(storage.get("media/a.txt").expect("get"), b"hello world");
     assert!(storage.exists("media/a.txt").expect("exists"));
-    assert_eq!(
-        storage.public_url("media/a.txt"),
-        "https://cdn.test/media/a.txt"
-    );
 
     // Missing key → typed StorageNotFound (so the serve handler answers 404,
     // not a transient 503).

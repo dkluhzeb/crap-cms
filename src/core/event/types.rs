@@ -24,6 +24,28 @@ pub enum EventOperation {
     Update,
     /// A document was deleted.
     Delete,
+    /// A soft-deleted document was restored from the trash.
+    Undelete,
+    /// A published document or global was reverted to draft.
+    Unpublish,
+    /// A version snapshot was restored over the live document/global.
+    Restore,
+}
+
+impl EventOperation {
+    /// Canonical lowercase wire/Lua spelling — the single mapping shared by
+    /// the SSE payload, subscriber op filters, and the Lua hook contexts.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Undelete => "undelete",
+            Self::Unpublish => "unpublish",
+            Self::Restore => "restore",
+        }
+    }
 }
 
 /// The user who triggered a mutation event.

@@ -12,6 +12,9 @@ pub(in crate::api::handlers) fn mutation_operation(
         EventOperation::Create => content::MutationOperation::Create,
         EventOperation::Update => content::MutationOperation::Update,
         EventOperation::Delete => content::MutationOperation::Delete,
+        EventOperation::Undelete => content::MutationOperation::Undelete,
+        EventOperation::Unpublish => content::MutationOperation::Unpublish,
+        EventOperation::Restore => content::MutationOperation::Restore,
     }
 }
 
@@ -84,6 +87,18 @@ mod tests {
         assert_eq!(
             mutation_operation(&EventOperation::Delete),
             content::MutationOperation::Delete
+        );
+        assert_eq!(
+            mutation_operation(&EventOperation::Undelete),
+            content::MutationOperation::Undelete
+        );
+        assert_eq!(
+            mutation_operation(&EventOperation::Unpublish),
+            content::MutationOperation::Unpublish
+        );
+        assert_eq!(
+            mutation_operation(&EventOperation::Restore),
+            content::MutationOperation::Restore
         );
     }
 

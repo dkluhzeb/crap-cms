@@ -16,7 +16,8 @@ use crate::typegen::lua::LuaAnnotation;
 pub struct LiveFilterContext<'a> {
     /// Collection (or global) slug the mutation targets.
     pub collection: &'a str,
-    /// The mutation operation: `"create"`, `"update"`, or `"delete"`.
+    /// The mutation operation: `"create"`, `"update"`, `"delete"`,
+    /// `"undelete"`, `"unpublish"`, or `"restore"`.
     pub operation: &'a str,
     /// The document's field data for this event.
     #[lua(ty = "table<string, any>")]

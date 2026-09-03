@@ -162,10 +162,11 @@ grpcurl -plaintext -d '{
 ```
 
 Non-localized (shared) fields are **only writable under the default locale**.
-A write with a non-default `locale` parameter is *locale-locked*: any shared
-fields in the payload are **silently skipped** (the write succeeds, the shared
-values stay unchanged) — this protects the canonical value from being
-clobbered by a translation edit. To change shared fields, write without a
+A write with a non-default `locale` parameter is *locale-locked*: shared
+fields in the payload are a **validation error naming each field** (they used
+to be silently skipped — a success response that discarded data). This
+protects the canonical value from being clobbered by a translation edit while
+never letting a write half-apply. To change shared fields, write without a
 `locale` parameter or with the default locale.
 
 ### Removing a translation

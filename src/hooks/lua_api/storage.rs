@@ -24,7 +24,7 @@ use super::utils::require_init_phase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, lua_fn, lua_table};
 
 /// Allowed keys on a `crap.storage.register` handler table.
-const STORAGE_HANDLER_KEYS: &[&str] = &["put", "get", "delete", "url", "exists"];
+const STORAGE_HANDLER_KEYS: &[&str] = &["put", "get", "delete", "exists"];
 
 /// Register a custom storage backend's handler. **Init-only** — call from
 /// `init.lua` when `[upload] storage = "custom"`. Stores the handler as
@@ -33,8 +33,8 @@ const STORAGE_HANDLER_KEYS: &[&str] = &["put", "get", "delete", "url", "exists"]
 fn storage_register(
     lua: &Lua,
     #[lua(
-        ty = "{ put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), url?: fun(key: string): string, exists?: fun(key: string): boolean }",
-        doc = "Storage handler. `put`/`get`/`delete` required; `url`/`exists` optional. `get` returns nil for a missing key."
+        ty = "{ put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), exists?: fun(key: string): boolean }",
+        doc = "Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key."
     )]
     handler: Table,
 ) -> LuaResult<()> {
@@ -52,7 +52,7 @@ fn storage_register(
         }
     }
 
-    for name in ["url", "exists"] {
+    for name in ["exists"] {
         if !matches!(handler.get::<Value>(name)?, Value::Nil | Value::Function(_)) {
             return Err(RuntimeError(format!(
                 "crap.storage.register: '{name}' must be a function when provided"
@@ -119,7 +119,6 @@ mod tests {
               put = function(k, d, c) end,
               get = function(k) return '' end,
               delete = function(k) end,
-              url = function(k) return k end,
             })
             ",
         )

@@ -204,7 +204,6 @@ mod tests {
     use crate::core::field::*;
     use crate::db::DbConnection;
     use crate::db::DbValue;
-    use crate::db::query::fts::search::fts_search;
     use crate::db::query::fts::sync::helpers::get_fts_table_columns;
     use crate::db::query::fts::sync::test_helpers::*;
     use crate::db::{BoxedConnection, pool};
@@ -268,14 +267,14 @@ mod tests {
         def1.admin.list_searchable_fields = vec!["title".into()];
         sync_fts_table(&conn, "posts", &def1, &LocaleConfig::default()).unwrap();
 
-        let results = fts_search(&conn, "posts", "Hello", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Hello", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
         let mut def2 = simple_def(vec![text_field("title"), text_field("body")]);
         def2.admin.list_searchable_fields = vec!["title".into(), "body".into()];
         sync_fts_table(&conn, "posts", &def2, &LocaleConfig::default()).unwrap();
 
-        let results = fts_search(&conn, "posts", "World", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "World", 10).unwrap();
         assert_eq!(results, vec!["1"]);
     }
 
@@ -346,10 +345,10 @@ mod tests {
         assert!(cols.contains(&"body".to_string()));
         assert_eq!(cols.len(), 3);
 
-        let results = fts_search(&conn, "posts", "Hello", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Hello", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
-        let results = fts_search(&conn, "posts", "Hallo", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Hallo", 10).unwrap();
         assert_eq!(results, vec!["1"]);
     }
 
@@ -384,10 +383,10 @@ mod tests {
 
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        let results = fts_search(&conn, "posts", "Extracted", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Extracted", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
-        let results = fts_search(&conn, "posts", "paragraph", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "paragraph", 10).unwrap();
         assert!(results.is_empty());
     }
 
@@ -421,7 +420,7 @@ mod tests {
 
         sync_fts_table(&conn, "posts", &def, &locale_config).unwrap();
 
-        let results = fts_search(&conn, "posts", "locale", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "locale", 10).unwrap();
         assert_eq!(results, vec!["1"]);
     }
 }

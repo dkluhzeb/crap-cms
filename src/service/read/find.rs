@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::post_process::post_process_docs;
-use super::validate_filters::validate_user_filters;
+use super::validate_filters::{validate_user_filters, validate_user_select};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -74,6 +74,8 @@ pub fn find_documents(
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
+
+    validate_user_select(input.query.select.as_deref(), def)?;
 
     let mut fq = input.query.clone();
     fq.filters

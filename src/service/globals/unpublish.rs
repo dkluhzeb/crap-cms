@@ -140,7 +140,7 @@ fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
     let doc = unpublish_global_in_conn(ctx)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
 
     Ok(doc)
 }
@@ -153,7 +153,7 @@ fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
         // Same post-commit sequence as `update_global_document` / the
         // collection unpublish path: notify subscribers of the status
         // change; the envelope flushes nested-hook events after.
-        ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+        ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
     })
 }
 

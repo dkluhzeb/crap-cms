@@ -55,6 +55,24 @@ fn parse_relationship_table(
 
     let name = get_string(field_tbl, "name").unwrap_or_default();
 
+    // With the table syntax, `has_many` lives INSIDE the relationship table.
+    // A top-level `has_many = true` next to it silently forced scalar JSON
+    // storage (no junction table, no populate, no ref-counting) while reading
+    // as if it were the switch. Reject the combination outright. (The legacy
+    // flat `relation_to` syntax keeps consuming the top-level flag.)
+    if !matches!(
+        field_tbl.get::<mlua::Value>("has_many").map_err(lua_err)?,
+        mlua::Value::Nil
+    ) {
+        return Err(RuntimeError(format!(
+            "Field '{name}': put has_many inside the relationship table — \
+             relationship = {{ collection = ..., has_many = true }}. A top-level \
+             has_many on a {} field would store a plain JSON array (no junction \
+             table, no populate, no ref-counting).",
+            field_type.as_str()
+        )));
+    }
+
     let (collection, polymorphic) = if *field_type == FieldType::Relationship {
         parse_relationship_collection(rel_tbl, &name)?
     } else {
@@ -118,6 +136,28 @@ fn parse_legacy_relation_to(field_tbl: &Table) -> LuaResult<Option<RelationshipC
 mod tests {
     use crate::hooks::lua_api::parse::fields::parse_fields;
     use mlua::Lua;
+
+    /// Regression: `has_many = true` at the top level of a relationship/upload
+    /// field with the table syntax silently produced scalar JSON storage.
+    #[test]
+    fn top_level_has_many_beside_relationship_table_is_rejected() {
+        let lua = Lua::new();
+        let fields = lua.create_table().unwrap();
+        let f = lua.create_table().unwrap();
+        f.set("name", "tags").unwrap();
+        f.set("type", "relationship").unwrap();
+        f.set("has_many", true).unwrap();
+        let rel = lua.create_table().unwrap();
+        rel.set("collection", "tags").unwrap();
+        f.set("relationship", rel).unwrap();
+        fields.set(1, f).unwrap();
+
+        let err = parse_fields(&lua, &fields).unwrap_err().to_string();
+        assert!(
+            err.contains("put has_many inside the relationship table"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn test_parse_fields_relationship_table_syntax() {

@@ -289,7 +289,7 @@ grpcurl -plaintext -d '{
 **Behavior:**
 - `select` is optional. When omitted or empty, all fields are returned (backward compatible).
 - `id` is always included. `created_at`, `updated_at` and `_status` are returned **only when named** in `select` (they are still fetched internally so cursor pagination keeps its composite order, but they are stripped from the response).
-- A name that matches no field is silently ignored (it selects nothing) — it is not an error.
+- A name that matches no top-level field (or `id`/`created_at`/`updated_at`/`_status`) is a **hard error** naming the entry — it used to silently select nothing.
 - Selecting a group field name (e.g., `"seo"`) includes all its sub-fields.
 - Relationship fields not in `select` are skipped during population (saves N+1 queries).
 

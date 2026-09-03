@@ -2,9 +2,7 @@
 //!
 //! Supports `SQLite` (FTS5 MATCH) and `PostgreSQL` (tsvector @@ tsquery).
 
-use anyhow::{Context as _, Result};
-
-use crate::db::{DbConnection, DbValue};
+use crate::db::DbConnection;
 
 /// FTS5 table name for a collection.
 pub(super) fn fts_table_name(slug: &str) -> String {
@@ -62,60 +60,6 @@ pub(crate) fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String
             .collect();
         tokens.join(" ")
     }
-}
-
-/// Search the FTS5 index and return matching document IDs, ordered by relevance.
-///
-/// Returns empty vec if the FTS table doesn't exist (graceful degradation).
-/// Returns empty vec if the query is empty after sanitization.
-///
-/// # Errors
-///
-/// Returns a backend error if the FTS query fails (other than missing-table).
-pub fn fts_search(
-    conn: &dyn DbConnection,
-    slug: &str,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<String>> {
-    let sanitized = sanitize_fts_query(conn, query);
-
-    if sanitized.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let fts_table = fts_table_name(slug);
-
-    // Check if FTS table exists (graceful degradation)
-    if !table_exists(conn, &fts_table) {
-        return Ok(Vec::new());
-    }
-
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-
-    let sql = match conn.kind() {
-        "postgres" => {
-            let p1_copy = conn.placeholder(1);
-            format!(
-                "SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {p1}) \
-                 ORDER BY ts_rank(tsv, to_tsquery('simple', {p1_copy})) DESC LIMIT {p2}"
-            )
-        }
-        _ => format!(
-            "SELECT id FROM {fts_table} WHERE {fts_table} MATCH {p1} ORDER BY rank LIMIT {p2}"
-        ),
-    };
-
-    let rows = conn
-        .query_all(&sql, &[DbValue::Text(sanitized), DbValue::Integer(limit)])
-        .with_context(|| format!("FTS search on {fts_table}"))?;
-
-    let ids = rows
-        .into_iter()
-        .filter_map(|row| row.opt_text_at(0))
-        .collect();
-
-    Ok(ids)
 }
 
 /// Build an `AND id IN (SELECT id FROM _fts_{slug} WHERE _fts_{slug} MATCH ?)` clause.
@@ -240,104 +184,6 @@ mod tests {
     fn sanitize_single_token() {
         let (_dir, conn) = setup_db();
         assert_eq!(sanitize_fts_query(&conn, "hello"), "\"hello\" *");
-    }
-
-    // ── fts_search ──────────────────────────────────────────────────────
-
-    #[test]
-    fn search_no_fts_table_returns_empty() {
-        let (_dir, conn) = setup_db();
-        let results = fts_search(&conn, "posts", "hello", 10).unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn search_empty_query_returns_empty() {
-        let (_dir, conn) = setup_db();
-        let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-
-        let results = fts_search(&conn, "posts", "", 10).unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn search_respects_limit() {
-        let (_dir, conn) = setup_db();
-        for i in 1..=5 {
-            insert_post(&conn, &format!("id{i}"), &format!("Rust post {i}"), "");
-        }
-        let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-
-        let results = fts_search(&conn, "posts", "Rust", 3).unwrap();
-        assert_eq!(results.len(), 3);
-    }
-
-    #[test]
-    fn search_relevance_ranking() {
-        let (_dir, conn) = setup_db();
-        insert_post(
-            &conn,
-            "1",
-            "Rust programming",
-            "Learn Rust today with Rust tutorials",
-        );
-        insert_post(&conn, "2", "Python programming", "Learn Python today");
-        let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-
-        // "Rust" should return doc 1 first (appears in both title and body)
-        let results = fts_search(&conn, "posts", "Rust", 10).unwrap();
-        assert!(!results.is_empty());
-        assert_eq!(results[0], "1");
-    }
-
-    /// Prefix matching: a query that is a strict prefix of a longer indexed
-    /// token must match (the `*` suffix). Every other search test matches the
-    /// term exactly, so a regression to exact-only matching would pass silently
-    /// without this.
-    #[test]
-    fn search_matches_by_prefix() {
-        let (_dir, conn) = setup_db();
-        insert_post(&conn, "1", "Rustacean", "");
-        let def = simple_def(vec![text_field("title")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-
-        let results = fts_search(&conn, "posts", "Rust", 10).unwrap();
-        assert_eq!(
-            results,
-            vec!["1".to_string()],
-            "a prefix query should match the longer indexed token"
-        );
-    }
-
-    /// Robustness: a term packed with FTS5 metacharacters and keywords must run
-    /// as a well-formed MATCH (no self-inflicted query error) and is always
-    /// bound as a parameter, never interpolated. Quoting each token makes every
-    /// special character literal inside the phrase.
-    #[test]
-    fn search_neutralizes_fts5_metacharacters() {
-        let (_dir, conn) = setup_db();
-        insert_post(&conn, "1", "Rust programming", "Learn Rust");
-        let def = simple_def(vec![text_field("title"), text_field("body")]);
-        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-
-        for term in [
-            "foo* AND bar",
-            "NEAR(a b)",
-            "\"unbalanced",
-            "(((",
-            "a OR NOT b -c +d",
-            "col:value ^boost",
-            "{}[]",
-            "* * *",
-        ] {
-            assert!(
-                fts_search(&conn, "posts", term, 10).is_ok(),
-                "pathological FTS term must not error: {term:?}"
-            );
-        }
     }
 
     // ── fts_where_clause ────────────────────────────────────────────────

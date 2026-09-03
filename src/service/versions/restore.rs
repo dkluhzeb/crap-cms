@@ -167,7 +167,7 @@ fn restore_collection_version_pool(
         None,
         |inner| restore_collection_version_core(inner, document_id, version_id, locale_config),
         |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
+            ctx.publish_mutation_event(EventOperation::Restore, document_id, &doc.fields);
             // Restoring an auth document can change that user's access.
             invalidate_user_streams_if_auth(ctx, document_id);
         },
@@ -183,7 +183,7 @@ fn restore_collection_version_conn(
     let doc = restore_collection_version_core(ctx, document_id, version_id, locale_config)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Restore, document_id, &doc.fields);
     invalidate_user_streams_if_auth(ctx, document_id);
 
     Ok(doc)
@@ -331,7 +331,7 @@ pub fn restore_global_version(
         None,
         |inner| restore_global_version_core(inner, version_id, locale_config),
         |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Update, "default", &doc.fields);
+            ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
         },
     )
 }

@@ -1309,6 +1309,12 @@ enum MutationOperation {
   MUTATION_OPERATION_CREATE = 1;
   MUTATION_OPERATION_UPDATE = 2;
   MUTATION_OPERATION_DELETE = 3;
+  // A soft-deleted document was restored from the trash.
+  MUTATION_OPERATION_UNDELETE = 4;
+  // A published document/global was reverted to draft.
+  MUTATION_OPERATION_UNPUBLISH = 5;
+  // A version snapshot was restored over the live document/global.
+  MUTATION_OPERATION_RESTORE = 6;
 }
 
 // Publication status of a version snapshot.

@@ -22,7 +22,7 @@ crap.collections.define("users", {
 
 ## Surface scoping
 
-Every non-`password_login` method takes a `surfaces` array listing the host transports it applies to. Today's surfaces are `"admin"` and `"grpc"`. A method whose `surfaces` doesn't include the current request's surface is skipped.
+Every non-`password_login` method takes a `surfaces` value listing the host transports it applies to: a list of surface names, or the string `"all"` meaning every current **and future** surface. Today's surfaces are `"admin"` and `"grpc"`. A method whose `surfaces` doesn't include the current request's surface is skipped. Unknown surface names in the list are load errors (a typo like `"gprc"` used to be silently skipped, shrinking the method's reach) — list surfaces explicitly only when you mean to exclude some.
 
 This lets you express:
 

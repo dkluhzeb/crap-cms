@@ -23,6 +23,7 @@ use crap_cms::core::HookRef;
 use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::db::DbConnection;
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
@@ -824,6 +825,59 @@ fn auth_strategy_returns_user_on_valid_key() {
     assert!(result.is_ok(), "run_auth_strategy should not error");
     let doc = result.unwrap();
     assert!(doc.is_some(), "Valid key should return a document");
+}
+
+/// Regression: strategy side-effect writes used to persist on FAILED
+/// attempts (bare conn, no transaction) — attacker-controlled DB growth
+/// from the login endpoint. The strategy now runs in a transaction that
+/// commits only when it authenticates someone.
+#[test]
+fn auth_strategy_writes_roll_back_on_failed_attempt() {
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let count = |conn: &crap_cms::db::BoxedConnection| -> i64 {
+        conn.query_one("SELECT COUNT(*) AS c FROM articles", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap()
+    };
+
+    let conn = pool.get().expect("DB connection");
+    let before = count(&conn);
+
+    // Failed attempt (no x-succeed header): the article write must vanish.
+    let headers = HashMap::new();
+    let result = runner
+        .run_auth_strategy(
+            &HookRef::new("hooks.auth_strategy.writing_auth"),
+            &api_key_strategy_input(&headers),
+            &conn,
+        )
+        .expect("should not error");
+    assert!(result.is_none());
+    assert_eq!(
+        count(&conn),
+        before,
+        "failed strategy attempt must roll back its writes"
+    );
+
+    // Successful attempt: the write commits.
+    let mut headers = HashMap::new();
+    headers.insert("x-succeed".to_string(), "yes".to_string());
+    let result = runner
+        .run_auth_strategy(
+            &HookRef::new("hooks.auth_strategy.writing_auth"),
+            &api_key_strategy_input(&headers),
+            &conn,
+        )
+        .expect("should not error");
+    assert!(result.is_some());
+    assert_eq!(
+        count(&conn),
+        before + 1,
+        "successful strategy attempt must commit its writes"
+    );
 }
 
 #[test]

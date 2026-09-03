@@ -134,6 +134,8 @@ pub fn find_document_by_id(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
+    super::validate_filters::validate_user_select(input.select, def)?;
+
     let scope = if input.include_deleted {
         resolve_trash_by_id(hooks, ctx, input)?
     } else {

@@ -36,7 +36,6 @@ pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::db::query::fts::search::fts_search;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::query::fts::sync::test_helpers::*;
 
@@ -48,13 +47,15 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         assert_eq!(
-            fts_search(&conn, "posts", "Searchable", 10).unwrap().len(),
+            fts_match_ids(&conn, "posts", "Searchable", 10)
+                .unwrap()
+                .len(),
             1
         );
 
         fts_delete(&conn, "posts", "1").unwrap();
         assert!(
-            fts_search(&conn, "posts", "Searchable", 10)
+            fts_match_ids(&conn, "posts", "Searchable", 10)
                 .unwrap()
                 .is_empty()
         );

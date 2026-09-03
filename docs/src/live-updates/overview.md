@@ -83,7 +83,7 @@ crap.collections.define("posts", {
 })
 ```
 
-The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, id, edited_by, options }` — the affected document's id is `ctx.id`, matching the other hook contexts; the serialized event payload calls the same value `document_id`) and returns `true` to broadcast or `false`/`nil` to suppress.
+The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, id, edited_by, options }`; `operation` is one of `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` — the affected document's id is `ctx.id`, matching the other hook contexts; the serialized event payload calls the same value `document_id`) and returns `true` to broadcast or `false`/`nil` to suppress.
 
 `filter` may be a bare ref string **or** a `{ ref, options }` table — the options reach the filter as `ctx.options`, so one gate function can be reused across collections with different config:
 
@@ -154,7 +154,7 @@ Access is snapshotted at subscribe time and re-resolved only on reconnect.
 | `sequence` | Monotonic sequence number | ✅ | ✅ |
 | `timestamp` | ISO 8601 timestamp | ✅ | ✅ |
 | `target` | `"collection"` or `"global"` | ✅ | ✅ |
-| `operation` | `"create"`, `"update"`, `"delete"` | ✅ | ✅ |
+| `operation` | `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` | ✅ | ✅ |
 | `collection` | Collection or global slug | ✅ | ✅ |
 | `document_id` | Document ID | ✅ | ✅ |
 | `data` | Document fields (hook-processed) | empty | ✅ |

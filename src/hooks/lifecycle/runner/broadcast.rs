@@ -247,11 +247,7 @@ fn publish_event_blocking(
     live: Option<&LiveSetting>,
     input: PublishEventInput,
 ) {
-    let op_str = match &input.operation {
-        EventOperation::Create => "create",
-        EventOperation::Update => "update",
-        EventOperation::Delete => "delete",
-    };
+    let op_str = input.operation.as_str();
 
     match runner.check_live_setting(
         live,

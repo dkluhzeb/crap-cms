@@ -804,6 +804,16 @@ for in-VM clears + boot check, tests, docs (`lua-api/cache.md`);
 policy? *Resolved by reasoning (no user decision needed): trash/versions hard-deny
 (different sets, not supersets — documented).*
 
+**✔ Tier-4 DECIDED + IMPLEMENTED 2026-09-03** (user rule: cleanest solution,
+break pre-tag): locale-lock → validation error; has_many → parse rejection;
+event vocabulary → dedicated undelete/unpublish/restore operations end-to-end;
+public_url limb → removed; strategy writes → transactional (commit on success);
+unknown select names → hard error; surfaces → strict + "all" sentinel; ranked
+search → dead code deleted (additive feature later); restore → translations
+restored from snapshot. Deliberately post-tag: before_broadcast stays inline;
+theme-bootstrap key; ranked-search feature. All with regression tests +
+CHANGELOG + frozen-contracts.md "Pre-alpha.10 design freezes".
+
 **A meta-observation for the freeze**: every doc-vs-code divergence found
 here predates the generated-contract machinery. The subsystems that went
 through this cycle's single-sourcing came out clean; the ones still on

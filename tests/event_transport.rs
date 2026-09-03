@@ -201,7 +201,7 @@ crap.globals.define("site", {
         .expect("no mutation event emitted within 5s of global unpublish")
         .expect("mutation event after global unpublish");
     assert_eq!(ev.target, EventTarget::Global);
-    assert_eq!(ev.operation, EventOperation::Update);
+    assert_eq!(ev.operation, EventOperation::Unpublish);
     assert_eq!(ev.collection.as_ref(), "site");
 }
 

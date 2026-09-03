@@ -1,6 +1,6 @@
 //! `HookRunner` methods for auth strategies and access control.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use mlua::{LuaSerdeExt, Value};
 use serde_json::Map;
 use tracing::error;
@@ -84,12 +84,37 @@ impl HookRunner {
         };
         let ctx_value = lua.to_value(&ctx)?;
 
-        let result: Value = func.call(ctx_value)?;
+        // The strategy runs inside a transaction that COMMITS only when it
+        // authenticates someone. A failed or erroring attempt rolls back —
+        // strategy attempts are attacker-controlled (unauthenticated input),
+        // so persistent writes keyed to failures would let anyone grow the
+        // database from the login endpoint. Counters belong in the rate
+        // limiters, observability in `crap.log` (neither lives in this tx).
+        conn.execute("BEGIN", &[])
+            .context("failed to open the auth-strategy transaction")?;
 
-        match result {
-            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
-            _ => Ok(None),
+        let outcome = (|| -> Result<Option<Document>> {
+            let result: Value = func.call(ctx_value)?;
+
+            match result {
+                Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
+                _ => Ok(None),
+            }
+        })();
+
+        match &outcome {
+            Ok(Some(_)) => {
+                conn.execute("COMMIT", &[])
+                    .context("failed to commit the auth-strategy transaction")?;
+            }
+            Ok(None) | Err(_) => {
+                let _ = conn
+                    .execute("ROLLBACK", &[])
+                    .inspect_err(|e| error!("auth-strategy rollback failed: {e:#}"));
+            }
         }
+
+        outcome
     }
 
     /// Run a `password_login` method's `mfa_when` gate: decides whether THIS

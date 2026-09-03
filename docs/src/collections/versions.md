@@ -157,11 +157,11 @@ version entry for the restore. The document's `_status` is restored to
 **the snapshot's status** — a draft snapshot restores as a draft, a
 published one as published (restore never force-publishes).
 
-> **Restore clears translations.** On a localized collection, restore
-> writes the snapshot value to the **default locale** column and sets
-> every non-default-locale column to `NULL` — existing translations are
-> lost and must be re-entered. Take this into account before restoring
-> documents with translated content.
+> **Restore includes translations.** Snapshots carry every locale's value
+> (the decorated `field__xx` columns), and restore writes each locale back
+> from the snapshot. A locale the snapshot has no value for is cleared —
+> restoring a version that predates a translation removes that translation,
+> exactly as the snapshot recorded the document.
 
 Restore is gated by `access.update` (and the `access.versions` toggle) for the
 collection, and it also honors **field-level write access**: a field the caller

@@ -97,10 +97,6 @@ impl StorageBackend for LocalStorage {
         }
     }
 
-    fn public_url(&self, key: &str) -> String {
-        format!("/uploads/{key}")
-    }
-
     fn kind(&self) -> &'static str {
         "local"
     }
@@ -135,15 +131,6 @@ mod tests {
 
         // Delete non-existent is OK
         storage.delete("media/test.txt").unwrap();
-    }
-
-    #[test]
-    fn public_url() {
-        let storage = LocalStorage::new("/tmp/uploads");
-        assert_eq!(
-            storage.public_url("media/photo.jpg"),
-            "/uploads/media/photo.jpg"
-        );
     }
 
     #[test]

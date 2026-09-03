@@ -89,6 +89,20 @@ fn insert_doc(
 
 // ── Test a: soft delete makes doc invisible to normal find ────────────────
 
+/// Local FTS index-membership probe (the ranked `fts_search` API was removed;
+/// membership is all these assertions need).
+fn fts_match_ids(conn: &crap_cms::db::BoxedConnection, slug: &str, term: &str) -> Vec<String> {
+    let table = format!("_fts_{slug}");
+    conn.query_all(
+        &format!("SELECT id FROM {table} WHERE {table} MATCH ?1"),
+        &[crap_cms::db::DbValue::Text(format!("\"{term}\" *"))],
+    )
+    .unwrap()
+    .iter()
+    .map(|r| r.get_string("id").unwrap())
+    .collect()
+}
+
 #[test]
 fn delete_document_soft_deletes_when_collection_enabled() {
     let def = make_soft_delete_def();
@@ -402,7 +416,7 @@ fn soft_delete_removes_from_fts() {
     query::fts::fts_upsert(&conn, "articles", &doc, Some(&def)).unwrap();
 
     // Verify FTS finds it
-    let results = query::fts::fts_search(&conn, "articles", "Unicorn", 10).unwrap();
+    let results = fts_match_ids(&conn, "articles", "Unicorn");
     assert_eq!(
         results.len(),
         1,
@@ -414,7 +428,7 @@ fn soft_delete_removes_from_fts() {
     query::fts::fts_delete(&conn, "articles", &id).unwrap();
 
     // Verify FTS no longer finds it
-    let results = query::fts::fts_search(&conn, "articles", "Unicorn", 10).unwrap();
+    let results = fts_match_ids(&conn, "articles", "Unicorn");
     assert!(
         results.is_empty(),
         "FTS should not find soft-deleted document"
@@ -449,7 +463,7 @@ fn restore_re_adds_to_fts() {
     query::fts::fts_delete(&conn, "articles", &id).unwrap();
 
     // Verify gone from FTS
-    let results = query::fts::fts_search(&conn, "articles", "Phoenix", 10).unwrap();
+    let results = fts_match_ids(&conn, "articles", "Phoenix");
     assert!(results.is_empty(), "should not be in FTS after soft-delete");
 
     // Restore + re-index FTS (mirrors what undelete_document does)
@@ -460,7 +474,7 @@ fn restore_re_adds_to_fts() {
     query::fts::fts_upsert(&conn, "articles", &doc, Some(&def)).unwrap();
 
     // Verify back in FTS
-    let results = query::fts::fts_search(&conn, "articles", "Phoenix", 10).unwrap();
+    let results = fts_match_ids(&conn, "articles", "Phoenix");
     assert_eq!(results.len(), 1, "should be back in FTS after restore");
     assert_eq!(results[0], id);
 }

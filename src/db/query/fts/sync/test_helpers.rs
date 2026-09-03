@@ -60,3 +60,29 @@ pub(super) fn insert_post(conn: &dyn DbConnection, id: &str, title: &str, body: 
         ],
     ).unwrap();
 }
+
+/// Test-only FTS index-membership probe: sanitized MATCH over the slug's FTS
+/// table, returning matching ids. Replaces the removed ranked `fts_search`
+/// for "is doc X in the index" assertions — no relevance ordering implied.
+pub(crate) fn fts_match_ids(
+    conn: &dyn crate::db::DbConnection,
+    slug: &str,
+    query: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<String>> {
+    let sanitized = crate::db::query::fts::search::sanitize_fts_query(conn, query);
+    if sanitized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let table = format!("_fts_{slug}");
+    let rows = conn.query_all(
+        &format!("SELECT id FROM {table} WHERE {table} MATCH ?1 LIMIT ?2"),
+        &[
+            crate::db::DbValue::Text(sanitized),
+            crate::db::DbValue::Integer(limit),
+        ],
+    )?;
+
+    rows.iter().map(|r| r.get_string("id")).collect()
+}

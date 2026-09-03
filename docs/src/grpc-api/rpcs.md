@@ -791,7 +791,7 @@ Subscribe to real-time mutation events (server streaming). See [Live Updates](..
 message SubscribeRequest {
   repeated string collections = 1;  // empty = all accessible
   repeated string globals = 2;      // empty = all accessible
-  repeated string operations = 3;   // "create","update","delete" — empty = all
+  repeated string operations = 3;   // "create","update","delete","undelete","unpublish","restore" — empty = all
   string token = 4;                 // auth token
 }
 

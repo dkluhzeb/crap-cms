@@ -568,3 +568,63 @@ mod tests {
         assert!(err.to_string().contains("_locked"));
     }
 }
+
+/// Validate that every user-supplied `select` name is a real top-level field
+/// (or one of the selectable system names). An unknown name used to be
+/// silently ignored — it selected nothing, quietly narrowing the response —
+/// which is the same silent-drop class the filter grammar rejects.
+///
+/// # Errors
+///
+/// Returns `HookError` naming the first unknown select entry.
+pub fn validate_user_select(
+    select: Option<&[String]>,
+    def: &crate::core::CollectionDefinition,
+) -> Result<(), ServiceError> {
+    let Some(select) = select else {
+        return Ok(());
+    };
+
+    for name in select {
+        let known = matches!(
+            name.as_str(),
+            "id" | "created_at" | "updated_at" | "_status"
+        ) || def.fields.iter().any(|f| f.name == *name);
+
+        if !known {
+            return Err(ServiceError::HookError(format!(
+                "Unknown select field '{name}' — select takes top-level field names \
+                 (a group name selects all its sub-fields) plus id, created_at, \
+                 updated_at and _status."
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+    use crate::core::{CollectionDefinition, FieldDefinition, field::FieldType};
+
+    /// Regression: unknown select names silently selected nothing.
+    #[test]
+    fn unknown_select_names_are_rejected() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("seo", FieldType::Group).build(),
+        ];
+
+        let ok = ["title", "seo", "id", "created_at", "updated_at", "_status"].map(String::from);
+        assert!(validate_user_select(Some(&ok), &def).is_ok());
+        assert!(validate_user_select(None, &def).is_ok());
+
+        let bad = ["title".to_string(), "titel".to_string()];
+        let err = validate_user_select(Some(&bad), &def)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unknown select field 'titel'"), "{err}");
+    }
+}

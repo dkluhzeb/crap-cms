@@ -50,6 +50,20 @@ clean.
   Handle the array, and pass `depth = 0` if you want IDs only (see Behavior
   changes).
 
+- **Schema authors: non-default-locale writes reject shared fields.** A
+  write under `locale = "de"` that includes a non-localized field is now a
+  validation error naming the field (it used to be silently dropped). Split
+  the write, or mark the field `localized` (item 11).
+- **Auth authors: methods got stricter, strategies got transactions.**
+  Strategies must declare `authenticate` and `activates_on`; `methods = {}`
+  and unknown `surfaces` names are load errors; strategy writes roll back
+  on failed attempts (items 12–13).
+- **Event subscribers: three new operations.** `undelete`, `unpublish` and
+  `restore` no longer arrive as `update` — regenerate stubs and extend your
+  operation switches (item 16).
+- **Custom storage: remove the `url` handler and `public_url_base`.** The
+  direct-URL limb is gone; everything serves via `/uploads/…` (item 17).
+
 ## Required action items
 
 ### 0. Rename camelCase keys to snake_case (API casing unified)
@@ -379,6 +393,87 @@ Also: MCP `update_global` now honours `draft`, `read_config_file` redacts
 `crap.toml` secrets, and the JSON-RPC layer is stricter (`jsonrpc` must be
 `"2.0"`, notifications get no reply, error responses carry `id: null`). No
 action needed for these.
+
+### 11. Non-default-locale writes reject shared fields
+
+`update(id, { title = x, slug = y }, { locale = "de" })` with a non-localized
+`slug` used to succeed while silently discarding `slug`. It is now a
+validation error listing every offending field, on all write surfaces.
+**Fix:** write shared fields under the default locale (or without a `locale`),
+or mark the field `localized` if it should vary per locale.
+
+### 12. Auth `methods` are strict (and a silent-disable bug is fixed)
+
+Load errors now, previously tolerated:
+
+- a `strategy` without a non-empty `authenticate` hook ref, or without
+  `activates_on` (`{ header = "x-..." }` or `{ always = true }`) — both used
+  to be silently dropped, and a dropped-to-empty list silently gained the
+  FULL default method set;
+- an explicit empty `methods = {}` (omit the key to get the defaults);
+- a wrong-typed `methods` value or a non-table entry in the list;
+- an unknown surface name in `surfaces` (typos like `"gprc"` used to be
+  silently skipped). New: `surfaces = "all"` means every current **and
+  future** surface.
+
+Also note a fixed defaults bug that may change behavior on upgrade:
+`auth = { methods = {...} }` **without** `enabled = true` used to parse as
+*disabled* (and `password_login` without `forgot_password` as
+forgot-password-off) because a missing boolean read as `false`. Both now take
+their documented `true` defaults — if you relied on the accidental
+disablement, write `enabled = false` explicitly.
+
+### 13. Custom auth strategy writes are transactional
+
+`authenticate` runs inside a transaction that commits only when it returns a
+user; on `nil` or an error every write it made rolls back. "Find or create
+user" flows keep working (the create commits with the successful login). For
+failed-attempt bookkeeping use the rate limiters and `crap.log` — persistent
+writes on failed, unauthenticated attempts were an attacker-driven-growth
+vector and are gone by design.
+
+### 14. `has_many` lives inside the `relationship` table
+
+On a relationship/upload field using `relationship = { ... }`, a top-level
+`has_many = true` next to it is now a load error — it silently stored a plain
+JSON array (no junction table, no populate, no ref-counting) while reading
+like the real switch. Move the flag: `relationship = { collection = ...,
+has_many = true }`. The legacy flat `relation_to` syntax keeps its top-level
+flag.
+
+### 15. Filter, select and tab strictness
+
+- `exists` / `not_exists` accept **only `true`** on every surface (Lua,
+  gRPC/MCP JSON, admin list URLs, access constraints). `{ exists = false }`
+  used to be silently dropped (Lua) or read as the inverted `IS NOT NULL`
+  (wire) — use `not_exists = true` for IS NULL.
+- Unknown `select` names are errors (they used to silently select nothing).
+  Valid: top-level field names + `id` / `created_at` / `updated_at` /
+  `_status`.
+- Every tab in a `tabs` field requires a `label`.
+
+### 16. Event subscribers: `undelete`, `unpublish`, `restore`
+
+Lifecycle mutations no longer masquerade as `update`. The gRPC
+`MutationOperation` enum gained `UNDELETE` / `UNPUBLISH` / `RESTORE`
+(regenerate stubs), the SSE payload and the Lua `live` / `before_broadcast`
+contexts see the new strings, and an empty `SubscribeRequest.operations`
+means all **six** operations. Extend any switch over the operation; a
+subscriber that filtered to `["update"]` explicitly will no longer receive
+lifecycle mutations — add the new names if you want them.
+
+Related gRPC detail: `Me` now resolves through the shared auth evaluator, so
+its error details changed (locked-account token → `UNAUTHENTICATED`
+"Session invalidated"; deleted user → `UNAUTHENTICATED` instead of
+`NOT_FOUND`).
+
+### 17. Custom storage: `url` handler and `public_url_base` removed
+
+The direct/public-URL limb had no production caller — every stored URL and
+every byte served goes through the `/uploads/…` proxy. Remove `url = ...`
+from `crap.storage.register` (now an unknown-key load error) and
+`public_url_base` from `[upload.s3]` (unknown config keys are fatal). A
+CDN/direct-link story returns as an explicit signed-URL design.
 
 ## Admin UI behavior
 
@@ -1008,6 +1103,23 @@ What changed:
   skip, truthy to require — so MFA can apply per surface
   (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`).
   No hook = MFA always required; a hook error fails closed.
+
+### Custom cache backend (`[cache] backend = "custom"`)
+
+Previously accepted-but-inert; now real. Register a Lua handler with
+`crap.cache.register({ get, set, delete, clear, has? })` in `init.lua` and
+the populate cache delegates to it — for shared stores the built-in
+backends don't cover. Selecting the backend without a registration fails
+startup. See [crap.cache](../lua-api/cache.md).
+
+### Smaller additions
+
+- `[mcp] http_max_body_bytes` — configurable `POST /mcp` body cap
+  (default 1 MiB, filesize strings accepted).
+- `crap-cms db console` opens `psql` on PostgreSQL (was SQLite-only).
+- `crap-cms jobs healthcheck` exits `0`/`2`/`1` for healthy/warning/
+  unhealthy — CI gates on it now actually fire (it always exited `0`).
+- `crap.globals.<slug>.unpublish()` / `.validate()` accessor sugar.
 
 ### Custom MFA delivery (`mfa = "custom"` + `mfa_deliver`)
 

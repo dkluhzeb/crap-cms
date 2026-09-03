@@ -21,4 +21,19 @@ function M.credential_auth(ctx)
     return nil
 end
 
+--- Strategy with a side-effect write: creates an article, then
+--- authenticates only when x-succeed is set. Used to pin the
+--- transaction contract (commit on success, rollback otherwise).
+function M.writing_auth(ctx)
+    crap.collections.create("articles", {
+        title = "From Strategy",
+        body = "side effect",
+    }, { override_access = true })
+
+    if ctx.headers["x-succeed"] == "yes" then
+        return { id = "strategy-user", email = "s@x.com" }
+    end
+    return nil
+end
+
 return M

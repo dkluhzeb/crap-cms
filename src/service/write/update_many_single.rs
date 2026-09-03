@@ -38,6 +38,8 @@ pub(crate) fn update_many_single_in_conn(
     // Canonicalize incoming data to nested groups up front (idempotent).
     input.data = nest_group_fields(&input.data, &def.fields);
 
+    crate::service::write::update::reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
+
     // The one shared `update` gate (also used by single update and the
     // update-mode dry-run) — Denied + Constrained row enforcement.
     check_update_access(

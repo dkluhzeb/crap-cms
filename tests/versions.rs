@@ -580,7 +580,9 @@ fn restore_version_clears_locale_columns() {
         .unwrap();
     assert_eq!(de_doc.get_str("title"), Some("Deutscher Titel"));
 
-    // Restore v1 — should clear the German translation
+    // Restore v1 — its snapshot predates the translation, so the German
+    // column goes back to NULL (a snapshot that CARRIES the translation
+    // restores it — see restore_version_restores_translations_from_snapshot).
     query::restore_version(
         &conn,
         "articles",

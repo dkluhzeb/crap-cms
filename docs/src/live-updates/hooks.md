@@ -24,7 +24,7 @@ crap.collections.define("posts", {
 })
 ```
 
-The hook function receives `{ collection, operation, data, id, edited_by }`
+The hook function receives `{ collection, operation, data, id, edited_by }` — `operation` distinguishes the lifecycle mutations (`"undelete"`, `"unpublish"`, `"restore"`) from plain `"update"`s —
 (plus `ctx.options` when declared as a `{ ref, options }` table) and returns:
 
 - The context table (possibly with modified `data`) to continue broadcasting

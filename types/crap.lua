@@ -539,7 +539,7 @@ function crap.fields.join(config) end
 --- function returns `true` to broadcast, `false`/`nil` to suppress.
 --- @class crap.LiveFilterContext
 --- @field collection string Collection (or global) slug the mutation targets.
---- @field operation string The mutation operation: `"create"`, `"update"`, or `"delete"`.
+--- @field operation string The mutation operation: `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, or `"restore"`.
 --- @field data table<string, any> The document's field data for this event.
 --- @field id string The affected document's id, exposed to Lua as `ctx.id` (consistent with the other hook contexts; the serialized event payload uses `document_id`).
 --- @field edited_by? { id: string, email: string } The user who caused the mutation (`nil` for anonymous/system changes).
@@ -594,12 +594,12 @@ function crap.fields.join(config) end
 --- header / gRPC metadata. Default surfaces: all.
 --- @class crap.AuthMethodBearer
 --- @field type "bearer"
---- @field surfaces? crap.Surface[] Surfaces this method fires on (default: `{"admin", "grpc"}`).
+--- @field surfaces? crap.Surface[]|"all" Surfaces this method fires on (default: `{"admin", "grpc"}`).
 
 --- Accept the `crap_session` cookie. Default surfaces: admin.
 --- @class crap.AuthMethodSessionCookie
 --- @field type "session_cookie"
---- @field surfaces? crap.Surface[] Surfaces this method fires on (default: `{"admin"}`).
+--- @field surfaces? crap.Surface[]|"all" Surfaces this method fires on (default: `{"admin"}`).
 
 --- Custom Lua-driven authentication. `authenticate` is a
 --- `module.function`-shaped Lua hook ref. The hook receives
@@ -610,7 +610,7 @@ function crap.fields.join(config) end
 --- @field name string Identifier used in logging + error messages. Doesn't have to be unique across collections, but should be.
 --- @field authenticate string | crap.HookRef Lua function ref, e.g. `"hooks.auth.api_key"`. Receives `crap.AuthStrategyContext`; returns user doc or nil. May carry per-config options exposed to the hook as `ctx.options`.
 --- @field activates_on crap.Activation Discriminator for when the strategy fires. See [`Activation`].
---- @field surfaces? crap.Surface[] Surfaces this method fires on (default: `{"admin"}`).
+--- @field surfaces? crap.Surface[]|"all" Surfaces this method fires on (default: `{"admin"}`).
 
 --- One authentication method on a collection. The collection's
 --- `methods` list is ordered: the evaluator tries each in
@@ -1777,7 +1777,7 @@ crap.storage = {}
 --- Register a custom storage backend's handler. **Init-only** — call from
 --- `init.lua` when `[upload] storage = "custom"`. Stores the handler as
 --- `crap._storage`; the custom backend delegates every operation to it.
---- @param handler { put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), url?: fun(key: string): string, exists?: fun(key: string): boolean }  Storage handler. `put`/`get`/`delete` required; `url`/`exists` optional. `get` returns nil for a missing key.
+--- @param handler { put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), exists?: fun(key: string): boolean }  Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key.
 function crap.storage.register(handler) end
 
 

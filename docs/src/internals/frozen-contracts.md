@@ -445,3 +445,29 @@ downstream config that vendored templates.
   fallback only when the value has a literal `"` or a triple-stash `{{{ }}}`, and
   the single-final-newline / one-blank-line-max policy — all load-bearing once
   frozen. An empty input formats to a single newline.
+
+## Pre-alpha.10 design freezes (2026-09-03)
+
+Decided under the "cleanest solution, break now" rule; each is frozen from
+alpha.10 on:
+
+- **Locale-locked writes error.** A non-default-locale write containing a
+  non-localized field is a validation error naming the field — never a
+  silent skip.
+- **`has_many` lives inside `relationship`.** The top-level flag next to a
+  `relationship` table is a load error (legacy `relation_to` keeps its flat
+  flag).
+- **Event vocabulary is six operations.** `create`, `update`, `delete`,
+  `undelete`, `unpublish`, `restore` — on the proto enum, SSE payloads, and
+  the Lua live/broadcast contexts. Lifecycle mutations never masquerade as
+  `update`.
+- **Auth strategies are transactional.** Commit on authenticate, rollback
+  otherwise; failed attempts can never persist writes.
+- **`select` is strict.** Unknown names error; valid = top-level field names
+  + `id`/`created_at`/`updated_at`/`_status`.
+- **`surfaces` is strict and `"all"` is the every-surface sentinel** (future
+  surfaces included). Unknown names error.
+- **No direct/public storage URLs.** Everything serves through `/uploads/…`;
+  a bypass returns only as an explicit signed-URL design.
+- **Search is a prefix filter.** The ranked FTS mode was removed as dead
+  code; ranked search would return as an additive feature.

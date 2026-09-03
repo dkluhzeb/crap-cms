@@ -104,4 +104,4 @@ Collection, global, and field-level access control functions run with CRUD acces
 
 ## Auth Strategies
 
-Custom auth strategy `authenticate` functions run with CRUD access on the request's pooled connection, **without a transaction wrapper**: any write a strategy performs is applied immediately and is **not rolled back** if the strategy — or the rest of the login — subsequently fails. Keep strategy side effects idempotent (e.g. an upsert-style "find or create user"), or avoid writes in strategies entirely.
+Custom auth strategy `authenticate` functions run with CRUD access **inside a transaction that commits only when the strategy authenticates someone**. A strategy that returns `nil` or raises rolls its writes back — failed attempts are unauthenticated, attacker-controlled input, so persisting their side effects would let anyone grow the database from the login endpoint. "Find or create user" flows work unchanged (the create commits with the successful login). For failed-attempt bookkeeping use the built-in rate limiters (counters) and `crap.log` (observability) — both live outside this transaction.

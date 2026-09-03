@@ -176,7 +176,6 @@ mod tests {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::field::*;
     use crate::core::{Registry, richtext::RichtextNodeDef};
-    use crate::db::query::fts::search::fts_search;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::query::fts::sync::test_helpers::*;
     use crate::db::{BoxedConnection, pool};
@@ -194,7 +193,7 @@ mod tests {
         doc.fields.insert("body".into(), json!("Some content"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
-        let results = fts_search(&conn, "posts", "Unique", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Unique", 10).unwrap();
         assert_eq!(results, vec!["new1"]);
     }
 
@@ -210,10 +209,10 @@ mod tests {
         doc.fields.insert("body".into(), json!(""));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
-        let old_results = fts_search(&conn, "posts", "Old", 10).unwrap();
+        let old_results = fts_match_ids(&conn, "posts", "Old", 10).unwrap();
         assert!(old_results.is_empty());
 
-        let new_results = fts_search(&conn, "posts", "New", 10).unwrap();
+        let new_results = fts_match_ids(&conn, "posts", "New", 10).unwrap();
         assert_eq!(new_results, vec!["1"]);
     }
 
@@ -252,10 +251,10 @@ mod tests {
             .insert("title__de".into(), json!("Deutscher Titel"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
-        let en_results = fts_search(&conn, "posts", "English", 10).unwrap();
+        let en_results = fts_match_ids(&conn, "posts", "English", 10).unwrap();
         assert_eq!(en_results, vec!["doc1"]);
 
-        let de_results = fts_search(&conn, "posts", "Deutscher", 10).unwrap();
+        let de_results = fts_match_ids(&conn, "posts", "Deutscher", 10).unwrap();
         assert_eq!(de_results, vec!["doc1"]);
     }
 
@@ -290,10 +289,10 @@ mod tests {
         doc.fields.insert("content".into(), json!(pm_json));
         fts_upsert(&conn, "posts", &doc, Some(&def)).unwrap();
 
-        let results = fts_search(&conn, "posts", "Searchable", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Searchable", 10).unwrap();
         assert_eq!(results, vec!["1"]);
 
-        let results = fts_search(&conn, "posts", "paragraph", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "paragraph", 10).unwrap();
         assert!(results.is_empty());
     }
 
@@ -336,13 +335,13 @@ mod tests {
 
         fts_upsert_with_registry(&conn, "posts", &doc, Some(&def), Some(&registry)).unwrap();
 
-        let results = fts_search(&conn, "posts", "Hello", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Hello", 10).unwrap();
         assert_eq!(results, vec!["rg1"]);
 
-        let results = fts_search(&conn, "posts", "Click", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Click", 10).unwrap();
         assert_eq!(results, vec!["rg1"]);
 
-        let results = fts_search(&conn, "posts", "go", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "go", 10).unwrap();
         assert!(results.is_empty() || !results.contains(&"rg1".to_string()));
     }
 
@@ -366,7 +365,7 @@ mod tests {
 
         fts_upsert_with_registry(&conn, "posts", &doc, None, None).unwrap();
 
-        let results = fts_search(&conn, "posts", "Plain", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "Plain", 10).unwrap();
         assert_eq!(results, vec!["plain1"]);
     }
 
@@ -388,7 +387,7 @@ mod tests {
             .insert("title".into(), json!({"nested": "object"}));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
-        let results = fts_search(&conn, "posts", "nested", 10).unwrap();
+        let results = fts_match_ids(&conn, "posts", "nested", 10).unwrap();
         assert!(results.is_empty());
     }
 }

@@ -41,11 +41,7 @@ use crate::{
 /// surfaces can't drift on the spelling.
 #[must_use]
 pub fn event_op_str(op: &EventOperation) -> &'static str {
-    match op {
-        EventOperation::Create => "create",
-        EventOperation::Update => "update",
-        EventOperation::Delete => "delete",
-    }
+    op.as_str()
 }
 
 /// Borrowed view of a subscriber's resolved access, plus the registry and hook

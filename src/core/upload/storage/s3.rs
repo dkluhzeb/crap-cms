@@ -18,7 +18,6 @@ use super::{SharedStorage, StorageBackend, StorageNotFound};
 pub struct S3Storage {
     bucket: Box<Bucket>,
     prefix: String,
-    public_url_base: String,
 }
 
 impl S3Storage {
@@ -125,22 +124,6 @@ impl StorageBackend for S3Storage {
         }
     }
 
-    fn public_url(&self, key: &str) -> String {
-        let full_key = self.full_key(key);
-
-        if self.public_url_base.is_empty() {
-            // Generate S3 URL
-            format!("{}/{}", self.bucket.url(), full_key)
-        } else {
-            // Use configured CDN/custom URL base
-            format!(
-                "{}/{}",
-                self.public_url_base.trim_end_matches('/'),
-                full_key
-            )
-        }
-    }
-
     fn kind(&self) -> &'static str {
         "s3"
     }
@@ -209,7 +192,6 @@ pub fn create_s3_storage(config: &S3Config) -> Result<SharedStorage> {
     Ok(Arc::new(S3Storage {
         bucket,
         prefix: config.prefix.clone(),
-        public_url_base: config.public_url_base.clone(),
     }))
 }
 
@@ -279,7 +261,6 @@ mod tests {
             secret_key: "secret".into(),
             endpoint: None,
             prefix: String::new(),
-            public_url_base: String::new(),
             path_style: false,
         }
     }
