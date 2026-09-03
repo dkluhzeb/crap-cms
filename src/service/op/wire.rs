@@ -155,7 +155,7 @@ pub static COLLECTION_OPS: &[OpWire] = &[
             f(
                 "order_by",
                 WireKind::Str,
-                "Sort field (prefix with - for descending)",
+                "Sort field (prefix with - for descending). '_rank' (only together with 'search', page/offset pagination) sorts by search relevance, best first.",
             ),
             f("limit", WireKind::Int, "Max results per page"),
             f(

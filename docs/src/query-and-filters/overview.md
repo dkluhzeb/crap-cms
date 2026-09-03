@@ -51,6 +51,8 @@ admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
 
 Prefix a field name with `-` for descending order. When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.
 
+**Relevance order:** `order_by = "_rank"` (only valid together with `search`) sorts by search relevance, best first — FTS5 `bm25()` on SQLite, `ts_rank` on Postgres — with a stable `id` tiebreaker. It requires page/offset pagination (relevance is not cursor-stable) and skips the drafts `_status` prepend described below: when you search ranked, relevance wins. Without an FTS index yet, it degrades to `id` order, matching the search filter's behavior.
+
 On a **drafts-enabled** collection, `_status ASC` is prepended to every sort (on all surfaces) so draft rows group before published ones in mixed reads; when the read is pinned to a single status (a normal published-only read, or `draft = true`) the prepend is a no-op and your sort applies exactly.
 
 **Lua:**

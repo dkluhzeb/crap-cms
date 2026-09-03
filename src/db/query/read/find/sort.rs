@@ -35,6 +35,13 @@ pub(super) fn resolve_sort(
 
     let (sort_col, sort_dir) = resolve_order(query.order_by.as_deref(), def.timestamps);
 
+    // `_rank` is virtual (relevance for the current search term) — validated
+    // by `validate_query_fields` (requires `search`, forbids cursors) and
+    // rendered by the FTS module, so it never resolves to a real column.
+    if sort_col == "_rank" {
+        return Ok((sort_col, SortDirection::Asc, false));
+    }
+
     if !is_valid_sort_column(&sort_col, def) {
         bail!(
             "Invalid sort column '{}' — not a column on '{}'",

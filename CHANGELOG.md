@@ -2734,6 +2734,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Ranked search: `order_by = "_rank"`.** Together with `search`, sorts results by
+  relevance (SQLite FTS5 `bm25()`, Postgres `ts_rank`), best first, flowing through
+  the normal read pipeline — access rules, the status axis, soft-delete filtering,
+  populate and field stripping all apply unchanged. Valid only with a `search` term
+  and page/offset pagination (relevance is not cursor-stable; combining with cursors
+  is an error); the drafts `_status` prepend is skipped in rank mode. Available on
+  every read surface (gRPC, MCP, Lua, admin list URLs).
 - **Generated doc tables (`cargo xtask gen-doc-tables [--check]`).** The reference
   tables that kept drifting are now rendered from their sources of truth and gated
   in CI like the other generators: the slots-guide table (from the `SLOT_DOCS`

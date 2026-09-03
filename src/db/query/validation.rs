@@ -178,8 +178,26 @@ pub fn validate_query_fields(
         validate_clause_fields(clause, &exact_columns, &prefix_roots)?;
     }
 
-    // order_by only supports flat columns (no sub-field sorting)
+    // order_by only supports flat columns (no sub-field sorting).
+    // `_rank` is the one virtual sort: relevance order for the current
+    // `search` term (best first). It is only meaningful with a search and
+    // has no stable column, so cursor pagination cannot encode it.
     if let Some(ref order) = query.order_by {
+        if order == "_rank" {
+            if query.search.as_deref().is_none_or(str::is_empty) {
+                bail!("order_by '_rank' requires a 'search' term — it sorts by search relevance");
+            }
+            if query.after_cursor.is_some() || query.before_cursor.is_some() {
+                bail!(
+                    "order_by '_rank' cannot be combined with cursor pagination — relevance is not cursor-stable; use page/offset pagination"
+                );
+            }
+            return Ok(());
+        }
+        if order == "-_rank" {
+            bail!("order_by '_rank' is always best-first — drop the '-' prefix");
+        }
+
         let col = order.strip_prefix('-').unwrap_or(order);
 
         validate_field_name(col, &exact_columns)?;

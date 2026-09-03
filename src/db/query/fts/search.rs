@@ -97,6 +97,47 @@ pub(crate) fn fts_where_clause(
     Some((clause, sanitized))
 }
 
+/// ORDER BY clause sorting by search relevance, best first, with a stable
+/// `id` tiebreaker. Correlated against the FTS table so it composes with the
+/// normal find pipeline (access constraints, status axis, soft-delete,
+/// pagination) untouched: `SQLite` ranks via `bm25()` (lower = better), and
+/// `Postgres` via `ts_rank` (higher = better, NULLS LAST for safety).
+///
+/// Returns `None` when the FTS table doesn't exist or the term sanitizes to
+/// nothing — callers fall back to a plain stable order, mirroring the
+/// search *filter*'s graceful degradation.
+pub(crate) fn fts_rank_order_by(
+    conn: &dyn DbConnection,
+    slug: &str,
+    search: &str,
+    param_index: usize,
+) -> Option<(String, String)> {
+    let sanitized = sanitize_fts_query(conn, search);
+
+    if sanitized.is_empty() {
+        return None;
+    }
+
+    let fts_table = fts_table_name(slug);
+
+    if !table_exists(conn, &fts_table) {
+        return None;
+    }
+
+    let placeholder = conn.placeholder(param_index);
+
+    let clause = match conn.kind() {
+        "postgres" => format!(
+            " ORDER BY (SELECT ts_rank(f.tsv, to_tsquery('simple', {placeholder})) FROM {fts_table} f WHERE f.id = \"{slug}\".id) DESC NULLS LAST, id ASC"
+        ),
+        _ => format!(
+            " ORDER BY (SELECT bm25({fts_table}) FROM {fts_table} WHERE {fts_table}.id = \"{slug}\".id AND {fts_table} MATCH {placeholder}) ASC, id ASC"
+        ),
+    };
+
+    Some((clause, sanitized))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,7 +28,7 @@ field definitions.
 | Field | Type | Required | Surfaces | Description |
 |-------|------|----------|----------|-------------|
 | `where` | where filter |  | gRPC, MCP, Lua | Filter conditions. Keys are field names, values are filter objects (e.g. {"equals": "value"}, {"contains": "text"}, {"greater_than": 5}) |
-| `order_by` | string |  | gRPC, MCP, Lua | Sort field (prefix with - for descending) |
+| `order_by` | string |  | gRPC, MCP, Lua | Sort field (prefix with - for descending). '_rank' (only together with 'search', page/offset pagination) sorts by search relevance, best first. |
 | `limit` | integer |  | gRPC, MCP, Lua | Max results per page |
 | `page` | integer |  | gRPC, MCP, Lua | Page number (1-indexed, page mode only) |
 | `offset` | integer |  | Lua | Number of results to skip |

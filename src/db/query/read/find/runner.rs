@@ -78,7 +78,11 @@ pub fn find(
             &mut params,
         )?;
     }
-    apply_order_by(&sort_col, sort_dir, using_before, def, locale_ctx, &mut sql)?;
+    if sort_col == "_rank" {
+        apply_rank_order_by(conn, slug, query, &mut sql, &mut params);
+    } else {
+        apply_order_by(&sort_col, sort_dir, using_before, def, locale_ctx, &mut sql)?;
+    }
     apply_limit_offset(conn, query, &mut sql, &mut params);
 
     let rows = conn
@@ -163,6 +167,31 @@ fn build_select(
     let (select_exprs, _) = apply_select_filter(select_exprs, result_names, query.select.as_ref());
 
     Ok(select_exprs)
+}
+
+/// Sort by search relevance (`order_by = "_rank"`, best first). Falls back
+/// to plain `id` order when the FTS clause is unavailable (no index yet /
+/// term sanitizes to nothing) — matching the search *filter*'s graceful
+/// degradation. Note the drafts `_status ASC` prepend is intentionally
+/// skipped in rank mode: the caller asked for relevance, relevance wins.
+fn apply_rank_order_by(
+    conn: &dyn DbConnection,
+    slug: &str,
+    query: &FindQuery,
+    sql: &mut String,
+    params: &mut Vec<DbValue>,
+) {
+    let clause = query
+        .search
+        .as_deref()
+        .and_then(|term| fts::fts_rank_order_by(conn, slug, term, params.len() + 1));
+
+    if let Some((order_clause, sanitized)) = clause {
+        sql.push_str(&order_clause);
+        params.push(DbValue::Text(sanitized));
+    } else {
+        sql.push_str(" ORDER BY id ASC");
+    }
 }
 
 /// Apply FTS search filter if present.
