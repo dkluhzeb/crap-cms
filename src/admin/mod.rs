@@ -58,6 +58,7 @@ pub mod custom_pages;
 pub mod custom_routes;
 pub mod handlers;
 mod mcp_handler;
+pub mod mcp_sessions;
 pub mod server;
 pub(crate) mod server_builder;
 mod state;

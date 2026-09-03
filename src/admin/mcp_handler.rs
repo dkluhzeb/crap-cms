@@ -1,4 +1,6 @@
-//! MCP HTTP transport handler — JSON-RPC 2.0 over POST /mcp.
+//! MCP HTTP transport handler — JSON-RPC 2.0 over POST /mcp, with
+//! `Mcp-Session-Id` session tracking (per-session client identity for
+//! audit logs) and DELETE-based session termination.
 
 use std::net::SocketAddr;
 
@@ -95,29 +97,57 @@ async fn parse_rpc_body(
     })
 }
 
+/// The MCP spec's session header: returned on `initialize`, echoed by the
+/// client on every later request. Lowercase (HTTP header names are
+/// case-insensitive; axum normalizes to lowercase).
+const SESSION_HEADER: &str = "mcp-session-id";
+
+/// Shared auth guard for both /mcp methods: empty-key defense-in-depth plus
+/// the constant-time API-key check.
+fn check_mcp_auth(
+    state: &AdminState,
+    request: &Request<Body>,
+    peer_addr: SocketAddr,
+) -> Result<(), Box<Response>> {
+    // Defense-in-depth: reject all requests when no API key is configured.
+    // Config validation already rejects this at startup, but a belt-and-braces
+    // guard prevents accidental activation in tests or after a config reload.
+    if state.config.mcp.api_key.is_empty() {
+        return Err(Box::new(
+            Json(JsonRpcResponse::error(
+                None,
+                INVALID_REQUEST,
+                "MCP HTTP endpoint requires an API key — set mcp.api_key in crap.toml",
+            ))
+            .into_response(),
+        ));
+    }
+
+    validate_api_key(request, &state.config.mcp.api_key, Some(peer_addr))
+}
+
 /// MCP HTTP transport handler — receives JSON-RPC 2.0 over POST /mcp.
-/// Validates API key from Authorization header.
+/// Validates API key from Authorization header. `initialize` opens a
+/// tracked session (the response carries `Mcp-Session-Id`); later requests
+/// echoing the header get their audit identity resolved from it. A
+/// missing/unknown/expired session id is never an error — the audit label
+/// falls back to `(http)`.
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn mcp_http_handler(
     State(state): State<AdminState>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> Response {
-    // Defense-in-depth: reject all requests when no API key is configured.
-    // Config validation already rejects this at startup, but a belt-and-braces
-    // guard prevents accidental activation in tests or after a config reload.
-    if state.config.mcp.api_key.is_empty() {
-        return Json(JsonRpcResponse::error(
-            None,
-            INVALID_REQUEST,
-            "MCP HTTP endpoint requires an API key — set mcp.api_key in crap.toml",
-        ))
-        .into_response();
-    }
-
-    if let Err(resp) = validate_api_key(&request, &state.config.mcp.api_key, Some(peer_addr)) {
+    if let Err(resp) = check_mcp_auth(&state, &request, peer_addr) {
         return *resp;
     }
+
+    // Capture the session id before the body parse consumes the request.
+    let session_id = request
+        .headers()
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
 
     let rpc_request = match parse_rpc_body(request, state.config.mcp.http_max_body_bytes).await {
         Ok(r) => r,
@@ -129,19 +159,78 @@ pub(super) async fn mcp_http_handler(
     // still echo it.
     let is_notification = rpc_request.id.is_none();
     let request_id = rpc_request.id.clone();
+    let is_initialize = rpc_request.method == "initialize";
 
     let server = state.mcp_server();
 
-    let response = match task::spawn_blocking(move || server.handle_message(rpc_request)).await {
-        Ok(resp) => resp,
-        Err(_) => JsonRpcResponse::error(request_id, INTERNAL_ERROR, "Internal error"),
+    // Tracked session: pre-populate the fresh per-request server with the
+    // session's client name so audit lines read `[client=Claude Code]`
+    // instead of `[client=(http)]` — parity with the stdio transport.
+    if !is_initialize
+        && let Some(id) = session_id.as_deref()
+        && let Some(name) = state.mcp_sessions.lookup_touch(id)
+    {
+        let _ = server.client_name.set(name);
+    }
+
+    let Ok((server, response)) = task::spawn_blocking(move || {
+        let response = server.handle_message(rpc_request);
+        (server, response)
+    })
+    .await
+    else {
+        return Json(JsonRpcResponse::error(
+            request_id,
+            INTERNAL_ERROR,
+            "Internal error",
+        ))
+        .into_response();
     };
 
     if is_notification {
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    Json(response).into_response()
+    let mut http_response = Json(response).into_response();
+
+    // A successful `initialize` announced a client name — open the tracked
+    // session and hand its id back per spec.
+    if is_initialize
+        && let Some(name) = server.client_name.get()
+        && let Ok(value) = state.mcp_sessions.insert(name).parse()
+    {
+        http_response.headers_mut().insert(SESSION_HEADER, value);
+    }
+
+    http_response
+}
+
+/// DELETE /mcp — explicit session termination (MCP spec). Requires the API
+/// key like every transport request; 204 when the session existed, 404
+/// otherwise, 400 without the header.
+#[cfg(not(tarpaulin_include))]
+pub(super) async fn mcp_delete_session_handler(
+    State(state): State<AdminState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    request: Request<Body>,
+) -> Response {
+    if let Err(resp) = check_mcp_auth(&state, &request, peer_addr) {
+        return *resp;
+    }
+
+    let Some(session_id) = request
+        .headers()
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    if state.mcp_sessions.remove(session_id) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
 }
 
 #[cfg(test)]

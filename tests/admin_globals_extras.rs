@@ -158,6 +158,7 @@ fn setup_app_with_config(
     );
 
     let state = AdminState {
+        mcp_sessions: Arc::default(),
         infra,
         config,
         config_dir: tmp.path().to_path_buf(),

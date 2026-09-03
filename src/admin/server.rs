@@ -158,6 +158,7 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
 
     Ok(AdminState {
+        mcp_sessions: Arc::default(),
         infra,
         config,
         config_dir: config_dir.clone(),
@@ -445,7 +446,9 @@ fn assemble_base_router(
     upload_api: Router<AdminState>,
 ) -> Router<AdminState> {
     let mcp_route = if state.config.mcp.enabled && state.config.mcp.http {
-        Some(post(mcp_http_handler))
+        // POST carries JSON-RPC; DELETE terminates an `Mcp-Session-Id`
+        // session (MCP spec's explicit session-termination request).
+        Some(post(mcp_http_handler).delete(mcp_delete_session_handler))
     } else {
         None
     };
@@ -868,7 +871,7 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
 }
 
 // MCP HTTP handler is in `mcp_handler.rs`.
-use super::mcp_handler::mcp_http_handler;
+use super::mcp_handler::{mcp_delete_session_handler, mcp_http_handler};
 
 #[cfg(test)]
 mod tests {

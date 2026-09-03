@@ -66,6 +66,9 @@ pub struct AdminState {
     pub password_provider: SharedPasswordProvider,
     /// Per-subscriber SSE send timeout in milliseconds.
     pub subscriber_send_timeout_ms: u64,
+    /// MCP HTTP session store (`Mcp-Session-Id` → client name) so audit
+    /// logs carry per-session client identity like the stdio transport.
+    pub mcp_sessions: Arc<crate::admin::mcp_sessions::McpSessions>,
     /// Discovered filesystem-routed custom pages
     /// (`<config_dir>/templates/pages/<slug>.hbs`). Populated once at
     /// startup; the route handler validates incoming slugs against this,
@@ -93,12 +96,10 @@ impl AdminState {
             infra: Arc::clone(&self.infra),
             config: self.config.clone(),
             config_dir: self.config_dir.clone(),
-            // HTTP transport: every request gets a fresh `McpServer`,
-            // so `client_name` never gets populated by `initialize`
-            // (the request that initialized is a different instance).
-            // Audit logs fall back to `transport_label = "http"`.
-            // Per-session identity propagation needs `Mcp-Session-Id`
-            // tracking — tracked separately.
+            // HTTP transport: every request gets a fresh `McpServer`.
+            // The `Mcp-Session-Id` layer (`mcp_handler`) pre-populates
+            // `client_name` from the session store for tracked sessions;
+            // untracked requests fall back to `transport_label = "(http)"`.
             client_name: OnceLock::new(),
             transport_label: "(http)",
         }

@@ -2742,6 +2742,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **MCP HTTP session tracking (`Mcp-Session-Id`).** The HTTP transport now
+  implements the MCP spec's session header: `initialize` opens a tracked
+  session (the response carries `Mcp-Session-Id`), requests echoing the
+  header get their per-call audit lines attributed to the announced client
+  (`[client=Claude Code]` instead of `[client=(http)]` — parity with the
+  stdio transport), and `DELETE /mcp` with the header terminates the
+  session. Tracking is identity-for-audit only: the API key still
+  authenticates every request, and a missing, unknown, or expired session id
+  is never an error. Sessions expire after 30 idle minutes and are capped at
+  1024 (oldest evicted).
+
 - **TOTP MFA: `mfa = "totp"` on the `password_login` method.** Authenticator-app
   second factor (RFC 6238: SHA-1, 30-second steps, 6 digits, ±1 step of clock
   tolerance) with no code delivery. Enrollment is challenge-driven: the first

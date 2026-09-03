@@ -95,6 +95,23 @@ payloads — bulk creates, or `write_config_file` with big assets. A JSON-RPC
 HTTP `204 No Content`, per the JSON-RPC convention of not responding to
 notifications.
 
+#### Sessions (`Mcp-Session-Id`)
+
+The HTTP transport tracks sessions per the MCP spec so audit logs carry
+the real client identity (parity with stdio). `initialize` opens a
+session — the response carries an `Mcp-Session-Id` header. Echo it on
+every subsequent request and per-call audit lines read
+`[client=<your client name>]` instead of the `[client=(http)]` fallback.
+
+- Tracking is **identity-for-audit only**: the API key still
+  authenticates every request, and a missing, unknown, or expired
+  session id is never an error — the audit label just falls back.
+- Sessions expire after 30 idle minutes; at most 1024 are tracked
+  (oldest evicted).
+- `DELETE /mcp` with the `Mcp-Session-Id` header terminates the session
+  explicitly (`204`; `404` if unknown, `400` without the header). The
+  API key is required here too.
+
 ## Auto-Generated Tools
 
 ### Content CRUD (per collection)
