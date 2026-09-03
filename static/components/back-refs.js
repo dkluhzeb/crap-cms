@@ -7,6 +7,7 @@
  * Shadow DOM, then hides the trigger.
  *
  * @module back-refs
+ * @category enhancer
  * @stability stable
  *
  * @example

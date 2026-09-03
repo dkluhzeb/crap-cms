@@ -6,6 +6,7 @@
  * across navigation is handled by `<crap-scroll-restore>`.
  *
  * @module tabs
+ * @category enhancer
  * @stability stable
  */
 

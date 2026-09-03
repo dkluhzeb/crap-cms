@@ -11,6 +11,7 @@
  * `base.hbs`, not by this component.
  *
  * @module sticky-header
+ * @category enhancer
  * @stability stable
  */
 

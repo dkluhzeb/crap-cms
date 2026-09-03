@@ -30,6 +30,7 @@
  *   list.dataset.items = JSON.stringify(newItems);
  *
  * @module pill-list
+ * @category enhancer
  * @stability stable
  */
 

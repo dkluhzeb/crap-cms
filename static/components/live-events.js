@@ -9,6 +9,7 @@
  * Auto-reconnects on connection loss.
  *
  * @module live-events
+ * @category enhancer
  * @stability stable
  */
 

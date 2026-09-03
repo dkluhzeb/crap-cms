@@ -22,6 +22,7 @@
  * </crap-focal-point>
  *
  * @module focal-point
+ * @category form-field
  * @stability stable
  */
 

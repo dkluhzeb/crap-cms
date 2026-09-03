@@ -10,6 +10,7 @@
  *                 because Safari refuses to parse the space form).
  *
  * @module time-format
+ * @category enhancer
  * @stability stable
  */
 

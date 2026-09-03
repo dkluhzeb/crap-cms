@@ -13,6 +13,7 @@
  *    a row. The slotted select + button are hidden via host-attribute CSS.
  *
  * @module block-picker
+ * @category form-field
  * @stability stable
  */
 

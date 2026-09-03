@@ -25,6 +25,7 @@
  * incremental customization.
  *
  * @module list-settings/column-picker
+ * @category enhancer
  * @stability stable
  */
 

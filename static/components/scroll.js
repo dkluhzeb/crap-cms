@@ -7,6 +7,7 @@
  * HTMX swap).
  *
  * @module scroll
+ * @category enhancer
  * @stability stable
  */
 

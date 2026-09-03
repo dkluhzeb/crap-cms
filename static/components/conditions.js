@@ -14,6 +14,7 @@
  *    field name.
  *
  * @module conditions
+ * @category form-field
  * @stability stable
  */
 

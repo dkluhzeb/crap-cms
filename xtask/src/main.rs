@@ -36,6 +36,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod drift;
+mod gen_doc_tables;
 mod gen_lua_types;
 mod gen_proto;
 mod gen_template_doc;
@@ -58,6 +59,15 @@ enum Cmd {
     /// diff) when the on-disk file diverges from what would be generated.
     GenLuaTypes {
         /// Verify the on-disk file matches; do not write. Use in CI.
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Regenerate the generated doc tables (slots guide region,
+    /// css-variables reference, …). With `--check`, exits non-zero when
+    /// any target diverges from its Rust/CSS source of truth.
+    GenDocTables {
+        /// Verify the on-disk docs match; do not write. Use in CI.
         #[arg(long)]
         check: bool,
     },
@@ -96,6 +106,7 @@ fn main() -> ExitCode {
         Cmd::GenTemplateDoc { check } => gen_template_doc::run(check),
         Cmd::GenProto { check } => gen_proto::run(check),
         Cmd::GenWireDoc { check } => gen_wire_doc::run(check),
+        Cmd::GenDocTables { check } => gen_doc_tables::run(check),
     };
 
     match result {

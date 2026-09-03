@@ -12,6 +12,7 @@
  *  - **Log out** — navigate to `LOGOUT_URL`.
  *
  * @module session-guard
+ * @category singleton
  * @stability stable
  */
 

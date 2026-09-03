@@ -22,6 +22,7 @@
  * X-Crap-Toast: {"message": "Saved", "type": "success"}
  *
  * @module toast
+ * @category singleton
  * @stability stable
  */
 

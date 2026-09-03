@@ -32,6 +32,7 @@
  * </crap-richtext>
  *
  * @module richtext
+ * @category form-field
  * @stability stable
  */
 

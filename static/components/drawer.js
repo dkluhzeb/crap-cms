@@ -16,6 +16,7 @@
  * // ... user closes, or call `drawer.close()`.
  *
  * @module drawer
+ * @category singleton
  * @stability stable
  */
 

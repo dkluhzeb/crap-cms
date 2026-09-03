@@ -98,6 +98,21 @@ jobs:
         # and committed.
         run: cargo xtask gen-template-doc --check
 
+      - name: Proto CRUD messages in sync (cargo xtask gen-proto --check)
+        # `proto/content.proto`'s CRUD request messages are generated from
+        # the wire model. CLAUDE.md documents this as a CI gate; the step
+        # was missing until the Tier-2 doc-generation wave.
+        run: cargo xtask gen-proto --check
+
+      - name: Wire reference doc in sync (cargo xtask gen-wire-doc --check)
+        run: cargo xtask gen-wire-doc --check
+
+      - name: Generated doc tables in sync (cargo xtask gen-doc-tables --check)
+        # Slots guide table, css-variables reference, MCP reserved-args
+        # table, and the component reference tables — all rendered from
+        # their Rust/CSS/JS sources of truth.
+        run: cargo xtask gen-doc-tables --check
+
       - name: Security audit (cargo audit)
         run: |
           # Pin to exact version — caret ranges let crates.io serve

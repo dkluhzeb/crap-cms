@@ -8,6 +8,7 @@
  * by `<crap-scroll-restore>`.
  *
  * @module groups
+ * @category enhancer
  * @stability internal
  */
 

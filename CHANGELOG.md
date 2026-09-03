@@ -2734,6 +2734,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Generated doc tables (`cargo xtask gen-doc-tables [--check]`).** The reference
+  tables that kept drifting are now rendered from their sources of truth and gated
+  in CI like the other generators: the slots-guide table (from the `SLOT_DOCS`
+  registry, which also drives the stable-API test), the full `css-variables.md`
+  (from `static/styles/tokens.css` itself), the MCP reserved-arguments table (tools
+  column derived from the wire model), and the three component reference tables
+  (from `@category`/`@stability` header annotations next to each
+  `customElements.define`). Hand-editing a generated region now fails the check.
 - **`[cache] backend = "custom"` is now functional.** Register a Lua cache handler
   with `crap.cache.register({ get, set, delete, clear, has? })` in `init.lua` and the
   populate cache delegates every operation to it — for shared stores the built-in

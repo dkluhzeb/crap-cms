@@ -23,6 +23,7 @@
  * </crap-tags>
  *
  * @module tags
+ * @category form-field
  * @stability stable
  */
 

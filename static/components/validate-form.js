@@ -22,6 +22,7 @@
  * </crap-validate-form>
  *
  * @module validate-form
+ * @category form-field
  * @stability stable
  */
 

@@ -12,6 +12,7 @@
  *    picked option carries the metadata directly.
  *
  * @module uploads
+ * @category form-field
  * @stability stable
  */
 

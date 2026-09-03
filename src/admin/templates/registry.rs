@@ -848,24 +848,14 @@ mod tests {
     /// this pins every documented slot to its declaring template.
     #[test]
     fn documented_builtin_slots_exist_in_templates() {
-        let expected: &[(&str, &str)] = &[
-            ("layout/base.hbs", "head_extras"),
-            ("layout/base.hbs", "body_end_scripts"),
-            ("layout/header.hbs", "page_header_actions"),
-            ("layout/sidebar.hbs", "sidebar_bottom"),
-            ("dashboard/index.hbs", "dashboard_widgets"),
-            ("collections/edit_form.hbs", "collection_edit_toolbar"),
-            ("collections/edit_sidebar.hbs", "collection_edit_sidebar"),
-            ("collections/items.hbs", "list_toolbar_actions"),
-            ("collections/items.hbs", "list_footer"),
-            ("globals/edit.hbs", "global_edit_toolbar"),
-            ("globals/edit_sidebar.hbs", "global_edit_sidebar"),
-            ("auth/login.hbs", "login_extras"),
-            ("partials/breadcrumb.hbs", "breadcrumb_extras"),
-            ("partials/field.hbs", "field_help"),
-        ];
+        // Single source: the same `SLOT_DOCS` table renders the slots-guide
+        // documentation, so the docs and this pin can never disagree.
+        let expected: Vec<(&str, &str)> = crate::admin::templates::slot_docs::SLOT_DOCS
+            .iter()
+            .map(|s| (s.file, s.slot))
+            .collect();
 
-        for (file, slot) in expected {
+        for (file, slot) in &expected {
             let contents = TEMPLATES_DIR
                 .get_file(file)
                 .unwrap_or_else(|| panic!("template `{file}` missing"))

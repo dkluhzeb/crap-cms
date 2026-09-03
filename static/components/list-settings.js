@@ -21,6 +21,7 @@
  * HTMX-aware navigation for filter application.
  *
  * @module list-settings
+ * @category enhancer
  * @stability experimental
  */
 

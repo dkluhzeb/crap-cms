@@ -5,6 +5,7 @@
  * index rewriting, live row label watchers, empty state, and max_rows.
  *
  * @module array-fields
+ * @category form-field
  * @stability experimental
  */
 

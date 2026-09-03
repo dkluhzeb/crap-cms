@@ -24,6 +24,7 @@
  * </crap-array-row>
  *
  * @module array-row
+ * @category form-field
  * @stability stable
  */
 

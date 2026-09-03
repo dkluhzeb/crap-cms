@@ -25,6 +25,7 @@
  * etc.).
  *
  * @module list-settings/filter-builder
+ * @category enhancer
  * @stability stable
  */
 

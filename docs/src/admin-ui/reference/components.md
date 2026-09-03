@@ -56,14 +56,16 @@ over the canonical event-discovery + module APIs documented above.
 
 ## Singleton reference
 
-| Tag                       | Role                       | Discovery event                    | Module                                    |
-| ------------------------- | -------------------------- | ---------------------------------- | ----------------------------------------- |
-| `<crap-toast>`            | Toast notifications        | `crap:toast-request`               | `static/components/toast.js`              |
-| `<crap-drawer>`           | Right-side slide-in panel  | `crap:drawer-request`              | `static/components/drawer.js`             |
-| `<crap-confirm-dialog>`   | Promise-based confirm      | `crap:confirm-dialog-request`      | `static/components/confirm-dialog.js`     |
-| `<crap-delete-dialog>`    | Delete-document confirm    | `crap:delete-dialog-request`       | `static/components/delete-dialog.js`      |
-| `<crap-create-panel>`     | Inline create-from-relation | `crap:create-panel-request`       | `static/components/create-panel.js`       |
-| `<crap-session-dialog>`   | Idle-session warn / stay   | (mounted directly by `layout/base.hbs`) | `static/components/session-guard.js`     |
+<!-- GENERATED:components-singleton BEGIN -->
+| Tag | Event | Stability | Summary | Source |
+|---|---|---|---|---|
+| `<crap-confirm-dialog>` | `crap:confirm-dialog-request` | stable | Standalone confirmation dialog for HTMX actions | `static/components/confirm-dialog.js` |
+| `<crap-create-panel>` | `crap:create-panel-request` | stable | Inline Create Panel | `static/components/create-panel.js` |
+| `<crap-delete-dialog>` | `crap:delete-dialog-request` | stable | Singleton delete confirmation dialog | `static/components/delete-dialog.js` |
+| `<crap-drawer>` | `crap:drawer-request` | stable | Slide-in drawer panel | `static/components/drawer.js` |
+| `<crap-session-dialog>` | — | stable | Session expiry warning | `static/components/session-guard.js` |
+| `<crap-toast>` | `crap:toast-request` | stable | Toast notifications | `static/components/toast.js` |
+<!-- GENERATED:components-singleton END -->
 
 ### `<crap-toast>` — `toast({ message, type?, duration? })`
 
@@ -113,21 +115,24 @@ These wrap form-bound inputs. Their tags **must remain in light DOM**
 Some also dispatch a bubbling `crap:change` event on edit so
 `<crap-dirty-form>` can react (see the contract below).
 
-| Tag                          | Wraps                       | Notes                                                  |
-| ---------------------------- | --------------------------- | ------------------------------------------------------ |
-| `<crap-tags>`                | hidden `<input>`            | comma/Enter-separated tag input; emits `crap:change`   |
-| `<crap-code>`                | hidden `<textarea>`         | CodeMirror 6 editor with theme-aware syntax highlight   |
-| `<crap-richtext>`            | hidden `<textarea>`         | ProseMirror editor; HTML or JSON output                 |
-| `<crap-password-toggle>`     | slotted `<input type=password>` | Shadow DOM; renders own toggle button + icon       |
-| `<crap-focal-point>`         | slotted `<img>` + hidden inputs | Drag-to-set focal-point coordinates for image fields |
-| `<crap-relationship-search>` | hidden `<input>`            | Search-and-pick references (single or has-many)         |
-| `<crap-upload-preview>`      | hidden `<input>` + slot     | Drag-and-drop upload + preview                          |
-| `<crap-block-picker>`        | hidden `<select>`           | Used inside blocks-field add-row UI                     |
-| `<crap-array-field>`         | wraps an array-row container | Coordinates drag-reorder, add/remove, validation badge |
-| `<crap-array-row>`           | wraps one row inside `<crap-array-field>` | Row boundary: mirrors the configured `label_field` / row-label sub-field into the row header; the stable hook point for per-row behaviour |
-| `<crap-validate-form>`       | wraps a `<form>`            | Live server-side validation via `validate-url` attr     |
-| `<crap-dirty-form>`          | wraps a `<form>`            | Warns on navigation away with unsaved edits             |
-| `<crap-conditions>`          | wraps a `<form>`            | Show/hide fields based on `data-condition` JSON         |
+<!-- GENERATED:components-form-field BEGIN -->
+| Tag | Stability | Summary | Source |
+|---|---|---|---|
+| `<crap-array-field>` | experimental | Array and blocks field repeater | `static/components/array-fields.js` |
+| `<crap-array-row>` | stable | Array/blocks row wrapper | `static/components/array-row.js` |
+| `<crap-block-picker>` | stable | Block picker | `static/components/block-picker.js` |
+| `<crap-code>` | stable | CodeMirror 6-based code editor | `static/components/code.js` |
+| `<crap-conditions>` | stable | Display conditions | `static/components/conditions.js` |
+| `<crap-confirm>` | stable | Confirmation guard around destructive form actions | `static/components/confirm.js` |
+| `<crap-dirty-form>` | stable | Dirty Form Guard | `static/components/dirty-form.js` |
+| `<crap-focal-point>` | stable | Focal point picker | `static/components/focal-point.js` |
+| `<crap-password-toggle>` | stable | Password visibility toggle | `static/components/password-toggle.js` |
+| `<crap-relationship-search>` | experimental | Relationship / upload field | `static/components/relationship-search.js` |
+| `<crap-richtext>` | stable | ProseMirror-based WYSIWYG editor | `static/components/richtext.js` |
+| `<crap-tags>` | stable | Tag input | `static/components/tags.js` |
+| `<crap-upload-preview>` | stable | Upload-field preview | `static/components/uploads.js` |
+| `<crap-validate-form>` | stable | Pre-submit validation for upload forms | `static/components/validate-form.js` |
+<!-- GENERATED:components-form-field END -->
 
 ### `crap:change` event contract
 
@@ -146,20 +151,25 @@ relays it internally).
 
 Tag-only enhancements that auto-init on connect; no public API.
 
-| Tag                          | Role                                                       |
-| ---------------------------- | ---------------------------------------------------------- |
-| `<crap-sticky-header>`       | Sticky page-title bar with shadow on scroll                |
-| `<crap-list-settings>`       | Column picker + filter builder for list pages              |
-| `<crap-pill-list>`           | Chip cluster from a `data-items` JSON array; fires `crap:pill-removed` (`{ id }`). Self-styled, reusable in any has-many UI |
-| `<crap-column-picker>`       | Column checkbox list for list pages (`data-collection`, `data-options`); fires `crap:column-picker-saved`. Mounted by `<crap-list-settings>` |
-| `<crap-filter-builder>`      | Row-per-condition filter UI (`data-collection`, `data-fields`); fires `crap:filter-builder-applied`; exports `OPS_BY_TYPE` for subclassing. Mounted by `<crap-list-settings>` |
-| `<crap-back-refs>`           | Lazy-loaded incoming-references panel                      |
-| `<crap-collapsible>`         | Collapsible group/fieldset (uses `<details>` semantics)    |
-| `<crap-tabs>`                | Tab switcher inside group fields                           |
-| `<crap-sidebar>`             | Mobile sidebar toggle                                      |
-| `<crap-scroll-restore>`      | Preserves scroll position across HTMX swaps                |
-| `<crap-live-events>`         | SSE subscription for live document updates                 |
-| `<crap-time>`                | Locale-aware datetime formatter                            |
+<!-- GENERATED:components-enhancer BEGIN -->
+| Tag | Stability | Summary | Source |
+|---|---|---|---|
+| `<crap-back-refs>` | stable | Back-references lazy loader | `static/components/back-refs.js` |
+| `<crap-collapsible>` | internal | Collapsible group/section | `static/components/_internal/groups.js` |
+| `<crap-column-picker>` | stable | Column picker | `static/components/list-settings/column-picker.js` |
+| `<crap-filter-builder>` | stable | Filter builder | `static/components/list-settings/filter-builder.js` |
+| `<crap-list-settings>` | experimental | List settings | `static/components/list-settings.js` |
+| `<crap-live-events>` | stable | Live event stream | `static/components/live-events.js` |
+| `<crap-locale-picker>` | stable | Editor locale picker | `static/components/locale-picker.js` |
+| `<crap-pill-list>` | stable | Pill / chip list | `static/components/pill-list.js` |
+| `<crap-scroll-restore>` | stable | Form UI state preservation | `static/components/scroll.js` |
+| `<crap-sidebar>` | stable | Mobile sidebar toggle | `static/components/sidebar-toggle.js` |
+| `<crap-sticky-header>` | stable | Sticky page header | `static/components/sticky-header.js` |
+| `<crap-tabs>` | stable | Tab field switching | `static/components/tabs.js` |
+| `<crap-theme-picker>` | stable | Theme switcher | `static/components/theme.js` |
+| `<crap-time>` | stable | Locale-aware date display | `static/components/time-format.js` |
+| `<crap-ui-locale-picker>` | stable | Admin UI locale picker | `static/components/ui-locale-picker.js` |
+<!-- GENERATED:components-enhancer END -->
 
 ### Three pickers via `CrapPickerBase`
 

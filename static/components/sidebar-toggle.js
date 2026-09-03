@@ -7,6 +7,7 @@
  * dismisses the menu).
  *
  * @module sidebar-toggle
+ * @category enhancer
  * @stability stable
  */
 

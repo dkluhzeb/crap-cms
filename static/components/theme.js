@@ -15,6 +15,7 @@
  * the storage key changes here, change it there too.
  *
  * @module theme
+ * @category enhancer
  * @stability stable
  */
 

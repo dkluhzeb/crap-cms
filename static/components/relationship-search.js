@@ -19,6 +19,7 @@
  * @attr data-error   Boolean attribute for error styling.
  *
  * @module relationship-search
+ * @category form-field
  * @stability experimental
  */
 

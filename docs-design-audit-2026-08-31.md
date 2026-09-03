@@ -766,10 +766,18 @@ like `Me` does); bulk conn-path cache clears (#4); admin-gate Constrained
 handling decision (#3); reject `[cache] backend="custom"` (#5). Each is
 hours, not days, and each has its regression-test shape implied by the finding.
 
-**Tier 2 — the doc-generation wave** (kills recurrence, not just instances):
-mdbook options tables from the wire model (the planned fourth consumer —
-S2/M3/M5/C9 of the API section all die), slots table, component-tag table,
-CSS-token table, config-reference key tables from the serde structs.
+**Tier 2 — the doc-generation wave** — ✔ IMPLEMENTED 2026-09-04 (user chose
+pre-tag): `cargo xtask gen-doc-tables [--check]` + `src/docgen/{region,
+css_tokens,mcp_reserved,components}.rs`. Live targets: slots-guide table (from
+`SLOT_DOCS`, which now also drives the stable-API pin), whole-file
+css-variables.md (from tokens.css itself), MCP reserved-args table (tools
+column derived from the wire model — immediately exposed the hand table missing
+locale/draft on reads and events on delete/undelete/unpublish), and the three
+component tables (from `@category`/`@stability` header annotations beside every
+`customElements.define`, 35 files annotated). CI additionally gained the
+missing gen-proto/gen-wire-doc gates (CLAUDE.md claimed them; ci.yml lacked
+them) plus gen-doc-tables. STAGED (not built): config-reference key tables from
+the serde structs — needs a derive; assess post-tag.
 
 **Tier 3 — high-traffic doc fixes by hand** (the quickstart, the depth page,
 the locale page, transaction-access.md, the misplaced [auth] keys,

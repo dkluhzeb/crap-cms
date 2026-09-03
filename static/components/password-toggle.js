@@ -14,6 +14,7 @@
  * `::slotted(input)` so the toggle button doesn't overlap the text.
  *
  * @module password-toggle
+ * @category form-field
  * @stability stable
  */
 

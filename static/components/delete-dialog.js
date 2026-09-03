@@ -19,6 +19,7 @@
  * });
  *
  * @module delete-dialog
+ * @category singleton
  * @stability stable
  */
 

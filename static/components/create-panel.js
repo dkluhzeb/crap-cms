@@ -15,6 +15,7 @@
  *   });
  *
  * @module create-panel
+ * @category singleton
  * @stability stable
  */
 

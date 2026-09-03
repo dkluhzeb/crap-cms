@@ -18,6 +18,7 @@
  * </crap-confirm>
  *
  * @module confirm
+ * @category form-field
  * @stability stable
  */
 

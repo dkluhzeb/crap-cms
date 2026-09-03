@@ -10,6 +10,7 @@
  *   - `[data-ui-locale-dropdown]` — container of `[data-ui-locale-value="…"]` items
  *
  * @module ui-locale-picker
+ * @category enhancer
  * @stability stable
  */
 

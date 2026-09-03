@@ -22,11 +22,4 @@ pub mod scheduler;
 pub mod service;
 pub mod typegen;
 
-/// Generators that produce documentation artefacts from typed Rust
-/// source. Sibling namespace to [`typegen`] for items that aren't
-/// type definitions per se — e.g. the admin-template-context reference.
-/// Consumed by `cargo xtask gen-*` subcommands.
-pub mod docgen {
-    pub use crate::admin::context::page::schema_doc::generate_template_context_md;
-    pub use crate::service::op::wire_doc::generate_wire_reference_md;
-}
+pub mod docgen;

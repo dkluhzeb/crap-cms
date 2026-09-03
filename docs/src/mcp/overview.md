@@ -144,17 +144,20 @@ instead of quietly writing nothing. `update_many` additionally **rejects a
 per-item `password` on auth collections, validated against the password policy and
 hashed per document — parity with the single `create_*` tool.
 
-Alongside field values, the write tools accept a few **reserved top-level
+Alongside field values, the CRUD tools accept a few **reserved top-level
 arguments** (excluded from the document's field data, like `id` and
-`password`):
+`password`). The tools column below is generated from the wire model, so it
+covers reads as well as writes:
 
+<!-- GENERATED:mcp-reserved-args BEGIN -->
 | Argument | Tools | Description |
 |----------|-------|-------------|
-| `locale` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
-| `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_update_*`, `global_validate_*` | Write as a draft version. |
-| `events` | all write tools | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
+| `locale` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields — selects the locale on reads, targets it on writes. |
+| `draft` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | On writes: save as a draft version. On reads: include the draft overlay. |
+| `events` | `create_*`, `update_*`, `delete_*`, `undelete_*`, `unpublish_*`, `create_many_*`, `update_many_*`, `delete_many_*`, `global_update_*` | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
 | `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
+<!-- GENERATED:mcp-reserved-args END -->
 
 > A collection with a field literally named `locale`, `draft`, `events`, or
 > `force_hard_delete` would have it shadowed by the reserved argument — the

@@ -12,6 +12,7 @@
  * Usage: add `hx-confirm="Are you sure?"` to any HTMX-powered element.
  *
  * @module confirm-dialog
+ * @category singleton
  * @stability stable
  */
 

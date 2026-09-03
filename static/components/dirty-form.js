@@ -8,6 +8,7 @@
  * tab close.
  *
  * @module dirty-form
+ * @category form-field
  * @stability stable
  */
 

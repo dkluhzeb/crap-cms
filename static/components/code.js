@@ -14,6 +14,7 @@
  * </crap-code>
  *
  * @module code
+ * @category form-field
  * @stability stable
  */
 
