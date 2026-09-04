@@ -18,7 +18,7 @@ use crate::{
             field::FieldContext, page::globals::GlobalEditPage,
         },
         handlers::shared::{
-            EnrichOptions, apply_display_conditions, build_field_contexts,
+            EnrichOptions, PageRequest, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
             flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
@@ -239,5 +239,11 @@ pub async fn edit_form(
         locale_data,
     };
 
-    render_page(&state, hx, "globals/edit", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "globals/edit",
+        &ctx,
+    )
+    .await
 }

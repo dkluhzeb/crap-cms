@@ -1,16 +1,20 @@
 //! `HookRunner` methods for display conditions and rendering.
 
+use std::sync::Arc;
+
 use mlua::{Function, Lua, LuaSerdeExt as _, Result as LuaResult, Table, Value};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use crate::{
     admin::custom_pages::CustomPage,
-    core::HookRef,
+    core::{Document, HookRef},
+    db::DbPool,
     hooks::{
         HookRunner,
         lifecycle::{
-            ConditionContext,
+            ConditionContext, TxContextGuard,
             execution::{
                 call_display_condition_with_lua, has_registered_hooks, resolve_hook_function,
             },
@@ -19,6 +23,7 @@ use crate::{
         lua_api,
         lua_api::pages::PAGES_KEY,
     },
+    typegen::LuaAnnotation,
 };
 
 impl HookRunner {
@@ -101,8 +106,27 @@ impl HookRunner {
     /// `ctx.user`, `ctx.document`, `ctx.page`, `ctx.collection`, etc. to
     /// scope their data. Functions registered with no arguments still
     /// work — Lua silently drops the extra arg.
-    pub fn call_template_data(&self, name: &str, page_ctx: &JsonValue) -> Option<JsonValue> {
-        let lua = self.pool.acquire().ok()?;
+    ///
+    /// `crud` is the same [`RenderCrud`] the page's `before_render` hook
+    /// runs under, so the two render-time extension points have identical
+    /// database access: read-only as the signed-in admin on authenticated
+    /// pages, nothing at all on unauthenticated and error pages.
+    pub fn call_template_data(
+        &self,
+        name: &str,
+        page_ctx: &JsonValue,
+        crud: &RenderCrud,
+    ) -> Option<JsonValue> {
+        // Logged, not swallowed: a VM-pool timeout makes the value vanish
+        // from the page, and a widget that silently renders empty is very
+        // hard to trace back to pool exhaustion. `run_before_render` warns
+        // on the same failure.
+        let lua = self
+            .pool
+            .acquire()
+            .inspect_err(|e| warn!("crap.template_data['{name}']: VM pool error: {e}"))
+            .ok()?;
+        let _guard = crud.install(&lua);
 
         let table: Table = lua
             .named_registry_value(crate::hooks::lua_api::template_data::TEMPLATE_DATA_KEY)
@@ -163,11 +187,32 @@ impl HookRunner {
         out
     }
 
-    /// Run `before_render` hooks on the template context.
-    /// Global registered `before_render` hooks receive the full template context as a
-    /// Lua table and return the (potentially modified) context. No CRUD access.
-    /// On error: logs warning, returns original context unmodified.
-    pub fn run_before_render(&self, context: JsonValue) -> JsonValue {
+    /// Run `before_render` hooks on an admin page's template context.
+    ///
+    /// Each hook is called as `fn(ctx, info)`:
+    ///
+    /// - `ctx` — the full template context as a Lua table. Tables are
+    ///   pass-by-reference, so mutating `ctx` in place is enough; returning a
+    ///   table replaces the context for the hooks that follow.
+    /// - `info` — [`RenderInfo`]: which page is rendering, so a hook can
+    ///   bail out in one line instead of guessing from which keys exist.
+    ///
+    /// [`RenderParams::crud`] decides whether the hooks get read-only
+    /// database access (see [`RenderCrud`]). The whole context makes exactly
+    /// ONE round trip through Lua no matter how many hooks are registered.
+    ///
+    /// Failures are always soft. A VM-pool or conversion failure logs a
+    /// warning and returns the context untouched; a hook that raises is
+    /// logged and skipped, keeping whatever the hooks around it did. A page
+    /// is never failed by a hook.
+    #[must_use]
+    pub fn run_before_render(&self, params: RenderParams) -> JsonValue {
+        let RenderParams {
+            context,
+            info,
+            crud,
+        } = params;
+
         if !self.has_registered_hooks_for("before_render") {
             return context;
         }
@@ -185,12 +230,163 @@ impl HookRunner {
             return context;
         }
 
-        execute_render_hooks(&lua, context)
+        // Identity is installed either way, so a read-only hook's CRUD runs
+        // as the viewer (and an access-check hook sees the same `ctx.user`
+        // every other hook does). Only the *database* half is conditional.
+        // Installing it explicitly also guarantees a pooled VM cannot carry
+        // a previous run's identity into this one.
+        let _guard = crud.install(&lua);
+
+        execute_render_hooks(&lua, context, &info)
     }
 }
 
-/// Execute all registered `before_render` hooks, piping context through each.
-fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
+/// Which page is being rendered — the second argument handed to every
+/// `before_render` hook.
+///
+/// Without this a hook has to infer the page from which context keys happen
+/// to exist, which silently breaks whenever a page grows a field.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.template.render_info")]
+pub struct RenderInfo {
+    /// The page discriminant, matching `ctx.page.type`
+    /// (`"dashboard"`, `"collection_items"`, `"error_404"`, …).
+    pub page: String,
+
+    /// The template being rendered, e.g. `"collections/items"`. Reflects
+    /// the built-in name even when an overlay template has replaced it.
+    pub template: String,
+
+    /// Collection slug, on pages scoped to one collection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub collection: Option<String>,
+
+    /// Global slug, on pages scoped to one global.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub global: Option<String>,
+}
+
+impl RenderInfo {
+    /// Derive the render info from the serialized page context plus the
+    /// template name. Everything but the template name already lives in the
+    /// context, so handlers do not have to restate it.
+    #[must_use]
+    pub fn from_context(template: &str, context: &JsonValue) -> Self {
+        let slug_of = |key: &str| {
+            context
+                .get(key)
+                .and_then(|v| v.get("slug"))
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        };
+
+        Self {
+            page: context
+                .get("page")
+                .and_then(|p| p.get("type"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            template: template.to_string(),
+            collection: slug_of("collection"),
+            global: slug_of("global"),
+        }
+    }
+}
+
+/// What database access an admin render gets — shared by the
+/// `before_render` hook and by `crap.template_data` functions, so the two
+/// render-time extension points can never drift apart.
+///
+/// Cheap to clone (the viewer is behind an `Arc`) because a single page
+/// render installs it once for the hook and again for every `{{data "…"}}`
+/// site the template evaluates.
+#[derive(Clone)]
+pub enum RenderCrud {
+    /// Read-only pool access — authenticated content pages. Reads draw from
+    /// the read pool and run as `user`; every write op is refused (see
+    /// [`PoolMode::ReadOnly`]).
+    ///
+    /// [`PoolMode::ReadOnly`]: crate::hooks::lifecycle::PoolMode
+    ReadOnly {
+        pool: DbPool,
+        user: Option<Arc<Document>>,
+        ui_locale: Option<String>,
+    },
+    /// No database access — unauthenticated pages (login, password reset,
+    /// MFA) and error pages.
+    ///
+    /// This is a security boundary, not an optimization: with no signed-in
+    /// user there is no identity to scope a query by, so any read a hook
+    /// performed would either be denied or have to bypass access control to
+    /// be useful — and its output would land on a page served to an
+    /// anonymous visitor. Error pages additionally have to render when the
+    /// database is the thing that failed.
+    None {
+        user: Option<Arc<Document>>,
+        ui_locale: Option<String>,
+    },
+}
+
+impl RenderCrud {
+    /// No identity and no database — the safe default for any render that
+    /// did not declare an access level.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::None {
+            user: None,
+            ui_locale: None,
+        }
+    }
+
+    /// Install this access level on `lua` for the duration of one hook or
+    /// template-data call. The returned guard restores the VM's previous
+    /// context on drop.
+    pub(crate) fn install<'a>(&self, lua: &'a Lua) -> TxContextGuard<'a> {
+        let user = self.user().map(|u| (**u).clone());
+        let ui_locale = self.ui_locale().map(str::to_string);
+
+        match self {
+            Self::ReadOnly { pool, .. } => {
+                TxContextGuard::set_pool_read_only(lua, pool.clone(), user, ui_locale)
+            }
+            Self::None { .. } => TxContextGuard::set_identity(lua, user, ui_locale),
+        }
+    }
+
+    fn user(&self) -> Option<&Arc<Document>> {
+        match self {
+            Self::ReadOnly { user, .. } | Self::None { user, .. } => user.as_ref(),
+        }
+    }
+
+    fn ui_locale(&self) -> Option<&str> {
+        match self {
+            Self::ReadOnly { ui_locale, .. } | Self::None { ui_locale, .. } => ui_locale.as_deref(),
+        }
+    }
+}
+
+/// Arguments for [`HookRunner::run_before_render`].
+pub struct RenderParams {
+    /// The serialized page context handed to the template engine.
+    pub context: JsonValue,
+    /// Which page is rendering.
+    pub info: RenderInfo,
+    /// The database access the hooks get.
+    pub crud: RenderCrud,
+}
+
+/// Execute all registered `before_render` hooks, piping one Lua table
+/// through each in registration order.
+///
+/// The context is converted to Lua once and back once — Lua tables are
+/// references, so a hook mutating `ctx` is observed by the next hook without
+/// a round trip. A hook that *returns* a different table replaces the
+/// current one for everything downstream.
+fn execute_render_hooks(lua: &Lua, context: JsonValue, info: &RenderInfo) -> JsonValue {
     let hooks_table: Table = match lua
         .named_registry_value::<Table>("_crap_event_hooks")
         .and_then(|t| t.get::<Table>("before_render"))
@@ -199,30 +395,36 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
         Err(_) => return context,
     };
 
+    let mut current = match lua_api::json_to_lua(lua, &context) {
+        Ok(Value::Table(t)) => t,
+        Ok(_) => return context,
+        Err(e) => {
+            warn!("before_render: failed to convert context to Lua: {e}");
+
+            return context;
+        }
+    };
+
+    let info_lua = match lua.to_value(info) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("before_render: failed to convert render info to Lua: {e}");
+
+            return context;
+        }
+    };
+
     let len = hooks_table.raw_len();
 
     for i in 1..=len {
-        let func: mlua::Function = match hooks_table.raw_get(i) {
-            Ok(f) => f,
-            Err(_) => continue,
+        let Ok(func) = hooks_table.raw_get::<Function>(i) else {
+            continue;
         };
 
-        let ctx_lua = match lua_api::json_to_lua(lua, &context) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("before_render: failed to convert context to Lua: {e}");
-
-                return context;
-            }
-        };
-
-        match func.call::<Value>(ctx_lua) {
-            Ok(Value::Table(tbl)) => match lua_api::lua_to_json(&Value::Table(tbl)) {
-                Ok(new_ctx) => context = new_ctx,
-                Err(e) => {
-                    warn!("before_render: failed to convert Lua result to JSON: {e}");
-                }
-            },
+        match func.call::<Value>((&current, &info_lua)) {
+            // A returned table replaces the context for later hooks.
+            Ok(Value::Table(tbl)) => current = tbl,
+            // `nil` means "I mutated ctx in place" (or did nothing).
             Ok(Value::Nil) => {}
             Ok(_) => {
                 warn!("before_render hook returned non-table, non-nil value; ignoring");
@@ -233,7 +435,14 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
         }
     }
 
-    context
+    match lua_api::lua_to_json(&Value::Table(current)) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("before_render: failed to convert Lua result to JSON: {e}");
+
+            context
+        }
+    }
 }
 
 /// Convert one `slug → opts` page-registry entry into a [`CustomPage`].
@@ -331,6 +540,61 @@ mod tests {
         assert!(
             page_from_entry(&lua, "status".into(), &opts).is_none(),
             "a page whose access gate can't be decoded must not be served"
+        );
+    }
+
+    // ── RenderInfo derivation ────────────────────────────────────────────
+
+    #[test]
+    fn render_info_reads_page_type_and_slugs_from_the_context() {
+        let ctx = serde_json::json!({
+            "page": { "type": "collection_items", "title": "Posts" },
+            "collection": { "slug": "posts", "display_name": "Posts" },
+        });
+
+        let info = RenderInfo::from_context("collections/items", &ctx);
+
+        assert_eq!(info.page, "collection_items");
+        assert_eq!(info.template, "collections/items");
+        assert_eq!(info.collection.as_deref(), Some("posts"));
+        assert_eq!(info.global, None);
+    }
+
+    #[test]
+    fn render_info_picks_up_a_global_slug() {
+        let ctx = serde_json::json!({
+            "page": { "type": "global_edit" },
+            "global": { "slug": "settings" },
+        });
+
+        let info = RenderInfo::from_context("globals/edit", &ctx);
+
+        assert_eq!(info.global.as_deref(), Some("settings"));
+        assert_eq!(info.collection, None);
+    }
+
+    /// A context with no `page` block (or a malformed one) must still yield
+    /// usable info rather than panicking — the template name alone is enough
+    /// for a hook to branch on.
+    #[test]
+    fn render_info_tolerates_a_context_without_page_meta() {
+        let info = RenderInfo::from_context("errors/500", &serde_json::json!({}));
+
+        assert_eq!(info.page, "");
+        assert_eq!(info.template, "errors/500");
+        assert_eq!(info.collection, None);
+        assert_eq!(info.global, None);
+    }
+
+    /// `collection` is only a slug carrier here — a context where it is not
+    /// an object (or lacks `slug`) must not produce a bogus value.
+    #[test]
+    fn render_info_ignores_a_collection_field_that_is_not_a_slug_object() {
+        let ctx = serde_json::json!({ "page": { "type": "dashboard" }, "collection": "posts" });
+
+        assert_eq!(
+            RenderInfo::from_context("dashboard/index", &ctx).collection,
+            None
         );
     }
 }

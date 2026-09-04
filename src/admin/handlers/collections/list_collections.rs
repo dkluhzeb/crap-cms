@@ -8,7 +8,9 @@ use crate::{
             BasePageContext, PageMeta, PageType,
             page::collections::{CollectionEntry, CollectionListPage},
         },
-        handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
+        handlers::shared::{
+            PageRequest, extract_editor_locale, get_user_doc, has_read_access, render_page,
+        },
     },
     core::auth::{AuthUser, Claims},
 };
@@ -51,5 +53,11 @@ pub async fn list_collections(
 
     let ctx = CollectionListPage { base, collections };
 
-    render_page(&state, hx, "collections/list", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/list",
+        &ctx,
+    )
+    .await
 }

@@ -80,8 +80,8 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
 
 /// Build and render the form with an error toast. Handles both create (`doc_id = None`)
 /// and edit (`doc_id = Some(id)`) modes, including upload hidden field preservation.
-pub(in crate::admin::handlers::collections) fn render_form_with_error(
-    p: &FormErrorParams,
+pub(in crate::admin::handlers::collections) async fn render_form_with_error(
+    p: &FormErrorParams<'_>,
 ) -> Response {
     let mut fields = build_field_contexts(&p.def.fields, p.form.raw(), p.error_map, true, false);
 
@@ -170,11 +170,11 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
         upload_hidden_fields,
     };
 
-    page_with_toast(p.state, "collections/edit", &ctx, p.toast_msg)
+    page_with_toast(p.state, p.auth_user, "collections/edit", &ctx, p.toast_msg).await
 }
 
 /// Render the upload error page (create mode).
-pub(in crate::admin::handlers::collections) fn render_upload_error(
+pub(in crate::admin::handlers::collections) async fn render_upload_error(
     state: &AdminState,
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
@@ -192,10 +192,11 @@ pub(in crate::admin::handlers::collections) fn render_upload_error(
         auth_user,
         toast_msg: err_msg,
     })
+    .await
 }
 
 /// Render the upload error page (edit mode).
-pub(in crate::admin::handlers::collections) fn render_edit_upload_error(
+pub(in crate::admin::handlers::collections) async fn render_edit_upload_error(
     state: &AdminState,
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
@@ -214,10 +215,11 @@ pub(in crate::admin::handlers::collections) fn render_edit_upload_error(
         auth_user,
         toast_msg: err_msg,
     })
+    .await
 }
 
 /// Re-render the form with validation errors (works for both create and edit).
-pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
+pub(in crate::admin::handlers::collections) async fn render_form_validation_errors(
     state: &AdminState,
     def: &CollectionDefinition,
     doc_id: Option<&str>,
@@ -239,6 +241,7 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
         auth_user,
         toast_msg,
     })
+    .await
 }
 
 /// Parameters for mapping a collection write `ServiceError` to a form response.
@@ -302,8 +305,8 @@ fn op_label(editing: bool) -> &'static str {
 ///
 /// `doc_id` distinguishes edit (`Some`) from create (`None`) — see
 /// [`classify_write_error`] for the branch decisions.
-pub(in crate::admin::handlers::collections) fn handle_collection_write_error(
-    p: WriteErrorParams,
+pub(in crate::admin::handlers::collections) async fn handle_collection_write_error(
+    p: WriteErrorParams<'_>,
 ) -> Response {
     let editing = p.doc_id.is_some();
 
@@ -323,7 +326,8 @@ pub(in crate::admin::handlers::collections) fn handle_collection_write_error(
                     p.form,
                     ve,
                     p.auth_user,
-                );
+                )
+                .await;
             }
 
             toast_only_error(&write_error_toast(

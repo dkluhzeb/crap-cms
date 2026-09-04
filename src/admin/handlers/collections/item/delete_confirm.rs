@@ -15,7 +15,7 @@ use crate::{
             page::collections::CollectionDeleteConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, collection_base, extract_editor_locale, forbidden,
+            PageRequest, check_access_or_forbid, collection_base, extract_editor_locale, forbidden,
             lookup_ref_count, not_found, render_page, require_collection,
         },
     },
@@ -144,5 +144,11 @@ pub async fn delete_confirm(
         ref_count,
     };
 
-    render_page(&state, hx, "collections/delete", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/delete",
+        &ctx,
+    )
+    .await
 }

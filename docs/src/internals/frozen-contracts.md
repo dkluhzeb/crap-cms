@@ -212,7 +212,8 @@ changing a representation is a breaking change to every consumer.
   deletes `before_delete` → `after_delete`. `before_render` is global-only.
 - **Which events get CRUD access** (before/after-change, before/after-delete,
   field before-validate/before-change/after-change) vs which do not (`before_read`,
-  `after_read`, `before_broadcast`, `before_render`, validators, conditions).
+  `after_read`, `before_broadcast`, validators, conditions). `before_render` is the
+  one **read-only** tier — see below.
 - **Hook-return semantics.** Only `data` and `context` are read back; `data`
   **replaces** `ctx.data` wholesale. A normal hook returning `false` is ignored
   (only `error()` aborts); `before_broadcast`/live-filter returning `false`/`nil`
@@ -221,6 +222,33 @@ changing a representation is a breaking change to every consumer.
   `find_by_id` / `get` / `init` (hook context); access functions also see
   `trash` / `undelete` / `unpublish` / `restore` / `count` / `search` / `read` /
   `subscribe` / `trigger`. Hook/field-hook context key names are frozen.
+
+### `before_render`
+
+- **The signature is `fn(ctx, info)`.** `ctx` is the page context; `info` is the
+  page identity (`page`, `template`, `collection?`, `global?`). `info.page` is
+  the same discriminant as `ctx.page.type`, and both come from the generated
+  [template-context reference](../admin-ui/reference/template-context.md) — a
+  page's `page.type` value and template name are part of that frozen table.
+- **One shared table.** Every registered hook is handed the same Lua table; the
+  context is converted from and back to JSON exactly once per render regardless
+  of hook count. A hook that returns a table replaces the context for the hooks
+  after it; `nil` keeps the current one.
+- **The access level is shared with `crap.template_data`.** Both render-time
+  extension points on a page run under one [`RenderCrud`] — same identity,
+  same database access — so neither can drift into being the privileged one.
+- **Read-only on authenticated pages; no database at all on unauthenticated
+  and error pages.** Reads run as the signed-in admin with normal access
+  control. Writes and `crap.transaction(fn)` are refused — a page render must
+  not take the write path (it would serialize admin page loads against writes)
+  and must not be able to mutate. The auth/error carve-out is a security
+  boundary: with no viewer there is no identity to scope a read by, and error
+  pages have to render when the database is what failed.
+- **Failure is always fail-soft.** A hook error, a non-table return, or a
+  conversion failure logs a warning and renders the page with the context as it
+  stood. A render is never failed by a hook.
+
+[`RenderCrud`]: https://docs.rs/crap-cms/latest/crap_cms/hooks/lifecycle/enum.RenderCrud.html
 
 ## Read-surface invariants
 

@@ -32,7 +32,7 @@ end)
 | `before_delete` | Before delete |
 | `after_delete` | After delete (runs in transaction, has CRUD access) |
 | `before_broadcast` | Before live event broadcast (can suppress or transform) |
-| `before_render` | Before rendering admin pages (receives full template context, can modify it; global-only, no CRUD access) |
+| `before_render` | Before rendering admin pages — receives `(ctx, info)`: the full template context plus which page is rendering. Global-only. Read-only CRUD on authenticated pages, none on auth/error pages. |
 
 Registering any other event name is a **hard error** — a typo such as
 `crap.hooks.register("on_change", ...)` would otherwise silently create a

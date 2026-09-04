@@ -19,7 +19,7 @@ use crate::{
             page::collections::{CollectionCreatePage, UploadFormContext},
         },
         handlers::shared::{
-            EnrichOptions, apply_display_conditions, build_field_contexts,
+            EnrichOptions, PageRequest, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, collection_base,
             enrich_field_contexts, extract_editor_locale, forbidden, get_user_doc,
             is_non_default_locale, render_page, require_collection, split_sidebar_fields,
@@ -183,7 +183,13 @@ pub async fn create_form(
         upload,
     };
 
-    render_page(&state, hx, "collections/edit", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/edit",
+        &ctx,
+    )
+    .await
 }
 
 #[cfg(test)]

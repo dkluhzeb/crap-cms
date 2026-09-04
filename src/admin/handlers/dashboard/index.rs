@@ -11,7 +11,10 @@ use crate::{
             BasePageContext, PageMeta, PageType,
             page::dashboard::{CollectionCard, DashboardPage, GlobalCard},
         },
-        handlers::shared::{extract_editor_locale, get_user_doc, is_admin_visible, render_page},
+        handlers::shared::{
+            PageRequest, extract_editor_locale, get_user_doc, is_admin_visible, render_page,
+            server_error,
+        },
     },
     core::{AuthUser, Claims, Document},
     db::{BoxedConnection, query::global_last_updated},
@@ -125,6 +128,25 @@ fn build_global_cards(
     cards
 }
 
+/// Build both card lists off one pooled connection.
+///
+/// Scoped to its own function so the connection is released before the
+/// handler awaits the page render: a `before_render` hook acquires a read
+/// connection of its own, and a handler still holding one across that await
+/// makes the two compete for the same pool. `None` means the connection
+/// could not be acquired.
+fn build_cards(
+    state: &AdminState,
+    user_doc: Option<&Document>,
+) -> Option<(Vec<CollectionCard>, Vec<GlobalCard>)> {
+    let conn = state.infra.pool.get().ok()?;
+
+    let collections = build_collection_cards(state, &conn, &state.infra.hook_runner, user_doc);
+    let globals = build_global_cards(state, &conn, user_doc);
+
+    Some((collections, globals))
+}
+
 /// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
     State(state): State<AdminState>,
@@ -133,18 +155,11 @@ pub async fn index(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Ok(conn) = state.infra.pool.get() else {
-        return crate::admin::handlers::shared::render_or_error(
-            &state,
-            "errors/500",
-            &serde_json::json!({"message": "Database error"}),
-        );
-    };
-
     let user_doc = get_user_doc(auth_user.as_ref());
-    let collection_cards =
-        build_collection_cards(&state, &conn, &state.infra.hook_runner, user_doc);
-    let global_cards = build_global_cards(&state, &conn, user_doc);
+
+    let Some((collection_cards, global_cards)) = build_cards(&state, user_doc) else {
+        return server_error(&state, "Database error");
+    };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -163,5 +178,11 @@ pub async fn index(
         global_cards,
     };
 
-    render_page(&state, hx, "dashboard/index", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "dashboard/index",
+        &ctx,
+    )
+    .await
 }

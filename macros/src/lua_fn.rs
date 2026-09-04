@@ -56,6 +56,12 @@ struct LuaFnAttr {
     /// no transaction is appropriate.
     #[darling(default)]
     auto_tx: bool,
+    /// Like `auto_tx`, but for **read-only** CRUD declarations: routes
+    /// through `with_lua_db_read`, which additionally works under a
+    /// read-only pool context (the admin `before_render` hook) instead of
+    /// taking the write pool. Mutually exclusive with `auto_tx`.
+    #[darling(default)]
+    auto_tx_read: bool,
 }
 
 /// Per-parameter attribute: `#[lua(ty = "...")]` on a function
@@ -67,6 +73,28 @@ struct LuaParamAttr {
     ty: Option<String>,
     #[darling(default)]
     doc: Option<String>,
+}
+
+/// Wrap the user fn's call in the DB-context helper its `auto_tx` /
+/// `auto_tx_read` flag asks for, so `get_tx_conn(lua)?` inside the user fn
+/// works the same in hook-mode (existing shared `TxContext`), job-mode
+/// (`PoolContext` → per-op IMMEDIATE tx) and — for read-only declarations —
+/// admin render-hook mode (read-pool connection). The `_conn` arg is unused:
+/// user code pulls the connection from `get_tx_conn` as before.
+fn wrap_in_db_context(attr: &LuaFnAttr, raw_call: TokenStream2) -> TokenStream2 {
+    if attr.auto_tx_read {
+        return quote! {
+            ::crap_cms::hooks::lua_api::crud::with_lua_db_read(lua, |_conn| { #raw_call })
+        };
+    }
+
+    if attr.auto_tx {
+        return quote! {
+            ::crap_cms::hooks::lua_api::crud::with_lua_db(lua, |_conn| { #raw_call })
+        };
+    }
+
+    raw_call
 }
 
 pub(crate) fn run(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -187,18 +215,7 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
         quote! { #fn_name(lua, #(#closure_arg_names),*) }
     };
 
-    // `auto_tx`: route through `with_lua_db` so the user fn's
-    // `get_tx_conn(lua)?` works transparently in both hook-mode
-    // (existing shared TxContext) and job-mode (PoolContext →
-    // per-op IMMEDIATE tx). The `_conn` arg is unused — user code
-    // pulls the conn from `get_tx_conn` as before.
-    let inner_call = if attr.auto_tx {
-        quote! {
-            ::crap_cms::hooks::lua_api::crud::with_lua_db(lua, |_conn| { #raw_call })
-        }
-    } else {
-        raw_call
-    };
+    let inner_call = wrap_in_db_context(attr, raw_call);
     let closure_body = build_closure_body(&inner_call, &closure_arg_names, &closure_arg_types);
 
     let state_param_ty = if let Some(t) = &state_ty {

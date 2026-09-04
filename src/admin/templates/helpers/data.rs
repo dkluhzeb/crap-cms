@@ -27,7 +27,7 @@ use std::sync::Arc;
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
 
-use crate::hooks::HookRunner;
+use crate::{admin::templates::render_scope, hooks::HookRunner};
 
 /// Handlebars helper that invokes a registered Lua template-data
 /// function. Returns the function's JSON-converted result, or `null`
@@ -53,9 +53,12 @@ impl HelperDef for DataHelper {
                 ))
             })?;
 
+        // Same database access the page's `before_render` hook ran under —
+        // read-only as the signed-in admin on an authenticated page, nothing
+        // on an unauthenticated or error page. See `render_scope`.
         let result = self
             .runner
-            .call_template_data(&name, ctx.data())
+            .call_template_data(&name, ctx.data(), &render_scope::current())
             .unwrap_or(Value::Null);
 
         Ok(ScopedJson::Derived(result))

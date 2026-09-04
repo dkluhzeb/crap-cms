@@ -82,7 +82,7 @@ pub(crate) struct CollectionsFindByIdState {
 #[lua_fn(
     path = "crap.collections.find_by_id",
     returns = "crap.Document?",
-    auto_tx
+    auto_tx_read
 )]
 fn collections_find_by_id(
     state: &CollectionsFindByIdState,

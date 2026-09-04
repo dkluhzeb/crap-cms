@@ -277,14 +277,17 @@ pub(in crate::admin::handlers::collections) async fn do_update(
 
             htmx_redirect(&paths::collection_item(slug, id))
         }
-        Ok(Err(e)) => handle_collection_write_error(WriteErrorParams {
-            state,
-            def: &def,
-            form: &form_for_error,
-            err: e,
-            doc_id: Some(id),
-            auth_user,
-        }),
+        Ok(Err(e)) => {
+            handle_collection_write_error(WriteErrorParams {
+                state,
+                def: &def,
+                form: &form_for_error,
+                err: e,
+                doc_id: Some(id),
+                auth_user,
+            })
+            .await
+        }
         Err(e) => {
             error!("Update task error: {}", e);
             redirect_response(&paths::collection_item(slug, id))

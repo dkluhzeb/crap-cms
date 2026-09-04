@@ -86,7 +86,7 @@ pub(crate) struct CollectionsCountState {
 #[lua_fn(
     path = "crap.collections.count",
     returns_doc = "Number of matching documents.",
-    auto_tx
+    auto_tx_read
 )]
 fn collections_count(
     state: &CollectionsCountState,

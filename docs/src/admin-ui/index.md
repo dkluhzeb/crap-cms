@@ -19,6 +19,7 @@ your goal:
 | Add a custom richtext node (CTA button, mention pill, embed) | Lua | [Custom richtext node scenario](scenarios/06-custom-richtext-node.md) |
 | Add a custom field type (rating, color picker, slug builder) | Lua + HBS + JS | [Custom field type scenario](scenarios/07-custom-field-type.md) |
 | Add a custom admin page | Lua + HBS template | [Custom admin page scenario](scenarios/05-custom-page.md) |
+| Put data on a page the template can't reach | Lua | [`before_render` hook](../hooks/lifecycle-events.md#before_render), [Add a list column scenario](scenarios/02-add-list-column.md) |
 
 The customization motion is always the same: **drop a file at the
 matching path inside your config dir's `static/` or `templates/`

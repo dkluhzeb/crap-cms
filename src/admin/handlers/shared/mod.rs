@@ -49,11 +49,11 @@ pub use pagination::{Pagination, PaginationParams};
 
 // response
 pub(crate) use response::{
-    bad_request, forbidden, htmx_inline_created, htmx_redirect, htmx_redirect_with_created,
-    json_bad_request, json_conflict, json_forbidden, json_not_found, json_server_error, not_found,
-    page_with_toast, redirect_response, render_or_error, render_page, require_collection,
-    require_collection_json, require_global, server_error, service_error_to_admin_response,
-    task_join_error_response, toast_only_error,
+    PageRequest, bad_request, forbidden, htmx_inline_created, htmx_redirect,
+    htmx_redirect_with_created, json_bad_request, json_conflict, json_forbidden, json_not_found,
+    json_server_error, not_found, page_with_toast, redirect_response, render_auth_page,
+    render_page, require_collection, require_collection_json, require_global, server_error,
+    service_error_to_admin_response, task_join_error_response, toast_only_error,
 };
 
 // versions

@@ -14,7 +14,9 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 | `before_delete` | delete, delete_many | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
 | `after_delete` | delete, delete_many | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
 | `before_broadcast` | create, update, delete | Yes (data) | No | Can suppress or transform live update events. See [Live Updates](../live-updates/hooks.md). |
-| `before_render` | admin page render | Yes (context) | No | Runs before rendering admin pages. Receives the full template context and can modify it. Global-only (no collection-level refs). Useful for injecting global template data. |
+| `before_render` | admin page render | Yes (context) | Read-only† | Runs before rendering admin pages. Receives the full template context plus a page-identity table, and can modify the context. Global-only (no collection-level refs). |
+
+*† `before_render` gets **read-only** CRUD on authenticated admin pages — see [`before_render`](#before_render) below. Unauthenticated pages and error pages get none.*
 
 *\* `before_read` hooks have no CRUD access when called from the gRPC API or admin UI. However, when triggered from a Lua CRUD call inside a hook (e.g., `crap.collections.find()` inside `before_change`), `before_read` hooks inherit the parent's transaction context and DO have CRUD access.*
 
@@ -127,27 +129,100 @@ suppression at any stage stops the rest of the chain.
 
 ## `before_render`
 
-Fires before an admin page template is rendered. The hook receives the full template
-context (the JSON object passed to the template engine) as a Lua table, and may return
-a modified table to inject globals, sidebar items, or additional template variables.
+Fires before an admin page template is rendered, from every admin page handler —
+dashboard, collection list/edit, delete confirm, version list/restore, globals,
+custom pages, login, forgot/reset password, and the error pages.
 
-**No CRUD access**, **global hooks only** (no collection-level refs). Errors, non-table
-returns, and conversion failures log a warning and fall back to the unmodified context.
+**Global hooks only** (no collection-level refs). Errors, non-table returns, and
+conversion failures log a warning and fall back to the unmodified context.
 
-**Return values:**
-
-- A table — the new template context.
-- `nil` — the original context is preserved (no-op).
-- Anything else — logged as a warning, ignored.
+### Arguments
 
 ```lua
-crap.hooks.register("before_render", function(ctx)
-    -- Inject a banner shown in the admin layout
+crap.hooks.register("before_render", function(ctx, info)
+    ...
+end)
+```
+
+| Argument | What it is |
+|----------|------------|
+| `ctx` | The full template context — the JSON object handed to the template engine, as a Lua table. |
+| `info` | Which page is rendering. See below. |
+
+`info` carries:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `info.page` | string | The page discriminant, same value as `ctx.page.type` (`"dashboard"`, `"collection_items"`, `"error_404"`, …). |
+| `info.template` | string | The template being rendered, e.g. `"collections/items"`. Reflects the built-in name even when an overlay template has replaced it. |
+| `info.collection` | string? | Collection slug, on pages scoped to one collection. |
+| `info.global` | string? | Global slug, on pages scoped to one global. |
+
+Use `info` to scope a hook to the pages it applies to — one line, instead of
+guessing from which context keys happen to exist:
+
+```lua
+crap.hooks.register("before_render", function(ctx, info)
+    if info.page ~= "dashboard" then return end
     ctx.banner_message = "Maintenance window 02:00 UTC tonight"
     return ctx
 end)
 ```
 
-Fires from every admin page handler (dashboard, list, edit, delete confirm, version
-list/restore, login, forgot/reset password, etc.). Inspect `ctx` to branch on the page
-being rendered.
+### Return values
+
+- A table — becomes the context for the remaining hooks and the renderer.
+- `nil` — keeps the current context. Lua tables are references, so mutating
+  `ctx` in place is enough; returning it is conventional and harmless.
+- Anything else — logged as a warning, ignored.
+
+Every registered hook shares **one** Lua table, converted from and back to JSON
+exactly once per render however many hooks are registered. A hook therefore sees
+what earlier hooks wrote.
+
+### Database access
+
+On an **authenticated admin page** the hook gets **read-only** database access, so
+it can build page data from real content:
+
+```lua
+crap.hooks.register("before_render", function(ctx, info)
+    if info.page ~= "dashboard" then return end
+
+    ctx.pending_orders = crap.collections.orders.count({
+        where = { status = { equals = "pending" } },
+    })
+    return ctx
+end)
+```
+
+Reads run **as the signed-in admin**, with access control applied exactly as
+anywhere else — so a hook cannot surface rows the viewer is not allowed to see
+unless it explicitly passes `override_access = true`. With
+`[admin] require_auth = false` there is no signed-in user, so reads run with no
+identity and your access rules see `ctx.user == nil`.
+
+Writes are **refused**, with an error naming the alternative. Two reasons:
+
+1. A page render is a `GET`. Write-capable pool access takes the single SQLite
+   writer even for a `count`, which would serialize every admin page load
+   against every real write.
+2. A render hook that could write would turn viewing a page into a mutation,
+   with no request an operator could point at as the cause.
+
+Do writes from a lifecycle hook, a [job handler](../jobs/overview.md), or a
+[custom route](../lua-api/routes.md) instead. `crap.transaction(fn)` is refused
+here for the same reason.
+
+The same access applies to [`crap.template_data`](../admin-ui/scenarios/04-dashboard-widget.md)
+functions on that page. They are the other render-time extension point —
+`{{data "name"}}` in a template — and giving one a database but not the other
+would send anyone reaching for the purpose-built helper down a dead end.
+
+**Unauthenticated pages** (login, forgot/reset password, MFA) and **error pages**
+(400/403/404/500) run the hook with **no** database access at all. That is a
+boundary rather than an optimization: there is no signed-in user to scope a read
+by, so anything a hook read would either be denied or have to bypass access
+control — and its output would land on a page served to an anonymous visitor.
+Error pages additionally have to render when the database is the thing that
+failed.

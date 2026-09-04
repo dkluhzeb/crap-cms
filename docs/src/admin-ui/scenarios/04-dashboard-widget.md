@@ -98,8 +98,14 @@ Notes on the registration:
 - **`crap.template_data.register("name", fn)`** — `name` is what
   the template uses in `{{data "name"}}`. The fn runs on demand.
 - **`fn(ctx)`** — the page render context (`ctx.user`, `ctx.nav`,
-  `ctx.crap.site_name`, etc.). Read-only by convention; this isn't
-  the place to mutate page-wide state.
+  `ctx.crap.site_name`, etc.).
+- **Database access is read-only**, and identical to what
+  [`before_render`](../../hooks/lifecycle-events.md#before_render) gets on the
+  same page: on an authenticated admin page the function can query as the
+  signed-in admin (`crap.collections.orders.count{...}`), with access control
+  applied as everywhere else; writes and `crap.transaction(fn)` are refused.
+  On unauthenticated pages (login, password reset) there is no database at
+  all — no viewer to scope a query by.
 - **Return a table** — `{{#with (data "weather_now")}}` binds it.
   Returning `nil` makes `{{#with}}` fall to its `{{else}}` branch.
 - **`crap.env.get(key)`** — read-only env access **restricted to

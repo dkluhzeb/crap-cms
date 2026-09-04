@@ -13,7 +13,7 @@ Hooks can call back into the Crap CMS CRUD API. Whether a hook has CRUD access d
 | `after_read` | **No** | Fire-and-forget, no transaction |
 | `before_delete` | Yes | Runs inside the delete transaction |
 | `after_delete` | **Yes** | Runs inside the delete transaction, after the DB delete |
-| `before_render` | No | Admin display enrichment — no transaction |
+| `before_render` | No | Admin page render — read-only pool access, never a write transaction |
 | `before_broadcast` | No | Live-event filtering/transform — no transaction |
 
 This applies to all three hook levels (field, collection, registered).

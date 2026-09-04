@@ -13,6 +13,7 @@ use crate::{
     },
     core::{CollectionDefinition, FieldType, Registry, Slug, collection::GlobalDefinition},
     db::query::get_column_names,
+    hooks::lifecycle::RenderInfo,
     typegen::{
         helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w, wraw},
         lua::LuaAnnotation,
@@ -93,6 +94,7 @@ fn render_template_data_types(out: &mut String) {
     DocumentRef::render_lua_annotation(out);
     EditorLocaleOption::render_lua_annotation(out);
     BasePageContext::render_lua_annotation(out);
+    RenderInfo::render_lua_annotation(out);
 
     out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
 }

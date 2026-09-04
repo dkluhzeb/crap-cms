@@ -1,10 +1,9 @@
 use axum::{extract::State, response::Response};
 
-use crate::admin::handlers::shared::HxNav;
 use crate::admin::{
     AdminState,
     context::{AuthBasePageContext, PageMeta, PageType, page::auth::ForgotPasswordPage},
-    handlers::{auth::get_auth_collections, shared::render_page},
+    handlers::{auth::get_auth_collections, shared::render_auth_page},
 };
 
 /// GET /admin/forgot-password — render the forgot password form.
@@ -22,5 +21,5 @@ pub async fn forgot_password_page(State(state): State<AdminState>) -> Response {
         show_collection_picker,
     };
 
-    render_page(&state, HxNav::full(), "auth/forgot_password", &ctx)
+    render_auth_page(&state, "auth/forgot_password", &ctx)
 }

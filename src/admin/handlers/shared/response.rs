@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::fmt::Write as _;
 
 use axum::{
-    Json,
+    Extension, Json,
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -19,9 +19,59 @@ use crate::{
         context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
         handlers::shared::hx::HxNav,
     },
-    core::{CollectionDefinition, GlobalDefinition, richtext::renderer::html_escape},
+    admin::{state::render_template, templates::render_scope::RenderScope},
+    core::{
+        CollectionDefinition, GlobalDefinition, auth::AuthUser, richtext::renderer::html_escape,
+    },
+    hooks::lifecycle::{RenderCrud, RenderInfo, RenderParams},
     service::ServiceError,
 };
+
+/// Who is viewing an authenticated admin page, and how it is being
+/// requested. Bundled so [`render_page`] keeps a short parameter list.
+pub struct PageRequest<'a> {
+    /// htmx navigation mode — decides full document vs. `#main` fragment.
+    pub hx: HxNav,
+    /// The signed-in admin, when the admin UI has auth enabled.
+    /// `before_render` hooks read the database as this user, so anything a
+    /// hook injects is already scoped to what the viewer may see.
+    pub user: Option<&'a Extension<AuthUser>>,
+}
+
+impl<'a> PageRequest<'a> {
+    #[must_use]
+    pub fn new(hx: HxNav, user: Option<&'a Extension<AuthUser>>) -> Self {
+        Self { hx, user }
+    }
+}
+
+/// Render one of the built-in error pages, running `before_render` without
+/// database access first. A hook can still add a banner or branding to a
+/// 403/404/500; it cannot make the page depend on a database that may be
+/// the very thing that failed.
+fn render_error_page(state: &AdminState, template: &str, data: Value) -> Result<String, String> {
+    let data = hook_without_crud(state, template, data);
+    let _scope = RenderScope::enter(RenderCrud::none());
+
+    state.render(template, &data)
+}
+
+/// Run `before_render` with **no** database access, for pages that have no
+/// signed-in user to scope reads by: the unauthenticated auth pages and the
+/// error pages. See [`RenderCrud::None`] for why that is a boundary rather
+/// than an optimization.
+fn hook_without_crud(state: &AdminState, template: &str, data: Value) -> Value {
+    let info = RenderInfo::from_context(template, &data);
+
+    state.infra.hook_runner.run_before_render(RenderParams {
+        context: data,
+        info,
+        crud: RenderCrud::None {
+            user: None,
+            ui_locale: None,
+        },
+    })
+}
 
 /// Serialize a typed page-context struct, run the `before_render` Lua hook,
 /// and render the named template. On render failure logs the error and
@@ -32,21 +82,125 @@ use crate::{
 /// `hx` decides partial-vs-full: an htmx navigation targeting `#main`
 /// (see [`HxNav`]) gets only `<title>` + main content — the `htmx_partial`
 /// branch in `layout/base.hbs` — everything else the full document.
-pub fn render_page<T: Serialize>(
+///
+/// **Callers must not still be holding a pooled connection here.** Lua reads
+/// during this await — the `before_render` hook, and any `{{data "name"}}`
+/// function the template evaluates — each acquire a read connection, so a
+/// handler that keeps one alive across it puts them in competition for the
+/// same pool; enough concurrent renders and every one of them waits out the
+/// connection timeout. Confine database work to a helper that returns owned
+/// data, the way every page handler in this module does.
+pub async fn render_page<T: Serialize>(
     state: &AdminState,
-    hx: HxNav,
+    req: PageRequest<'_>,
     template: &str,
     ctx: &T,
 ) -> Response {
     let mut data = to_value(ctx).expect("admin page context serializes infallibly");
 
-    if hx.partial
+    if req.hx.partial
         && let Some(obj) = data.as_object_mut()
     {
         obj.insert("htmx_partial".to_string(), Value::Bool(true));
     }
 
-    let data = state.infra.hook_runner.run_before_render(data);
+    let Some(crud) = render_access(state, req.user) else {
+        return render_or_error(state, template, &data);
+    };
+
+    match render_blocking(state, template.to_string(), data, crud).await {
+        Ok(html) => Html(html).into_response(),
+        Err(RenderFailure::Template(e)) => {
+            error!("Template render error: {e}");
+
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+                .into_response()
+        }
+        Err(RenderFailure::TaskDied) => server_error(state, "Page rendering failed"),
+    }
+}
+
+/// The access level an authenticated page render runs under.
+///
+/// `None` means no Lua takes part in this render at all — no `before_render`
+/// hook and no registered `crap.template_data` function — so the caller can
+/// render inline and skip the blocking hand-off entirely.
+fn render_access(state: &AdminState, user: Option<&Extension<AuthUser>>) -> Option<RenderCrud> {
+    let runner = &state.infra.hook_runner;
+
+    if !runner.has_registered_hooks_for("before_render") && !runner.has_template_data() {
+        return None;
+    }
+
+    Some(RenderCrud::ReadOnly {
+        pool: state.infra.pool.clone(),
+        user: user.map(|Extension(au)| Arc::new(au.user_doc.clone())),
+        ui_locale: user.map(|Extension(au)| au.ui_locale.clone()),
+    })
+}
+
+/// Why an authenticated render produced no HTML.
+enum RenderFailure {
+    /// Handlebars refused the template — same fallback as the sync path.
+    Template(String),
+    /// The blocking task itself panicked. The context was moved into it and
+    /// cannot be recovered, so the caller renders an error page rather than
+    /// a page built from a hollow context.
+    TaskDied,
+}
+
+/// Run `before_render` and render the template, both on a blocking thread.
+///
+/// They belong on the *same* hop. Lua can reach the database from either
+/// side of it — the hook directly, a `{{data "name"}}` function from inside
+/// Handlebars — so neither may run on an async worker. Sharing one hop also
+/// means the template-data functions see exactly the access level the hook
+/// saw, installed once for the whole render by [`RenderScope`].
+async fn render_blocking(
+    state: &AdminState,
+    template: String,
+    data: Value,
+    crud: RenderCrud,
+) -> Result<String, RenderFailure> {
+    let infra = Arc::clone(&state.infra);
+    let handlebars = Arc::clone(&state.handlebars);
+    let info = RenderInfo::from_context(&template, &data);
+
+    let rendered = tokio::task::spawn_blocking(move || {
+        let data = infra.hook_runner.run_before_render(RenderParams {
+            context: data,
+            info,
+            crud: crud.clone(),
+        });
+
+        let _scope = RenderScope::enter(crud);
+
+        render_template(&handlebars, &template, &data)
+    })
+    .await;
+
+    match rendered {
+        Ok(Ok(html)) => Ok(html),
+        Ok(Err(e)) => Err(RenderFailure::Template(e)),
+        Err(e) => {
+            error!("admin render task failed: {e}");
+
+            Err(RenderFailure::TaskDied)
+        }
+    }
+}
+
+/// Render an unauthenticated page (login, forgot/reset password, MFA).
+///
+/// Always a full document — these pages are never htmx fragments — and the
+/// `before_render` hook runs without database access.
+pub fn render_auth_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
+    let data = to_value(ctx).expect("admin page context serializes infallibly");
+    let data = hook_without_crud(state, template, data);
+
+    // Declared, not merely absent: a `{{data "name"}}` function on an
+    // unauthenticated page gets no database, the same as the hook above.
+    let _scope = RenderScope::enter(RenderCrud::none());
 
     render_or_error(state, template, &data)
 }
@@ -72,9 +226,8 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.infra.hook_runner.run_before_render(data);
 
-    let html = match state.render("errors/403", &data) {
+    let html = match render_error_page(state, "errors/403", data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!(
             "<h1>403 Forbidden</h1><p>{}</p>",
@@ -166,37 +319,57 @@ fn percent_encode_header(s: &str) -> String {
 /// Render a typed page context with an `X-Crap-Toast` header attached for
 /// client-side notification. The typed context is serialized + run through
 /// the `before_render` hook before rendering.
-pub fn page_with_toast<T: Serialize>(
+pub async fn page_with_toast<T: Serialize>(
     state: &AdminState,
+    user: Option<&Extension<AuthUser>>,
     template: &str,
     ctx: &T,
     toast: &str,
 ) -> Response {
     let data = to_value(ctx).expect("page context serializes infallibly");
-    let data = state.infra.hook_runner.run_before_render(data);
 
-    html_with_toast(state, template, &data, toast)
+    let Some(crud) = render_access(state, user) else {
+        return html_with_toast(state, template, &data, toast);
+    };
+
+    match render_blocking(state, template.to_string(), data, crud).await {
+        Ok(html) => with_toast_header(Html(html).into_response(), toast),
+        Err(RenderFailure::Template(e)) => {
+            error!("Template render error: {e}");
+
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+                .into_response()
+        }
+        Err(RenderFailure::TaskDied) => server_error(state, "Page rendering failed"),
+    }
 }
 
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
-pub fn html_with_toast(state: &AdminState, template: &str, data: &Value, toast: &str) -> Response {
+///
+/// Private for the same reason as [`render_or_error`]: it does not run
+/// `before_render`. Reached only from [`page_with_toast`]'s inline path,
+/// which is taken exactly when no Lua participates in the render.
+fn html_with_toast(state: &AdminState, template: &str, data: &Value, toast: &str) -> Response {
     match state.render(template, data) {
-        Ok(html) => {
-            let mut resp = Html(html).into_response();
-            let json_toast = json!({ "message": toast, "type": "error" }).to_string();
-
-            if let Ok(val) = json_toast.parse() {
-                resp.headers_mut().insert("X-Crap-Toast", val);
-            }
-
-            resp
-        }
+        Ok(html) => with_toast_header(Html(html).into_response(), toast),
         Err(e) => {
             error!("Template render error: {}", e);
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
                 .into_response()
         }
     }
+}
+
+/// Attach the `X-Crap-Toast` notification header to a response. Shared so
+/// the inline and blocking render paths emit an identical header.
+fn with_toast_header(mut resp: Response, toast: &str) -> Response {
+    let json_toast = json!({ "message": toast, "type": "error" }).to_string();
+
+    if let Ok(val) = json_toast.parse() {
+        resp.headers_mut().insert("X-Crap-Toast", val);
+    }
+
+    resp
 }
 
 /// Return a 422 response with only the toast header — HTMX won't swap the body,
@@ -217,7 +390,11 @@ pub fn toast_only_error(msg: &str) -> Response {
 }
 
 /// Render a template, falling back to a plain error page on failure.
-pub fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
+///
+/// Private on purpose: it does **not** run `before_render`. Every page goes
+/// through [`render_page`] or [`render_auth_page`], which run the hook first
+/// — a handler reaching for a raw render would silently opt its page out.
+fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
     match state.render(template, data) {
         Ok(html) => Html(html),
         Err(e) => {
@@ -243,9 +420,8 @@ pub fn bad_request(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.infra.hook_runner.run_before_render(data);
 
-    let html = match state.render("errors/400", &data) {
+    let html = match render_error_page(state, "errors/400", data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>400</h1><p>{}</p>", html_escape(message))),
     };
@@ -266,9 +442,8 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.infra.hook_runner.run_before_render(data);
 
-    let html = match state.render("errors/404", &data) {
+    let html = match render_error_page(state, "errors/404", data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>404</h1><p>{}</p>", html_escape(message))),
     };
@@ -419,9 +594,8 @@ pub fn server_error(state: &AdminState, message: &str) -> Response {
     };
 
     let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
-    let data = state.infra.hook_runner.run_before_render(data);
 
-    let html = match state.render("errors/500", &data) {
+    let html = match render_error_page(state, "errors/500", data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>500</h1><p>{}</p>", html_escape(message))),
     };

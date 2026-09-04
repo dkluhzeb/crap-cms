@@ -114,11 +114,21 @@ available in every context that carries a database connection:
 - Custom route handlers — Yes
 - `crap.transaction(fn)` — Yes (explicit transaction block)
 
+**Read-only CRUD:**
+
+- `before_render` hooks and `crap.template_data` functions on authenticated
+  admin pages — reads run as the signed-in admin; writes and
+  `crap.transaction(fn)` are refused. The two render-time extension points
+  get the same access on the same page. See
+  [`before_render`](../hooks/lifecycle-events.md#before_render).
+  Unauthenticated pages (login, password reset) and error pages get no CRUD
+  at all.
+
 **No CRUD:**
 
 - `before_read` / `after_read` hooks — No (no connection; `after_read` is a
   per-document transform)
-- `before_render` / `before_broadcast` hooks — No
+- `before_broadcast` hooks — No
 - Collection definition files — No (definitions load before the DB is ready)
 
 Calling CRUD functions anywhere else results in an error:

@@ -80,7 +80,7 @@ fn update_global_document_blocking(
 }
 
 /// Build the validation error response with re-rendered form fields.
-fn render_validation_error(
+async fn render_validation_error(
     state: &AdminState,
     def: &GlobalDefinition,
     form: &FormData,
@@ -143,7 +143,7 @@ fn render_validation_error(
         sidebar_fields,
     };
 
-    page_with_toast(state, "globals/edit", &ctx, toast_msg)
+    page_with_toast(state, auth_user, "globals/edit", &ctx, toast_msg).await
 }
 
 /// POST /admin/globals/{slug} — update a global
@@ -191,7 +191,7 @@ pub async fn update_action(
                 forbidden(&state, "You don't have permission to update this global")
             }
             ServiceError::Validation(ref ve) => {
-                render_validation_error(&state, &def, &form_for_error, ve, auth_user.as_ref())
+                render_validation_error(&state, &def, &form_for_error, ve, auth_user.as_ref()).await
             }
             other => {
                 error!("Global update error: {}", other);

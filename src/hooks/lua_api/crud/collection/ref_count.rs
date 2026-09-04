@@ -23,7 +23,7 @@ use crate::{
 #[lua_fn(
     path = "crap.collections.ref_count",
     returns_doc = "Number of incoming references.",
-    auto_tx
+    auto_tx_read
 )]
 fn collections_ref_count(
     state: &Arc<Registry>,

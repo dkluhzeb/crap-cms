@@ -177,7 +177,11 @@ pub(crate) struct CollectionsFindState {
 
 /// Find documents matching a query. Returns documents and total count.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.find", returns = "crap.FindResult", auto_tx)]
+#[lua_fn(
+    path = "crap.collections.find",
+    returns = "crap.FindResult",
+    auto_tx_read
+)]
 fn collections_find(
     state: &CollectionsFindState,
     lua: &Lua,

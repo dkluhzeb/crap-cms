@@ -85,7 +85,7 @@ pub(crate) struct ListVersionsResult {
 #[lua_fn(
     path = "crap.collections.list_versions",
     returns = "crap.ListVersionsResult",
-    auto_tx
+    auto_tx_read
 )]
 fn collections_list_versions(
     state: &Arc<Registry>,

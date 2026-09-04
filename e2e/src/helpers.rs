@@ -111,8 +111,16 @@ pub fn setup_app_at(
         .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
-        .expect("create handlebars");
+    // Pass the runner, exactly as `admin::server` does — without it the
+    // `{{data "name"}}` helper is never registered, so any template using it
+    // renders empty here while working in production.
+    let handlebars = templates::create_handlebars(
+        tmp.path(),
+        false,
+        translations.clone(),
+        Some(Arc::new(hook_runner.clone())),
+    )
+    .expect("create handlebars");
 
     let has_auth = registry
         .collections

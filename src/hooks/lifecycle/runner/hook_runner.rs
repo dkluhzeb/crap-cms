@@ -15,6 +15,11 @@ pub struct HookRunner {
     /// Since hooks are only registered during VM creation (init.lua), this set is immutable.
     /// Allows skipping VM acquisition when no registered hooks exist for an event.
     pub(super) registered_events: Arc<HashSet<String>>,
+    /// Whether any `crap.template_data` function is registered. Like
+    /// [`Self::registered_events`], registration only happens during VM
+    /// creation, so this is immutable — it lets the admin render path skip
+    /// the blocking hop entirely when no Lua touches the render.
+    pub(super) has_template_data: bool,
     /// Snapshot of the registry for richtext node attr validation.
     pub(super) registry: Arc<Registry>,
     /// Snapshot of `[access] default_deny` so [`check_access`] can
@@ -41,6 +46,12 @@ impl HookRunner {
     #[must_use]
     pub fn has_registered_hooks_for(&self, event: &str) -> bool {
         self.registered_events.contains(event)
+    }
+
+    /// Whether any `crap.template_data` function is registered.
+    #[must_use]
+    pub fn has_template_data(&self) -> bool {
+        self.has_template_data
     }
 
     /// A pooled [`LuaVmLease`] over this runner's VM pool — each

@@ -15,15 +15,50 @@ use crate::{
             page::collections::CollectionRestoreConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, collection_item_base, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, paths, redirect_response, render_page,
+            PageRequest, check_access_or_forbid, collection_item_base, extract_editor_locale,
+            forbidden, load_version_with_missing_relations, paths, redirect_response, render_page,
             require_collection, server_error,
         },
     },
-    core::auth::{AuthUser, Claims},
-    db::query::AccessResult,
+    core::{
+        CollectionDefinition, Document,
+        auth::{AuthUser, Claims},
+        document::VersionSnapshot,
+    },
+    db::query::{AccessResult, MissingRelation},
     service::{self, RunnerReadHooks},
 };
+
+/// Load the version being restored plus the relations it can no longer
+/// resolve.
+///
+/// Scoped to its own function so the pooled connection and the read hooks
+/// borrowing it — neither of which is `Send` — are dropped before the
+/// handler awaits the page render.
+fn load_restore_data(
+    state: &AdminState,
+    slug: &str,
+    def: &CollectionDefinition,
+    version_id: &str,
+    user_doc: Option<&Document>,
+) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+    let Ok(conn) = state.infra.pool.get() else {
+        return Err("Database error");
+    };
+
+    // `find_version_by_id` (called by `load_version_with_missing_relations`)
+    // runs an access check against the collection's `read` access ref, so
+    // `ServiceContext.read_hooks` must be wired or it errors out with
+    // "read_hooks not set" → 500. The version list handler does the same.
+    let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
+    let ctx = service::ServiceContext::collection(slug, def)
+        .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
+        .build();
+
+    load_version_with_missing_relations(&ctx, &conn, &state.infra.registry, version_id, &def.fields)
+}
 
 /// GET /`admin/collections/{slug}/{id}/versions/{version_id}/restore` — confirmation page
 pub async fn restore_confirm(
@@ -59,29 +94,9 @@ pub async fn restore_confirm(
         _ => {}
     }
 
-    let Ok(conn) = state.infra.pool.get() else {
-        return server_error(&state, "Database error");
-    };
-
-    // `find_version_by_id` (called by `load_version_with_missing_relations`)
-    // runs an access check against the collection's `read` access ref, so
-    // `ServiceContext.read_hooks` must be wired or it errors out with
-    // "read_hooks not set" → 500. The version list handler does the same.
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
-    let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
-    let version_ctx = service::ServiceContext::collection(&slug, &def)
-        .conn(&conn)
-        .read_hooks(&read_hooks)
-        .user(user_doc)
-        .build();
 
-    let (version, missing) = match load_version_with_missing_relations(
-        &version_ctx,
-        &conn,
-        &state.infra.registry,
-        &version_id,
-        &def.fields,
-    ) {
+    let (version, missing) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
         Ok(data) => data,
         Err(msg) => return server_error(&state, msg),
     };
@@ -114,5 +129,11 @@ pub async fn restore_confirm(
         back_url,
     };
 
-    render_page(&state, hx, "collections/restore", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/restore",
+        &ctx,
+    )
+    .await
 }

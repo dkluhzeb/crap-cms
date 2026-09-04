@@ -70,7 +70,7 @@ const TEMPLATE: &str = r"<!--
 
 # Admin template context reference
 
-Every admin page renders a typed Rust struct serialized to JSON, runs it through the optional `before_render` Lua hook, and hands it to Handlebars. This file lists every page, its `page.type` discriminant, the template it renders, and the fields the template can rely on.
+Every admin page renders a typed Rust struct serialized to JSON, runs it through the optional [`before_render`](../../hooks/lifecycle-events.md#before_render) Lua hook, and hands it to Handlebars. This file lists every page, its `page.type` discriminant, the template it renders, and the fields the template can rely on. The `page.type` column doubles as the `info.page` value a `before_render` hook receives, and the template column as `info.template`.
 
 Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `Option<T>`. Composite leaves like `CrapMeta`, `NavData`, `FieldContext` link into the [shared definitions](#shared-definitions) section at the bottom.
 

@@ -33,7 +33,10 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 
 use crate::{
-    hooks::lifecycle::{LuaCrudInfra, PoolContext, TxContext, run_effects_on_vm},
+    hooks::{
+        lifecycle::{LuaCrudInfra, PoolContext, TxContext, run_effects_on_vm},
+        lua_api::crud::{TxSlot, ensure_writable},
+    },
     service::{DeferredEffect, DeferredQueue, EffectOutcome},
 };
 
@@ -43,6 +46,12 @@ use crate::{
 /// `TxContext` — e.g., from `init.lua` or a top-level script).
 #[allow(clippy::needless_pass_by_value)]
 fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
+    // Checked first, for the same reason `with_lua_db` does: a read-only
+    // render context installs a `TxContext` while a read is in flight, and
+    // the pass-through below would otherwise hand that read connection to a
+    // block whose whole purpose is to write.
+    ensure_writable(lua)?;
+
     // Pass-through: already inside a shared tx (hook context, or a
     // surrounding `crap.transaction(fn)`). Call `fn` directly.
     if lua.app_data_ref::<TxContext>().is_some() {
@@ -59,7 +68,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
                     .into(),
             )
         })?
-        .0
+        .pool
         .clone();
 
     let mut conn = pool
@@ -86,14 +95,16 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     infra.deferred = Some(dq.clone());
     lua.set_app_data(infra);
 
-    // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on
-    // this function's stack until just below — `remove_app_data` runs
-    // before `tx.commit()` / drop, so the pointer is never
-    // dereferenced after the tx is gone. Closure call runs
-    // synchronously between set/remove.
+    // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on this
+    // function's stack until just below, and `TxSlot` removes the pointer
+    // when the inner scope ends — including if the closure unwinds — so it
+    // is never dereferenced after the tx is gone.
     lua.set_app_data(TxContext::new(&tx));
-    let call_result = fn_arg.call::<Value>(());
-    lua.remove_app_data::<TxContext>();
+    let call_result = {
+        let _slot = TxSlot(lua);
+
+        fn_arg.call::<Value>(())
+    };
 
     match prev_infra {
         Some(p) => {

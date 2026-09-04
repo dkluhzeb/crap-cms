@@ -76,6 +76,28 @@ pub struct AdminState {
     pub custom_pages: custom_pages::CustomPageRegistry,
 }
 
+/// Render `template` against `data`.
+///
+/// Free function rather than only a method because the authenticated page
+/// path renders on a `spawn_blocking` thread that holds an
+/// `Arc<Handlebars>` instead of the whole [`AdminState`] — cloning the
+/// latter would copy the entire config per render. Both entry points funnel
+/// here so there is one place templates are rendered.
+///
+/// # Errors
+///
+/// Returns a formatted error string if the template is unknown or rendering
+/// fails.
+pub fn render_template(
+    handlebars: &Handlebars<'static>,
+    template: &str,
+    data: &Value,
+) -> Result<String, String> {
+    handlebars
+        .render(template, data)
+        .map_err(|e| format!("Template error: {e}"))
+}
+
 impl AdminState {
     /// Render a template with the given data, returning HTML string.
     ///
@@ -83,9 +105,7 @@ impl AdminState {
     ///
     /// Returns a formatted error string if the template is unknown or rendering fails.
     pub fn render(&self, template: &str, data: &Value) -> Result<String, String> {
-        self.handlebars
-            .render(template, data)
-            .map_err(|e| format!("Template error: {e}"))
+        render_template(&self.handlebars, template, data)
     }
 
     /// Build an [`McpServer`] for the HTTP MCP transport, sharing the admin's

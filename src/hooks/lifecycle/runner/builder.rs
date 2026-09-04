@@ -18,7 +18,7 @@ use crate::{
         self, HookRunner,
         lifecycle::{
             InitPhase, LuaVmInfra,
-            execution::scan_registered_events,
+            execution::{scan_has_template_data, scan_registered_events},
             types::{HookDepth, MaxInstructions},
         },
         lua_api::{
@@ -127,6 +127,7 @@ impl<'a> HookRunnerBuilder<'a> {
         // Cache which events have globally-registered hooks (from init.lua).
         // All VMs execute the same init.lua, so checking any VM suffices.
         let registered_events = scan_registered_events(&prewarmed[0]);
+        let has_template_data = scan_has_template_data(&prewarmed[0]);
 
         info!(
             "HookRunner ready: {} VM(s) pre-warmed in {:.0}ms (cap {}){}",
@@ -143,6 +144,7 @@ impl<'a> HookRunnerBuilder<'a> {
         Ok(HookRunner {
             pool: Arc::new(VmPool::new(prewarmed, factory, cap)),
             registered_events: Arc::new(registered_events),
+            has_template_data,
             registry,
             default_deny: config.access.default_deny,
         })

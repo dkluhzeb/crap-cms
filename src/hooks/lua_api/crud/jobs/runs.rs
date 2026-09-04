@@ -75,7 +75,7 @@ fn run_to_table(lua: &Lua, run: &crate::core::job::JobRun) -> LuaResult<Table> {
 #[lua_fn(
     path = "crap.jobs.get_run",
     returns_doc = "The run table (`id`, `slug`, `status`, `queue`, `attempt`, `max_attempts`, and `result` / `error` / `created_at` when set), or nil when it does not exist or is not visible.",
-    auto_tx
+    auto_tx_read
 )]
 fn jobs_get_run(
     state: &JobsRunsState,
@@ -97,7 +97,7 @@ fn jobs_get_run(
 #[lua_fn(
     path = "crap.jobs.list_runs",
     returns_doc = "A table with `runs` (array of run tables) and `total`.",
-    auto_tx
+    auto_tx_read
 )]
 fn jobs_list_runs(
     state: &JobsRunsState,

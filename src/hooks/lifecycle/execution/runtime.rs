@@ -97,6 +97,17 @@ pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
     events
 }
 
+/// Whether any `crap.template_data` function was registered by `init.lua`.
+///
+/// Scanned once at startup on a pre-warmed VM, like
+/// [`scan_registered_events`] — every VM runs the same `init.lua`, and
+/// registration is init-only. Lets the admin render path skip its blocking
+/// hop when no Lua participates in rendering at all.
+pub(crate) fn scan_has_template_data(lua: &Lua) -> bool {
+    lua.named_registry_value::<Table>(crate::hooks::lua_api::template_data::TEMPLATE_DATA_KEY)
+        .is_ok_and(|t| t.pairs::<Value, Value>().next().is_some())
+}
+
 /// Reuses the same context-to-table / table-to-context conversion as `call_hook_ref`.
 pub(crate) fn call_registered_hooks(
     lua: &Lua,

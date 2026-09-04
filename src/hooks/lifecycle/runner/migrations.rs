@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     db::DbConnection,
-    hooks::{HookRunner, lifecycle::types::TxContextGuard},
+    hooks::{HookRunner, lifecycle::TxContextGuard},
 };
 
 impl HookRunner {

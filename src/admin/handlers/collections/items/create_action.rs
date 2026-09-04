@@ -250,14 +250,17 @@ pub async fn create_action(
                 htmx_redirect_with_created(&paths::collection(&slug), &doc.id, label)
             }
         }
-        Ok(Err(e)) => handle_collection_write_error(WriteErrorParams {
-            state: &state,
-            def: &def,
-            form: &form_for_error,
-            err: e,
-            doc_id: None,
-            auth_user: auth_user.as_ref(),
-        }),
+        Ok(Err(e)) => {
+            handle_collection_write_error(WriteErrorParams {
+                state: &state,
+                def: &def,
+                form: &form_for_error,
+                err: e,
+                doc_id: None,
+                auth_user: auth_user.as_ref(),
+            })
+            .await
+        }
         Err(e) => {
             error!("Create task error: {}", e);
             redirect_response(&paths::collection_create(&slug))

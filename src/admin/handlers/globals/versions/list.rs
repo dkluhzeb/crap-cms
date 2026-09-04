@@ -16,11 +16,15 @@ use crate::{
             page::globals::GlobalVersionsListPage,
         },
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, global_base, paths,
-            redirect_response, render_page, require_global, server_error, version_to_json,
+            PageRequest, Pagination, PaginationParams, extract_editor_locale, get_user_doc,
+            global_base, paths, redirect_response, render_page, require_global, server_error,
+            version_to_json,
         },
     },
-    core::auth::{AuthUser, Claims},
+    core::{
+        Document, GlobalDefinition,
+        auth::{AuthUser, Claims},
+    },
     db::query::PaginationResult,
     service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
 };
@@ -45,6 +49,31 @@ fn fetch_version_data(ctx: &ServiceContext, pg: &Pagination) -> (Vec<Value>, Pag
     (versions, result.pagination)
 }
 
+/// Fetch one page of global version history.
+///
+/// Scoped to its own function so the pooled connection and the read hooks
+/// borrowing it — neither of which is `Send` — are dropped before the
+/// handler awaits the page render. `None` means the connection could not be
+/// acquired.
+fn load_version_page(
+    state: &AdminState,
+    slug: &str,
+    def: &GlobalDefinition,
+    pg: &Pagination,
+    user_doc: Option<&Document>,
+) -> Option<(Vec<Value>, PaginationResult)> {
+    let conn = state.infra.pool.get().ok()?;
+    let hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
+
+    let ctx = ServiceContext::global(slug, def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user_doc)
+        .build();
+
+    Some(fetch_version_data(&ctx, pg))
+}
+
 /// GET /admin/globals/{slug}/versions — dedicated version history page
 pub async fn list_versions_page(
     State(state): State<AdminState>,
@@ -64,21 +93,12 @@ pub async fn list_versions_page(
         return redirect_response(&paths::global(&slug));
     }
 
-    let Ok(conn) = state.infra.pool.get() else {
-        return server_error(&state, "Database error");
-    };
-
     let user_doc = get_user_doc(auth_user.as_ref());
     let pg = params.resolve(&state.config.pagination);
-    let hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
 
-    let ctx = ServiceContext::global(&slug, &def)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(user_doc)
-        .build();
-
-    let (versions, pagination) = fetch_version_data(&ctx, &pg);
+    let Some((versions, pagination)) = load_version_page(&state, &slug, &def, &pg, user_doc) else {
+        return server_error(&state, "Database error");
+    };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -107,5 +127,11 @@ pub async fn list_versions_page(
         restore_url_prefix: paths::global(&slug),
     };
 
-    render_page(&state, hx, "globals/versions", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "globals/versions",
+        &ctx,
+    )
+    .await
 }

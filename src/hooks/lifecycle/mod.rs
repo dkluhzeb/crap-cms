@@ -18,7 +18,7 @@ pub use context::{
 pub(crate) use runner::run_effects_on_vm;
 pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
-    PublishEventInput,
+    PublishEventInput, RenderCrud, RenderInfo, RenderParams,
 };
 pub use types::{DisplayConditionResult, FieldHookEvent, HookEvent, InitPhase, LuaCrudInfra};
 // Internal types needed by sibling submodules (access.rs, context.rs)
@@ -29,7 +29,8 @@ pub(crate) use execution::{
     apply_after_read_inner, resolve_hook_function, run_field_hooks_inner, run_hooks_inner,
 };
 pub(crate) use types::{
-    HookDepth, HookDepthGuard, LuaVmInfra, PoolContext, TxContext, UiLocaleContext, UserContext,
+    HookDepth, HookDepthGuard, LuaVmInfra, PoolContext, PoolMode, TxContext, TxContextGuard,
+    UiLocaleContext, UserContext,
 };
 pub use validation::ValidationCtx;
 pub use validation::is_valid_email_format;

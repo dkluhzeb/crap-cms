@@ -21,7 +21,7 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, bad_request, extract_editor_locale,
+                ListUrlContext, PageRequest, PaginationParams, bad_request, extract_editor_locale,
                 extract_status_filter, extract_where_params, parse_where_params, paths,
                 render_page, require_collection, service_error_to_admin_response,
                 task_join_error_response, validate_sort,
@@ -522,7 +522,13 @@ pub async fn list_items(
         auth_user: auth_user.as_ref(),
     });
 
-    render_page(&state, hx, "collections/items", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/items",
+        &ctx,
+    )
+    .await
 }
 
 /// Build a single item row for the collection list table.

@@ -30,13 +30,6 @@ pub struct HxNav {
 }
 
 impl HxNav {
-    /// A full-page render — for render paths that are never htmx
-    /// navigation targets (auth pages outside the admin shell).
-    #[must_use]
-    pub fn full() -> Self {
-        Self::default()
-    }
-
     /// Derive the navigation intent from request headers — for handlers
     /// that already extract a [`HeaderMap`] (keeps their extractor list
     /// short); the axum extractor below delegates here.

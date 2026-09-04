@@ -20,7 +20,8 @@ use crate::{
         context::{BasePageContext, PageMeta, PageType, page::custom::CustomPage},
         custom_pages::is_valid_slug,
         handlers::shared::{
-            extract_editor_locale, forbidden, get_user_doc, has_read_access, not_found, render_page,
+            PageRequest, extract_editor_locale, forbidden, get_user_doc, has_read_access,
+            not_found, render_page,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -74,5 +75,11 @@ pub async fn render_custom_page(
 
     let ctx = CustomPage { base, slug };
 
-    render_page(&state, hx, &template_name, &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        &template_name,
+        &ctx,
+    )
+    .await
 }

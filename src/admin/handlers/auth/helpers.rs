@@ -12,7 +12,6 @@ use axum::{
 use chrono::Utc;
 use ipnet::IpNet;
 
-use crate::admin::handlers::shared::HxNav;
 use crate::core::collection::Auth;
 use crate::{
     admin::{
@@ -23,7 +22,7 @@ use crate::{
         },
         handlers::{
             auth::{MFA_PENDING_COOKIE, append_cookies, session_cookies, session_same_site},
-            shared::render_page,
+            shared::render_auth_page,
         },
         server::extract_cookie,
     },
@@ -137,7 +136,7 @@ pub(in crate::admin::handlers) fn login_error(
         success: None,
     };
 
-    render_page(state, HxNav::full(), "auth/login", &ctx)
+    render_auth_page(state, "auth/login", &ctx)
 }
 
 /// Check if every auth collection has password-login turned off
@@ -210,7 +209,7 @@ pub(in crate::admin::handlers) fn render_forgot_success(
         show_collection_picker,
     };
 
-    render_page(state, HxNav::full(), "auth/forgot_password", &ctx)
+    render_auth_page(state, "auth/forgot_password", &ctx)
 }
 
 /// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.
@@ -354,7 +353,7 @@ pub(in crate::admin::handlers) fn render_mfa_form(
         totp_secret: provisioning.map(|p| p.secret.clone()),
     };
 
-    render_page(state, HxNav::full(), "auth/mfa", &ctx)
+    render_auth_page(state, "auth/mfa", &ctx)
 }
 
 /// Whether `slug`'s password login uses `mfa = "totp"`.

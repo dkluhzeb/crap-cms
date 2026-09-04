@@ -1460,6 +1460,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A `{{data "name"}}` value vanished silently when the Lua VM pool was
+  exhausted.** `call_template_data` dropped the pool error with `.ok()?`, so
+  the helper rendered empty with nothing logged — a dashboard widget just
+  disappearing, with no way to trace it back to pool pressure. It now warns
+  with the function name, matching what `before_render` already did on the
+  same failure.
+
+
+- **The e2e harness rendered admin pages without the `{{data}}` helper.** It
+  built the Handlebars registry with no hook runner, so unlike production the
+  `data` helper was never registered — any template using `{{data "name"}}`
+  rendered empty in tests while working in the real server, and the whole
+  `crap.template_data` surface had no end-to-end coverage. The harness now
+  passes the runner, matching `admin::server`.
+
+
+- **A panicking CRUD call could leave a Lua VM holding a pointer to a freed
+  database connection.** Every Lua CRUD op installs a `TxContext` — a fat
+  pointer to the borrowed connection — and removed it with a plain statement
+  after the call. If the call unwound, that statement was skipped: the
+  connection dropped back into the pool while the VM kept pointing at it, and
+  the VM went back to its own pool too, so the next hook to lease that VM
+  would dereference freed memory. The slot is now owned by an RAII guard, so
+  it is cleared on the unwind path as well. Covers `crap.transaction(fn)` and
+  both pool-mode CRUD paths.
+
+- **The admin dashboard rendered a broken 500 page when the database was
+  unavailable.** It bypassed the shared `server_error` helper and rendered
+  `errors/500` against an ad-hoc `{"message": ...}` object, so the page had no
+  `crap` block (hence no CSP nonce), no navigation, and no page metadata, and
+  skipped the `before_render` hook every other error page runs. It now goes
+  through the same helper as every other 500.
+
+- **The dashboard held a pooled read connection while rendering.** Harmless
+  before, but a `before_render` hook now acquires a read connection of its
+  own, so the two competed for one pool and enough concurrent dashboard loads
+  would have made every hook wait out the connection timeout. The card queries
+  are confined to a helper that releases the connection before rendering — the
+  shape every other page handler already used.
+
+
 - **Upload filenames: the extension is now sanitized to ASCII alphanumerics**
   (the stem always was). Previously a crafted upload could smuggle `?`, `&`,
   `#`, `%` or control bytes into the stored filename's extension — surviving
@@ -2750,6 +2791,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`crap.template_data` functions get the same read-only database access as
+  `before_render`.** They are the two render-time extension points — a hook
+  that reshapes the whole page context, and `{{data "name"}}` for a value one
+  template needs — and a function registered with
+  `crap.template_data.register` can now query as the signed-in admin, just
+  like the hook:
+
+  ```lua
+  crap.template_data.register("pending_orders", function(ctx)
+      return crap.collections.orders.count({ where = { status = { equals = "pending" } } })
+  end)
+  ```
+
+  Both run under one access level per page: read-only as the viewer on
+  authenticated pages, no database at all on unauthenticated and error pages.
+  Writes and `crap.transaction(fn)` are refused from either. Previously only
+  `before_render` could reach the database, which meant the helper built for
+  putting data in templates was the one that could not fetch any.
+
+
+- **Admin render hooks: `before_render` now knows which page it is on, and can
+  read the database.** The hook signature is `fn(ctx, info)` — `info` carries
+  `page` (the same discriminant as `ctx.page.type`), `template`, and the
+  `collection` / `global` slug where the page has one. Previously the only way
+  to tell pages apart was to guess from which context keys happened to exist,
+  which the docs themselves recommended and which broke whenever a page grew a
+  field; scoping a hook to one page is now a single line
+  (`if info.page ~= "dashboard" then return end`).
+
+  On authenticated admin pages the hook also gets **read-only** database
+  access, so it can build page data from real content
+  (`ctx.pending = crap.collections.orders.count{...}`) instead of being limited
+  to reshaping what the handler already fetched. Reads run as the signed-in
+  admin with normal access control, on the read pool. Writes and
+  `crap.transaction(fn)` are refused with an error naming the alternative: a
+  page render is a `GET`, write-capable access would take the single SQLite
+  writer even for a `count` and serialize every admin page load against every
+  real write — and a render hook that could write would turn viewing a page
+  into a mutation. Unauthenticated pages (login, password reset, MFA) and error
+  pages run the hook with no database access at all: there is no viewer to
+  scope a read by, and an error page has to render when the database is the
+  thing that failed.
+
+  Existing `fn(ctx)` hooks keep working unchanged — Lua ignores the extra
+  argument.
+
+
 - **Queued bulk operations: `queue = true` on `CreateMany` / `UpdateMany` /
   `DeleteMany` (gRPC and MCP).** Instead of holding one write transaction for the whole
   batch while the caller blocks, the request is stored as a `_system_bulk`
@@ -3311,6 +3399,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **Authenticated admin pages render on a blocking thread.** Lua can now reach
+  the database from either side of a page render — `before_render` before it,
+  a `crap.template_data` function from inside Handlebars — so neither may run
+  on an async worker. Both now share one blocking hop, which also takes
+  template rendering itself off the reactor. Pages where no Lua participates
+  (no `before_render` hook and no registered template-data function) still
+  render inline and pay nothing.
+
+
+- **The admin page context now makes one round trip through Lua, not one per
+  hook.** `before_render` used to convert the entire page context JSON → Lua →
+  JSON separately for *every* registered hook, so five hooks on a 50-row list
+  page meant five full conversions of the whole context. All hooks now share a
+  single Lua table — which is also what makes a hook's in-place mutation
+  visible to the next hook — and the conversion happens once per render. Pages
+  with no `before_render` hook registered skip the machinery entirely.
+
 
 - **A third framework job queue, `bulk`, is seeded** alongside `images` and
   `email` (`concurrency = 1`, `timeout = 3600`, `retries = 0`) to host queued

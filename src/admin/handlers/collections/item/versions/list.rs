@@ -16,7 +16,7 @@ use crate::{
             PaginationContext, page::collections::CollectionVersionsListPage,
         },
         handlers::shared::{
-            Pagination, PaginationParams, collection_item_base, extract_editor_locale,
+            PageRequest, Pagination, PaginationParams, collection_item_base, extract_editor_locale,
             get_user_doc, not_found, paths, redirect_response, render_page, require_collection,
             server_error, version_to_json,
         },
@@ -147,5 +147,11 @@ pub async fn list_versions_page(
         restore_url_prefix: paths::collection_item(&slug, &id),
     };
 
-    render_page(&state, hx, "collections/versions", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/versions",
+        &ctx,
+    )
+    .await
 }

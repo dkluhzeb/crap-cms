@@ -29,7 +29,9 @@ use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::ConditionContext;
-use crap_cms::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
+use crap_cms::hooks::lifecycle::{
+    HookContext, HookEvent, HookRunner, RenderCrud, RenderInfo, RenderParams,
+};
 use serde_json::json;
 
 /// A throwaway condition context for `call_display_condition` tests (the
@@ -234,6 +236,18 @@ fn call_display_condition_invalid_ref_returns_none() {
     assert!(result.is_none(), "Invalid hook ref should return None");
 }
 
+/// Build the no-CRUD `RenderParams` the display-hook tests use.
+fn render_params(context: serde_json::Value) -> RenderParams {
+    RenderParams {
+        info: RenderInfo::from_context("test/page", &context),
+        context,
+        crud: RenderCrud::None {
+            user: None,
+            ui_locale: None,
+        },
+    }
+}
+
 // ── 6O. run_before_render ────────────────────────────────────────────────────
 
 #[test]
@@ -243,7 +257,7 @@ fn run_before_render_no_hooks_returns_same() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let context = json!({"page": "home", "items": [1, 2, 3]});
-    let result = runner.run_before_render(context.clone());
+    let result = runner.run_before_render(render_params(context.clone()));
     assert_eq!(result, context);
 }
 
@@ -468,7 +482,7 @@ fn before_render_registered_hook_adds_marker() {
         .expect("HookRunner::new");
 
     let context = json!({ "page": "edit" });
-    let result = runner.run_before_render(context);
+    let result = runner.run_before_render(render_params(context));
     assert_eq!(
         result.get("_render_marker").and_then(|v| v.as_str()),
         Some("rendered"),
@@ -507,7 +521,7 @@ fn before_render_hook_returning_nil_preserves_context() {
         .expect("HookRunner::new");
 
     let context = json!({ "page": "list" });
-    let result = runner.run_before_render(context.clone());
+    let result = runner.run_before_render(render_params(context.clone()));
     // nil return should keep context unchanged
     assert_eq!(result, context);
 }
@@ -544,7 +558,7 @@ fn before_render_hook_error_returns_original_context() {
         .expect("HookRunner::new");
 
     let context = json!({ "page": "edit", "title": "Hello" });
-    let result = runner.run_before_render(context.clone());
+    let result = runner.run_before_render(render_params(context.clone()));
 
     // A failing hook must not propagate — the original context is returned
     // unmodified so callers (admin UI render path) can proceed.

@@ -77,7 +77,8 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
                     p.doc_id,
                     p.auth_user,
                     "Could not load the existing document for file cleanup",
-                ));
+                )
+                .await);
             }
         },
         None => None,
@@ -111,7 +112,8 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
                 p.doc_id,
                 p.auth_user,
                 &e.to_string(),
-            ))
+            )
+            .await)
         }
         Err(e) => {
             error!("Upload task error: {}", e);
@@ -122,13 +124,14 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
                 p.doc_id,
                 p.auth_user,
                 &e.to_string(),
-            ))
+            )
+            .await)
         }
     }
 }
 
 /// Render the appropriate upload error page based on create/edit mode.
-fn render_error(
+async fn render_error(
     state: &AdminState,
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
@@ -137,8 +140,8 @@ fn render_error(
     err_msg: &str,
 ) -> Response {
     if let Some(id) = doc_id {
-        render_edit_upload_error(state, def, form_data, id, auth_user, err_msg)
+        render_edit_upload_error(state, def, form_data, id, auth_user, err_msg).await
     } else {
-        render_upload_error(state, def, form_data, auth_user, err_msg)
+        render_upload_error(state, def, form_data, auth_user, err_msg).await
     }
 }

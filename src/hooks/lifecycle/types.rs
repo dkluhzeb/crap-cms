@@ -132,7 +132,34 @@ unsafe impl Sync for TxContext {}
 /// for `TxContext` during `fn` so a sequence of CRUD ops shares one
 /// tx for explicit multi-step atomicity.
 #[derive(Clone)]
-pub(crate) struct PoolContext(pub(crate) DbPool);
+pub(crate) struct PoolContext {
+    pub(crate) pool: DbPool,
+    pub(crate) mode: PoolMode,
+}
+
+/// What a pool-mode context is allowed to do.
+///
+/// Job handlers run [`PoolMode::Write`]: every CRUD op opens its own
+/// short-lived IMMEDIATE transaction on the **write** pool, so a handler
+/// can read and write freely.
+///
+/// Admin render hooks (`before_render`) run [`PoolMode::ReadOnly`]: reads
+/// draw a **read**-pool connection and every write op is refused up front.
+/// Two reasons, both structural rather than stylistic:
+///
+/// 1. A page render is a `GET`. Taking the single `SQLite` writer — which
+///    `PoolMode::Write` does even for `find`/`count` — on every admin page
+///    load would serialize renders against each other and against real
+///    writes.
+/// 2. A render hook that could write turns any admin page view into a
+///    mutation, with no request the operator can point at as the cause.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PoolMode {
+    /// Read and write; each op gets its own IMMEDIATE tx (job handlers).
+    Write,
+    /// Reads only, on the read pool (admin `before_render` hooks).
+    ReadOnly,
+}
 
 /// Optional authenticated user context injected alongside `TxContext`.
 /// CRUD closures read this when overrideAccess = false.
@@ -370,9 +397,34 @@ impl<'a> TxContextGuard<'a> {
         ui_locale: Option<String>,
         infra: Option<LuaCrudInfra>,
     ) -> Self {
+        Self::set_pool_with_mode(lua, pool, PoolMode::Write, user, ui_locale, infra)
+    }
+
+    /// Read-only pool mode: `UserContext` + `UiLocaleContext` as usual, but
+    /// CRUD reads draw from the read pool and every write op is refused.
+    /// Used by the admin `before_render` hook — see [`PoolMode::ReadOnly`]
+    /// for why a page render must not be able to write.
+    pub(crate) fn set_pool_read_only(
+        lua: &'a Lua,
+        pool: DbPool,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+    ) -> Self {
+        Self::set_pool_with_mode(lua, pool, PoolMode::ReadOnly, user, ui_locale, None)
+    }
+
+    /// Shared body of [`Self::set_pool`] and [`Self::set_pool_read_only`].
+    fn set_pool_with_mode(
+        lua: &'a Lua,
+        pool: DbPool,
+        mode: PoolMode,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+        infra: Option<LuaCrudInfra>,
+    ) -> Self {
         let guard = Self::snapshot(lua);
 
-        lua.set_app_data(PoolContext(pool));
+        lua.set_app_data(PoolContext { pool, mode });
         lua.set_app_data(UserContext(user));
         lua.set_app_data(UiLocaleContext(ui_locale));
 

@@ -2,6 +2,7 @@
 
 mod helpers;
 mod registry;
+pub(crate) mod render_scope;
 pub mod slot_docs;
 
 pub use registry::create_handlebars;

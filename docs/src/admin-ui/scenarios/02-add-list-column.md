@@ -87,12 +87,9 @@ a `before_render` hook:
 
 ```lua
 -- <config_dir>/init.lua
-crap.hooks.register("before_render", function(ctx)
-  if not ctx.collection or ctx.collection.slug ~= "posts" then
-    return ctx
-  end
-  if not ctx.items then
-    return ctx
+crap.hooks.register("before_render", function(ctx, info)
+  if info.collection ~= "posts" or info.page ~= "collection_items" then
+    return
   end
 
   for _, doc in ipairs(ctx.items) do
@@ -105,18 +102,21 @@ end)
 
 Notes:
 
-- **`before_render` is global** — fires for every admin page render.
-  Filter by what's in the context (`ctx.collection`, `ctx.items`,
-  etc.) to no-op for pages your hook doesn't apply to.
-- **`ctx` is the page context directly** — there's no `ctx.template`
-  field; identify the page by which keys exist (`ctx.items` is set
-  on collection list pages) plus their values.
+- **`before_render` is global** — it fires for every admin page render,
+  so scope it with the second argument. `info.page` and
+  `info.collection` say exactly which page is rendering; bailing out
+  early is one line.
 - **Mutate or return** — Lua tables are pass-by-reference, so
   mutating `ctx.items[i].word_count` is enough. Returning `ctx`
   explicitly is conventional and harmless.
 - **Cost** — the hook runs in the request path. For 50 rows × a
   word-count regex, this is a sub-millisecond cost. For more
   expensive enrichments, prefer Option A.
+- **Need to look something up?** The hook has read-only database
+  access on authenticated pages, so an enrichment that needs a query
+  (`crap.collections.authors.find_by_id(doc.author)`) works here too —
+  it just runs once per page render, per row. Denormalizing with
+  Option A stays the better answer when the value is hot.
 
 ## Step 4 — restart (or rely on dev mode)
 

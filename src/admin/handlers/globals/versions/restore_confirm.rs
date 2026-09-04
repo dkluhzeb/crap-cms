@@ -15,15 +15,48 @@ use crate::{
             page::globals::GlobalRestoreConfirmPage,
         },
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, global_base,
+            PageRequest, check_access_or_forbid, extract_editor_locale, forbidden, global_base,
             load_version_with_missing_relations, paths, redirect_response, render_page,
             require_global, server_error,
         },
     },
-    core::auth::{AuthUser, Claims},
-    db::query::AccessResult,
+    core::{
+        Document, GlobalDefinition,
+        auth::{AuthUser, Claims},
+        document::VersionSnapshot,
+    },
+    db::query::{AccessResult, MissingRelation},
     service::{self, RunnerReadHooks},
 };
+
+/// Load the global version being restored plus the relations it can no
+/// longer resolve.
+///
+/// Scoped to its own function so the pooled connection and the read hooks
+/// borrowing it — neither of which is `Send` — are dropped before the
+/// handler awaits the page render.
+fn load_restore_data(
+    state: &AdminState,
+    slug: &str,
+    def: &GlobalDefinition,
+    version_id: &str,
+    user_doc: Option<&Document>,
+) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+    let Ok(conn) = state.infra.pool.get() else {
+        return Err("Database error");
+    };
+
+    // `find_version_by_id` (called by `load_version_with_missing_relations`)
+    // runs an access check that requires `ServiceContext.read_hooks`.
+    let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
+    let ctx = service::ServiceContext::global(slug, def)
+        .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
+        .build();
+
+    load_version_with_missing_relations(&ctx, &conn, &state.infra.registry, version_id, &def.fields)
+}
 
 /// GET /`admin/globals/{slug}/versions/{version_id}/restore` — confirmation page
 pub async fn restore_confirm(
@@ -59,27 +92,9 @@ pub async fn restore_confirm(
         _ => {}
     }
 
-    let Ok(conn) = state.infra.pool.get() else {
-        return server_error(&state, "Database error");
-    };
-
-    // `find_version_by_id` (called by `load_version_with_missing_relations`)
-    // runs an access check that requires `ServiceContext.read_hooks`.
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
-    let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
-    let version_ctx = service::ServiceContext::global(&slug, &def)
-        .conn(&conn)
-        .read_hooks(&read_hooks)
-        .user(user_doc)
-        .build();
 
-    let (version, missing) = match load_version_with_missing_relations(
-        &version_ctx,
-        &conn,
-        &state.infra.registry,
-        &version_id,
-        &def.fields,
-    ) {
+    let (version, missing) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
         Ok(data) => data,
         Err(msg) => return server_error(&state, msg),
     };
@@ -111,5 +126,11 @@ pub async fn restore_confirm(
         back_url,
     };
 
-    render_page(&state, hx, "globals/restore", &ctx)
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "globals/restore",
+        &ctx,
+    )
+    .await
 }
