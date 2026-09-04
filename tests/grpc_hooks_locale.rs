@@ -867,6 +867,7 @@ async fn update_many_with_filter() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
@@ -923,6 +924,7 @@ async fn delete_many_with_where() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),

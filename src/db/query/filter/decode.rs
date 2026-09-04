@@ -21,6 +21,27 @@ use serde_json::{Map, Value};
 
 use crate::db::{Filter, FilterClause, FilterOp};
 
+/// Decode a `where` clause supplied as a JSON **string** (the gRPC wire
+/// form, and the stored form in a queued `_system_bulk` job payload) into
+/// the canonical filter grammar. Thin wrapper over [`decode_where_map`] so
+/// every surface that receives the JSON-string dialect shares one decoder
+/// instead of re-implementing the parse.
+///
+/// # Errors
+///
+/// Returns a message when the string is not a JSON object, or when the
+/// object does not parse into the filter grammar.
+pub fn decode_where_json_str(json_str: &str) -> Result<Vec<FilterClause>, String> {
+    let value: Value =
+        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let map = value
+        .as_object()
+        .ok_or_else(|| "where clause must be a JSON object".to_string())?;
+
+    decode_where_map(map)
+}
+
 /// Decode a `where` object into filter clauses. Errors are plain strings —
 /// each surface wraps them in its own wire error type.
 ///

@@ -79,9 +79,9 @@ pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
-    FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, PaginatedResult,
-    PersistOptions, SearchDocumentsInput, VerificationQueue, WriteInput, WriteResult,
-    values_from_strings,
+    FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, OpDeadline,
+    PaginatedResult, PersistOptions, SearchDocumentsInput, VerificationQueue, WriteInput,
+    WriteResult, values_from_strings,
 };
 pub(crate) use types::{
     flush_deferred_effects, flush_queue, flush_verification_queue, invalidate_user_streams_if_auth,

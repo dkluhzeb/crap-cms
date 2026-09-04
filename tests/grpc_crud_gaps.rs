@@ -641,6 +641,7 @@ async fn update_many_basic() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
@@ -674,6 +675,7 @@ async fn update_many_with_where_partial() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
@@ -694,6 +696,7 @@ async fn update_many_no_matches() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
@@ -727,6 +730,7 @@ async fn delete_many_basic() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
@@ -773,6 +777,7 @@ async fn delete_many_with_where_partial() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
@@ -793,6 +798,7 @@ async fn delete_many_no_matches() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
@@ -834,6 +840,7 @@ async fn delete_many_soft_deletes_when_collection_has_soft_delete() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: None,
@@ -883,6 +890,7 @@ async fn delete_many_force_hard_delete_on_soft_delete_collection() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".to_string(),
             r#where: None,
@@ -1129,7 +1137,7 @@ async fn trigger_job_unauthenticated() {
         .service
         .trigger_job(Request::new(content::TriggerJobRequest {
             slug: "cleanup".to_string(),
-            data_json: None,
+            data: None,
             priority: None,
         }))
         .await

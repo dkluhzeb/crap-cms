@@ -188,6 +188,22 @@ crashes will run again, so **job handlers must be idempotent**. A job that must
 never run twice needs its own guard (e.g. a unique key or an idempotency check
 at the top of the handler).
 
+## System jobs
+
+The framework queues three job kinds of its own. They live outside
+`crap.jobs.define` (Rust handlers, no Lua VM), but flow through the same
+claim/execute/retry machinery and are configured through their queues:
+
+| Slug | Queue | Purpose |
+|---|---|---|
+| `_system_email` | `email` | Outbound email delivery |
+| `_system_image_convert` | `images` | AVIF / WebP image conversion |
+| `_system_bulk` | `bulk` | Queued bulk ops ([`queue = true`](../grpc-api/rpcs.md#queued-mode-queue--true) on CreateMany / UpdateMany / DeleteMany) |
+
+`_system_bulk` runs are visible only to the identity that queued them and
+never appear in `ListJobRuns`; the `bulk` queue defaults to
+`concurrency = 1`, `timeout = 3600`, `retries = 0`.
+
 ## Configuration (`crap.toml`)
 
 ```toml
@@ -215,7 +231,7 @@ crap-cms -C <config_dir> jobs healthcheck             # health summary; exit 0/2
 Four RPCs for job management:
 
 - `ListJobs` — list all defined jobs
-- `TriggerJob(slug, data_json?)` — queue a job, returns the run ID
+- `TriggerJob(slug, data?)` — queue a job, returns the run ID
 - `GetJobRun(id)` — get details of a specific run
 - `ListJobRuns(slug?, status?, limit?, offset?)` — list job runs with filters
 

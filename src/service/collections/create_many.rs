@@ -16,6 +16,7 @@ use crate::{
 };
 
 use super::update_many::enforce_bulk_limit;
+use crate::service::OpDeadline;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -37,6 +38,10 @@ pub struct CreateManyOptions {
     /// Locale for localized field writes — every item writes this locale's
     /// columns, exactly like single create. `None` = default locale.
     pub locale_ctx: Option<LocaleContext>,
+    /// Cooperative abort deadline, checked between documents. Set by the
+    /// queued-bulk runner so a job timeout actually stops (and rolls back)
+    /// the batch instead of only recording a failure.
+    pub deadline: OpDeadline,
 }
 
 impl Default for CreateManyOptions {
@@ -46,6 +51,7 @@ impl Default for CreateManyOptions {
             draft: false,
             max_documents: 0,
             locale_ctx: None,
+            deadline: OpDeadline::none(),
         }
     }
 }
@@ -100,6 +106,8 @@ fn create_many_pooled(
             let mut created = 0i64;
 
             for item in items {
+                opts.deadline.check(created)?;
+
                 let input = WriteInput::builder(item.data.clone())
                     .password(item.password.as_deref())
                     .locale_ctx(opts.locale_ctx.as_ref())
@@ -113,6 +121,10 @@ fn create_many_pooled(
                 documents.push(doc);
                 created += 1;
             }
+
+            // One last check: everything after this returns into the
+            // envelope's `tx.commit()`, so an expiry here still rolls back.
+            opts.deadline.check(created)?;
 
             Ok(CreateManyResult { created, documents })
         },
@@ -139,6 +151,8 @@ fn create_many_on_conn(
     let mut documents = Vec::with_capacity(items.len());
 
     for item in items {
+        opts.deadline.check(created)?;
+
         let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
             .locale_ctx(opts.locale_ctx.as_ref())

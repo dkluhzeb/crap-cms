@@ -2,6 +2,7 @@
 
 mod after_change_input;
 mod count_documents_input;
+mod deadline;
 mod deferred_effect;
 mod email_context;
 mod find_by_id_input;
@@ -18,6 +19,7 @@ mod write_result;
 
 pub(crate) use after_change_input::AfterChangeInput;
 pub use count_documents_input::CountDocumentsInput;
+pub use deadline::OpDeadline;
 pub(crate) use deferred_effect::flush_deferred_effects;
 pub use deferred_effect::{DeferredEffect, DeferredQueue, EffectOutcome};
 pub use email_context::EmailContext;

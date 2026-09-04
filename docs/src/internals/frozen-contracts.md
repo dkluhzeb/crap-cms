@@ -155,7 +155,7 @@ changing a representation is a breaking change to every consumer.
 - **JSON-string escape hatches are intentional and permanent** — do NOT promote
   them to typed messages: `FindRequest.where` (a JSON filter string, so new
   operators need no wire change), `FieldInfo.type` (field-type name as a free
-  string), and the job `data_json` / `result_json` payloads.
+  string), and the job `data` / `result_json` payloads.
 - **Schema introspection is a one-way lossy projection.** `DescribeCollection`
   flattens `tabs` sub-fields into `fields` (tab grouping is not reconstructable),
   and `FieldInfo.name` is the **Lua** field name (nested), never the flattened
@@ -488,10 +488,68 @@ alpha.10 on:
   in pool-mode with `ctx = { data, outcome }`. Registrations from hooks
   fired by nested CRUD attach to the outermost transaction.
 
+## Queued bulk operations (frozen 2026-09-04)
+
+- **`queue = true` response shape.** The count fields (`created`,
+  `modified`, `deleted`, `soft_deleted`, `skipped`) are `0` and the document
+  list is empty; `job_id` is present. Without `queue`, `job_id` is absent.
+  The `result_json` summaries are frozen: `{"created":N}`,
+  `{"modified":N}`, `{"deleted":N,"soft_deleted":N,"skipped":N}`.
+- **Queued runs are queuer-scoped, override-wide.** A `_system_bulk` run
+  is readable through `GetJobRun` by the identity that queued it, and by
+  any override caller (which is how the MCP job tools read them — those
+  return status/result/error only, never the payload). It never appears in
+  `ListJobRuns`. Unparseable run data fails closed.
+- **Identity is a reference, re-checked at execution.** Only the user id,
+  auth collection, and session version are stored — never a user document —
+  and the user is re-loaded when the run executes: a locked or deleted
+  account, or a session-version bump (force-logout, password reset,
+  unverify), abandons the run. Strategy-authenticated callers cannot queue
+  (their identity may be synthetic and is not re-resolvable). Anonymous callers cannot queue (`UNAUTHENTICATED`), and `CreateMany`
+  with `queue` plus any per-item password is `INVALID_ARGUMENT`.
+- **Exactly one attempt.** `_system_bulk` runs are pinned to
+  `max_attempts = 1` at insert, independent of `[jobs.queues.bulk]
+  retries` — a retry could re-apply an already-committed batch.
+- **The budget is enforced, not just reported.** A run that exceeds its
+  queue `timeout` commits nothing: the batch aborts itself and the atomic
+  transaction rolls back, so the recorded failure is truthful.
+- **`_system_bulk` is a reserved system slug** (`SYSTEM_JOB_SLUGS`). User
+  job slugs cannot collide — `validate_slug` rejects a leading underscore.
+- **Queue-time capture.** `bulk_max_documents`, `hooks`, `draft`, `events`,
+  `locale`, and `force_hard_delete` are snapshotted when the run is queued;
+  later config changes do not affect a pending run.
+- **Refused before it is stored.** The collection access gate and the
+  document cap run at queue time; a denial or an over-limit batch is a
+  synchronous error, not a queued run that fails later.
+- **`CancelJobRun` cancels a not-yet-claimed run**, authorized by the same
+  rule that governs reading it. A claimed run cannot be cancelled.
+- **A finished run does not retain its request body.** The stored payload
+  is reduced to the queueing identity once the run reaches a terminal
+  status.
+
+## MCP job tools (frozen 2026-09-04)
+
+- **`[mcp] job_tools` is three-state** — `false` | `"read"` | `"all"`;
+  `true` is rejected as ambiguous. Tier membership is frozen: `"read"` =
+  `list_jobs` + `get_job_run` + `list_job_runs`; `"all"` adds
+  `trigger_job`. Every tier is enforced at execution, not only in
+  `tools/list`, and the `queue` argument on the bulk tools is advertised
+  and accepted only from `"read"` up.
+- **System-job runs stay hidden.** `_system_email` and
+  `_system_image_convert` runs are not readable through the job tools
+  (their payloads carry delivery tokens); `_system_bulk` is the sole
+  exception, under the queuer-scoped rule above.
+
 ## Explicitly NOT frozen (carve-outs recorded before the alpha.10 tag)
 
 Named here so later fixes are improvements, not breaking changes:
 
+- **Queued-bulk failure classification and check granularity.** Whether a
+  crashed run surfaces as `failed` or `stale`, the grace the scheduler's
+  outer timer allows a self-limiting job, and how often a batch checks its
+  deadline (currently between documents and once before commit) are
+  implementation details. The contract is only: an over-budget run commits
+  nothing and is recorded as a failure.
 - **Live-event delivery granularity under load.** Sequence numbers already
   make delivery best-effort (a lagging subscriber drops events and detects
   the gap). Since alpha.10 the stream pumps implement burst coalescing —

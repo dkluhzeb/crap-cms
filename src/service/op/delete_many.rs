@@ -14,6 +14,7 @@ use crate::{
 use crate::core::Builder;
 
 use super::Operation;
+use crate::service::OpDeadline;
 
 /// Owned arguments for [`DeleteMany`].
 #[derive(Builder)]
@@ -39,6 +40,9 @@ pub struct DeleteManyArgs {
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
+    /// Cooperative abort deadline for the batch (see [`OpDeadline`]).
+    #[builder(default = OpDeadline::none())]
+    pub deadline: OpDeadline,
 }
 
 /// Bulk-delete all documents matching a filter in one transaction.
@@ -98,6 +102,7 @@ impl Operation for DeleteMany {
             run_hooks: args.run_hooks,
             include_deleted: args.include_deleted || args.trash,
             max_documents: args.max_documents,
+            deadline: args.deadline,
         };
 
         let result = delete_many(ctx, &filters, locale_config, &opts)?;

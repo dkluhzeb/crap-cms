@@ -408,6 +408,19 @@ service ContentAPI {
   //   NOT_FOUND       — job run ID not found
   rpc GetJobRun (GetJobRunRequest) returns (GetJobRunResponse);
 
+  // CancelJobRun cancels a single PENDING job run by id — notably a queued
+  // bulk operation the caller no longer wants. A run that has already been
+  // claimed cannot be stopped.
+  //
+  // Authorized exactly like GetJobRun: the identity that queued the run
+  // (for queued bulk), or the job's own access gate.
+  //
+  // Auth: required.
+  //
+  // Errors:
+  //   UNAUTHENTICATED — no valid Bearer token provided
+  rpc CancelJobRun (CancelJobRunRequest) returns (CancelJobRunResponse);
+
   // ListJobRuns lists job execution history with optional filters.
   // Defaults to the 50 most recent runs when no limit is specified.
   //
@@ -747,15 +760,25 @@ message CreateManyRequest {
   // Emit a live-update event per created document. Default: false (bulk
   // operations are quiet). Set true to notify event-stream subscribers.
   optional bool events = 6;
+
+  // Run as a queued background job instead of synchronously. The response
+  // carries only job_id and the work runs later under the caller's identity;
+  // poll GetJobRun with that id for status and the result summary.
+  // Defaults to false (run synchronously).
+  optional bool queue = 7;
 }
 
 // CreateManyResponse reports the number of documents created.
 message CreateManyResponse {
-  // Number of documents created.
+  // Number of documents created (0 when queue=true — the work runs later).
   int64 created = 1;
 
-  // The created documents with server-assigned IDs.
+  // The created documents with server-assigned IDs (empty when queue=true).
   repeated Document documents = 2;
+
+  // Present when queue=true: the background job run executing this batch.
+  // Poll GetJobRun with it; the result summary lands in result_json.
+  optional string job_id = 3;
 }
 
 // UpdateRequest modifies an existing document.
@@ -1060,12 +1083,21 @@ message UpdateManyRequest {
   // Emit a live-update event per modified document. Default: false (bulk
   // operations are quiet). Set true to notify event-stream subscribers.
   optional bool events = 7;
+
+  // Run as a queued background job instead of synchronously. The response
+  // carries only job_id and the work runs later under the caller's identity;
+  // poll GetJobRun with that id for status and the result summary.
+  // Defaults to false (run synchronously).
+  optional bool queue = 8;
 }
 
 // UpdateManyResponse reports the number of documents modified.
 message UpdateManyResponse {
-  // Number of documents updated in this operation.
+  // Number of documents updated in this operation (0 when queue=true).
   int64 modified = 1;
+
+  // Present when queue=true: the background job run executing this batch.
+  optional string job_id = 2;
 }
 
 // DeleteManyRequest bulk-deletes all documents matching a filter.
@@ -1088,6 +1120,12 @@ message DeleteManyRequest {
   // Emit a live-update event per deleted document. Default: false (bulk
   // operations are quiet). Set true to notify event-stream subscribers.
   optional bool events = 5;
+
+  // Run as a queued background job instead of synchronously. The response
+  // carries only job_id and the work runs later under the caller's identity;
+  // poll GetJobRun with that id for status and the result summary.
+  // Defaults to false (run synchronously).
+  optional bool queue = 6;
 }
 
 // DeleteManyResponse reports the number of documents deleted.
@@ -1100,6 +1138,9 @@ message DeleteManyResponse {
 
   // Number of documents skipped because they are still referenced by other documents.
   int64 skipped = 3;
+
+  // Present when queue=true: the background job run executing this batch.
+  optional string job_id = 4;
 }
 
 // Document represents a single CMS document as returned by the API.
@@ -1482,9 +1523,11 @@ message TriggerJobRequest {
   // The job slug to trigger.
   string slug = 1;
 
-  // Optional JSON-serialized input data passed to the job handler as its argument.
-  // Defaults to "{}" when absent.
-  optional string data_json = 2;
+  // Optional JSON-serialized input data passed to the job handler as its
+  // argument. Defaults to "{}" when absent. Named `data` on every surface
+  // (MCP and Lua take a real object/table; the gRPC wire form is a JSON
+  // string) — the same string-vs-object split `where` uses.
+  optional string data = 2;
 
   // Optional scheduling priority. Higher = claimed sooner; same-priority jobs
   // claim FIFO. Negative values are allowed (run only when otherwise idle).
@@ -1496,6 +1539,19 @@ message TriggerJobRequest {
 message TriggerJobResponse {
   // Nanoid ID of the queued job run. Use with GetJobRun to poll status.
   string job_id = 1;
+}
+
+// CancelJobRunRequest cancels one pending run by id.
+message CancelJobRunRequest {
+  // The nanoid job run ID.
+  string id = 1;
+}
+
+// CancelJobRunResponse reports whether the run was cancelled.
+message CancelJobRunResponse {
+  // True when a pending run was removed; false when it does not exist, is
+  // not visible to the caller, or had already been claimed.
+  bool cancelled = 1;
 }
 
 // GetJobRunRequest fetches a single job run by its ID.
@@ -1516,8 +1572,9 @@ message JobRunInfo {
   // Current execution status.
   JobRunStatus status = 3;
 
-  // JSON-serialized input data passed to the handler.
-  string data_json = 4;
+  // JSON-serialized input data passed to the handler. For a finished
+  // queued-bulk run this is reduced to the queueing identity.
+  string data = 4;
 
   // JSON-serialized return value from the handler (absent if not yet completed).
   optional string result_json = 5;

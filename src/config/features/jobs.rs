@@ -38,6 +38,14 @@ const DEFAULT_IMAGES_QUEUE_RETRIES: u32 = 2;
 /// the now-removed `[email] queue_concurrency` field.
 const DEFAULT_EMAIL_QUEUE_CONCURRENCY: u32 = 5;
 
+/// `bulk` queue: one at a time — each run holds a write transaction for its
+/// whole batch.
+const DEFAULT_BULK_QUEUE_CONCURRENCY: u32 = 1;
+/// `bulk` queue: generous — large batches are the reason to queue at all.
+pub(crate) const DEFAULT_BULK_QUEUE_TIMEOUT_SECS: u64 = 3600;
+/// `bulk` queue: no automatic retries (see the seeding comment).
+const DEFAULT_BULK_QUEUE_RETRIES: u32 = 0;
+
 /// Default timeout (seconds) applied to the `email` queue when the
 /// operator doesn't set `[jobs.queues.email]` explicitly. SMTP
 /// handshake + delivery within `30s` is the historical default from
@@ -243,6 +251,24 @@ impl JobsConfig {
         }
         if images.retries.is_none() {
             images.retries = Some(DEFAULT_IMAGES_QUEUE_RETRIES);
+        }
+
+        let bulk = self
+            .queues
+            .entry(crate::core::job::SYSTEM_BULK_QUEUE.to_string())
+            .or_default();
+        if bulk.concurrency.is_none() {
+            bulk.concurrency = Some(DEFAULT_BULK_QUEUE_CONCURRENCY);
+        }
+        if bulk.timeout.is_none() {
+            bulk.timeout = Some(DEFAULT_BULK_QUEUE_TIMEOUT_SECS);
+        }
+        if bulk.retries.is_none() {
+            // ZERO retries by design: the batch op is atomic, but a crash in
+            // the window between its commit and the completion mark would
+            // make a retry re-apply the whole batch. Re-queue explicitly
+            // instead.
+            bulk.retries = Some(DEFAULT_BULK_QUEUE_RETRIES);
         }
 
         let email = self.queues.entry("email".to_string()).or_default();
@@ -520,7 +546,11 @@ mod tests {
         let mut cfg = JobsConfig::default();
         cfg.apply_queue_defaults();
 
-        for queue in [SYSTEM_EMAIL_QUEUE, IMAGE_CONVERT_QUEUE] {
+        for queue in [
+            SYSTEM_EMAIL_QUEUE,
+            IMAGE_CONVERT_QUEUE,
+            crate::core::job::SYSTEM_BULK_QUEUE,
+        ] {
             let q = cfg.queues.get(queue).unwrap_or_else(|| {
                 panic!(
                     "system queue '{queue}' missing from apply_queue_defaults — \
@@ -709,10 +739,10 @@ mod tests {
         )
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
-        // 3 operator-declared queues + framework-seeded `email`
-        // (the operator's `images` overrides what apply_queue_defaults
-        // would have seeded, so it doesn't add a 5th).
-        assert_eq!(config.jobs.queues.len(), 4);
+        // 3 operator-declared queues + the framework-seeded `email` and
+        // `bulk` (the operator's `images` overrides what
+        // apply_queue_defaults would have seeded, so it adds nothing).
+        assert_eq!(config.jobs.queues.len(), 5);
         assert_eq!(config.jobs.queues["default"].concurrency, Some(10));
         assert_eq!(config.jobs.queues["emails"].concurrency, Some(4));
         assert_eq!(config.jobs.queues["images"].concurrency, Some(2));

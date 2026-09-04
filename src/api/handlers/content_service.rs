@@ -620,6 +620,13 @@ impl ContentApi for ContentService {
         self.get_job_run_impl(request).await
     }
 
+    async fn cancel_job_run(
+        &self,
+        request: Request<content::CancelJobRunRequest>,
+    ) -> Result<Response<content::CancelJobRunResponse>, Status> {
+        self.cancel_job_run_impl(request).await
+    }
+
     async fn list_job_runs(
         &self,
         request: Request<content::ListJobRunsRequest>,

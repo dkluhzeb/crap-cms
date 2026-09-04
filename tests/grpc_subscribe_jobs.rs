@@ -635,7 +635,7 @@ async fn trigger_job_authenticated() {
 
     let mut req = Request::new(content::TriggerJobRequest {
         slug: "process".to_string(),
-        data_json: Some(r#"{"key": "value"}"#.to_string()),
+        data: Some(r#"{"key": "value"}"#.to_string()),
         priority: None,
     });
     add_auth(&mut req, &token);
@@ -660,7 +660,7 @@ async fn list_job_runs_authenticated() {
     // Trigger a job to create a run
     let mut trigger_req = Request::new(content::TriggerJobRequest {
         slug: "sync".to_string(),
-        data_json: None,
+        data: None,
         priority: None,
     });
     add_auth(&mut trigger_req, &token);

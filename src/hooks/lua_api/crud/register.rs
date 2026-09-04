@@ -226,6 +226,13 @@ fn register_job_functions(
         .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
         .collect();
 
+    jobs::runs::register_jobs_runs(
+        lua,
+        jobs::runs::JobsRunsState {
+            registry: Arc::clone(&registry),
+        },
+    )?;
+
     let state = jobs::queue::JobsQueueState::new(registry, queue_retries);
     jobs::queue::register_jobs_queue(lua, &jobs, state)?;
 

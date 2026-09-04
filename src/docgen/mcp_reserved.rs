@@ -32,6 +32,10 @@ const RESERVED: &[(&str, &str)] = &[
         "force_hard_delete",
         "Skip `soft_delete` and remove the row permanently.",
     ),
+    (
+        "queue",
+        "Run as a queued background job: returns a `job_id` instead of results; poll it with the `get_job_run` tool. Advertised and accepted only when `[mcp] job_tools` is `\"read\"` or `\"all\"`.",
+    ),
 ];
 
 /// MCP tool-name pattern for a wire op.

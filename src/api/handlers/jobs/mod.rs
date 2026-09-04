@@ -1,5 +1,6 @@
 //! Job RPC handlers: `ListJobs`, `TriggerJob`, `GetJobRun`, `ListJobRuns`.
 
+mod cancel_run;
 mod get_run;
 mod list;
 mod list_runs;
@@ -17,7 +18,7 @@ pub(super) fn job_run_to_proto(run: &JobRun) -> content::JobRunInfo {
         id: run.id.clone(),
         slug: run.slug.clone(),
         status: enum_mapping::job_run_status(run.status).into(),
-        data_json: run.data.clone(),
+        data: run.data.clone(),
         result_json: run.result.clone(),
         error: run.error.clone(),
         attempt: run.attempt,

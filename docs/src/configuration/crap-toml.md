@@ -280,6 +280,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 # enabled = false         # Enable MCP server
 # http = false            # Mount POST /mcp on admin server
 # config_tools = false    # Enable config read/write tools
+# job_tools = false       # Job tools: false | "read" | "all" (adds trigger_job)
 # api_key = ""            # API key for HTTP transport
 # http_max_body_bytes = "1MB" # Max POST /mcp body size
 # include_collections = [] # Only expose these collections
@@ -523,9 +524,11 @@ throttle resource-shared work (an `email` queue with a shared SMTP
 pool, an `images` queue limited by CPU, …) independent of per-job
 caps.
 
-The framework's own jobs run on two built-in queues — **`images`**
-(image processing) and **`email`** (mail delivery) — and any entry
-keyed by exactly those names overrides their defaults. A key that
+The framework's own jobs run on three built-in queues — **`images`**
+(image processing), **`email`** (mail delivery), and **`bulk`** (queued
+bulk operations) — and any entry keyed by exactly those names overrides
+their defaults. Note that a *user* job placed on the `bulk` queue shares
+its framework-seeded `concurrency = 1`. A key that
 matches no queue (a typo such as `emails`) is accepted but only
 logged as a startup warning, so double-check the spelling.
 
@@ -539,13 +542,14 @@ reports = { concurrency = 1, timeout = "30m", retries = 0 }
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `concurrency` | integer | `0` (unlimited) | Max concurrent runs across all slugs in this queue. `0` means no per-queue cap; only the global `[jobs] max_concurrent` and per-slug `JobDefinition::concurrency` apply. |
-| `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. Accepts seconds or human-readable (`"5m"`, `"30s"`). |
-| `retries` | integer | unset (worker default, see below) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+| `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`, `_system_bulk`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. Accepts seconds or human-readable (`"5m"`, `"30s"`). |
+| `retries` | integer | unset (worker default, see below) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. **Exception:** `_system_bulk` always runs with exactly one attempt — a retry could re-apply a committed batch — so `[jobs.queues.bulk] retries` affects only *user* jobs placed on that queue. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
 
-The two framework queues are **seeded** with defaults at startup so the
+The three framework queues are **seeded** with defaults at startup so the
 built-in system jobs never run with `timeout = 0` / `retries = 0`:
 `images` → `concurrency = 2, timeout = "5m", retries = 2`; `email` →
-`concurrency = 5, timeout = "30s", retries = 3`. Seeding is per field: a
+`concurrency = 5, timeout = "30s", retries = 3`; `bulk` →
+`concurrency = 1, timeout = "1h", retries = 0`. Seeding is per field: a
 `[jobs.queues.images] concurrency = 4` entry keeps the seeded timeout and
 retries, and an explicit `0` is honoured as "unlimited / no retries".
 
@@ -564,6 +568,9 @@ sets them:
 | `email` | `concurrency` | `5` | Bounded burst for shared SMTP pools; matches the historic `[email] queue_concurrency` default. |
 | `email` | `timeout` | `"30s"` | SMTP handshake + delivery; matches the historic `[email] queue_timeout` default. |
 | `email` | `retries` | `3` | Survives greylisting + brief outbound network blips; matches the historic `[email] queue_retries` default. |
+| `bulk` | `concurrency` | `1` | A queued bulk batch holds the write transaction for its whole duration; running them one at a time keeps the write lock predictable. |
+| `bulk` | `timeout` | `3600` | Large batches are the reason to queue at all. The batch enforces this budget itself and rolls back if it is exceeded. |
+| `bulk` | `retries` | `0` | Retrying could re-apply an already-committed batch. `_system_bulk` runs are pinned to a single attempt regardless of this value. |
 
 Operator overrides win — partial overrides are merged field-by-field
 (`[jobs.queues.images] concurrency = 4` keeps the framework's
@@ -618,6 +625,7 @@ from the allowlist.
 | `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
 | `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
 | `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
+| `job_tools` | `false` \| `"read"` \| `"all"` | `false` | Background-job MCP tools. `false` exposes none; `"read"` adds `list_jobs` / `get_job_run` / `list_job_runs` (introspection, failure triage, and polling for queued bulk ops); `"all"` also exposes `trigger_job`, which queues **any** defined job. Tiered because MCP runs with override access, so a job's own `access` hook cannot restrict it. The `queue` argument on the bulk tools appears only from `"read"` up. `true` is rejected as ambiguous. |
 | `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server refuses to start without one, and the key must be **at least 32 characters** (MCP bypasses collection/field ACLs; generate one with `openssl rand -hex 32`). Requests must include `Authorization: Bearer <key>`. |
 | `http_max_body_bytes` | integer/string | `1048576` (1 MiB) | Maximum request-body size for `POST /mcp`. Accepts integer bytes or a filesize string (`"16MB"`). Raise for large bulk payloads or `write_config_file` assets. |
 | `include_collections` | string[] | `[]` (empty) | Only expose these slugs via MCP (collections **and** globals). Empty = everything. Enforced identically in tool listing, execution and schema resources. |

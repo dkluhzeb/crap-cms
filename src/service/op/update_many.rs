@@ -14,6 +14,7 @@ use crate::{
 use crate::core::Builder;
 
 use super::Operation;
+use crate::service::OpDeadline;
 
 /// Owned arguments for [`UpdateMany`]. A `password` never travels here — a
 /// broadcast write must not set one credential on many rows; every surface
@@ -32,6 +33,9 @@ pub struct UpdateManyArgs {
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
+    /// Cooperative abort deadline for the batch (see [`OpDeadline`]).
+    #[builder(default = OpDeadline::none())]
+    pub deadline: OpDeadline,
 }
 
 /// Bulk-update all documents matching a filter in one transaction.
@@ -68,6 +72,7 @@ impl Operation for UpdateMany {
             draft: args.draft,
             ui_locale: ctx.ui_locale.clone(),
             max_documents: args.max_documents,
+            deadline: args.deadline,
         };
 
         update_many(ctx, &filters, &args.data, locale_config, &opts)

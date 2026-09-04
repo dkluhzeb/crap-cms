@@ -10,9 +10,11 @@ use crate::{
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{doc_to_json, extract_auth_password, extract_data_from_args},
+        jobs::{QueuedFields, queue_bulk_tool},
     },
     service::{
         CreateManyItem,
+        jobs::bulk_queue::BulkOpKind,
         op::{self, CreateMany, CreateManyArgs, Principal, TargetRef},
     },
 };
@@ -80,6 +82,32 @@ pub(in crate::mcp::tools) fn exec_create_many(
     // gRPC/MCP/Lua via the wire model.
     let locale = args.get("locale").and_then(Value::as_str);
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
+    if args.get("queue").and_then(Value::as_bool).unwrap_or(false) {
+        // The payload persists in the jobs table until execution, so
+        // plaintext credentials must never enter it (same rule as gRPC).
+        if items.iter().any(|i| i.password.is_some()) {
+            anyhow::bail!(
+                "queue cannot be combined with per-item passwords — run create_many without queue"
+            );
+        }
+
+        return queue_bulk_tool(
+            ctx,
+            slug,
+            BulkOpKind::CreateMany,
+            QueuedFields {
+                locale: locale.map(str::to_string),
+                draft,
+                hooks: run_hooks,
+                events,
+                documents: Some(items.into_iter().map(|i| i.data).collect()),
+                where_clause: None,
+                data: None,
+                force_hard_delete: false,
+            },
+        );
+    }
 
     let op_args = CreateManyArgs::builder(items)
         .run_hooks(run_hooks)

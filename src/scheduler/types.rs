@@ -37,6 +37,9 @@ pub struct SchedulerParams {
 /// user handlers). Future system jobs (email retention sweeps etc.)
 /// land here.
 pub(super) struct TickJobConfig {
+    /// Full infra bundle for system jobs that execute service ops
+    /// (`_system_bulk`).
+    pub app_infra: Arc<AppInfra>,
     pub priority_decay: u64,
     /// Per-queue aggregate concurrency caps, sourced from
     /// `[jobs.queues.<name>] concurrency = N` plus framework defaults

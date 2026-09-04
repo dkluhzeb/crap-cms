@@ -424,6 +424,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 tag: 6,
                 doc: "Emit a live-update event per created document. Default: false (bulk\noperations are quiet). Set true to notify event-stream subscribers.",
             },
+            ProtoField {
+                name: "queue",
+                ty: "optional bool",
+                tag: 7,
+                doc: "Run as a queued background job instead of synchronously. The response\ncarries only job_id and the work runs later under the caller's identity;\npoll GetJobRun with that id for status and the result summary.\nDefaults to false (run synchronously).",
+            },
         ],
     },
     ProtoMessage {
@@ -472,6 +478,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 tag: 7,
                 doc: "Emit a live-update event per modified document. Default: false (bulk\noperations are quiet). Set true to notify event-stream subscribers.",
             },
+            ProtoField {
+                name: "queue",
+                ty: "optional bool",
+                tag: 8,
+                doc: "Run as a queued background job instead of synchronously. The response\ncarries only job_id and the work runs later under the caller's identity;\npoll GetJobRun with that id for status and the result summary.\nDefaults to false (run synchronously).",
+            },
         ],
     },
     ProtoMessage {
@@ -507,6 +519,12 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 ty: "optional bool",
                 tag: 5,
                 doc: "Emit a live-update event per deleted document. Default: false (bulk\noperations are quiet). Set true to notify event-stream subscribers.",
+            },
+            ProtoField {
+                name: "queue",
+                ty: "optional bool",
+                tag: 6,
+                doc: "Run as a queued background job instead of synchronously. The response\ncarries only job_id and the work runs later under the caller's identity;\npoll GetJobRun with that id for status and the result summary.\nDefaults to false (run synchronously).",
             },
         ],
     },

@@ -43,6 +43,8 @@ use super::{
     },
 };
 
+use super::jobs::{exec_job_tool, is_job_tool, job_tools};
+
 // Static (non-CRUD) tool names. Each appears at exactly two production
 // sites — the `generate_tools` declaration and the `execute_tool` match
 // arm. Hoisted so a typo at one site can't silently desync them. Tests
@@ -133,7 +135,25 @@ pub(in crate::mcp) fn generate_tools(
 
     for (slug, def) in &registry.collections {
         if slug_exposed(slug, config, exposure) {
-            tools.extend(collection_tools(slug, def));
+            let mut collection = collection_tools(slug, def);
+
+            // `queue` is only usable when the client also has a tool to poll
+            // the returned job id with, so hide it below `job_tools = "read"`.
+            // (`queue_bulk_tool` enforces the same rule at execution.)
+            //
+            // ONLY the three bulk tools: `create_*`/`update_*`/`validate_*`
+            // spread the collection's own fields at the top level, so a
+            // blanket strip would delete a legitimate field named `queue`
+            // from their schemas.
+            if !config.job_tools.reads() {
+                for tool in &mut collection {
+                    if is_bulk_tool_name(&tool.name) {
+                        strip_schema_prop(&mut tool.input_schema, "queue");
+                    }
+                }
+            }
+
+            tools.extend(collection);
         }
     }
 
@@ -152,7 +172,29 @@ pub(in crate::mcp) fn generate_tools(
         tools.extend(config_generation_tools());
     }
 
+    // Job tools per the configured tier (none / read / read+trigger).
+    tools.extend(job_tools(config.job_tools));
+
     tools
+}
+
+/// Whether a generated tool name is one of the three bulk ops — the only
+/// tools whose schema carries the `queue` wire option.
+fn is_bulk_tool_name(name: &str) -> bool {
+    name.starts_with("create_many_")
+        || name.starts_with("update_many_")
+        || name.starts_with("delete_many_")
+}
+
+/// Remove one property from a generated tool input schema (used to hide an
+/// argument the current configuration cannot honor).
+fn strip_schema_prop(schema: &mut Value, prop: &str) {
+    if let Some(props) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        props.remove(prop);
+    }
 }
 
 /// Append the collection/global-level `mcp.description` (when set) to an
@@ -482,50 +524,12 @@ pub(in crate::mcp) fn execute_tool(
     ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     // Static tools first
-    match name {
-        TOOL_LIST_COLLECTIONS => {
-            let exposure = mcp_exposure(ctx)?;
-            return exec_list_collections(&ctx.infra.registry, &ctx.config.mcp, &exposure);
-        }
-        TOOL_DESCRIBE_COLLECTION => {
-            let exposure = mcp_exposure(ctx)?;
-            return exec_describe_collection(args, &ctx.infra.registry, &ctx.config.mcp, &exposure);
-        }
-        TOOL_LIST_FIELD_TYPES => return exec_list_field_types(),
-        TOOL_CLI_REFERENCE => {
-            return exec_cli_reference(args.get("command").and_then(Value::as_str));
-        }
-        TOOL_READ_CONFIG_FILE | TOOL_WRITE_CONFIG_FILE | TOOL_LIST_CONFIG_FILES => {
-            if !ctx.config.mcp.config_tools {
-                bail!("Config tools are not enabled. Set config_tools = true in [mcp] config.");
-            }
-            return match name {
-                TOOL_READ_CONFIG_FILE => {
-                    let path = args
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .context("Missing 'path' argument")?;
-                    exec_read_config_file(path, config_dir)
-                }
-                TOOL_WRITE_CONFIG_FILE => {
-                    let path = args
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .context("Missing 'path' argument")?;
-                    let content = args
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .context("Missing 'content' argument")?;
-                    exec_write_config_file(path, content, config_dir, ctx.client_label)
-                }
-                TOOL_LIST_CONFIG_FILES => {
-                    let subdir = args.get("path").and_then(Value::as_str);
-                    exec_list_config_files(subdir, config_dir)
-                }
-                _ => unreachable!(),
-            };
-        }
-        _ => {}
+    if let Some(result) = try_static_tool(name, args, config_dir, ctx) {
+        return result;
+    }
+
+    if is_job_tool(name) {
+        return exec_job_tool(name, args, ctx);
     }
 
     // Dynamic CRUD tools
@@ -533,11 +537,75 @@ pub(in crate::mcp) fn execute_tool(
         bail!("Unknown tool: {name}");
     };
 
+    execute_crud_tool(&parsed, args, ctx)
+}
+
+/// Handle the non-CRUD, non-job tools. `None` when `name` is not one.
+fn try_static_tool(
+    name: &str,
+    args: &Value,
+    config_dir: &Path,
+    ctx: &ToolExecCtx<'_>,
+) -> Option<Result<String>> {
+    match name {
+        TOOL_LIST_COLLECTIONS => Some(mcp_exposure(ctx).and_then(|exposure| {
+            exec_list_collections(&ctx.infra.registry, &ctx.config.mcp, &exposure)
+        })),
+        TOOL_DESCRIBE_COLLECTION => Some(mcp_exposure(ctx).and_then(|exposure| {
+            exec_describe_collection(args, &ctx.infra.registry, &ctx.config.mcp, &exposure)
+        })),
+        TOOL_LIST_FIELD_TYPES => Some(exec_list_field_types()),
+        TOOL_CLI_REFERENCE => Some(exec_cli_reference(
+            args.get("command").and_then(Value::as_str),
+        )),
+        TOOL_READ_CONFIG_FILE | TOOL_WRITE_CONFIG_FILE | TOOL_LIST_CONFIG_FILES => {
+            Some(exec_config_tool(name, args, config_dir, ctx))
+        }
+        _ => None,
+    }
+}
+
+/// The three config-generation tools, behind the `config_tools` gate.
+fn exec_config_tool(
+    name: &str,
+    args: &Value,
+    config_dir: &Path,
+    ctx: &ToolExecCtx<'_>,
+) -> Result<String> {
+    if !ctx.config.mcp.config_tools {
+        bail!("Config tools are not enabled. Set config_tools = true in [mcp] config.");
+    }
+
+    let path_arg = || {
+        args.get("path")
+            .and_then(Value::as_str)
+            .context("Missing 'path' argument")
+    };
+
+    match name {
+        TOOL_READ_CONFIG_FILE => exec_read_config_file(path_arg()?, config_dir),
+        TOOL_WRITE_CONFIG_FILE => {
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .context("Missing 'content' argument")?;
+
+            exec_write_config_file(path_arg()?, content, config_dir, ctx.client_label)
+        }
+        TOOL_LIST_CONFIG_FILES => {
+            exec_list_config_files(args.get("path").and_then(Value::as_str), config_dir)
+        }
+        _ => bail!("Unknown config tool: {name}"),
+    }
+}
+
+/// Route a parsed CRUD tool, applying the MCP exposure filters first.
+fn execute_crud_tool(parsed: &ParsedTool, args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     // Enforce include/exclude at execution time — not just in tools/list.
     // Without this, an attacker who knows a collection slug could directly call
     // e.g. find_<slug> even if the collection was excluded from tool listing.
     if !should_include(&parsed.slug, &ctx.config.mcp) {
-        bail!("Tool not available: {name}");
+        bail!("Tool not available: {}", parsed.slug);
     }
 
     // Enforce `access.mcp` at execution — the MCP boundary's access gate (the
@@ -567,7 +635,7 @@ pub(in crate::mcp) fn execute_tool(
             &conn,
             &parsed.slug,
         ) {
-            bail!("Tool not available: {name}");
+            bail!("Tool not available: {}", parsed.slug);
         }
     }
 
@@ -611,6 +679,33 @@ mod tests {
         hooks::lifecycle::HookRunner,
         mcp::tools::test_helpers::{make_exec_ctx, make_registry},
     };
+
+    /// The bulk tools advertise `queue` only when the client also has a job
+    /// tool to poll the returned id with. Listing it at the `false` tier
+    /// would promise a dead end.
+    #[test]
+    fn queue_arg_follows_the_job_tools_tier() {
+        use crate::config::McpJobTools;
+
+        let reg = make_registry();
+        let queue_prop = |mode: McpJobTools| {
+            let config = McpConfig {
+                job_tools: mode,
+                ..McpConfig::default()
+            };
+            let tools = generate_tools(&reg, &config, &McpExposure::default());
+            let tool = tools
+                .iter()
+                .find(|t| t.name == "create_many_posts")
+                .expect("create_many tool");
+
+            tool.input_schema["properties"].get("queue").cloned()
+        };
+
+        assert!(queue_prop(McpJobTools::Off).is_none());
+        assert!(queue_prop(McpJobTools::Read).is_some());
+        assert!(queue_prop(McpJobTools::All).is_some());
+    }
 
     #[test]
     fn generate_tools_basic() {

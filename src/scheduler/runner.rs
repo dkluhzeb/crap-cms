@@ -84,7 +84,7 @@ fn record_job_failure(
 
 /// Record a permanent (never-retried) job failure — e.g. a malformed system-job
 /// payload that no retry can fix.
-fn record_permanent_job_failure(
+pub(super) fn record_permanent_job_failure(
     pool: &DbPool,
     job_run: &JobRun,
     label: &str,
@@ -114,6 +114,9 @@ pub struct ExecuteJobParams<'a> {
     /// (cloned per handler invocation; the queues stay `None` in pool-mode).
     /// `None` = job writes publish no events and skip cache invalidation.
     pub lua_infra: Option<&'a LuaCrudInfra>,
+    /// Full infra bundle — required by `_system_bulk` (service-op
+    /// execution). `None` in contexts that never run bulk jobs.
+    pub app_infra: Option<&'a std::sync::Arc<crate::service::AppInfra>>,
 }
 
 /// Execute a single job: call the Lua handler with CRUD access,
@@ -133,6 +136,7 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
         email_provider,
         storage,
         lua_infra,
+        app_infra,
     } = p;
 
     let start = Instant::now();
@@ -151,6 +155,18 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
     // Rust handler — no Lua VM needed.
     if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
         return execute_system_image_convert(pool, job_run, storage, start);
+    }
+
+    // System bulk job: run the queued bulk service op (create/update/delete
+    // many) under the actor snapshotted at queue time. Rust handler.
+    if job_run.slug == crate::core::job::SYSTEM_BULK_JOB {
+        return super::bulk::execute_system_bulk(&super::bulk::ExecuteBulkParams {
+            pool,
+            app_infra,
+            job_run,
+            start,
+            timeout_secs: job_def.timeout,
+        });
     }
 
     // Lua job handler runs in **pool-mode**: no outer transaction.

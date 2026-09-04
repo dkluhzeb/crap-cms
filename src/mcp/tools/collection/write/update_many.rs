@@ -10,8 +10,12 @@ use crate::{
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{extract_data_from_args, parse_where_filters},
+        jobs::{QueuedFields, queue_bulk_tool},
     },
-    service::op::{self, Principal, TargetRef, UpdateMany, UpdateManyArgs},
+    service::{
+        jobs::bulk_queue::BulkOpKind,
+        op::{self, Principal, TargetRef, UpdateMany, UpdateManyArgs},
+    },
 };
 
 /// Shape returned to the MCP client for an `update_many` tool call.
@@ -68,6 +72,33 @@ pub(in crate::mcp::tools) fn exec_update_many(
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
+    if args.get("queue").and_then(Value::as_bool).unwrap_or(false) {
+        return queue_bulk_tool(
+            ctx,
+            slug,
+            BulkOpKind::UpdateMany,
+            QueuedFields {
+                locale: args
+                    .get("locale")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                draft,
+                hooks: run_hooks,
+                events,
+                documents: None,
+                // Serialize the SAME object `parse_where_filters` accepted,
+                // so a queued run decodes exactly what a synchronous call
+                // would have used (a non-object `where` is ignored by both).
+                where_clause: args
+                    .get("where")
+                    .and_then(Value::as_object)
+                    .map(|o| Value::Object(o.clone()).to_string()),
+                data: Some(data),
+                force_hard_delete: false,
+            },
+        );
+    }
 
     let op_args = UpdateManyArgs::builder(filters, data)
         .locale_ctx(locale_ctx)

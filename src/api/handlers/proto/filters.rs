@@ -1,11 +1,11 @@
 //! Filter parsing: JSON `where` clause string to `FilterClause` conversion.
 //!
 //! Thin wire shim: the grammar itself (scalar shorthand, operator objects,
-//! `or` groups) lives in the canonical [`decode_where_map`] shared by every
+//! `or` groups) lives in the canonical [`decode_where_json_str`] shared by every
 //! surface — this module only owns the JSON-string step.
 
 use crate::db::FilterClause;
-use crate::db::query::filter::decode_where_map;
+use crate::db::query::filter::decode_where_json_str;
 
 /// Parse a JSON `where` clause string into a list of filter clauses.
 ///
@@ -17,14 +17,7 @@ use crate::db::query::filter::decode_where_map;
 /// Returns an error when the string is not a JSON object or the object does
 /// not decode in the canonical `where` grammar.
 pub fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
-    let obj: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {e}"))?;
-
-    let map = obj
-        .as_object()
-        .ok_or_else(|| "where clause must be a JSON object".to_string())?;
-
-    decode_where_map(map)
+    decode_where_json_str(json_str)
 }
 
 #[cfg(test)]

@@ -2,4 +2,5 @@
 
 mod create_many;
 mod delete_many;
+mod queue;
 mod update_many;

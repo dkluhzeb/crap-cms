@@ -24,12 +24,15 @@ pub use cache::{CacheBackend, CacheConfig};
 pub use depth::DepthConfig;
 pub use email::{EmailConfig, EmailProvider, SmtpTls};
 pub use hooks::HooksConfig;
-pub(crate) use jobs::{DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS};
+pub(crate) use jobs::{
+    DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
+    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS,
+};
 pub use jobs::{JobsConfig, QueueConfig};
 pub use live::{LiveConfig, LiveTransport};
 pub use locale::LocaleConfig;
 pub use logging::{LogRotation, LoggingConfig};
-pub use mcp::McpConfig;
+pub use mcp::{McpConfig, McpJobTools};
 pub use pagination::{PaginationConfig, PaginationMode};
 pub use update::UpdateConfig;
 pub use upload::{S3Config, UploadConfig, UploadStorage};

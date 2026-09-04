@@ -17,7 +17,7 @@ use crate::{
 struct TriggerJobBlockingInput {
     infra: Arc<AppInfra>,
     headers: HashMap<String, String>,
-    data_json: String,
+    data: String,
     slug: String,
     token: Option<String>,
     /// `None` → use the definition's default priority; `Some(N)` → override.
@@ -77,7 +77,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         &job_ctx,
         &service::jobs::QueueJobInput {
             job_def: &job_def,
-            data: Some(&input.data_json),
+            data: Some(&input.data),
             scheduled_by: "grpc",
             priority: effective_priority,
             queue_retries,
@@ -102,7 +102,7 @@ impl ContentService {
 
         let input = TriggerJobBlockingInput {
             infra: Arc::clone(&self.infra),
-            data_json: req.data_json.unwrap_or_else(|| "{}".to_string()),
+            data: req.data.unwrap_or_else(|| "{}".to_string()),
             slug: req.slug.clone(),
             token,
             headers,

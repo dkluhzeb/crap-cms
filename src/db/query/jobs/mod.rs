@@ -9,12 +9,14 @@ mod query;
 #[cfg(test)]
 mod test_helpers;
 
-pub use bulk::{cancel_pending_jobs, delete_pending_failed_jobs_matching, purge_old_jobs};
+pub use bulk::{
+    cancel_pending_job, cancel_pending_jobs, delete_pending_failed_jobs_matching, purge_old_jobs,
+};
 pub use claim::claim_pending_jobs;
 pub use cron::try_claim_cron_window;
 pub use lifecycle::{
-    InsertJobOpts, InsertedJob, complete_job, fail_job, insert_job, insert_job_with, mark_stale,
-    update_heartbeat,
+    InsertJobOpts, InsertedJob, complete_job, complete_job_repairing, fail_job, insert_job,
+    insert_job_with, mark_stale, set_job_data, update_heartbeat,
 };
 pub use query::{
     count_failed_since, count_job_runs, count_job_runs_in, count_pending_older_than, count_running,

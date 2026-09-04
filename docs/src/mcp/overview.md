@@ -15,6 +15,7 @@ Add an `[mcp]` section to `crap.toml`:
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
+job_tools = false           # Job tools: false (none) | "read" (introspection) | "all" (+ trigger_job)
 api_key = ""                # API key for HTTP auth (required, min 32 chars, when http = true)
 http_max_body_bytes = "1MB" # Max /mcp request-body size (int bytes or "16MB"-style string)
 include_collections = []    # Whitelist (empty = all)
@@ -174,10 +175,11 @@ covers reads as well as writes:
 | `events` | `create_*`, `update_*`, `delete_*`, `undelete_*`, `unpublish_*`, `create_many_*`, `update_many_*`, `delete_many_*`, `global_update_*` | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
 | `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
+| `queue` | `create_many_*`, `update_many_*`, `delete_many_*` | Run as a queued background job: returns a `job_id` instead of results; poll it with the `get_job_run` tool. Advertised and accepted only when `[mcp] job_tools` is `"read"` or `"all"`. |
 <!-- GENERATED:mcp-reserved-args END -->
 
 > A collection with a field literally named `locale`, `draft`, `events`, or
-> `force_hard_delete` would have it shadowed by the reserved argument — the
+> `force_hard_delete`, or `queue` would have it shadowed by the reserved argument — the
 > same caveat that already applies to `id` and `password`.
 
 ### Global CRUD (per global)
@@ -200,6 +202,50 @@ Always available:
 | `describe_collection` | Get full field schema for a collection or global |
 | `list_field_types` | List all field types with descriptions and capabilities |
 | `cli_reference` | Get CLI command reference (all or specific command) |
+
+### Background Jobs (opt-in, three tiers)
+
+`[mcp] job_tools` takes `false` (default), `"read"`, or `"all"`:
+
+| Tier | Tools |
+|------|-------|
+| `false` | none |
+| `"read"` | `list_jobs`, `get_job_run`, `list_job_runs` |
+| `"all"` | the above **plus** `trigger_job` |
+
+| Tool | Description |
+|------|-------------|
+| `list_jobs` | List defined jobs (slug, queue, schedule, timeout, priority) |
+| `get_job_run` | Status + result of one run by id — **use this to poll the `job_id` from a queued bulk operation** |
+| `list_job_runs` | Recent runs, newest first; filter by `slug` and/or `status` (e.g. `"failed"`) to triage |
+| `trigger_job` | Queue any defined job for immediate execution; returns the run id |
+
+The split exists because reading and executing carry different risk:
+`"all"` lets a client queue **any** defined job, and because MCP has no end
+user the job's `access` hook runs with `ctx.user = nil` — write those hooks
+defensively (a hook dereferencing `ctx.user` will error rather than deny).
+`"read"` gives an assistant enough to inspect and triage **user-defined**
+jobs and to poll queued bulk runs, without that power. Every tier is
+enforced at execution, not just in `tools/list`.
+
+> The framework's own system jobs (`_system_email`,
+> `_system_image_convert`) are deliberately **not** readable through these
+> tools: they have no job definition, and their payloads carry things like
+> password-reset tokens. Queued bulk runs (`_system_bulk`) are the one
+> exception. Note MCP reads them with override access, so an MCP client can
+> poll **any** queued bulk run's status — including one a gRPC end user
+> queued. Their payload is never exposed: these tools return status, result
+> and error only.
+
+From `"read"` up, these pair with `queue = true` on the bulk tools
+(`create_many_*`, `update_many_*`, `delete_many_*`): the call returns a
+`job_id` immediately instead of blocking the tool call until a large batch
+finishes — which also avoids client-side tool-call timeouts on big
+operations. Poll it with `get_job_run`; the result summary carries the same
+counts the synchronous call would have returned. A queued run executes
+through the identical service operation (atomic batch, hooks, the
+`bulk_max_documents` cap). `create_many` cannot combine `queue` with
+per-item passwords — the payload is persisted until execution.
 
 ### Config Generation Tools (opt-in)
 

@@ -30,17 +30,21 @@ pub(super) fn can_read_job_runs(
         return Ok(true);
     };
 
-    let runner = ctx.runner()?;
+    let input = AccessCheckInput::builder("read", slug)
+        .access(Some(access))
+        .user(ctx.user)
+        .build();
 
-    let result = runner
-        .check_access(
-            &AccessCheckInput::builder("read", slug)
-                .access(Some(access))
-                .user(ctx.user)
-                .build(),
-            conn,
-        )
-        .map_err(ServiceError::Internal)?;
+    // One rule, two evaluators — the same split every CRUD path already
+    // uses. A context carrying `write_hooks` evaluates through them
+    // (`LuaWriteHooks` runs in the CALLER's VM, so a hook or job handler
+    // never re-enters the VM pool); otherwise the runner is used directly,
+    // which is what the gRPC and MCP surfaces do.
+    let result = match ctx.write_hooks {
+        Some(hooks) => hooks.check_access(&input),
+        None => ctx.runner()?.check_access(&input, conn),
+    }
+    .map_err(ServiceError::Internal)?;
 
     match result {
         AccessResult::Allowed => Ok(true),

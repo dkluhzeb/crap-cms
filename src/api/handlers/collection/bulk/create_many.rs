@@ -19,6 +19,7 @@ use crate::{
     db::LocaleContext,
     service::{
         CreateManyItem,
+        jobs::bulk_queue::{BulkJobData, BulkOpKind, QueuedBy},
         op::{self, CreateMany, CreateManyArgs, Credentials, Principal, TargetRef},
     },
 };
@@ -65,6 +66,47 @@ impl ContentService {
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
+            headers,
+        });
+
+        if req.queue.unwrap_or(false) {
+            // Queued path: the payload persists in the jobs table until
+            // execution — plaintext passwords must never land there.
+            if items.iter().any(|i| i.password.is_some()) {
+                return Err(Status::invalid_argument(
+                    "queue=true cannot be combined with per-item passwords — run synchronously instead",
+                ));
+            }
+
+            let job = BulkJobData {
+                op: BulkOpKind::CreateMany,
+                collection: req.collection.clone(),
+                queued_by: QueuedBy::System, // stamped for real in queue_bulk_run
+                ui_locale: None,             // ditto
+                locale: req.locale.clone(),
+                draft: req.draft.unwrap_or(false),
+                hooks: req.hooks.unwrap_or(true),
+                events: req.events.unwrap_or(false),
+                max_documents: self.server_config.bulk_max_documents,
+                documents: Some(items.into_iter().map(|i| i.data).collect()),
+                where_clause: None,
+                data: None,
+                force_hard_delete: false,
+            };
+
+            let job_id = self.queue_bulk_run(principal, job).await?;
+
+            return Ok(Response::new(content::CreateManyResponse {
+                created: 0,
+                documents: Vec::new(),
+                job_id: Some(job_id),
+            }));
+        }
+
         let args = CreateManyArgs::builder(items)
             .run_hooks(req.hooks.unwrap_or(true))
             .draft(req.draft.unwrap_or(false))
@@ -72,13 +114,6 @@ impl ContentService {
             .max_documents(self.server_config.bulk_max_documents)
             .events(req.events.unwrap_or(false))
             .build();
-
-        let principal = Principal::Credentials(Credentials {
-            surface: Surface::Grpc,
-            bearer: token,
-            session_cookie: None,
-            headers,
-        });
 
         let result = op::run_blocking::<CreateMany>(
             Arc::clone(&self.infra),
@@ -96,6 +131,7 @@ impl ContentService {
             .collect();
 
         Ok(Response::new(content::CreateManyResponse {
+            job_id: None,
             created: result.created,
             documents,
         }))

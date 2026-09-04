@@ -262,6 +262,90 @@ fn find_active_by_unique_key(
 /// guard, the zombie's late `complete_job` would clobber that live state
 /// (flipping a re-queued or failed row to `completed`). With it, the stale
 /// write is a harmless no-op. `attempt` is the executing run's attempt number.
+/// Mark a run completed even if it is no longer `running` — used to repair
+/// the row when the scheduler's uncancellable outer timer already stamped a
+/// failure for work that then committed anyway. Returns whether a repair
+/// was actually needed.
+///
+/// # Errors
+///
+/// Returns a backend error if either UPDATE fails.
+/// Replace a run's stored `data` payload. Used to strip a finished
+/// `_system_bulk` run's request body (documents / patch / filter) once it
+/// can no longer be needed, shrinking the at-rest window for whatever the
+/// caller submitted.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
+pub fn set_job_data(conn: &dyn DbConnection, id: &str, data: &str) -> Result<()> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+
+    conn.execute(
+        &format!("UPDATE _crap_jobs SET data = {p2} WHERE id = {p1}"),
+        &[
+            DbValue::Text(id.to_string()),
+            DbValue::Text(data.to_string()),
+        ],
+    )
+    .context("Failed to strip job data")?;
+
+    Ok(())
+}
+
+/// Mark a run completed even if it is no longer `running` — used to repair
+/// the row when the scheduler's uncancellable outer timer already stamped a
+/// failure for work that then committed anyway. Returns whether a repair
+/// was actually needed.
+///
+/// # Errors
+///
+/// Returns a backend error if either UPDATE fails.
+pub fn complete_job_repairing(
+    conn: &dyn DbConnection,
+    id: &str,
+    attempt: u32,
+    result_json: Option<&str>,
+) -> Result<bool> {
+    complete_job(conn, id, attempt, result_json)?;
+
+    let p1 = conn.placeholder(1);
+    let still_open = conn
+        .query_one(
+            &format!("SELECT status FROM _crap_jobs WHERE id = {p1}"),
+            &[DbValue::Text(id.to_string())],
+        )?
+        .and_then(|row| row.opt_text_at(0));
+
+    if still_open.as_deref() == Some("completed") {
+        return Ok(false);
+    }
+
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let result_val = match result_json {
+        Some(r) => DbValue::Text(r.to_string()),
+        None => DbValue::Null,
+    };
+
+    conn.execute(
+        &format!(
+            "UPDATE _crap_jobs SET status = 'completed', error = NULL, result = {p2}, \
+             completed_at = {} WHERE id = {p1}",
+            conn.now_expr()
+        ),
+        &[DbValue::Text(id.to_string()), result_val],
+    )
+    .context("Failed to repair job completion")?;
+
+    Ok(true)
+}
+
+/// Mark a run completed. Guarded compare-and-set on `status = 'running'`
+/// and the attempt, so a stale writer cannot resurrect a terminal row.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn complete_job(
     conn: &dyn DbConnection,
     id: &str,

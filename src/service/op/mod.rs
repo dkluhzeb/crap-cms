@@ -25,7 +25,7 @@ use crate::{
     db::BoxedConnection,
     service::{
         AppInfra, RunnerReadHooks, ServiceContext, ServiceError,
-        auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, evaluate},
+        auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, ResolvedMethod, evaluate},
     },
 };
 
@@ -348,6 +348,86 @@ pub fn run<O: Operation>(
     let ctx = builder.build();
 
     O::run(&ctx, args).map_err(CoreError::Service)
+}
+
+/// Resolve a principal WITHOUT running an operation — the queued-bulk path
+/// needs the actor (to stamp `queued_by` into the job data) before any op
+/// executes. Returns `(user, override_access)`.
+///
+/// # Errors
+///
+/// Propagates credential-resolution failures ([`CoreError::Auth`] etc.).
+pub fn resolve_queue_actor(
+    infra: &AppInfra,
+    principal: Principal,
+) -> Result<(Option<QueuedActor>, bool), CoreError> {
+    match principal {
+        Principal::Override => Ok((None, true)),
+        // A pre-resolved principal carries no issuing collection, so its
+        // identity cannot be re-resolved at execution. Refuse rather than
+        // storing an unusable reference that would fail minutes later.
+        Principal::Resolved { .. } => Err(CoreError::Internal(anyhow!(
+            "a pre-resolved principal cannot queue background work — it carries no auth collection"
+        ))),
+        Principal::Credentials(c) => {
+            let conn = infra
+                .pool
+                .get()
+                .map_err(|e| CoreError::Service(ServiceError::classify(e, infra.pool.kind())))?;
+
+            let request = AuthRequest {
+                surface: c.surface,
+                bearer_token: c.bearer.as_deref(),
+                session_cookie_token: c.session_cookie.as_deref(),
+                headers: &c.headers,
+            };
+            let deps = EvaluateDeps {
+                registry: &infra.registry,
+                token_provider: infra.token_provider.as_ref(),
+                hook_runner: &infra.hook_runner,
+                conn: &conn,
+            };
+
+            match evaluate(&request, &deps) {
+                Resolution::Authenticated(auth) => {
+                    let collection = match &auth.via {
+                        ResolvedMethod::Bearer { collection }
+                        | ResolvedMethod::SessionCookie { collection } => collection.to_string(),
+                        // A strategy may synthesize a virtual user document
+                        // that is not a row of the declaring collection, so
+                        // the identity is not re-loadable at execution.
+                        ResolvedMethod::Strategy { .. } => {
+                            return Err(CoreError::Internal(anyhow!(
+                                "strategy-authenticated callers cannot queue background work — \
+                                 the identity cannot be re-resolved at execution"
+                            )));
+                        }
+                    };
+
+                    Ok((
+                        Some(QueuedActor {
+                            id: auth.user.user_doc.id.to_string(),
+                            collection,
+                            session_version: auth.user.claims.session_version,
+                            ui_locale: Some(auth.user.ui_locale),
+                        }),
+                        false,
+                    ))
+                }
+                Resolution::Anonymous => Ok((None, false)),
+                Resolution::Invalid(failure) => Err(CoreError::Auth(failure)),
+            }
+        }
+    }
+}
+
+/// The identity a queued job is stamped with: a REFERENCE to the acting
+/// user (re-loaded at execution), never a document snapshot.
+pub struct QueuedActor {
+    pub id: String,
+    pub collection: String,
+    pub session_version: u64,
+    pub ui_locale: Option<String>,
 }
 
 /// The resolved actor for one operation.

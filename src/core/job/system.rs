@@ -16,6 +16,17 @@ pub use crate::core::email::SYSTEM_EMAIL_JOB;
 /// Defined in [`crate::core::upload::queue`].
 pub use crate::core::upload::SYSTEM_IMAGE_CONVERT_JOB;
 
+/// `_system_bulk` — queued bulk create/update/delete (`queue = true` on the
+/// gRPC/MCP bulk operations). Defined HERE (no core subsystem owns it):
+/// queueing lives in `service::jobs::bulk_queue`, execution in
+/// `scheduler::bulk`.
+pub const SYSTEM_BULK_JOB: &str = "_system_bulk";
+
+/// Queue name for `_system_bulk` runs. Concurrency defaults to 1 — bulk
+/// writes hold the write transaction for their whole batch, so running them
+/// serially is the sane default.
+pub const SYSTEM_BULK_QUEUE: &str = "bulk";
+
 /// All built-in system-job slugs as a static slice. Useful for
 /// validation, admin tooling, and future enumeration over the set.
 ///
@@ -27,7 +38,8 @@ pub use crate::core::upload::SYSTEM_IMAGE_CONVERT_JOB;
 ///    `crap.toml` resolves sane `timeout` / `retries` /
 ///    `concurrency` for the new queue — the regression test
 ///    `system_queues_have_all_defaults_seeded` guards this.
-pub const SYSTEM_JOB_SLUGS: &[&str] = &[SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB];
+pub const SYSTEM_JOB_SLUGS: &[&str] =
+    &[SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB, SYSTEM_BULK_JOB];
 
 #[cfg(test)]
 mod tests {

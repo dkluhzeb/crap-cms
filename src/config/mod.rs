@@ -52,10 +52,13 @@ pub use cors::CorsConfig;
 pub use features::{
     AccessConfig, CacheBackend, CacheConfig, DepthConfig, EmailConfig, EmailProvider, HooksConfig,
     JobsConfig, LiveConfig, LiveTransport, LocaleConfig, LogRotation, LoggingConfig, McpConfig,
-    PaginationConfig, PaginationMode, QueueConfig, S3Config, SmtpTls, UpdateConfig, UploadConfig,
-    UploadStorage,
+    McpJobTools, PaginationConfig, PaginationMode, QueueConfig, S3Config, SmtpTls, UpdateConfig,
+    UploadConfig, UploadStorage,
 };
-pub(crate) use features::{DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS};
+pub(crate) use features::{
+    DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
+    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS,
+};
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
 pub use routes::RoutesConfig;

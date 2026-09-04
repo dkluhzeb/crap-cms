@@ -126,6 +126,7 @@ field definitions.
 | `draft` | boolean |  | gRPC, MCP, Lua | Create documents as drafts (default: false) |
 | `hooks` | boolean |  | gRPC, MCP, Lua | Run per-document lifecycle hooks (default: true) |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event per created document (default: false — bulk ops are quiet) |
+| `queue` | boolean |  | gRPC, MCP | Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly. |
 
 ### `update_many`
 
@@ -137,6 +138,7 @@ field definitions.
 | `draft` | boolean |  | gRPC, MCP, Lua | Target draft versions (default: false) |
 | `locale` | locale (string) |  | gRPC, MCP, Lua | Locale code (e.g. 'en', 'de') for localized fields |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event per modified document (default: false — bulk ops are quiet) |
+| `queue` | boolean |  | gRPC, MCP | Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly. |
 
 ### `delete_many`
 
@@ -148,6 +150,7 @@ field definitions.
 | `force_hard_delete` | boolean |  | gRPC, MCP, Lua | Force hard delete even on soft-delete collections (default: false) |
 | `trash` | boolean |  | Lua | Target already-trashed documents and permanently remove them (empty the trash) |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event per deleted document (default: false — bulk ops are quiet) |
+| `queue` | boolean |  | gRPC, MCP | Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly. |
 
 ### `list_versions`
 

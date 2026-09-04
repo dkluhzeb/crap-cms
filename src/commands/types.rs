@@ -580,6 +580,12 @@ pub enum JobsAction {
         /// Only cancel jobs with this slug (default: all pending)
         #[arg(short, long)]
         slug: Option<String>,
+
+        /// Cancel exactly this run id (takes precedence over --slug).
+        /// The precise alternative to clearing a whole slug — e.g. one
+        /// queued bulk operation.
+        #[arg(long)]
+        id: Option<String>,
     },
     /// Clean up old completed/failed job runs
     Purge {

@@ -136,11 +136,13 @@ message CreateManyRequest {
   optional bool draft = 4;              // true = create as drafts
   optional bool hooks = 5;              // default: true. Set false to skip hooks.
   optional bool events = 6;             // default: false (bulk is quiet). true = emit per-doc events
+  optional bool queue = 7;              // default: false. true = run as a background job
 }
 
 message CreateManyResponse {
-  int64 created = 1;                     // number of documents created
-  repeated Document documents = 2;       // the created documents
+  int64 created = 1;                     // number of documents created (0 when queued)
+  repeated Document documents = 2;       // the created documents (empty when queued)
+  optional string job_id = 3;            // present when queue=true — poll with GetJobRun
 }
 ```
 
@@ -153,6 +155,97 @@ grpcurl -plaintext -d '{
     ]
 }' localhost:50051 crap.ContentAPI/CreateMany
 ```
+
+### Queued mode (`queue = true`)
+
+All three bulk RPCs (`CreateMany`, `UpdateMany`, `DeleteMany`) accept
+`queue = true`. Instead of running inline — one write transaction held for
+the whole batch, with the caller blocked until it commits — the request is
+stored as a background job and the response returns **only** a `job_id`:
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\":{\"equals\":\"stale\"}}",
+    "queue": true
+}' localhost:50051 crap.ContentAPI/DeleteMany
+# → { "jobId": "V1StGXR8_Z5jdHi6B-myT" }
+```
+
+Poll it with [`GetJobRun`](#getjobrun): `status` reports
+`PENDING`/`RUNNING`/`COMPLETED`/`FAILED` — plus `STALE`, the terminal
+status a run reaches when its worker died — and `result_json` carries the
+same counts the synchronous response would have returned
+(`{"created":N}`, `{"modified":N}`, or
+`{"deleted":N,"soft_deleted":N,"skipped":N}`).
+
+Semantics worth knowing:
+
+- **Same operation, same rules.** The queued run executes through the
+  identical service operation — atomic batch, per-document hooks, access
+  checks, the `bulk_max_documents` cap (captured at queue time), event
+  emission — so queueing changes *when* the work happens, never *what* it
+  does.
+- **Hooks run normally.** Per-document lifecycle hooks
+  (`before_validate` / `before_change` / `after_change`, and the delete
+  pair) fire inside the queued run exactly as they would inline, in the
+  batch's transaction with CRUD access; `hooks = false` is honored and is
+  captured at queue time. Hooks see the queuing user as `ctx.user`, so a
+  hook that gates on the actor behaves as if that user had called
+  synchronously. `crap.tx.on_commit` / `on_rollback` effects registered by
+  those hooks fire after the batch commits, as usual. A hook error fails
+  the whole batch atomically and the run is marked failed.
+- **Checked before it is stored.** Queueing runs the collection's access
+  gate and the `bulk_max_documents` cap up front, so a caller who may not
+  perform the operation — or a batch that is too large — is refused
+  synchronously rather than handed a `job_id` for work that can only fail.
+  The full per-document gate still runs at execution.
+- **Cancellable.** `CancelJobRun` removes a run that has not been claimed
+  yet, authorized exactly like reading it. A run already in flight cannot
+  be stopped.
+- **The payload does not linger.** Once a run finishes, its stored request
+  body (documents / patch / filter) is stripped; only the identity needed
+  to resolve visibility remains, alongside the status and result.
+- **Runs as you.** The caller's identity is snapshotted at queue time and
+  the job executes under it. Anonymous callers are rejected
+  (`UNAUTHENTICATED`): there must be an actor for the access hooks to see.
+  Only a **reference** (user id + auth collection) is stored, never a
+  document snapshot, and the user is **re-loaded at execution**: if the
+  account was locked or deleted in the meantime the run is abandoned with
+  that reason. There is no per-run cancel RPC yet; an operator can clear
+  *all* pending runs of a slug with
+  `crap-cms jobs cancel --slug _system_bulk`.
+- **Visible only to you.** A queued bulk run is readable through
+  `GetJobRun` **only** by the identity that queued it (system/MCP-queued
+  runs only by an override caller), and never appears in `ListJobRuns`.
+- **No automatic retries.** The `bulk` queue defaults to a single attempt:
+  the batch is atomic, but a crash in the window between its commit and the
+  completion mark would make a retry re-apply the whole batch. Re-queue
+  explicitly if a run fails.
+- **Also available on MCP** (from `job_tools = "read"` up). The MCP bulk
+  tools accept `queue` too and the `get_job_run` tool polls it (see the [MCP
+  guide](../mcp/overview.md#background-jobs-opt-in-three-tiers)) — useful there because a long
+  synchronous batch can exceed a client's tool-call timeout. Not on the Lua
+  surface: hooks and job handlers compose `crap.jobs` directly.
+- **Passwords cannot be queued.** `CreateMany` with `queue = true` rejects
+  per-item passwords (`INVALID_ARGUMENT`) — the payload persists in the
+  jobs table until execution, so plaintext credentials must not enter it.
+  Run those synchronously.
+
+Serialization is controlled by `[jobs.queues.bulk]` in `crap.toml`
+(`concurrency` defaults to **1**, `timeout` to one hour, `retries` to `0`).
+
+**Timeouts are enforced, not just reported.** A queued batch checks its
+remaining budget between documents (and once more before committing) and
+aborts itself as soon as `[jobs.queues.bulk] timeout` is reached; the
+scheduler's uncancellable outer timer is given several minutes of extra
+grace on top, so it only ever fires for a genuinely stuck run. Because bulk ops are atomic, that
+abort rolls the whole batch back: nothing is committed, and the run's
+recorded failure ("exceeded its time limit after N document(s)") is
+therefore true. Raise the queue's `timeout` (or narrow the batch) and
+re-queue. Without this the scheduler's outer timer could only *record* a
+failure — blocking tasks cannot be cancelled mid-flight — leaving a
+committed batch marked failed.
 
 ## Update
 
@@ -280,10 +373,12 @@ message UpdateManyRequest {
   optional bool draft = 5;              // true = save as drafts
   optional bool hooks = 6;              // default: true. Set false to skip hooks & validation.
   optional bool events = 7;             // default: false (bulk is quiet). true = emit per-doc events
+  optional bool queue = 8;              // default: false. true = run as a background job
 }
 
 message UpdateManyResponse {
-  int64 modified = 1;
+  int64 modified = 1;                    // 0 when queued
+  optional string job_id = 2;            // present when queue=true — poll with GetJobRun
 }
 ```
 
@@ -308,12 +403,14 @@ message DeleteManyRequest {
   optional bool hooks = 3;              // default: true. Set false to skip hooks.
   bool force_hard_delete = 4;           // permanently delete even if soft_delete is enabled
   optional bool events = 5;             // default: false (bulk is quiet). true = emit per-doc events
+  optional bool queue = 6;              // default: false. true = run as a background job
 }
 
 message DeleteManyResponse {
-  int64 deleted = 1;                    // permanently deleted count
-  int64 soft_deleted = 2;              // soft-deleted (trashed) count
+  int64 deleted = 1;                    // permanently deleted count (0 when queued)
+  int64 soft_deleted = 2;              // soft-deleted (trashed) count (0 when queued)
   int64 skipped = 3;                   // skipped because still referenced by other documents
+  optional string job_id = 4;           // present when queue=true — poll with GetJobRun
 }
 ```
 
@@ -867,7 +964,7 @@ Queue a job for execution. Requires authentication. Checks the job's `access` fu
 ```protobuf
 message TriggerJobRequest {
   string slug = 1;
-  optional string data_json = 2;  // JSON input data
+  optional string data = 2;      // JSON input data
   optional int32 priority = 3;    // scheduling priority (higher = sooner; default 0)
 }
 
@@ -879,7 +976,7 @@ message TriggerJobResponse {
 ```bash
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
     "slug": "cleanup_expired",
-    "data_json": "{\"force\": true}",
+    "data": "{\"force\": true}",
     "priority": 10
 }' localhost:50051 crap.ContentAPI/TriggerJob
 ```
@@ -906,7 +1003,7 @@ message JobRunInfo {
   string id = 1;
   string slug = 2;
   JobRunStatus status = 3;            // was a string; now a JobRunStatus enum
-  string data_json = 4;
+  string data = 4;
   optional string result_json = 5;
   optional string error = 6;
   uint32 attempt = 7;

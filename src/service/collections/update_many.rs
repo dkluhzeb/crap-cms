@@ -4,6 +4,7 @@ use anyhow::Context as _;
 
 use super::bulk_access::{BulkScope, push_published_only_filter, scope_bulk_access};
 
+use crate::service::OpDeadline;
 use crate::{
     config::LocaleConfig,
     core::{DocumentFields, event::EventOperation},
@@ -42,6 +43,9 @@ pub struct UpdateManyOptions<'a> {
     /// Maximum number of documents the operation may match before it is
     /// rejected (from `server.bulk_max_documents`). `0` = no limit.
     pub max_documents: i64,
+    /// Cooperative abort deadline, checked between documents (see
+    /// [`OpDeadline`]).
+    pub deadline: OpDeadline,
 }
 
 /// Reject a bulk operation whose match-set exceeds `max_documents`
@@ -136,6 +140,8 @@ fn update_many_pool(
             let mut modified = 0i64;
 
             for doc_id in &doc_ids {
+                opts.deadline.check(modified)?;
+
                 let input = WriteInput::builder(data.clone())
                     .locale_ctx(opts.locale_ctx)
                     .draft(opts.draft)
@@ -150,6 +156,10 @@ fn update_many_pool(
                 ids.push(doc_id.clone());
                 modified += 1;
             }
+
+            // Final pre-commit check: everything after this returns into
+            // the envelope's `tx.commit()`, so an expiry here still rolls back.
+            opts.deadline.check(modified)?;
 
             Ok((
                 UpdateManyResult {
@@ -219,6 +229,7 @@ fn update_many_conn(
     let mut modified = 0i64;
 
     for doc_id in &doc_ids {
+        opts.deadline.check(modified)?;
         let input = WriteInput::builder(data.clone())
             .locale_ctx(opts.locale_ctx)
             .draft(opts.draft)
@@ -241,6 +252,10 @@ fn update_many_conn(
     // Parity with the single-document conn path (and the pool path's
     // orchestrator): every write clears the populate cache.
     ctx.clear_cache();
+
+    // Final pre-commit check (see create_many).
+
+    opts.deadline.check(modified)?;
 
     Ok(UpdateManyResult {
         modified,

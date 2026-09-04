@@ -996,6 +996,7 @@ async fn grpc_update_many_with_nested_array() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "products".to_string(),
             r#where: None,
@@ -1076,6 +1077,7 @@ async fn update_many_rejects_password_field() {
     let result = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "users".to_string(),
             r#where: None,
@@ -1129,6 +1131,7 @@ async fn create_many_rejects_non_string_password() {
     let result = ts
         .service
         .create_many(Request::new(content::CreateManyRequest {
+            queue: None,
             collection: "users".to_string(),
             documents: vec![content::DataMap { fields }],
             ..Default::default()
@@ -1175,6 +1178,7 @@ async fn grpc_create_many_honors_locale() {
     let err = ts
         .service
         .create_many(Request::new(content::CreateManyRequest {
+            queue: None,
             collection: "notes".to_string(),
             documents: vec![make_struct(&[("slug", "a"), ("body", "Deutsch A")])],
             locale: Some("de".to_string()),
@@ -1193,6 +1197,7 @@ async fn grpc_create_many_honors_locale() {
     let resp = ts
         .service
         .create_many(Request::new(content::CreateManyRequest {
+            queue: None,
             collection: "notes".to_string(),
             documents: vec![
                 make_struct(&[("slug", "a"), ("body", "English A")]),
@@ -1291,6 +1296,7 @@ async fn delete_many_cleans_up_upload_files() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "media".to_string(),
             r#where: None,

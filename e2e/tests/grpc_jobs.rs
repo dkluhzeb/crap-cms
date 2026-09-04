@@ -141,7 +141,7 @@ async fn trigger_job_queues_run_visible_via_get_and_list() {
         .trigger_job(with_bearer(
             TriggerJobRequest {
                 slug: "cleanup".to_string(),
-                data_json: Some(r#"{"foo":"bar"}"#.to_string()),
+                data: Some(r#"{"foo":"bar"}"#.to_string()),
                 priority: None,
             },
             &token,
@@ -167,10 +167,7 @@ async fn trigger_job_queues_run_visible_via_get_and_list() {
         JobRunStatus::Pending,
         "scheduler isn't running in tests, run stays pending"
     );
-    assert_eq!(
-        run.data_json, r#"{"foo":"bar"}"#,
-        "data_json should round-trip"
-    );
+    assert_eq!(run.data, r#"{"foo":"bar"}"#, "data should round-trip");
     // `attempt` reads as 0 for pending runs (scheduler bumps it to 1
     // on first execution); just sanity-check it's not garbage.
     assert!(run.attempt <= run.max_attempts);
@@ -211,7 +208,7 @@ async fn trigger_job_unknown_slug_returns_not_found() {
         .trigger_job(with_bearer(
             TriggerJobRequest {
                 slug: "no-such-job".to_string(),
-                data_json: None,
+                data: None,
                 priority: None,
             },
             &token,

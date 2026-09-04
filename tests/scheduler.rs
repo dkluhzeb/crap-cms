@@ -135,6 +135,7 @@ fn execute_job_echo_completes_successfully() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -180,6 +181,7 @@ fn execute_job_creates_document() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -228,6 +230,7 @@ fn execute_job_failing_handler_marks_failed() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -273,6 +276,7 @@ fn execute_job_failing_handler_retries() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -417,6 +421,7 @@ fn tx_two_creates_both_committed() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -472,6 +477,7 @@ fn tx_rollback_leaves_no_documents() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 
@@ -529,6 +535,7 @@ fn tx_separate_blocks_first_commits_when_second_rolls_back() {
         email_provider: None,
         storage: &test_storage(),
         lua_infra: None,
+        app_infra: None,
     })
     .expect("execute_job");
 

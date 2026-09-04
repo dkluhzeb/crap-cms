@@ -17,8 +17,8 @@ use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::{self, lifecycle::HookRunner};
 use crap_cms::service::{
-    CreateManyItem, CreateManyOptions, DeleteManyOptions, RunnerWriteHooks, ServiceContext,
-    ServiceError, UpdateManyOptions, create_many, delete_many, update_many,
+    CreateManyItem, CreateManyOptions, DeleteManyOptions, OpDeadline, RunnerWriteHooks,
+    ServiceContext, ServiceError, UpdateManyOptions, create_many, delete_many, update_many,
 };
 use serde_json::json;
 
@@ -95,6 +95,7 @@ fn update_opts(max_documents: i64) -> UpdateManyOptions<'static> {
         draft: false,
         ui_locale: None,
         max_documents,
+        deadline: OpDeadline::none(),
     }
 }
 
@@ -171,7 +172,66 @@ fn bulk_opts() -> CreateManyOptions {
         draft: false,
         max_documents: 0,
         locale_ctx: None,
+        deadline: OpDeadline::none(),
     }
+}
+
+/// An expired cooperative deadline aborts the batch and rolls it back
+/// whole — the property that makes a queued run's recorded timeout
+/// truthful instead of "failed, but actually committed".
+#[test]
+fn expired_deadline_aborts_and_commits_nothing() {
+    let s = setup(0);
+
+    let items: Vec<CreateManyItem> = (0..5)
+        .map(|i| CreateManyItem {
+            data: [("title".to_string(), json!(format!("Deadline {i}")))]
+                .into_iter()
+                .collect(),
+            password: None,
+        })
+        .collect();
+
+    let opts = CreateManyOptions {
+        deadline: OpDeadline::at(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .expect("clock is past the epoch"),
+        ),
+        ..bulk_opts()
+    };
+
+    let hooks = RunnerWriteHooks::new(&s.runner);
+    let ctx = ServiceContext::collection("posts", &s.def)
+        .pool(&s.pool)
+        .runner(&s.runner)
+        .write_hooks(&hooks)
+        .build();
+
+    let err = create_many(&ctx, &items, &opts).expect_err("an expired deadline must abort");
+    assert!(
+        matches!(err, ServiceError::LimitExceeded(_)),
+        "expected a limit-exceeded error, got: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("time limit"),
+        "the message must survive to the caller: {err}"
+    );
+
+    let conn = s.pool.get().unwrap();
+    let docs = crap_cms::db::query::find(
+        &conn,
+        "posts",
+        &s.def,
+        &crap_cms::db::query::FindQuery::default(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        docs.is_empty(),
+        "the aborted batch must leave nothing behind, found {}",
+        docs.len()
+    );
 }
 
 /// Regression (cross-surface harmonization): `create_many` on an auth
@@ -335,6 +395,7 @@ fn create_many_over_cap_is_rejected_and_creates_nothing() {
         run_hooks: false,
         draft: false,
         max_documents: 2,
+        deadline: OpDeadline::none(),
         locale_ctx: None,
     };
 
@@ -356,6 +417,7 @@ fn create_many_is_atomic_on_mid_operation_failure() {
         run_hooks: false,
         draft: false,
         max_documents: 0,
+        deadline: OpDeadline::none(),
         locale_ctx: None,
     };
 
@@ -618,6 +680,7 @@ return M
         draft: false,
         ui_locale: Some("fr".to_string()),
         max_documents: 100,
+        deadline: OpDeadline::none(),
     };
     let mut data = DocumentFields::new();
     data.insert("status".to_string(), json!("published"));
@@ -786,6 +849,7 @@ fn bulk_conn_paths_clear_cache() {
                 run_hooks: false,
                 include_deleted: false,
                 max_documents: 100,
+                deadline: OpDeadline::none(),
             },
         )
         .expect("delete_many conn");

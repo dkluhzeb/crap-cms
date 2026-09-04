@@ -27,6 +27,7 @@
 //!   (`PurgeTickInput`, `PurgeCollectionInput`, `SpawnJobInput`)
 //!   instead of >4 positional arguments.
 
+mod bulk;
 mod loop_runner;
 mod runner;
 mod types;

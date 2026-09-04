@@ -18,12 +18,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{
-        DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig,
-        LocaleConfig,
+        DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
+        DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig, LocaleConfig,
     },
     core::{
         DocumentFields, JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
         email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
+        job::{SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
         upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_upload_files},
     },
     db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
@@ -61,21 +62,14 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
     let locale_config = infra.locale_config.clone();
     let job_lua_infra = job_crud_infra(&infra);
 
-    info!(
-        "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
-        config.poll_interval, config.cron_interval, config.max_concurrent
-    );
-
-    warn_unused_queue_config(&config, &registry);
-
-    // A `running` job is assumed dead once its heartbeat is older than this.
-    // Must exceed the heartbeat interval (a merely-slow heartbeat must not
-    // reclaim a live job); 3× gives two missed beats of slack.
+    // A `running` job is assumed dead once its heartbeat is older than this
+    // (3× the interval = two missed beats of slack); the heartbeat tick below
+    // reuses it to reclaim jobs from crashed nodes.
     let stale_threshold_secs = config
         .heartbeat_interval
         .saturating_mul(STALE_HEARTBEAT_MULTIPLIER);
 
-    recover_on_startup(&pool, &registry, stale_threshold_secs)?;
+    announce_and_recover(&config, &pool, &registry, stale_threshold_secs)?;
 
     let poll_interval = Duration::from_secs(config.poll_interval);
     let cron_interval = Duration::from_secs(config.cron_interval);
@@ -122,13 +116,14 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 let max_concurrent = config.max_concurrent;
 
                 let ep = email_provider.clone();
-                let sys = TickJobConfig {
+                let sys = tick_job_config(&TickConfigSource {
+                    infra: &infra,
                     priority_decay,
-                    queue_concurrency: queue_concurrency.clone(),
-                    queue_timeouts: queue_timeouts.clone(),
-                    storage: storage.clone(),
-                    lua_infra: job_lua_infra.clone(),
-                };
+                    queue_concurrency: &queue_concurrency,
+                    queue_timeouts: &queue_timeouts,
+                    storage: &storage,
+                    lua_infra: &job_lua_infra,
+                });
 
                 tokio::spawn(async move {
                     if let Err(e) = poll_and_execute(
@@ -419,6 +414,57 @@ fn update_heartbeats(pool: &DbPool, running_jobs: &Arc<Mutex<Vec<String>>>) {
     }
 }
 
+/// Log the scheduler's startup line, warn about unused queue config, and
+/// reclaim jobs left `running` by a previous process.
+///
+/// # Errors
+///
+/// Propagates a stale-job recovery failure.
+#[cfg(not(tarpaulin_include))]
+fn announce_and_recover(
+    config: &JobsConfig,
+    pool: &DbPool,
+    registry: &Registry,
+    stale_threshold_secs: u64,
+) -> Result<()> {
+    info!(
+        "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
+        config.poll_interval, config.cron_interval, config.max_concurrent
+    );
+
+    warn_unused_queue_config(config, registry);
+
+    recover_on_startup(pool, registry, stale_threshold_secs)
+}
+
+/// Extra wall-clock the outer timer allows a job that enforces its own
+/// cooperative deadline, covering post-commit work (event publishing,
+/// upload-file deletion) that happens after the last in-batch check.
+const SELF_LIMITING_JOB_GRACE_SECS: u64 = 300;
+
+/// Borrowed sources for one [`TickJobConfig`] snapshot.
+struct TickConfigSource<'a> {
+    infra: &'a Arc<AppInfra>,
+    priority_decay: u64,
+    queue_concurrency: &'a HashMap<String, u32>,
+    queue_timeouts: &'a HashMap<String, u64>,
+    storage: &'a SharedStorage,
+    lua_infra: &'a LuaCrudInfra,
+}
+
+/// Snapshot the per-tick execution config (cheap clones) handed to the
+/// spawned poll task.
+fn tick_job_config(s: &TickConfigSource<'_>) -> TickJobConfig {
+    TickJobConfig {
+        app_infra: Arc::clone(s.infra),
+        priority_decay: s.priority_decay,
+        queue_concurrency: s.queue_concurrency.clone(),
+        queue_timeouts: s.queue_timeouts.clone(),
+        storage: s.storage.clone(),
+        lua_infra: s.lua_infra.clone(),
+    }
+}
+
 /// Poll for pending jobs and execute them.
 #[cfg(not(tarpaulin_include))]
 fn poll_and_execute(
@@ -467,6 +513,7 @@ fn poll_and_execute(
             job_run: &job_run,
             job_def: &job_def,
             lua_infra: &system.lua_infra,
+            app_infra: &system.app_infra,
         });
     }
 
@@ -492,7 +539,7 @@ fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
 /// declare them. We skip these in [`warn_unused_queue_config`]
 /// because a "no job uses queue X" warning would be a false positive:
 /// these queues host **system jobs** (`_system_image_convert`,
-/// `_system_email`) which live outside `registry.jobs` (they're
+/// `_system_email`, `_system_bulk`) which live outside `registry.jobs` (they're
 /// inserted directly by Rust without a `crap.jobs.define(...)`
 /// call), so the registry never reports a user job in them even when
 /// the queue is actively in use.
@@ -500,7 +547,7 @@ fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
 /// Keep in sync with the seeding logic in
 /// [`JobsConfig::apply_queue_defaults`] and the system-job slug list
 /// in `core::job::system::SYSTEM_JOB_SLUGS`.
-const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images", "email"];
+const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images", "email", "bulk"];
 
 /// Warn (don't error) if `[jobs.queues]` references a queue name that
 /// no defined job uses. Catches operator typos like
@@ -609,6 +656,19 @@ fn resolve_job_def(
         ));
     }
 
+    if job_run.slug == SYSTEM_BULK_JOB {
+        let timeout = queue_timeouts
+            .get(SYSTEM_BULK_QUEUE)
+            .copied()
+            .unwrap_or(DEFAULT_BULK_QUEUE_TIMEOUT_SECS);
+        return Some(Arc::new(
+            JobDefinition::builder(SYSTEM_BULK_JOB, "_system")
+                .queue(SYSTEM_BULK_QUEUE)
+                .timeout(timeout)
+                .build(),
+        ));
+    }
+
     warn!(
         "Job definition '{}' not found, marking as failed",
         job_run.slug
@@ -637,6 +697,7 @@ struct SpawnJobInput<'a> {
     job_run: &'a JobRun,
     job_def: &'a JobDefinition,
     lua_infra: &'a LuaCrudInfra,
+    app_infra: &'a Arc<AppInfra>,
 }
 
 /// Spawn a tokio task to execute a job with timeout enforcement.
@@ -649,7 +710,18 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let pool = s.pool.clone();
     let hook_runner = s.hook_runner.clone();
     let running_jobs = s.running_jobs.clone();
-    let timeout_secs = s.job_def.timeout;
+    // `_system_bulk` enforces its OWN cooperative deadline (it aborts and
+    // rolls back at `timeout`). Give the uncancellable outer timer extra
+    // grace so it can only ever fire for a genuinely stuck run — otherwise
+    // it could stamp `failed` while the batch is still doing post-commit
+    // work (event publishing, upload-file deletes) and then commits.
+    let timeout_secs = if s.job_def.slug.as_ref() == SYSTEM_BULK_JOB {
+        s.job_def
+            .timeout
+            .saturating_add(SELF_LIMITING_JOB_GRACE_SECS)
+    } else {
+        s.job_def.timeout
+    };
     let should_retry = s.job_run.attempt < s.job_run.max_attempts;
     let attempt = s.job_run.attempt;
     let pool_timeout = pool.clone();
@@ -661,6 +733,7 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let job_def = s.job_def.clone();
     let job_run = s.job_run.clone();
     let lua_infra = s.lua_infra.clone();
+    let app_infra = Arc::clone(s.app_infra);
 
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(timeout_secs);
@@ -675,6 +748,7 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
                     email_provider: ep.as_deref(),
                     storage: &storage,
                     lua_infra: Some(&lua_infra),
+                    app_infra: Some(&app_infra),
                 })
             }),
         )

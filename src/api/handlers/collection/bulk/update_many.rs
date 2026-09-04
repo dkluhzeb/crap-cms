@@ -17,7 +17,10 @@ use crate::{
     },
     core::{DocumentFields, collection::Surface},
     db::LocaleContext,
-    service::op::{self, Credentials, Principal, TargetRef, UpdateMany, UpdateManyArgs},
+    service::{
+        jobs::bulk_queue::{BulkJobData, BulkOpKind, QueuedBy},
+        op::{self, Credentials, Principal, TargetRef, UpdateMany, UpdateManyArgs},
+    },
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -53,7 +56,41 @@ impl ContentService {
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
+        let principal = Principal::Credentials(Credentials {
+            surface: Surface::Grpc,
+            bearer: token,
+            session_cookie: None,
+            headers,
+        });
+
+        // Validate the where clause up front either way (fail fast at queue
+        // time rather than storing a run that can only fail later).
         let filters = decode_where_json(req.r#where.as_deref())?;
+
+        if req.queue.unwrap_or(false) {
+            let job = BulkJobData {
+                op: BulkOpKind::UpdateMany,
+                collection: req.collection.clone(),
+                queued_by: QueuedBy::System, // stamped for real in queue_bulk_run
+                ui_locale: None,             // ditto
+                locale: req.locale.clone(),
+                draft: req.draft.unwrap_or(false),
+                hooks: req.hooks.unwrap_or(true),
+                events: req.events.unwrap_or(false),
+                max_documents: self.server_config.bulk_max_documents,
+                documents: None,
+                where_clause: req.r#where.clone(),
+                data: Some(data),
+                force_hard_delete: false,
+            };
+
+            let job_id = self.queue_bulk_run(principal, job).await?;
+
+            return Ok(Response::new(content::UpdateManyResponse {
+                modified: 0,
+                job_id: Some(job_id),
+            }));
+        }
 
         let args = UpdateManyArgs::builder(filters, data)
             .locale_ctx(locale_ctx)
@@ -62,13 +99,6 @@ impl ContentService {
             .max_documents(self.server_config.bulk_max_documents)
             .events(req.events.unwrap_or(false))
             .build();
-
-        let principal = Principal::Credentials(Credentials {
-            surface: Surface::Grpc,
-            bearer: token,
-            session_cookie: None,
-            headers,
-        });
 
         let result = op::run_blocking::<UpdateMany>(
             Arc::clone(&self.infra),
@@ -80,6 +110,7 @@ impl ContentService {
         .map_err(|e| self.core_error_status(e))?;
 
         Ok(Response::new(content::UpdateManyResponse {
+            job_id: None,
             modified: result.modified,
         }))
     }

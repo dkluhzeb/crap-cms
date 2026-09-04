@@ -147,6 +147,14 @@ const HOOKS_DOC: &str = "Run per-document lifecycle hooks (default: true)";
 const EVENT_SINGLE_DOC: &str = "Emit a live-update event for this change (default: true)";
 
 /// The collection operations' wire options.
+// NOT MODELED HERE: the job operations (`ListJobs`, `TriggerJob`,
+// `GetJobRun`, `ListJobRuns`, `CancelJobRun`). Their proto messages are
+// hand-written (outside `wire_proto`'s generated region) and their MCP tool
+// schemas are hand-written in `mcp::tools::jobs`, so job arguments are the
+// one op family whose cross-surface parity nothing enforces — drift has
+// already occurred there. Folding them in is an additive refactor tracked
+// for the internal-refactors pass; the breaking half (the `data_json` →
+// `data` rename) was done before the alpha.10 freeze.
 pub static COLLECTION_OPS: &[OpWire] = &[
     OpWire {
         op: "find",
@@ -346,6 +354,14 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 WireKind::Bool,
                 "Emit a live-update event per created document (default: false — bulk ops are quiet)",
             ),
+            on(
+                WireSurfaces::GRPC_MCP,
+                f(
+                    "queue",
+                    WireKind::Bool,
+                    "Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly.",
+                ),
+            ),
         ],
     },
     OpWire {
@@ -368,6 +384,14 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 "events",
                 WireKind::Bool,
                 "Emit a live-update event per modified document (default: false — bulk ops are quiet)",
+            ),
+            on(
+                WireSurfaces::GRPC_MCP,
+                f(
+                    "queue",
+                    WireKind::Bool,
+                    "Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly.",
+                ),
             ),
         ],
     },
@@ -407,6 +431,14 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 "events",
                 WireKind::Bool,
                 "Emit a live-update event per deleted document (default: false — bulk ops are quiet)",
+            ),
+            on(
+                WireSurfaces::GRPC_MCP,
+                f(
+                    "queue",
+                    WireKind::Bool,
+                    "Run as a queued background job instead of synchronously: the response carries only job_id, and the work runs later under the caller's identity. Poll it with GetJobRun (gRPC) or the get_job_run tool (MCP) for status and the result summary (default: false). Not on the Lua surface — hooks and jobs compose crap.jobs directly.",
+                ),
             ),
         ],
     },

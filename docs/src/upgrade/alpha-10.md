@@ -14,6 +14,27 @@ time (post-parse checks then aggregate). A project with several latent
 problems may need a couple of fix-and-restart cycles before it boots
 clean.
 
+
+## Job payload field renamed to `data`
+
+`TriggerJobRequest.data_json` and `JobRunInfo.data_json` are now
+`data` on the gRPC wire, matching what MCP and Lua have always called it.
+The field numbers and types are unchanged, so binary clients are
+unaffected — but JSON/grpcurl callers must rename the key:
+
+```diff
+ grpcurl -plaintext -d '{
+     "slug": "reindex",
+-    "data_json": "{\"force\": true}"
++    "data": "{\"force\": true}"
+ }' localhost:50051 crap.ContentAPI/TriggerJob
+```
+
+The same rename applies when reading a run: `JobRunInfo.data_json` →
+`data`. This lands now because the field name is frozen at the tag —
+after it, jobs could never share one argument vocabulary with the rest
+of the API.
+
 ## TL;DR
 
 - **Replace your binary, restart.** DB schema migrations apply
@@ -643,7 +664,7 @@ continue to work.
   invalidation like the lock/password-reset flows. **Action:** none.
 - **Job-run reads now honor the job's `access` function.** `GetJobRun` and
   `ListJobRuns` previously applied no authorization beyond authentication — any
-  authenticated caller could read any job's run payloads (`data_json`,
+  authenticated caller could read any job's run payloads (`data`,
   `result_json`, `error`), even for a job whose `access` restricted who could
   *trigger* it. All three job-read RPCs (`GetJobRun`, `ListJobRuns`, `ListJobs`)
   now enforce the job's `access`, invoked with `operation == "read"` (trigger

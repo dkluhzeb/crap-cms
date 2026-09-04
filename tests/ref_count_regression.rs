@@ -451,6 +451,7 @@ async fn update_many_adjusts_ref_counts() {
     setup
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            queue: None,
             events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("tag", &tag_b_id)])),
@@ -515,6 +516,7 @@ async fn delete_many_adjusts_ref_counts() {
     setup
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "posts".into(),
             ..Default::default()
@@ -568,6 +570,7 @@ async fn delete_many_skips_referenced_documents() {
     let resp = setup
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
             events: None,
             collection: "tags".into(),
             ..Default::default()

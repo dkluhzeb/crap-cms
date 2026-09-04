@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **The job payload field is `data`, not `data_json`** (`TriggerJobRequest`
+  and `JobRunInfo` on the gRPC wire). MCP and Lua already called it `data`;
+  the gRPC name was the odd one out, and a field name cannot be changed
+  after the release freeze. Field numbers and types are unchanged, so binary
+  clients are unaffected — JSON/grpcurl callers rename the key. This mirrors
+  how `where` is one name across surfaces despite being a JSON string on the
+  wire and an object on MCP.
+
 - **Locale-locked fields in a non-default-locale write are now a validation
   error.** `update(id, { title = x, slug = y }, { locale = "de" })` with a
   non-localized `slug` used to succeed while silently discarding `slug` — a
@@ -345,7 +353,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Job-run reads are access-controlled.** The `GetJobRun` and `ListJobRuns`
   gRPC RPCs previously applied no authorization beyond authentication — any
-  authenticated caller could read any job's run payloads (`data_json`,
+  authenticated caller could read any job's run payloads (`data`,
   `result_json`, `error`), even for jobs whose `access` function restricted who
   could trigger them. All three job-read RPCs (`GetJobRun`, `ListJobRuns`, and
   `ListJobs`) now enforce the job's `access` function, invoked with
@@ -2742,6 +2750,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Queued bulk operations: `queue = true` on `CreateMany` / `UpdateMany` /
+  `DeleteMany` (gRPC and MCP).** Instead of holding one write transaction for the whole
+  batch while the caller blocks, the request is stored as a `_system_bulk`
+  background job and the response returns a `job_id` to poll with `GetJobRun`
+  (the result summary lands in `result_json`). The queued run executes through
+  the *same* service operation as a synchronous call — atomic batch,
+  per-document hooks, access checks, the `bulk_max_documents` cap — under the
+  caller's identity, snapshotted at queue time; anonymous callers are rejected.
+  Queued runs are readable only by the identity that queued them and never
+  appear in `ListJobRuns`. `CreateMany` rejects `queue` together with per-item
+  passwords (the payload persists in the jobs table until execution). The new
+  `bulk` queue defaults to `concurrency = 1`, `timeout = 3600`, `retries = 0`
+  (a retry would re-apply an already-committed batch). The queue timeout is
+  **enforced cooperatively**: a queued batch checks its remaining budget
+  between documents (and before committing) and aborts itself at the
+  configured timeout — the scheduler's outer timer runs with extra grace on
+  top — rolling the whole (atomic) batch back — so a timed-out run commits
+  nothing and its recorded failure is truthful. Without that, an
+  uncancellable blocking task could commit after the timer had already
+  marked the run failed. The queuing identity is stored as a *reference*
+  (user id + auth collection + session version) and re-loaded at execution,
+  so no user fields are persisted in the jobs table, and a lock, deletion,
+  or session revocation (force-logout, password reset) between queueing and
+  execution abandons the run instead of being ignored. Queueing also runs
+  the collection's access gate and the `bulk_max_documents` cap up front, so
+  an unauthorized or oversized request is refused synchronously instead of
+  being persisted; and a finished run's stored payload is stripped down to
+  the queueing identity so submitted values are not kept at rest for the
+  retention window. Available on gRPC and
+  MCP (poll with the `get_job_run` tool there); not on the Lua surface, where
+  hooks and job handlers compose `crap.jobs` directly.
+
+- **`CancelJobRun` RPC.** Cancels a single job run that has not been claimed
+  yet — notably a queued bulk operation the caller no longer wants —
+  authorized exactly like `GetJobRun` (the identity that queued it, or the
+  job's own access gate). A run already in flight cannot be stopped.
+
+- **MCP job tools, in three tiers via the new `[mcp] job_tools`.** `false`
+  (default) exposes none; `"read"` adds `list_jobs`, `get_job_run`, and
+  `list_job_runs` — the polling half of queued bulk operations, plus
+  inspection and failure triage for **user-defined** jobs (the framework's
+  own `_system_email` / `_system_image_convert` runs stay hidden: their
+  payloads carry delivery tokens); `"all"` additionally exposes `trigger_job`, which
+  queues **any** defined job. Tiered rather than a single switch because MCP
+  executes with override access, so a job's own `access` hook cannot restrict
+  it: `"read"` lets an assistant diagnose without gaining the power to run
+  jobs. The `queue` argument on the MCP bulk tools is advertised (and
+  accepted) only from `"read"` up, so a client is never handed a `job_id` it
+  has no tool to poll. `job_tools = true` is rejected as ambiguous.
+
 - **MCP HTTP session tracking (`Mcp-Session-Id`).** The HTTP transport now
   implements the MCP spec's session header: `initialize` opens a tracked
   session (the response carries `Mcp-Session-Id`), requests echoing the
@@ -3253,6 +3311,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **A third framework job queue, `bulk`, is seeded** alongside `images` and
+  `email` (`concurrency = 1`, `timeout = 3600`, `retries = 0`) to host queued
+  bulk operations. If you already had a queue literally named `bulk` with
+  user jobs on it, those jobs now inherit `concurrency = 1` unless you set it
+  explicitly in `[jobs.queues.bulk]`.
 
 - **Live-event streams coalesce bursts (latest-wins per document).** Both the
   admin SSE stream and gRPC `Subscribe` now drain everything queued for a

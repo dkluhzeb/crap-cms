@@ -11,6 +11,31 @@ use crate::db::{DbConnection, DbValue};
 /// # Errors
 ///
 /// Returns a backend error if the DELETE fails.
+/// Cancel ONE pending run by id. Only a `pending` row can be cancelled —
+/// a claimed/running job cannot be stopped mid-flight. Returns whether a
+/// row was removed.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
+pub fn cancel_pending_job(conn: &dyn DbConnection, id: &str) -> Result<bool> {
+    let affected = conn.execute(
+        &format!(
+            "DELETE FROM _crap_jobs WHERE status = 'pending' AND id = {}",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(id.to_string())],
+    )?;
+
+    Ok(affected > 0)
+}
+
+/// Cancel all pending jobs, optionally filtered by slug. Returns how many
+/// rows were removed.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
     let affected = if let Some(slug) = slug {
         conn.execute(

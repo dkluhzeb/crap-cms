@@ -287,7 +287,8 @@ if `[jobs.queues]` references a queue name that no defined job uses
 (typo catcher).
 
 `[jobs.queues.<name>]` also carries two non-concurrency knobs that
-apply to **system jobs** (`_system_image_convert`, `_system_email`)
+apply to **system jobs** (`_system_image_convert`, `_system_email`,
+`_system_bulk`)
 which lack their own `JobDefinition`:
 
 | Field | What it sets |

@@ -14,6 +14,7 @@ use crate::{
 
 use super::bulk_access::{delete_scope, scope_bulk_access};
 use super::update_many::enforce_bulk_limit;
+use crate::service::OpDeadline;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -37,6 +38,9 @@ pub struct DeleteManyOptions {
     /// Maximum number of documents the operation may match before it is
     /// rejected (from `server.bulk_max_documents`). `0` = no limit.
     pub max_documents: i64,
+    /// Cooperative abort deadline, checked between documents (see
+    /// [`OpDeadline`]).
+    pub deadline: OpDeadline,
 }
 
 impl Default for DeleteManyOptions {
@@ -45,6 +49,7 @@ impl Default for DeleteManyOptions {
             run_hooks: true,
             include_deleted: false,
             max_documents: 0,
+            deadline: OpDeadline::none(),
         }
     }
 }
@@ -128,6 +133,9 @@ fn delete_many_pool(
             let mut pre_statuses = Vec::new();
 
             for id in &doc_ids {
+                opts.deadline
+                    .check(soft_count + hard_count + skipped_count)?;
+
                 match delete_document_in_conn(inner, id, Some(locale_config)) {
                     Ok(result) => {
                         if def.soft_delete {
@@ -150,6 +158,10 @@ fn delete_many_pool(
                     Err(e) => return Err(e),
                 }
             }
+
+            // Final pre-commit check (see create_many).
+            opts.deadline
+                .check(soft_count + hard_count + skipped_count)?;
 
             Ok((
                 DeleteManyResult {
@@ -224,6 +236,8 @@ fn delete_many_conn(
     let mut deleted_ids = Vec::new();
 
     for id in &doc_ids {
+        opts.deadline
+            .check(soft_count + hard_count + skipped_count)?;
         match delete_document_in_conn(ctx, id, Some(locale_config)) {
             Ok(result) => {
                 if def.soft_delete {
@@ -257,6 +271,11 @@ fn delete_many_conn(
     // Parity with the single-document conn path (and the pool path's
     // orchestrator): every write clears the populate cache.
     ctx.clear_cache();
+
+    // Final pre-commit check (see create_many).
+
+    opts.deadline
+        .check(soft_count + hard_count + skipped_count)?;
 
     Ok(DeleteManyResult {
         hard_deleted: hard_count,

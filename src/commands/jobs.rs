@@ -305,7 +305,7 @@ fn run_trigger(
 
 /// Cancel pending jobs, optionally filtered by slug.
 #[cfg(not(tarpaulin_include))]
-fn run_cancel(config_dir: &Path, slug: Option<String>) -> Result<()> {
+fn run_cancel(config_dir: &Path, slug: Option<String>, id: Option<String>) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -313,6 +313,21 @@ fn run_cancel(config_dir: &Path, slug: Option<String>) -> Result<()> {
     let cfg = CrapConfig::load(&config_dir)?;
     let pool = pool::create_pool(&config_dir, &cfg)?;
     let conn = pool.get().context("Failed to get DB connection")?;
+
+    // A single run by id — the precise alternative to clearing a whole
+    // slug, which would discard every other caller's pending work.
+    if let Some(id) = id {
+        if query::jobs::cancel_pending_job(&conn, &id)? {
+            cli::success(&format!("Cancelled pending job run {id}"));
+        } else {
+            cli::warning(&format!(
+                "No pending job run {id} (it may have already been claimed)"
+            ));
+        }
+
+        return Ok(());
+    }
+
     let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
 
     match slug {
@@ -379,7 +394,7 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;
             run_status(&pool, id.as_deref(), slug.as_deref(), limit)
         }
-        JobsAction::Cancel { slug } => run_cancel(config_dir, slug),
+        JobsAction::Cancel { slug, id } => run_cancel(config_dir, slug, id),
         JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),
         JobsAction::Healthcheck => {
             let (cfg, registry, pool) = init_stack(config_dir)?;

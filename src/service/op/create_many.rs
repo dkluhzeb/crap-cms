@@ -3,8 +3,8 @@
 use crate::{
     db::LocaleContext,
     service::{
-        CreateManyItem, CreateManyOptions, CreateManyResult, ServiceContext, ServiceError,
-        create_many,
+        CreateManyItem, CreateManyOptions, CreateManyResult, OpDeadline, ServiceContext,
+        ServiceError, create_many,
     },
 };
 
@@ -28,6 +28,9 @@ pub struct CreateManyArgs {
     pub max_documents: i64,
     /// Publish mutation events (bulk surfaces default this to `false`).
     pub events: bool,
+    /// Cooperative abort deadline for the batch (see [`OpDeadline`]).
+    #[builder(default = OpDeadline::none())]
+    pub deadline: OpDeadline,
 }
 
 /// Bulk-create documents in one transaction.
@@ -50,6 +53,7 @@ impl Operation for CreateMany {
             run_hooks: args.run_hooks,
             draft: args.draft,
             max_documents: args.max_documents,
+            deadline: args.deadline,
             locale_ctx: args.locale_ctx,
         };
 
