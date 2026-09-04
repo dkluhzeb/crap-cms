@@ -1482,6 +1482,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A draft-only document read as `_status: "published"` in the draft view.**
+  The draft overlay served the version snapshot's fields verbatim, and the
+  create path snapshotted the document *before* the draft stamp landed on the
+  row — so a document that was never published carried `"published"` inside
+  its snapshot forever (the version row itself was correctly `draft`; the
+  published view correctly hid the document). Found by the Postgres upgrade
+  smoke test, present on both backends. Two-part fix: the overlay now treats
+  the **row** as the authority on `_status` (collections and globals alike —
+  this also corrects snapshots already stored by older releases, which no
+  write-side fix could reach), and new snapshots record the status they are
+  stamped with. A published document with a pending draft edit still reads
+  `"published"` — the status is the document's, not the version's, now pinned
+  by tests on both semantics.
+
+
 - **The S3 region default depended on whether the `[upload.s3]` section
   header existed.** `S3Config` derived `Default` (`region = ""`) while the
   serde field default was `"us-east-1"` — so a config with an `[upload.s3]`

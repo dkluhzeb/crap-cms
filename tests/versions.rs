@@ -1248,6 +1248,221 @@ async fn grpc_create_draft_sets_status() {
     assert_eq!(status.as_deref(), Some("draft"));
 }
 
+// ── Globals draft overlay ───────────────────────────────────────────────
+
+/// The globals twin of the collection regression above, exercised the way an
+/// upgraded pre-alpha.10 database presents: a version row stamped `draft`
+/// whose SNAPSHOT still carries `_status: "published"` (the stale value the
+/// old create path baked in, kept forever by existing databases). The
+/// drafts-included read must report the ROW's status.
+#[test]
+fn global_draft_overlay_reports_the_rows_status_not_the_snapshots() {
+    use crap_cms::service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document};
+
+    let mut gdef = GlobalDefinition::new("site");
+    gdef.fields = vec![FieldDefinition::builder("tagline", FieldType::Text).build()];
+    gdef.versions = Some(VersionsConfig::new(true, 0));
+
+    let (_tmp, pool) = create_test_pool();
+    let shared = Registry::shared();
+    {
+        let mut reg = shared.write().unwrap();
+        reg.register_global(gdef.clone());
+    }
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
+
+    let mut conn = pool.get().unwrap();
+    {
+        let tx = conn.transaction().unwrap();
+
+        // Published content in the row…
+        let mut data = DocumentFields::new();
+        data.insert("tagline".to_string(), json!("live"));
+        query::update_global(&tx, "site", &gdef, &data, None).unwrap();
+
+        // …then the pre-alpha.10 shape: row stamped draft, snapshot stale.
+        query::set_document_status(&tx, "_global_site", "default", "draft").unwrap();
+        query::create_version(
+            &tx,
+            "_global_site",
+            "default",
+            "draft",
+            &json!({ "tagline": "pending edit", "_status": "published" }),
+        )
+        .unwrap();
+
+        tx.commit().unwrap();
+    }
+
+    let config = CrapConfig::test_default();
+    let runner = HookRunner::builder()
+        .config_dir(_tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = pool.get().unwrap();
+    let hooks = RunnerReadHooks::new(&runner, &conn, None, None);
+    let ctx = ServiceContext::global("site", &gdef)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .build();
+    let mut input = GetGlobalInput::new(None, None);
+    input.include_drafts = true;
+
+    let doc = get_global_document(&ctx, &input).expect("draft read");
+
+    assert_eq!(
+        doc.fields.get("tagline").and_then(|v| v.as_str()),
+        Some("pending edit"),
+        "the overlay serves the draft snapshot content"
+    );
+    assert_eq!(
+        doc.fields.get("_status").and_then(|v| v.as_str()),
+        Some("draft"),
+        "the row, not the stale snapshot, is the authority on _status"
+    );
+}
+
+/// Extract a string field from a response document's typed field map.
+fn proto_str_field(doc: &content::Document, field: &str) -> Option<String> {
+    doc.fields.as_ref().and_then(|s| {
+        s.fields.get(field).and_then(|v| match &v.kind {
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
+            _ => None,
+        })
+    })
+}
+
+/// Regression: the draft-view read of a draft-only document must report
+/// `_status: "draft"`. The overlay used to serve the version snapshot's
+/// stale value — the create path snapshotted the doc BEFORE the draft stamp
+/// landed on the row, so a document that was never published read back as
+/// "published". The row is the authority (and pre-alpha.10 databases keep
+/// the stale snapshots forever, so the read-side override matters even with
+/// the write path fixed).
+#[tokio::test]
+async fn grpc_draft_view_of_a_draft_only_document_reports_draft_status() {
+    let ts = setup_service(vec![make_versioned_def()]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "articles".to_string(),
+            data: Some(make_struct(&[("title", "Never published")])),
+            locale: None,
+            draft: Some(true),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: Some(true),
+            trash: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    assert_eq!(
+        proto_str_field(&found, "_status").as_deref(),
+        Some("draft"),
+        "a never-published document must not read as published"
+    );
+
+    // And the stored snapshot itself now records the truth at stamp time.
+    let conn = ts.pool.get().unwrap();
+    let version = query::find_latest_version(&conn, "articles", &doc.id)
+        .unwrap()
+        .expect("draft version exists");
+    assert_eq!(version.status, "draft");
+    assert_eq!(
+        version.snapshot.get("_status").and_then(|v| v.as_str()),
+        Some("draft"),
+        "the snapshot must not store a status that was never true"
+    );
+}
+
+/// The sibling semantics pin: a PUBLISHED document with a pending draft
+/// edit stays `_status: "published"` in the draft view — the status is the
+/// document's, not the version's.
+#[tokio::test]
+async fn grpc_draft_view_of_published_doc_with_pending_edit_reports_published() {
+    let ts = setup_service(vec![make_versioned_def()]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "articles".to_string(),
+            data: Some(make_struct(&[("title", "Live")])),
+            locale: None,
+            draft: Some(false),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // A pending draft edit on the live document.
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("title", "Edited (pending)")])),
+            locale: None,
+            draft: Some(true),
+            unpublish: None,
+        }))
+        .await
+        .unwrap();
+
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: Some(true),
+            trash: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    assert_eq!(
+        proto_str_field(&found, "title").as_deref(),
+        Some("Edited (pending)"),
+        "the draft view serves the pending edit"
+    );
+    assert_eq!(
+        proto_str_field(&found, "_status").as_deref(),
+        Some("published"),
+        "the document itself is still published"
+    );
+}
+
 #[tokio::test]
 async fn grpc_create_published_sets_status() {
     let ts = setup_service(vec![make_versioned_def()]);

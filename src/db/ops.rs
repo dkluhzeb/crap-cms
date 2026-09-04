@@ -110,7 +110,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         && p.def.has_drafts()
         && let Some(version) = query::find_latest_version(p.conn, p.slug, p.id)?
         && version.status == "draft"
-        && let Some(doc) = document_from_snapshot(p.id, &version.snapshot)
+        && let Some(mut doc) = document_from_snapshot(p.id, &version.snapshot)
     {
         // SECURITY: the snapshot bypasses the SQL `WHERE` path, so the view's
         // row constraint (e.g. a `draft = { author = me }` rule) must be enforced
@@ -119,6 +119,17 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         // that fails the constraint falls through to the (constrained) main-row
         // find below — which returns the published row or nothing.
         if matches_constraints_typed(&doc.fields, &p.snapshot_constraints, &p.def.fields) {
+            // `_status` is the DOCUMENT's workflow status, and the row is its
+            // authority — snapshots can carry a stale value (historically the
+            // create path snapshotted before the draft stamp landed, and
+            // pre-alpha.10 databases keep such snapshots forever). A draft-only
+            // document must read as "draft"; a published document with a
+            // pending draft edit reads as "published".
+            if let Some(row_status) = query::versions::get_document_status(p.conn, p.slug, p.id)? {
+                doc.fields
+                    .insert("_status".to_string(), Value::String(row_status));
+            }
+
             return Ok(Some(doc));
         }
     }

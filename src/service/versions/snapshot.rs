@@ -30,7 +30,22 @@ pub(crate) fn create_version_snapshot(
     if ctx.has_drafts {
         query::set_document_status(conn, ctx.table, ctx.parent_id, status)?;
     }
-    let snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc)?;
+    let mut snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc)?;
+
+    // The snapshot must record the status this version is stamped with, not
+    // whatever the in-memory doc happened to carry: on a draft create, `doc`
+    // was re-read BEFORE the draft stamp above and still says "published".
+    // Reads treat the row as the authority regardless, but snapshots should
+    // not store a value that was never true.
+    if ctx.has_drafts
+        && let Some(obj) = snapshot.as_object_mut()
+    {
+        obj.insert(
+            "_status".to_string(),
+            serde_json::Value::String(status.to_string()),
+        );
+    }
+
     query::create_version(conn, ctx.table, ctx.parent_id, status, &snapshot)?;
     prune_versions(conn, ctx.table, ctx.parent_id, ctx.versions)?;
     Ok(())

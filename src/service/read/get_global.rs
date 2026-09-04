@@ -38,8 +38,18 @@ fn resolve_global_doc(
     if include_drafts {
         if let Some(version) = query::find_latest_version(conn, &gtable, "default")?
             && version.status == "draft"
-            && let Some(doc) = ops::document_from_snapshot("default", &version.snapshot)
+            && let Some(mut doc) = ops::document_from_snapshot("default", &version.snapshot)
         {
+            // The row is the authority on `_status` — snapshots can carry a
+            // stale value (see the collection overlay in `db::ops`). A
+            // draft-only global must read as "draft".
+            if let Some(row_status) =
+                query::versions::get_document_status(conn, &gtable, "default")?
+            {
+                doc.fields
+                    .insert("_status".to_string(), Value::String(row_status));
+            }
+
             return Ok(doc);
         }
 
