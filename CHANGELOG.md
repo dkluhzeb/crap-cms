@@ -2811,6 +2811,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Access-constraint tables speak the full canonical `where` grammar,
+  including `["or"]` groups.** A read-access function returning a filter
+  table now decodes through the exact decoder every CRUD `where` uses on
+  every surface. Previously the table was parsed by a bespoke walker that
+  mistook the `or` key for a field name and denied — a rule like "own rows
+  OR public rows" was impossible to express. The security contract is
+  unchanged: each leaf is still restricted to the equality/membership
+  operators on flat own columns, an empty constraint set still denies —
+  including an empty group *inside* an `or` (a nil-valued key in a group
+  would otherwise turn "this group OR that group" into "every row") — and
+  any decode failure denies with a logged warning.
+
+
 - **`delay` and `unique` on every job-trigger surface.** They were Lua-only
   options of `crap.jobs.queue`; the gRPC `TriggerJob` RPC (`delay` tag 4,
   `unique` tag 5) and the MCP `trigger_job` tool now take them too. `delay`
@@ -3574,6 +3587,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- **The filter grammar has ONE description: `FILTER_OP_SPECS`.** A canonical
+  operator table (name, value shape, doc) now lives beside `FilterOp`,
+  pinned to the enum by a consistency test. The generated Lua annotations
+  (`crap.FilterOperators` and friends) render from it, and the admin URL
+  parser's unknown-operator message lists operators from it — replacing the
+  Rust mirror structs and the hand list that previously described the
+  grammar in parallel with the decoder. The two remaining filter parsers
+  are now structural front-ends only: the admin URL bracket syntax and the
+  JSON/Lua map shape both construct operators exclusively through
+  `FilterOp::scalar_from_name` / `decode_where_map`.
+
 
 - **The `crap.toml` reference is pinned to the config structs.** A new
   `#[derive(ConfigKeys)]` enumerates every section struct's serde keys, and

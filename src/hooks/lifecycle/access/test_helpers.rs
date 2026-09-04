@@ -11,10 +11,10 @@ use crate::core::{
     Document, FieldDefinition, FieldType, document::DocumentBuilder, field::FieldAccess,
 };
 
-pub(super) fn setup_lua() -> Lua {
-    let lua = Lua::new();
-    lua.load(
-        r#"
+/// The Lua access fixtures shared by every collection-access test —
+/// hoisted out of [`setup_lua`] so the function stays a two-liner however
+/// many fixtures the tests grow.
+const TEST_ACCESS_LUA: &str = r#"
         local access = {}
 
         function access.allow(ctx)
@@ -75,6 +75,29 @@ pub(super) fn setup_lua() -> Lua {
         function access.return_empty_table(ctx)
 
             return {}
+        end
+
+        function access.constrained_or_groups(ctx)
+
+            return { ["or"] = { { role = "admin" }, { owner = "u1" } } }
+        end
+
+        function access.constrained_in_list(ctx)
+
+            return { status = { ["in"] = { "published", "review" } } }
+        end
+
+        function access.constrained_array_table(ctx)
+
+            return { "not", "a", "map" }
+        end
+
+        function access.constrained_or_with_empty_group(ctx)
+
+            -- `{ tenant = nil }` IS `{}` in Lua: a nil-valued key inside an
+            -- or-group vanishes, leaving an empty AND-group that would
+            -- match EVERY row.
+            return { ["or"] = { { role = "admin" }, { tenant = nil } } }
         end
 
         function access.nil_keyed_constraint(ctx)
@@ -151,10 +174,11 @@ pub(super) fn setup_lua() -> Lua {
         end
 
         package.loaded["test_access"] = access
-    "#,
-    )
-    .exec()
-    .unwrap();
+    "#;
+
+pub(super) fn setup_lua() -> Lua {
+    let lua = Lua::new();
+    lua.load(TEST_ACCESS_LUA).exec().unwrap();
     lua
 }
 

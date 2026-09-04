@@ -15,6 +15,9 @@
 
 use super::{LuaAlias, LuaAnnotation, LuaFieldTypeViews};
 
+use crate::db::query::{FILTER_OP_SPECS, FilterOpValueKind};
+use std::fmt::Write as _;
+
 use crate::core::{
     BlockDefinition, Document, FieldAccess, FieldAdmin, FieldAdminLabels, FieldDefinition,
     FieldHooks, FieldTab, FieldType, HookRef, Hooks, IndexDefinition, Labels, LocalizedString,
@@ -72,7 +75,6 @@ use crate::hooks::lua_api::{
                 validate::{ValidateOptions, ValidateResult, render_crap_collections_validate_lua},
             },
         },
-        filter::{FilterOperators, FilterScalar, FilterValue, OrCondition},
         globals::{
             get::{GlobalGetOptions, render_crap_globals_get_lua},
             unpublish::{GlobalUnpublishOptions, render_crap_globals_unpublish_lua},
@@ -238,13 +240,57 @@ fn render_global_types(out: &mut String) {
     GlobalAccess::render_lua_annotation(out);
     GlobalDefinition::render_lua_annotation(out);
 }
+/// Render the filter-grammar types (`crap.FilterScalar`,
+/// `crap.FilterOperators`, `crap.FilterValue`, `crap.OrCondition`) from the
+/// canonical operator table ([`FILTER_OP_SPECS`]) — the same table the
+/// decoder is pinned against, so the documented operators can never drift
+/// from what `decode_where_map` accepts. There are no Rust mirror structs:
+/// the runtime folded onto the shared decoder, and these annotations are
+/// the grammar's editor-facing description.
+fn render_filter_types(out: &mut String) {
+    out.push_str(
+        "--- @alias crap.FilterScalar boolean | integer | number | string\n\n\
+         --- Filter operator table. Use one key per operator on the operator\n\
+         --- side of a `where = { field = { … } }` entry. Simple string /\n\
+         --- number / boolean values on the right-hand side are treated as\n\
+         --- `equals` automatically.\n\
+         --- @class crap.FilterOperators\n",
+    );
+
+    for spec in &FILTER_OP_SPECS {
+        // `in` is a Lua keyword — the annotation spells it `["in"]`.
+        let name = if spec.name == "in" {
+            "[\"in\"]".to_string()
+        } else {
+            spec.name.to_string()
+        };
+        let ty = match spec.value {
+            FilterOpValueKind::Scalar => "crap.FilterScalar",
+            FilterOpValueKind::Text => "string",
+            FilterOpValueKind::ScalarList => "crap.FilterScalar[]",
+            FilterOpValueKind::True => "boolean",
+        };
+        let _ = writeln!(out, "--- @field {name}? {ty} {}", spec.doc);
+    }
+
+    out.push_str(
+        "\n\
+         --- One filter value in a `where` clause: scalar (treated as\n\
+         --- `equals`) or operator table.\n\
+         --- @alias crap.FilterValue crap.FilterScalar | crap.FilterOperators\n\n\
+         --- One AND-group inside a `where.or` array. The Lua user passes a\n\
+         --- map of `field → FilterValue` exactly like the top-level `where`\n\
+         --- clause, and the OR clause is `{ group1, group2, … }`. Documented\n\
+         --- as a type alias so the `where` type union (on each `*QueryInput`)\n\
+         --- can name it.\n\
+         --- @alias crap.OrCondition table<string, crap.FilterValue>\n\n",
+    );
+}
+
 fn render_document_types(out: &mut String) {
     PaginationResult::render_lua_annotation(out);
     Document::render_lua_annotation(out);
-    FilterScalar::render_lua_alias(out);
-    FilterOperators::render_lua_annotation(out);
-    FilterValue::render_lua_alias(out);
-    OrCondition::render_lua_alias(out);
+    render_filter_types(out);
     FindQueryInput::render_lua_annotation(out);
     FindResult::render_lua_annotation(out);
 }

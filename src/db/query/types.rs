@@ -77,6 +77,97 @@ impl FilterOp {
     }
 }
 
+/// The value shape a filter operator takes on the wire.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FilterOpValueKind {
+    /// A scalar — string, number, or boolean.
+    Scalar,
+    /// A string only (`LIKE` patterns).
+    Text,
+    /// An array of scalars (`in` / `not_in`).
+    ScalarList,
+    /// The literal `true` (`exists` / `not_exists` — `false` is an error).
+    True,
+}
+
+/// One operator of the canonical filter grammar: its [`op_name`]
+/// spelling, the value shape it takes, and its one-line doc.
+///
+/// [`op_name`]: FilterOp::op_name
+pub struct FilterOpSpec {
+    pub name: &'static str,
+    pub value: FilterOpValueKind,
+    pub doc: &'static str,
+}
+
+/// Every operator of the canonical grammar — the single table that
+/// surface descriptions render from (the generated `crap.FilterOperators`
+/// Lua annotation, the admin URL parser's unknown-operator message), so a
+/// description can never list an operator the decoder does not accept.
+/// A consistency test below pins it against [`FilterOp`] itself.
+pub const FILTER_OP_SPECS: [FilterOpSpec; 12] = [
+    FilterOpSpec {
+        name: "equals",
+        value: FilterOpValueKind::Scalar,
+        doc: "Exact match (`field = value`).",
+    },
+    FilterOpSpec {
+        name: "not_equals",
+        value: FilterOpValueKind::Scalar,
+        doc: "Not equal (`field != value`).",
+    },
+    FilterOpSpec {
+        name: "like",
+        value: FilterOpValueKind::Text,
+        doc: "SQL `LIKE` pattern (`field LIKE value`).",
+    },
+    FilterOpSpec {
+        name: "contains",
+        value: FilterOpValueKind::Text,
+        doc: "Substring match (`field LIKE %value%`).",
+    },
+    FilterOpSpec {
+        name: "greater_than",
+        value: FilterOpValueKind::Scalar,
+        doc: "Greater than (`field > value`).",
+    },
+    FilterOpSpec {
+        name: "less_than",
+        value: FilterOpValueKind::Scalar,
+        doc: "Less than (`field < value`).",
+    },
+    FilterOpSpec {
+        name: "greater_than_or_equal",
+        value: FilterOpValueKind::Scalar,
+        doc: "Greater than or equal (`field >= value`).",
+    },
+    FilterOpSpec {
+        name: "less_than_or_equal",
+        value: FilterOpValueKind::Scalar,
+        doc: "Less than or equal (`field <= value`).",
+    },
+    FilterOpSpec {
+        name: "in",
+        value: FilterOpValueKind::ScalarList,
+        doc: "Value in list (`field IN (...)`).",
+    },
+    FilterOpSpec {
+        name: "not_in",
+        value: FilterOpValueKind::ScalarList,
+        doc: "Value not in list (`field NOT IN (...)`).",
+    },
+    FilterOpSpec {
+        name: "exists",
+        value: FilterOpValueKind::True,
+        doc: "Field is not null (`IS NOT NULL`). Only `true` is accepted — `false` is an error.",
+    },
+    FilterOpSpec {
+        name: "not_exists",
+        value: FilterOpValueKind::True,
+        doc: "Field is null (`IS NULL`). Only `true` is accepted — `false` is an error.",
+    },
+];
+
 /// A single field + operator filter condition.
 #[derive(Debug, Clone)]
 pub struct Filter {

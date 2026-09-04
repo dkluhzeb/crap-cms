@@ -8,12 +8,12 @@ use mlua::{Lua, LuaSerdeExt, Value};
 use tracing::warn;
 
 use crate::{
-    db::{AccessResult, Filter, FilterClause, FilterOp},
+    db::{AccessResult, FilterClause, query::filter::decode_where_map},
     hooks::{
         lifecycle::{
             AccessCheckInput, AccessContext, LuaVmInfra, execution::resolve_hook_function,
         },
-        lua_api::crud::filter::FilterValue,
+        lua_api::lua_to_json,
     },
     service::{validate_access_constraint_locales, validate_access_constraints},
 };
@@ -76,7 +76,7 @@ pub(crate) fn check_access_with_lua(
     match result {
         Value::Boolean(true) => Ok(AccessResult::Allowed),
         Value::Boolean(false) | Value::Nil => Ok(AccessResult::Denied),
-        Value::Table(tbl) => parse_access_constraints(lua, &tbl),
+        Value::Table(tbl) => Ok(parse_access_constraints(lua, &tbl)),
         other => {
             warn!(
                 "Access function '{}' returned unexpected type '{}', denying access",
@@ -146,42 +146,89 @@ pub(crate) fn check_collection_access(
     Ok(result)
 }
 
-/// Parse an access constraint table into filter clauses. Shares the
-/// `FilterValue` parser with the user-CRUD path
-/// (`hooks::lua_api::crud::filter`); the only access-specific
-/// quirk is top-level booleans which bind as `"1"`/`"0"` for SQL
-/// integer-boolean column compatibility (the CRUD path emits
-/// `"true"`/`"false"` because that's what `serde_json` produces).
-fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult> {
-    let mut clauses = Vec::new();
-
-    for pair in tbl.pairs::<String, Value>() {
-        let (field, value) = pair?;
-
-        // Boolean is a top-level access-filter quirk: SQL bind for
-        // boolean (integer) columns expects `"1"`/`"0"`.
-        if let Value::Boolean(b) = &value {
-            clauses.push(FilterClause::Single(Filter {
-                field,
-                op: FilterOp::Equals(if *b { "1" } else { "0" }.to_string()),
-            }));
-            continue;
+/// True when any composite node in the clause tree is empty. `And([])`
+/// matches every row on both enforcement paths (SQL renders no condition;
+/// the in-memory matcher's `all([])` is vacuously true), so inside an
+/// access constraint it is a fail-open hole, never a valid restriction.
+fn has_empty_group(clause: &FilterClause) -> bool {
+    match clause {
+        FilterClause::Single(_) => false,
+        FilterClause::And(subs) | FilterClause::Or(subs) => {
+            subs.is_empty() || subs.iter().any(has_empty_group)
         }
+    }
+}
 
-        match FilterValue::from_lua_value(lua, &value).and_then(FilterValue::into_filter_ops) {
-            Ok(ops) => {
-                for op in ops {
-                    clauses.push(FilterClause::Single(Filter {
-                        field: field.clone(),
-                        op,
-                    }));
-                }
-            }
-            Err(e) => {
-                warn!("Access constraint for field '{}': {}; denying", field, e);
-                return Ok(AccessResult::Denied);
-            }
+/// Parse an access constraint table into filter clauses through the ONE
+/// canonical `where` grammar (`decode_where_map`) — the same decoder every
+/// CRUD surface uses, so an access rule can express everything a `where`
+/// can: scalar shorthand, the full operator set, `in`/`not_in`, and `or`
+/// groups (previously an `or` key was mistaken for a field name and the
+/// rule denied).
+///
+/// Access-specific rules layered on top:
+///
+/// - **Top-level booleans bind as `"1"`/`"0"`** for SQL integer-boolean
+///   column compatibility (the CRUD path emits `"true"`/`"false"`, which
+///   the resolver coerces per field type — the access spelling is kept
+///   bit-identical to what it always bound).
+/// - **Every error denies.** A malformed constraint (unknown operator,
+///   `exists = false`, a non-map table) fails CLOSED with a logged warning
+///   rather than surfacing an error the caller might ignore.
+/// - **An empty constraint set denies** — see the warning below.
+fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> AccessResult {
+    let _ = lua;
+
+    let json = match lua_to_json(&Value::Table(tbl.clone())) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Access constraint table could not be read: {e}; denying");
+            return AccessResult::Denied;
         }
+    };
+
+    let Some(map) = json.as_object() else {
+        warn!(
+            "Access function returned an array-like table where a field → filter \
+             map was expected; denying"
+        );
+        return AccessResult::Denied;
+    };
+
+    // Boolean is a top-level access-filter quirk: SQL bind for boolean
+    // (integer) columns expects `"1"`/`"0"`.
+    let map: serde_json::Map<String, serde_json::Value> = map
+        .iter()
+        .map(|(k, v)| match v {
+            serde_json::Value::Bool(b) => {
+                let bound = if *b { "1" } else { "0" };
+                (k.clone(), serde_json::Value::String(bound.to_string()))
+            }
+            other => (k.clone(), other.clone()),
+        })
+        .collect();
+
+    let clauses = match decode_where_map(&map) {
+        Ok(clauses) => clauses,
+        Err(e) => {
+            warn!("Access constraint did not decode: {e}; denying");
+            return AccessResult::Denied;
+        }
+    };
+
+    // Fail CLOSED on an empty composite anywhere in the tree. An empty
+    // AND/OR group matches every row, and it arises the same way the empty
+    // top-level table does: a nil-valued key — this time inside an `or`
+    // group (`{ ["or"] = { { tenant = ctx.user.<nil> } } }` decodes to an
+    // empty group). Left in place it would turn "this group OR that group"
+    // into "everything".
+    if clauses.iter().any(has_empty_group) {
+        warn!(
+            "Access function returned an `or` group that produced no filters \
+             (likely a nil-valued key inside the group); denying — an empty \
+             group would match every row."
+        );
+        return AccessResult::Denied;
     }
 
     // Fail CLOSED on an empty constraint set. A hook that returned a *table*
@@ -201,10 +248,10 @@ fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult
              denying. Return `true` to allow unconditionally, or guard the nil \
              value explicitly."
         );
-        return Ok(AccessResult::Denied);
+        return AccessResult::Denied;
     }
 
-    Ok(AccessResult::Constrained(clauses))
+    AccessResult::Constrained(clauses)
 }
 
 #[cfg(test)]
@@ -226,6 +273,7 @@ mod tests {
     use super::super::test_helpers::*;
     use super::*;
     use crate::core::{DocumentFields, HookRef};
+    use crate::db::{FilterClause, FilterOp};
     use serde_json::json;
 
     /// Build an `AccessCheckInput` for tests (operation/collection are
@@ -507,6 +555,94 @@ mod tests {
     /// AND's nothing into the query — i.e. matches every row — so treating it as
     /// "allowed, unconstrained" turns an intended-to-restrict rule into a
     /// cross-tenant/cross-user data leak. Allow-all must be `return true`.
+    /// The fold onto `decode_where_map` made `or` groups work in access
+    /// constraints. Previously the `or` key was mistaken for a field name,
+    /// failed to parse as an operator table, and the rule denied.
+    #[test]
+    fn access_constrained_or_groups_become_an_or_clause() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.constrained_or_groups")),
+                None,
+            ),
+        )
+        .unwrap();
+
+        let AccessResult::Constrained(clauses) = result else {
+            panic!("expected Constrained, or-groups must be usable in access rules");
+        };
+        assert_eq!(clauses.len(), 1);
+        let FilterClause::Or(alts) = &clauses[0] else {
+            panic!("expected an Or clause");
+        };
+        assert_eq!(alts.len(), 2);
+    }
+
+    /// `in` lists decode through the shared grammar.
+    #[test]
+    fn access_constrained_in_list() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_in_list")), None),
+        )
+        .unwrap();
+
+        let AccessResult::Constrained(clauses) = result else {
+            panic!("expected Constrained");
+        };
+        let FilterClause::Single(f) = &clauses[0] else {
+            panic!("expected Single");
+        };
+        assert!(
+            matches!(&f.op, FilterOp::In(vs) if vs == &["published".to_string(), "review".to_string()]),
+            "got {:?}",
+            f.op
+        );
+    }
+
+    /// Regression: a nil-valued key INSIDE an `or` group produces an empty
+    /// AND-group — which matches every row. That is the same
+    /// intended-to-restrict-but-restricts-nothing leak the empty-table
+    /// guard denies at the top level, so it must deny here too, not
+    /// silently grant `role = "admin" OR everything`.
+    #[test]
+    fn access_or_group_with_empty_group_denies() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.constrained_or_with_empty_group")),
+                None,
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            matches!(result, AccessResult::Denied),
+            "an empty or-group must fail closed, got {result:?}"
+        );
+    }
+
+    /// An array-like table is not a field → filter map; it must deny (fail
+    /// closed), not error or silently constrain.
+    #[test]
+    fn access_array_table_denies() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.constrained_array_table")),
+                None,
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
     #[test]
     fn access_empty_constraint_table_denies() {
         let lua = setup_lua();

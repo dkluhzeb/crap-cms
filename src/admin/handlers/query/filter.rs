@@ -19,15 +19,28 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::{
     core::collection::CollectionDefinition,
-    db::query::{Filter, FilterClause, FilterOp, get_valid_filter_columns},
+    db::query::{
+        FILTER_OP_SPECS, Filter, FilterClause, FilterOp, FilterOpValueKind,
+        get_valid_filter_columns,
+    },
 };
 
 use super::url::url_decode;
 
-/// Valid operator names, listed in error messages on an unknown operator. One
-/// grammar with every surface — see [`FilterOp::op_name`].
-const VALID_OPS: &str = "equals, not_equals, contains, like, greater_than, less_than, \
-     greater_than_or_equal, less_than_or_equal, exists, not_exists";
+/// Valid operator names for the URL grammar, listed in error messages on an
+/// unknown operator. Derived from the canonical operator table
+/// ([`FILTER_OP_SPECS`]) so the message can never advertise an operator the
+/// decoder rejects — minus the list operators (`in`/`not_in`), which the URL
+/// form does not spell directly: repeated `equals`/`not_equals` params
+/// collapse into them instead.
+fn valid_url_ops() -> String {
+    FILTER_OP_SPECS
+        .iter()
+        .filter(|spec| spec.value != FilterOpValueKind::ScalarList)
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Parse an operator string and value into a `FilterOp` — the canonical grammar
 /// shared with the gRPC/MCP surfaces (`in`/`not_in` are synthesized post-hoc
@@ -52,8 +65,12 @@ fn parse_filter_op(op_str: &str, value: String) -> Result<FilterOp, String> {
                 FilterOp::NotExists
             })
         }
-        _ => FilterOp::scalar_from_name(op_str, value)
-            .ok_or_else(|| format!("Unknown filter operator '{op_str}' (valid: {VALID_OPS})")),
+        _ => FilterOp::scalar_from_name(op_str, value).ok_or_else(|| {
+            format!(
+                "Unknown filter operator '{op_str}' (valid: {})",
+                valid_url_ops()
+            )
+        }),
     }
 }
 

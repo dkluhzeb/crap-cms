@@ -34,7 +34,20 @@ return {
     category = "news",
     department = ctx.user.department,
 }
+
+-- OR groups: the caller sees a row when ANY group matches
+return {
+    ["or"] = {
+        { author = ctx.user.id },
+        { visibility = "public" },
+    },
+}
 ```
+
+The table is decoded by the **same canonical `where` grammar** as every CRUD
+filter on every surface — scalar shorthand, operator tables, and `["or"]`
+groups all behave exactly as they do in `crap.collections.find()`. The
+restrictions below apply per *leaf* filter, inside `or` groups included.
 
 ## Allowed Operators — Equality and Membership Only
 
@@ -166,7 +179,9 @@ end
 > safely refused rather than shown every tenant's data. Guarding the value
 > explicitly (as above) makes the intent clear and avoids relying on the
 > fail-closed default. The same applies to any `{ field = ctx.user.<field> }`
-> where the user field is optional.
+> where the user field is optional — **including inside `["or"]` groups**: a
+> group whose only key is nil-valued becomes an empty group, which would match
+> every row, so a constraint containing an empty group is denied the same way.
 
 ## Example: Owner-or-Admin
 

@@ -3,11 +3,13 @@
 Filters are used in `crap.collections.find()` / `count()` / `update_many()` / `delete_many()` queries. They map to SQL WHERE clauses.
 
 > **Access constraints use a subset.** An access function that returns a filter table
-> (`Constrained`) may only use `equals`, `not_equals`, `in`, `not_in`, `exists` and
-> `not_exists` on **flat own columns** — pattern (`like`, `contains`), ordered
-> (`greater_than`, …) and dotted-path constraints are rejected at load/evaluation time,
-> and a constraint table that produces no filters (nil-valued key, `exists = false`) is
-> a fail-closed **deny**. See [Filter Constraints](../access-control/filter-constraints.md).
+> (`Constrained`) decodes through the same grammar as any `where` — including
+> `["or"]` groups — but each leaf may only use `equals`, `not_equals`, `in`,
+> `not_in`, `exists` and `not_exists` on **flat own columns**: pattern (`like`,
+> `contains`), ordered (`greater_than`, …) and dotted-path constraints are rejected
+> at load/evaluation time, and a constraint table that produces no filters
+> (nil-valued key) or fails to decode (`exists = false`, an unknown operator) is a
+> fail-closed **deny**. See [Filter Constraints](../access-control/filter-constraints.md).
 
 ## Shorthand: Simple Equality
 

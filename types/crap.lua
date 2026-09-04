@@ -764,17 +764,12 @@ function crap.fields.join(config) end
 --- @field created_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
 --- @field updated_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
 
---- Scalar filter value — `string`, `integer`, `number`, or `boolean`.
---- Modeled as an untagged Rust enum so a Lua string and a Lua number
---- both deserialize into the right variant without any per-field
---- hint. The Lua alias is emitted as a type-union derived from the
---- variant payload types (`boolean | integer | number | string`).
 --- @alias crap.FilterScalar boolean | integer | number | string
 
 --- Filter operator table. Use one key per operator on the operator
 --- side of a `where = { field = { … } }` entry. Simple string /
 --- number / boolean values on the right-hand side are treated as
---- `equals` automatically (see `FilterValue::Scalar`).
+--- `equals` automatically.
 --- @class crap.FilterOperators
 --- @field equals? crap.FilterScalar Exact match (`field = value`).
 --- @field not_equals? crap.FilterScalar Not equal (`field != value`).
