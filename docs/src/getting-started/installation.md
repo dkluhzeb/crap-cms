@@ -113,4 +113,4 @@ The binary is at `target/release/crap-cms`. SQLite and Lua are bundled — no sy
 ## Optional Tools
 
 - **grpcurl** — for testing the gRPC API from the command line. See [grpcurl installation](https://github.com/fullstorydev/grpcurl#installation).
-- **lua-language-server** (LuaLS) — for IDE autocompletion in Lua config files. The project provides type definitions in `types/crap.lua`.
+- **lua-language-server** (LuaLS) — for IDE autocompletion in Lua config files. Type definitions are generated into your config dir's `types/` by `crap-cms typegen lua` (and automatically on every startup under `admin.dev_mode = true`).

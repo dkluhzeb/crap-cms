@@ -14,7 +14,11 @@ stmt_cache_capacity = 128
 # url = "host=localhost port=5432 user=crap password=crap dbname=crap_cms"
 
 [admin]
-dev_mode = false
+# The example is a playground: dev_mode reloads templates per request and
+# regenerates the editor type definitions (`types/crap.lua`, `types/hooks.lua`)
+# on every startup, so LuaLS autocomplete works after the first `serve`.
+# Real projects ship dev_mode = false (the scaffold's default).
+dev_mode = true
 default_timezone = "America/New_York"
 
 [auth]
