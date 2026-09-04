@@ -8,7 +8,7 @@ use mlua::{Lua, LuaSerdeExt, Value};
 use tracing::warn;
 
 use crate::{
-    db::{AccessResult, FilterClause, query::filter::decode_where_map},
+    db::{AccessResult, query::filter::decode_where_map},
     hooks::{
         lifecycle::{
             AccessCheckInput, AccessContext, LuaVmInfra, execution::resolve_hook_function,
@@ -146,19 +146,6 @@ pub(crate) fn check_collection_access(
     Ok(result)
 }
 
-/// True when any composite node in the clause tree is empty. `And([])`
-/// matches every row on both enforcement paths (SQL renders no condition;
-/// the in-memory matcher's `all([])` is vacuously true), so inside an
-/// access constraint it is a fail-open hole, never a valid restriction.
-fn has_empty_group(clause: &FilterClause) -> bool {
-    match clause {
-        FilterClause::Single(_) => false,
-        FilterClause::And(subs) | FilterClause::Or(subs) => {
-            subs.is_empty() || subs.iter().any(has_empty_group)
-        }
-    }
-}
-
 /// Parse an access constraint table into filter clauses through the ONE
 /// canonical `where` grammar (`decode_where_map`) — the same decoder every
 /// CRUD surface uses, so an access rule can express everything a `where`
@@ -175,7 +162,9 @@ fn has_empty_group(clause: &FilterClause) -> bool {
 /// - **Every error denies.** A malformed constraint (unknown operator,
 ///   `exists = false`, a non-map table) fails CLOSED with a logged warning
 ///   rather than surfacing an error the caller might ignore.
-/// - **An empty constraint set denies** — see the warning below.
+/// - **An empty constraint set denies** — see the warning below. (An empty
+///   group *inside* an `or` needs no case here: the decoder itself rejects
+///   it for every surface, and that error lands in the deny-on-error arm.)
 fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> AccessResult {
     let _ = lua;
 
@@ -215,21 +204,6 @@ fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> AccessResult {
             return AccessResult::Denied;
         }
     };
-
-    // Fail CLOSED on an empty composite anywhere in the tree. An empty
-    // AND/OR group matches every row, and it arises the same way the empty
-    // top-level table does: a nil-valued key — this time inside an `or`
-    // group (`{ ["or"] = { { tenant = ctx.user.<nil> } } }` decodes to an
-    // empty group). Left in place it would turn "this group OR that group"
-    // into "everything".
-    if clauses.iter().any(has_empty_group) {
-        warn!(
-            "Access function returned an `or` group that produced no filters \
-             (likely a nil-valued key inside the group); denying — an empty \
-             group would match every row."
-        );
-        return AccessResult::Denied;
-    }
 
     // Fail CLOSED on an empty constraint set. A hook that returned a *table*
     // intended to restrict which rows the caller sees, but it produced zero

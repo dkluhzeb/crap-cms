@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **An empty group inside a `where` `or` is now a hard error on every
+  surface.** `{"or": [{"status": "a"}, {}]}` (and `{"or": []}`) used to be
+  accepted with a vacuously-true group, silently making the whole `or` match
+  **every row** — on a `delete_many` that accident selects the entire
+  collection, and it arises naturally in Lua where `{ tenant = nil }` *is*
+  `{}`. The decoder now rejects it with an error naming the fix, the same
+  never-silently-widen rule the `in`/`not_in` element checks follow. (In an
+  access constraint the error becomes a fail-closed deny.)
+
+
 - **The job payload field is `data`, not `data_json`** (`TriggerJobRequest`
   and `JobRunInfo` on the gRPC wire). MCP and Lua already called it `data`;
   the gRPC name was the odd one out, and a field name cannot be changed

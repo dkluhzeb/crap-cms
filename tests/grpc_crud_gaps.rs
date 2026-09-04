@@ -758,6 +758,55 @@ async fn delete_many_basic() {
 }
 
 #[tokio::test]
+async fn delete_many_rejects_an_empty_or_group_instead_of_wiping() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "keep me")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // An empty group inside `or` is vacuously true — accepted, it would
+    // select EVERY row. It must be an error, and nothing may be deleted.
+    let err = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            queue: None,
+            events: None,
+            collection: "posts".to_string(),
+            r#where: Some(r#"{"or": [{"status": "draft"}, {}]}"#.to_string()),
+            hooks: None,
+            force_hard_delete: false,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+    assert!(err.message().contains("empty group"), "{err}");
+
+    let count = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .count;
+    assert_eq!(
+        count, 1,
+        "the rejected delete must not have removed anything"
+    );
+}
+
+#[tokio::test]
 async fn delete_many_with_where_partial() {
     let ts = setup_service(vec![make_posts_def()], vec![]);
 

@@ -31,9 +31,16 @@ pub struct QueueJobInput<'a> {
 }
 
 /// Queue a new job run, enforcing access control if configured. The ONE
-/// queue chokepoint for every surface — gRPC, MCP, and `crap.jobs.queue`
-/// all pass through here, so the access rules, the payload contract, and
-/// the delay/unique semantics cannot drift between them.
+/// queue chokepoint for **caller-triggered** runs — gRPC `TriggerJob`, MCP
+/// `trigger_job`, and `crap.jobs.queue` all pass through here, so the
+/// access rules, the payload contract, and the delay/unique semantics
+/// cannot drift between them.
+///
+/// System inserts stay separate by design, each with its own pinned
+/// contract: the cron scheduler (definition-driven, no access hook),
+/// `bulk_queue::queue_bulk` (access checked against the *collection* op at
+/// queue time; `max_attempts` hard-pinned to 1 so a committed batch can
+/// never be re-applied), and the email / image-convert queues.
 ///
 /// If `job_def.access` is set, the job's Lua access function decides whether
 /// `ctx.user` may trigger this job, with the queued payload exposed as

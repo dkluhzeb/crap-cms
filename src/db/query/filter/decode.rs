@@ -113,6 +113,10 @@ fn decode_or_clause(value: &Value) -> Result<FilterClause, String> {
         .as_array()
         .ok_or_else(|| "'or' must be an array".to_string())?;
 
+    if arr.is_empty() {
+        return Err("'or' requires at least one group".to_string());
+    }
+
     let mut groups = Vec::new();
 
     for element in arr {
@@ -124,6 +128,20 @@ fn decode_or_clause(value: &Value) -> Result<FilterClause, String> {
 
         for (f, v) in obj {
             group.extend(decode_field_filters(f, v, "or field")?);
+        }
+
+        // An empty group is a hard error, never a silent widen: one vacuous
+        // alternative makes the whole `or` match EVERY row, and it arises by
+        // accident (in Lua, `{ tenant = nil }` IS `{}`). On a bulk delete
+        // that accident selects the entire collection; in an access
+        // constraint it voids the restriction. Same philosophy as the
+        // in/not_in element rule above.
+        if group.is_empty() {
+            return Err(
+                "'or' contains an empty group, which would match every row — drop the \
+                 group, or guard the nil/absent value that emptied it"
+                    .to_string(),
+            );
         }
 
         groups.push(group);
@@ -234,6 +252,20 @@ mod tests {
         .unwrap();
         assert_eq!(clauses.len(), 1);
         assert!(matches!(&clauses[0], FilterClause::Or(_)));
+    }
+
+    /// Regression: an empty group inside `or` (a nil-valued key in Lua, an
+    /// empty object on the wire) must be a hard error. `or_groups` would
+    /// collapse it to `And([])` — vacuously true on both enforcement paths —
+    /// silently turning a targeted bulk delete or an access restriction into
+    /// "every row".
+    #[test]
+    fn empty_or_group_is_a_hard_error() {
+        let err = decode(&json!({ "or": [{ "status": "a" }, {}] })).unwrap_err();
+        assert!(err.contains("empty group"), "got: {err}");
+
+        let err = decode(&json!({ "or": [] })).unwrap_err();
+        assert!(err.contains("at least one group"), "got: {err}");
     }
 
     #[test]

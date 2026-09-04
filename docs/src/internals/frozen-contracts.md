@@ -90,9 +90,13 @@ freeze is unconditional.
 - **Filter DSL.** The operator set (`equals`, `not_equals`, `like`, `contains`,
   `greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`,
   `in`, `not_in`, `exists`, `not_exists`) is the **one grammar every surface**
-  speaks — the gRPC/JSON `where` API, the admin list URL, MCP, and the Lua filter
-  representation, all single-sourced through `FilterOp::op_name` /
-  `FilterOp::scalar_from_name`. (Alpha ≤10 spelled the ordered operators
+  speaks — the gRPC/JSON `where` API, the admin list URL, MCP, the Lua filter
+  representation, and (since alpha.10) the access-constraint tables — all
+  single-sourced through `FilterOp::op_name` / `FilterOp::scalar_from_name`
+  and decoded by `decode_where_map`; the grammar's *description*
+  (`FILTER_OP_SPECS`: names, value shapes, docs) is likewise single-sourced
+  and pinned to the enum by a consistency test. An empty group inside `or`
+  is a hard error on every surface (it would vacuously match every row). (Alpha ≤10 spelled the ordered operators
   differently per surface — the admin URL's terse `gt`/`gte`/`lt`/`lte` and MCP's
   `greater_than_equal`/`less_than_equal` — those short forms were removed in
   favor of the single verbose grammar.) Empty-`in` → no match / empty-`not_in` →
@@ -336,6 +340,12 @@ changing a representation is a breaking change to every consumer.
   (`draft ?? update`, `trash ?? update`, `versions ?? update`). Reads are a
   union of allowed views that downgrades rather than erroring. Changing a
   fallback target silently re-permissions every config that omits that key.
+- **Constraint tables use the canonical `where` grammar.** A `Constrained`
+  access result decodes through the same `decode_where_map` as every CRUD
+  filter — scalar shorthand, operator tables, and `["or"]` groups included —
+  with the leaf allowlist (equality/membership on flat own columns) applied
+  recursively. Every failure is a fail-closed deny: an empty constraint
+  table, a decode error, an empty `or` group, a disallowed operator.
 - **`access.admin` gates admin-UI visibility uniformly.** Both the sidebar nav
   and the dashboard cards hide a collection/global the user can't `admin`, and
   the rule is evaluated under operation `"admin"` — the same value the route

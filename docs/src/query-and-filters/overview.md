@@ -25,7 +25,7 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 >
 > **Ranges:** one operator object may carry several operators, ANDed together — `{ greater_than_or_equal = "2024-01-01", less_than = "2025-01-01" }`.
 >
-> **`in`/`not_in` element rules:** elements must be scalars — a nested array/object element is a **hard error** (never silently dropped); mixed scalar types are coerced to their string forms. An empty `in = {}` matches **nothing**; an empty `not_in = {}` matches **everything** — take care when the list is built dynamically (an accidentally-empty `not_in` combined with a bulk delete selects every document).
+> **`in`/`not_in` element rules:** elements must be scalars — a nested array/object element is a **hard error** (never silently dropped); mixed scalar types are coerced to their string forms. An empty `in = {}` matches **nothing**; an empty `not_in = {}` matches **everything** — take care when the list is built dynamically (an accidentally-empty `not_in` combined with a bulk delete selects every document). An empty **group** inside `or` (`{"or": [{}]}`) is a hard **error** for the same reason: one vacuous alternative would make the whole `or` match every row.
 >
 > **Scalar shorthand works on every surface:** bare values like `{ count = 42 }` or `{ active = true }` (Lua) and `{"count": 42}` / `{"active": true}` (gRPC/MCP `where` JSON) are coerced to a string `equals` — numbers via their decimal form, booleans as `"true"`/`"false"`. All surfaces share one filter grammar, so shorthand, operator objects, and `or` groups behave identically everywhere.
 
