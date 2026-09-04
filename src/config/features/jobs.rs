@@ -76,7 +76,7 @@ const DEFAULT_EMAIL_QUEUE_RETRIES: u32 = 3;
 /// (`images`) with safe defaults; without `Option`, an operator
 /// writing only `concurrency = 4` would silently lose the framework
 /// timeout default.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct QueueConfig {
     /// Max concurrent runs across all slugs in this queue.
@@ -139,7 +139,7 @@ impl QueueConfig {
 }
 
 /// Background job scheduler configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct JobsConfig {
     /// Maximum concurrent jobs in flight across the whole cluster.

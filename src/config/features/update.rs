@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpdateConfig {
     /// On `crap-cms serve` startup, print a one-line notice if the cached

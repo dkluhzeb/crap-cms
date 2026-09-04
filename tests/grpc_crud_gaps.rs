@@ -1139,6 +1139,8 @@ async fn trigger_job_unauthenticated() {
             slug: "cleanup".to_string(),
             data: None,
             priority: None,
+            delay: None,
+            unique: None,
         }))
         .await
         .unwrap_err();

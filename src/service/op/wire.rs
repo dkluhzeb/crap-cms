@@ -19,7 +19,10 @@
 //!   (`src/mcp/schema.rs`) — no hand-written JSON per op;
 //! - the wire-parity checker diffs the remaining hand sources
 //!   (`proto/content.proto`, `types/crap.lua`) against it;
-//! - (planned) the proto generator and the mdbook tables render from it.
+//! - the proto generator (`wire_proto`, `cargo xtask gen-proto`) renders
+//!   the request-message bodies from tags pinned per model field;
+//! - the operation-options reference (`wire_doc`, `cargo xtask
+//!   gen-wire-doc`) renders the mdbook tables.
 
 /// Which surfaces expose a field. Routing/structural differences aside, most
 /// fields exist everywhere; the exceptions are explicit.
@@ -74,6 +77,18 @@ pub enum WireKind {
     DataObject,
     /// Array of per-item document objects (`create_many` `documents`).
     DocumentsArray,
+    /// Free-form JSON payload (job trigger `data`) — an object on MCP/Lua,
+    /// a JSON string on gRPC (the same string-vs-object split `where` uses).
+    JsonData,
+    /// A job-run status. String constrained to [`JobStatus::ALL`] on
+    /// MCP/Lua, the `JobRunStatus` enum on gRPC.
+    ///
+    /// [`JobStatus::ALL`]: crate::core::JobStatus::ALL
+    JobStatus,
+    /// A duration: integer seconds, or a duration string (`"30s"`, `"5m"`,
+    /// `"1h"`) on the surfaces whose type system allows the union (MCP,
+    /// Lua). gRPC spells it as an `int64` of seconds.
+    Duration,
 }
 
 /// One wire option field of one operation.
@@ -147,14 +162,6 @@ const HOOKS_DOC: &str = "Run per-document lifecycle hooks (default: true)";
 const EVENT_SINGLE_DOC: &str = "Emit a live-update event for this change (default: true)";
 
 /// The collection operations' wire options.
-// NOT MODELED HERE: the job operations (`ListJobs`, `TriggerJob`,
-// `GetJobRun`, `ListJobRuns`, `CancelJobRun`). Their proto messages are
-// hand-written (outside `wire_proto`'s generated region) and their MCP tool
-// schemas are hand-written in `mcp::tools::jobs`, so job arguments are the
-// one op family whose cross-surface parity nothing enforces — drift has
-// already occurred there. Folding them in is an additive refactor tracked
-// for the internal-refactors pass; the breaking half (the `data_json` →
-// `data` rename) was done before the alpha.10 freeze.
 pub static COLLECTION_OPS: &[OpWire] = &[
     OpWire {
         op: "find",
@@ -510,6 +517,65 @@ pub static GLOBAL_OPS: &[OpWire] = &[
     },
 ];
 
+/// The job operations' wire options.
+///
+/// Unlike CRUD, the identifying argument (`slug` on trigger, `id` on
+/// get/cancel) is a real field on every surface — the MCP job tools are not
+/// per-slug the way `find_posts` is — so it is modeled here rather than
+/// treated as structural routing. On Lua, `slug`/`data`/`id` are positional
+/// arguments and the remaining fields form the options table
+/// ([`OpWire::lua_option_keys`] hands that list to `deny_unknown_keys`, so
+/// the accepted keys can never drift from this model).
+pub static JOB_OPS: &[OpWire] = &[
+    OpWire {
+        op: "list_jobs",
+        fields: &[],
+    },
+    OpWire {
+        op: "trigger_job",
+        fields: &[
+            req("slug", WireKind::Str, "The job slug to trigger"),
+            f(
+                "data",
+                WireKind::JsonData,
+                "JSON payload passed to the handler",
+            ),
+            f(
+                "priority",
+                WireKind::Int,
+                "Scheduling priority; higher runs sooner",
+            ),
+            f(
+                "delay",
+                WireKind::Duration,
+                "Seconds to wait before the run becomes claimable — an integer, or (MCP/Lua) a duration string (\"30s\", \"5m\", \"1h\"). Default 0 = immediate",
+            ),
+            f(
+                "unique",
+                WireKind::Str,
+                "Dedup key: when another pending/running run of this job carries the same key, its id is returned instead of queuing a duplicate",
+            ),
+        ],
+    },
+    OpWire {
+        op: "cancel_job_run",
+        fields: &[req("id", WireKind::Id, "The job run id to cancel")],
+    },
+    OpWire {
+        op: "get_job_run",
+        fields: &[req("id", WireKind::Id, "The job run id")],
+    },
+    OpWire {
+        op: "list_job_runs",
+        fields: &[
+            f("slug", WireKind::Str, "Only runs of this job slug"),
+            f("status", WireKind::JobStatus, "Only runs in this status"),
+            f("limit", WireKind::Int, "Max runs to return (default 50)"),
+            f("offset", WireKind::Int, "Runs to skip (default 0)"),
+        ],
+    },
+];
+
 /// Look up a collection op's wire by name.
 #[must_use]
 pub fn collection_op(op: &str) -> Option<&'static OpWire> {
@@ -522,12 +588,37 @@ pub fn global_op(op: &str) -> Option<&'static OpWire> {
     GLOBAL_OPS.iter().find(|w| w.op == op)
 }
 
+/// Look up a job op's wire by name.
+#[must_use]
+pub fn job_op(op: &str) -> Option<&'static OpWire> {
+    JOB_OPS.iter().find(|w| w.op == op)
+}
+
+impl OpWire {
+    /// The Lua option-table keys: every LUA-surface field except the ones
+    /// the Lua signature takes positionally. Handed to `deny_unknown_keys`
+    /// so a surface's accepted keys are sourced from the model instead of a
+    /// hand list beside it.
+    #[must_use]
+    pub fn lua_option_keys(&self, positional: &[&str]) -> Vec<&'static str> {
+        self.fields
+            .iter()
+            .filter(|f| f.surfaces.contains(WireSurfaces::LUA))
+            .filter(|f| !positional.contains(&f.name))
+            .map(|f| f.name)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn all_ops() -> impl Iterator<Item = &'static OpWire> {
-        COLLECTION_OPS.iter().chain(GLOBAL_OPS.iter())
+        COLLECTION_OPS
+            .iter()
+            .chain(GLOBAL_OPS.iter())
+            .chain(JOB_OPS.iter())
     }
 
     #[test]

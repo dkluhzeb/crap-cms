@@ -1533,6 +1533,14 @@ message TriggerJobRequest {
   // claim FIFO. Negative values are allowed (run only when otherwise idle).
   // Defaults to 0 when absent.
   optional int32 priority = 3;
+
+  // Seconds to wait before the run becomes claimable. Defaults to 0
+  // (claimable immediately). Negative values are rejected.
+  optional int64 delay = 4;
+
+  // Dedup key. When another pending/running run of this job carries the
+  // same key, that run's id is returned instead of queuing a duplicate.
+  optional string unique = 5;
 }
 
 // TriggerJobResponse returns the ID of the newly created job run.

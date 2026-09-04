@@ -23,40 +23,75 @@ pub struct QueueJobInput<'a> {
     /// definition's explicit retries still applies; the fallback is
     /// `0` (one attempt).
     pub queue_retries: Option<u32>,
+    /// Seconds to wait before the run becomes claimable. `0` = immediately.
+    pub delay_secs: u64,
+    /// Dedup key: when another pending/running run of this job carries the
+    /// same key, that run is returned instead of queuing a duplicate.
+    pub unique_key: Option<&'a str>,
 }
 
-/// Queue a new job run, enforcing access control if configured.
+/// Queue a new job run, enforcing access control if configured. The ONE
+/// queue chokepoint for every surface — gRPC, MCP, and `crap.jobs.queue`
+/// all pass through here, so the access rules, the payload contract, and
+/// the delay/unique semantics cannot drift between them.
 ///
-/// If `job_def.access` is set, the runner's Lua VM checks whether the given
-/// `user` is allowed to trigger this job. Returns `ServiceError::AccessDenied`
-/// when the check denies access.
+/// If `job_def.access` is set, the job's Lua access function decides whether
+/// `ctx.user` may trigger this job, with the queued payload exposed as
+/// `ctx.data`. Returns `ServiceError::AccessDenied` when it denies.
 ///
 /// # Errors
 ///
-/// Returns `AccessDenied` when the access hook denies, or a backend error if
-/// the access check or INSERT fails.
+/// Returns `AccessDenied` when the access hook denies, `HookError` (an
+/// invalid-argument on the wire) when `data` is not valid JSON — or not an
+/// object while a data-gating access rule needs to inspect it — and a
+/// backend error if the access check or INSERT fails.
 pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let runner = ctx.runner()?;
+
+    // Fail at queue time, not at execution: a payload that is not valid
+    // JSON used to be stored verbatim (gRPC sends a raw string) and only
+    // blew up when the handler ran, long after the caller was gone.
+    let payload_value: Option<serde_json::Value> =
+        match input.data {
+            None => None,
+            Some(s) => Some(serde_json::from_str(s).map_err(|e| {
+                ServiceError::HookError(format!("job data must be valid JSON: {e}"))
+            })?),
+        };
 
     if input.job_def.access.is_some() {
         // Expose the queued payload to the access fn as `ctx.data`, so it can
-        // gate on *what* is being queued, not only *who* is queuing.
-        let payload = input
-            .data
-            .and_then(|s| serde_json::from_str::<DocumentFields>(s).ok());
+        // gate on *what* is being queued, not only *who* is queuing. A
+        // non-object payload is an error here — silently dropping it to nil
+        // (the old behavior) would let a data-gating rule evaluate against
+        // nothing while the job still queued with that payload.
+        let payload: Option<DocumentFields> = match payload_value {
+            None => None,
+            Some(v) => Some(serde_json::from_value(v).map_err(|_| {
+                ServiceError::HookError(
+                    "job data must be a JSON object so the job's access rule can inspect it"
+                        .to_string(),
+                )
+            })?),
+        };
 
-        let result = runner
-            .check_access(
-                &AccessCheckInput::builder("trigger", ctx.slug)
-                    .access(input.job_def.access.as_ref())
-                    .user(ctx.user)
-                    .data(payload.as_ref())
-                    .build(),
-                conn,
-            )
-            .map_err(ServiceError::Internal)?;
+        let access_input = AccessCheckInput::builder("trigger", ctx.slug)
+            .access(input.job_def.access.as_ref())
+            .user(ctx.user)
+            .data(payload.as_ref())
+            .build();
+
+        // One rule, two evaluators — the same split every CRUD path uses. A
+        // context carrying `write_hooks` evaluates through them
+        // (`LuaWriteHooks` runs in the CALLER's VM, so `crap.jobs.queue`
+        // inside a hook never re-enters the VM pool); otherwise the runner
+        // is used directly, which is what gRPC and MCP do.
+        let result = match ctx.write_hooks {
+            Some(hooks) => hooks.check_access(&access_input),
+            None => ctx.runner()?.check_access(&access_input, conn),
+        }
+        .map_err(ServiceError::Internal)?;
 
         if matches!(result, AccessResult::Denied) {
             return Err(ServiceError::AccessDenied(
@@ -72,16 +107,20 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
         }
     }
 
-    let job_run = query::jobs::insert_job(
+    let inserted = query::jobs::insert_job_with(
         conn,
-        ctx.slug,
-        input.data.unwrap_or("{}"),
-        input.scheduled_by,
-        input.job_def.effective_max_attempts(input.queue_retries),
-        &input.job_def.queue,
-        input.priority,
+        &query::jobs::InsertJobOpts {
+            slug: ctx.slug,
+            data: input.data.unwrap_or("{}"),
+            scheduled_by: input.scheduled_by,
+            max_attempts: input.job_def.effective_max_attempts(input.queue_retries),
+            queue: &input.job_def.queue,
+            priority: input.priority,
+            delay_secs: input.delay_secs,
+            unique_key: input.unique_key,
+        },
     )
     .map_err(ServiceError::Internal)?;
 
-    Ok(job_run)
+    Ok(inserted.into_inner())
 }

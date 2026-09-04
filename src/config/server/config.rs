@@ -20,7 +20,7 @@ pub enum CompressionMode {
 }
 
 /// Admin UI and gRPC server bind settings.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     /// Port for the admin UI HTTP server. Default: 3000.

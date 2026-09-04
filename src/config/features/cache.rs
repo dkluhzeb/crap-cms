@@ -33,7 +33,7 @@ pub enum CacheBackend {
     Custom,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
     /// Cache backend: `memory` (default), `redis`, `none`, or `custom`.

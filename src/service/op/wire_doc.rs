@@ -8,7 +8,9 @@
 
 use std::fmt::Write as _;
 
-use crate::service::op::wire::{COLLECTION_OPS, GLOBAL_OPS, OpWire, WireKind, WireSurfaces};
+use crate::service::op::wire::{
+    COLLECTION_OPS, GLOBAL_OPS, JOB_OPS, OpWire, WireKind, WireSurfaces,
+};
 
 /// Human name for a wire kind, as shown in the reference table.
 fn kind_label(kind: WireKind) -> &'static str {
@@ -23,6 +25,9 @@ fn kind_label(kind: WireKind) -> &'static str {
         WireKind::DataFields => "field data (top-level)",
         WireKind::DataObject => "field data (`data` object)",
         WireKind::DocumentsArray => "field data (`documents` array)",
+        WireKind::JsonData => "JSON payload",
+        WireKind::JobStatus => "job status (string)",
+        WireKind::Duration => "duration (seconds or string)",
     }
 }
 
@@ -99,6 +104,23 @@ pub fn generate_wire_reference_md() -> String {
     out.push_str("## Global operations\n\n");
 
     for w in GLOBAL_OPS {
+        render_op(&mut out, w);
+    }
+
+    out.push_str(
+        "## Job operations\n\n\
+         Job identifiers (`slug` on trigger, `id` on get/cancel) are real\n\
+         fields on every surface, so they appear in the tables below. On Lua,\n\
+         `slug`/`data`/`id` are positional arguments of `crap.jobs.queue` /\n\
+         `crap.jobs.get_run` / `crap.jobs.cancel_run`; the remaining fields\n\
+         form the options table. `list_jobs` takes no arguments and is not\n\
+         exposed on Lua (definitions are in-process there).\n\n\
+         **JSON payload** — an object on MCP/Lua, a JSON string on gRPC.\n\
+         **job status** — one of `pending`, `running`, `completed`, `failed`,\n\
+         `stale` (the `JobRunStatus` enum on gRPC).\n\n",
+    );
+
+    for w in JOB_OPS {
         render_op(&mut out, w);
     }
 

@@ -8,7 +8,7 @@ use crate::core::HookRef;
 use super::csp::CspConfig;
 
 /// Admin UI behavior settings.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdminConfig {
     /// Enable development mode (e.g., more verbose errors).

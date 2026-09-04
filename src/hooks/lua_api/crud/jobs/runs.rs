@@ -21,7 +21,7 @@ use crate::{
         crud::{helpers::hook_user, tx_conn::get_tx_conn},
         parse::deny_unknown_keys,
     },
-    service::{self, LuaWriteHooks, ServiceContext},
+    service::{self, LuaWriteHooks, ServiceContext, op::wire},
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -108,12 +108,12 @@ fn jobs_list_runs(
     opts: Option<Table>,
 ) -> LuaResult<Table> {
     if let Some(opts) = opts.as_ref() {
-        deny_unknown_keys(
-            opts,
-            "jobs.list_runs options",
-            &["slug", "status", "limit", "offset"],
-        )
-        .map_err(|e| RuntimeError(format!("jobs.list_runs: {e}")))?;
+        // Accepted keys come from the wire model — see `jobs.queue`.
+        let allowed = wire::job_op("list_job_runs")
+            .expect("list_job_runs is modeled")
+            .lua_option_keys(&[]);
+        deny_unknown_keys(opts, "jobs.list_runs options", &allowed)
+            .map_err(|e| RuntimeError(format!("jobs.list_runs: {e}")))?;
     }
 
     let slug: Option<String> = opts.as_ref().and_then(|o| o.get("slug").ok());

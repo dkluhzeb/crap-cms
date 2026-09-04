@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Controls default and maximum page sizes, and pagination mode.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct PaginationConfig {
     /// Default page size when request doesn't specify a limit.

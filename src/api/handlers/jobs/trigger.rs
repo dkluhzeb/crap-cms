@@ -22,6 +22,10 @@ struct TriggerJobBlockingInput {
     token: Option<String>,
     /// `None` → use the definition's default priority; `Some(N)` → override.
     priority: Option<i32>,
+    /// Seconds before the run becomes claimable. `0` = immediately.
+    delay_secs: u64,
+    /// Dedup key — see `QueueJobInput::unique_key`.
+    unique_key: Option<String>,
     /// Snapshot of `[jobs.queues]` retries by queue name. Used by
     /// `effective_max_attempts` so jobs defined without an explicit
     /// `retries` inherit the operator's queue-level default.
@@ -81,6 +85,8 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
             scheduled_by: "grpc",
             priority: effective_priority,
             queue_retries,
+            delay_secs: input.delay_secs,
+            unique_key: input.unique_key.as_deref(),
         },
     )
     .map_err(Status::from)?;
@@ -100,6 +106,14 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
+        // A negative delay is a caller bug, not "no delay" — reject it
+        // rather than silently clamping.
+        let delay_secs = match req.delay {
+            None => 0,
+            Some(d) => u64::try_from(d)
+                .map_err(|_| Status::invalid_argument("delay must be >= 0 seconds"))?,
+        };
+
         let input = TriggerJobBlockingInput {
             infra: Arc::clone(&self.infra),
             data: req.data.unwrap_or_else(|| "{}".to_string()),
@@ -107,6 +121,8 @@ impl ContentService {
             token,
             headers,
             priority: req.priority,
+            delay_secs,
+            unique_key: req.unique,
             queue_retries: self.queue_retries.clone(),
         };
 

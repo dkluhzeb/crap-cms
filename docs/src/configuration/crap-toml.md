@@ -202,7 +202,6 @@ max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB",
 # access_key = "${AWS_ACCESS_KEY}"
 # secret_key = "${AWS_SECRET_KEY}"
 # prefix = ""            # optional key prefix
-# public_url_base = ""   # CDN URL base (empty = S3 URLs)
 # path_style = false     # true for MinIO
 
 [email]
@@ -317,7 +316,9 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | `"data/crap.db"` | SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is. |
+| `backend` | string | `"sqlite"` | Database engine: `"sqlite"` (default) or `"postgres"` (requires the `postgres` build feature). |
+| `url` | string | — (none) | PostgreSQL connection string (e.g. `"host=localhost user=crap dbname=crap_cms"`). Only used when `backend = "postgres"`; required then. |
+| `path` | string | `"data/crap.db"` | SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is. Only used when `backend = "sqlite"`. |
 | `pool_max_size` | integer | `64` | Maximum number of connections in the **read** pool. Reads and writes use separate pools; under SQLite WAL (unlimited concurrent readers) this governs read concurrency. |
 | `write_pool_max_size` | integer | `4` | Maximum number of connections in the **write** pool (SQLite only). Writes take `BEGIN IMMEDIATE` and serialize on SQLite's single writer, so a small pool is correct — excess writers queue on checkout instead of starving readers of read-pool connections. Raising it does not increase SQLite write throughput; on Postgres (single shared pool) it is ignored. |
 | `cache_size` | integer | `-16384` | SQLite page cache size. Negative = KB, positive = pages. Default 16MB. |
@@ -325,6 +326,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |
 | `busy_timeout` | duration | `30000` (`"30s"`) | SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (`"30s"`, `"1m"`). |
 | `connection_timeout` | duration | `30` | Pool checkout timeout in seconds. How long `pool.get()` waits for a free connection before returning an error. Should be >= `busy_timeout` so SQLite's WAL-writer retry loop resolves before the pool-level timeout fires. |
+| `stmt_cache_capacity` | integer | `128` | Per-connection prepared-statement LRU cache size (SQLite). When the number of distinct hot-path SQL strings exceeds it, statements are re-prepared on every call — under load that serializes on SQLite's internal allocator lock. Bump it if a workload adds enough new SQL variants to thrash the cache. |
 
 ### `[admin]`
 
@@ -334,6 +336,8 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
 | `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). The gate is boolean: a returned filter table is logged as an error and denies. |
 | `default_timezone` | string | `""` | Default IANA timezone for date fields with `timezone = true` that don't specify their own `default_timezone`. Pre-selects the timezone in the admin dropdown. Example: `"America/New_York"`. |
+| `site_name` | string | `"Crap CMS"` | Display name shown in the admin header wordmark and `<title>` tags. Override to rebrand without touching templates. |
+| `csrf_cookie_lifetime` | integer/string | `86400` (`"24h"`) | CSRF double-submit cookie lifetime. Accepts seconds or human strings (`"4h"`, `"30m"`). The cookie is tied to a `SameSite=Strict` session, so longer windows carry limited replay risk; shorten to reduce the window in which a stolen double-submit token can be used. |
 | `csp` | table | *(see below)* | Content-Security-Policy header configuration. See `[admin.csp]`. |
 
 ### `[admin.csp]`
@@ -376,6 +380,7 @@ nonce applies to `script-src` only).
 |-------|------|---------|-------------|
 | `secret` | string | `""` (empty) | JWT signing secret. If empty, a random secret is auto-generated and **persisted to `data/.jwt_secret`** so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself. |
 | `token_expiry` | integer/string | `7200` (`"2h"`) | Default JWT token lifetime. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`). Can be overridden per auth collection. |
+| `password_policy` | table | *(see below)* | Password strength requirements. See `[auth.password_policy]`. |
 | `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
 | `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests. |
 | `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` or `max_ip_login_attempts` is reached. Accepts seconds or human-readable. |
@@ -407,6 +412,7 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `default_depth` | integer | `1` | Default population depth for `FindByID`. `Find` always defaults to `0`. |
 | `max_depth` | integer | `10` | Maximum allowed depth for any request. Hard cap to prevent excessive queries. |
+| `max_nesting_depth` | integer | `64` | Maximum nesting depth for in-memory JSON *data structures* (the Lua↔JSON converter). Distinct from `max_depth`, which limits relationship *population*: this bounds how deeply a single value — e.g. a Lua table a hook builds — may nest, guarding against stack overflow. Must be large enough to hold what `max_depth` population produces (validated at startup). |
 
 ### `[cache]`
 
@@ -432,6 +438,7 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `storage` | string | `"local"` | Storage backend: `"local"` (filesystem), `"s3"` (S3-compatible, requires `--features s3-storage`), or `"custom"` (Lua-delegated). |
 | `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding). |
+| `s3` | table | *(see below)* | S3-compatible storage settings, used when `storage = "s3"`. See `[upload.s3]`. |
 
 ### `[upload.s3]`
 
@@ -445,7 +452,6 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 | `access_key` | string | (required) | AWS access key ID. |
 | `secret_key` | string | (required) | AWS secret access key. |
 | `prefix` | string | `""` | Optional key prefix prepended to all storage keys. |
-| `public_url_base` | string | `""` | Base URL for public file links (e.g., CDN). Empty = S3 URLs. |
 | `path_style` | boolean | `false` | Use path-style addressing (required for MinIO). |
 
 ### `[email]`
@@ -514,7 +520,8 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
-| `auto_purge` | integer/string/bool | `"30d"` | Auto-purge completed/failed/stale runs older than this duration. Accepts seconds or human-readable (`"30d"`, `"24h"`, `"30m"`, `"3600"`). Set to `false` to disable auto-purge. Absent = 30 days default. |
+| `auto_purge` | integer/string/bool | `2592000` (`"30d"`) | Auto-purge completed/failed/stale runs older than this duration. Accepts seconds or human-readable (`"30d"`, `"24h"`, `"30m"`, `"3600"`). Set to `false` to disable auto-purge. Absent = 30 days default. |
+| `queues` | table | *(see below)* | Per-queue concurrency/timeout/retries overrides, keyed by queue name. See `[jobs.queues]`. |
 | `priority_decay` | integer/string | `0` | Priority aging period: wait time required for a job's effective scheduling priority to bump by `+1`. `0` disables decay (pure static `priority DESC, created_at ASC` ordering — index-friendly fast path). Positive durations (`"1m"`, `"30s"`, `"1h"`) enable aging-based promotion so older lower-priority jobs eventually get claimed instead of starving forever. |
 
 ### `[jobs.queues]`
@@ -617,6 +624,16 @@ with no path or trailing slash (`https://app.example.com`, not
 only entry when used, and method/header entries must be valid HTTP
 tokens. Invalid entries fail startup instead of being silently dropped
 from the allowlist.
+
+### `[routes]`
+
+Settings for custom Lua-defined HTTP routes (`crap.routes.register` —
+see [Custom routes](../lua-api/routes.md)).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prefix` | string | `""` | URL prefix prepended to every custom route. Empty (default) mounts each route at its literal `path`; set e.g. `"/api"` to namespace all custom routes under one base. Must not collide with a reserved built-in prefix. |
+| `max_body` | integer/string | `1048576` (`"1MB"`) | Default request body-size limit for custom routes. A per-route `max_body` in `crap.routes.register` overrides it. Accepts bytes or a file-size string (`"512KB"`, `"2MB"`). |
 
 ### `[mcp]`
 

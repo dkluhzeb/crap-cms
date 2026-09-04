@@ -24,8 +24,21 @@ use crate::config::{
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
 
+/// Enumerate a config struct's serde keys — implemented by
+/// `#[derive(ConfigKeys)]` (`crap-cms-macros`).
+///
+/// Exists for the config↔docs parity test: the reference tables in
+/// `docs/src/configuration/crap-toml.md` are curated by hand, so they are
+/// *pinned* against the structs rather than generated. Serializing a
+/// default can't produce this list (fields defaulting to `None` are
+/// omitted), so the derive enumerates the declaration.
+pub trait ConfigKeys {
+    /// The serde key of every (de)serializable field, in declaration order.
+    fn config_keys() -> Vec<&'static str>;
+}
+
 /// Top-level configuration loaded from `crap.toml` in the config directory.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct CrapConfig {
     /// Required CMS version. If set, warns on mismatch at startup.

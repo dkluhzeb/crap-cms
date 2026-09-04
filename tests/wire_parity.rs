@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use crap_cms::service::op::{
-    wire::{self, OpWire, WireKind, WireSurfaces},
+    wire::{self, OpWire, WireField, WireKind, WireSurfaces},
     wire_proto,
 };
 
@@ -311,6 +311,73 @@ fn lua_option_classes_match_wire_model() {
             "Lua",
             &expected_lua_fields(w, &[]),
             &lua_class_fields(class),
+        );
+    }
+}
+
+// ── Job ops ─────────────────────────────────────────────────────────────
+//
+// Unlike CRUD, the identifying argument (`slug`/`id`) is a modeled field on
+// every surface, so the proto comparison includes tag 1 instead of treating
+// it as structural routing. The Lua side needs no checker here: the option
+// tables of `crap.jobs.queue` / `crap.jobs.list_runs` reject unknown keys
+// against `OpWire::lua_option_keys`, so their accepted keys are *generated*
+// from the model rather than diffed against it.
+
+/// Every job request message carries exactly the model's GRPC-surface
+/// fields. `list_jobs` has an empty request and no pin — nothing can drift
+/// in an empty message.
+#[test]
+fn job_proto_messages_match_wire_model() {
+    let map = [
+        ("trigger_job", "TriggerJobRequest"),
+        ("cancel_job_run", "CancelJobRunRequest"),
+        ("get_job_run", "GetJobRunRequest"),
+        ("list_job_runs", "ListJobRunsRequest"),
+    ];
+
+    for (op, message) in map {
+        let w = wire::job_op(op).expect("wire model covers every job op");
+
+        let expected: BTreeSet<String> = w
+            .fields
+            .iter()
+            .filter(|f| f.surfaces.contains(WireSurfaces::GRPC))
+            .map(|f| f.grpc_name().to_string())
+            .collect();
+
+        assert_same(op, "proto", &expected, &proto_message_fields(message));
+    }
+}
+
+/// The pinned proto spec and the model's GRPC surface agree field-for-field
+/// on every job op, and the map above names every op the model declares.
+#[test]
+fn job_proto_spec_covers_exactly_the_grpc_surface() {
+    for w in wire::JOB_OPS {
+        if w.op == "list_jobs" {
+            assert!(
+                wire_proto::proto_message(w.op).is_none(),
+                "list_jobs takes no arguments; an empty message needs no pin"
+            );
+            continue;
+        }
+
+        let msg = wire_proto::proto_message(w.op)
+            .unwrap_or_else(|| panic!("no pinned proto message for job op `{}`", w.op));
+        let spec_names: BTreeSet<&str> = msg.fields.iter().map(|f| f.name).collect();
+
+        let model_names: BTreeSet<&str> = w
+            .fields
+            .iter()
+            .filter(|f| f.surfaces.contains(WireSurfaces::GRPC))
+            .map(WireField::grpc_name)
+            .collect();
+
+        assert_eq!(
+            model_names, spec_names,
+            "job op `{}`: wire model GRPC surface and pinned proto spec diverge",
+            w.op
         );
     }
 }

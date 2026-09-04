@@ -672,6 +672,95 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
             },
         ],
     },
+    // ── Job operations ──────────────────────────────────────────────────
+    // `ListJobsRequest` has no fields and no pin — nothing can drift in an
+    // empty message. The run-addressed messages are `id`-routed (tag 1).
+    ProtoMessage {
+        op: "trigger_job",
+        message: "TriggerJobRequest",
+        fields: &[
+            ProtoField {
+                name: "slug",
+                ty: "string",
+                tag: 1,
+                doc: "The job slug to trigger.",
+            },
+            ProtoField {
+                name: "data",
+                ty: "optional string",
+                tag: 2,
+                doc: "Optional JSON-serialized input data passed to the job handler as its\nargument. Defaults to \"{}\" when absent. Named `data` on every surface\n(MCP and Lua take a real object/table; the gRPC wire form is a JSON\nstring) — the same string-vs-object split `where` uses.",
+            },
+            ProtoField {
+                name: "priority",
+                ty: "optional int32",
+                tag: 3,
+                doc: "Optional scheduling priority. Higher = claimed sooner; same-priority jobs\nclaim FIFO. Negative values are allowed (run only when otherwise idle).\nDefaults to 0 when absent.",
+            },
+            ProtoField {
+                name: "delay",
+                ty: "optional int64",
+                tag: 4,
+                doc: "Seconds to wait before the run becomes claimable. Defaults to 0\n(claimable immediately). Negative values are rejected.",
+            },
+            ProtoField {
+                name: "unique",
+                ty: "optional string",
+                tag: 5,
+                doc: "Dedup key. When another pending/running run of this job carries the\nsame key, that run's id is returned instead of queuing a duplicate.",
+            },
+        ],
+    },
+    ProtoMessage {
+        op: "cancel_job_run",
+        message: "CancelJobRunRequest",
+        fields: &[ProtoField {
+            name: "id",
+            ty: "string",
+            tag: 1,
+            doc: "The nanoid job run ID.",
+        }],
+    },
+    ProtoMessage {
+        op: "get_job_run",
+        message: "GetJobRunRequest",
+        fields: &[ProtoField {
+            name: "id",
+            ty: "string",
+            tag: 1,
+            doc: "The nanoid job run ID (from TriggerJobResponse.job_id or ListJobRuns).",
+        }],
+    },
+    ProtoMessage {
+        op: "list_job_runs",
+        message: "ListJobRunsRequest",
+        fields: &[
+            ProtoField {
+                name: "slug",
+                ty: "optional string",
+                tag: 1,
+                doc: "Filter by job slug. Absent = all job slugs.",
+            },
+            ProtoField {
+                name: "status",
+                ty: "JobRunStatus",
+                tag: 2,
+                doc: "Filter by status. UNSPECIFIED = all statuses.",
+            },
+            ProtoField {
+                name: "limit",
+                ty: "optional int64",
+                tag: 3,
+                doc: "Maximum runs to return. Defaults to 50.",
+            },
+            ProtoField {
+                name: "offset",
+                ty: "optional int64",
+                tag: 4,
+                doc: "Number of runs to skip (for manual pagination). Defaults to 0.",
+            },
+        ],
+    },
 ];
 
 /// The pinned proto spec for one op, or `None` for ops with no gRPC message
@@ -770,7 +859,9 @@ mod tests {
                 msg.message
             );
             assert!(
-                first.name == "collection" || first.name == "slug",
+                // Job run messages are `id`-routed; everything else routes
+                // by collection/global/job slug.
+                first.name == "collection" || first.name == "slug" || first.name == "id",
                 "`{}` must start with its routing field",
                 msg.message
             );

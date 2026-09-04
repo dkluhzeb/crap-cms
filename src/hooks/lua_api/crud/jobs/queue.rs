@@ -8,13 +8,12 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::config::parse_duration_string;
-use crate::core::{DocumentFields, Registry};
-use crate::db::query::jobs::InsertJobOpts;
-use crate::db::{AccessResult, query};
-use crate::hooks::lifecycle::{AccessCheckInput, access::check_access_with_lua};
+use crate::core::Registry;
 use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
 use crate::hooks::lua_api::parse::deny_unknown_keys;
+use crate::service::op::wire;
+use crate::service::{self, LuaWriteHooks, ServiceContext};
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// State threaded into `crap.jobs.queue` — the loaded `Registry` plus a
@@ -85,11 +84,14 @@ fn queue_job_inner(
     let conn = get_tx_conn(lua)?;
 
     // Reject unknown option keys (parity with the strict schema config):
-    // a typo like `{ priorty = 5 }` errors loudly instead of being
-    // silently ignored.
+    // a typo like `{ priorty = 5 }` errors loudly instead of being silently
+    // ignored. The accepted keys come from the wire model, so this surface
+    // cannot drift from the others (`slug` and `data` are positional).
     if let Some(opts) = opts {
-        deny_unknown_keys(opts, "jobs.queue options", &["priority", "delay", "unique"])
-            .map_err(lua_err)?;
+        let allowed = wire::job_op("trigger_job")
+            .expect("trigger_job is modeled")
+            .lua_option_keys(&["slug", "data"]);
+        deny_unknown_keys(opts, "jobs.queue options", &allowed).map_err(lua_err)?;
     }
 
     let job_def = reg
@@ -108,47 +110,6 @@ fn queue_job_inner(
 
     let unique_key: Option<String> = parse_unique_opt(opts)?;
 
-    if job_def.access.is_some() {
-        let user_doc = hook_user(lua);
-
-        // Expose the queued payload to the access fn as `ctx.data`. A payload
-        // that can't be converted to a JSON object is an error — silently
-        // dropping it to `nil` would let a data-gating access rule evaluate
-        // against nothing while the job still queues with that payload.
-        let payload: Option<DocumentFields> = match data.as_ref() {
-            None => None,
-            Some(t) => {
-                let json = lua_api::lua_to_json(&Value::Table(t.clone()))
-                    .map_err(|e| RuntimeError(format!("invalid job payload: {e:#}")))?;
-                Some(serde_json::from_value(json).map_err(|e| {
-                    RuntimeError(format!(
-                        "job payload must be a table/object for access checks: {e}"
-                    ))
-                })?)
-            }
-        };
-
-        let result = check_access_with_lua(
-            lua,
-            &AccessCheckInput::builder("trigger", slug)
-                .access(job_def.access.as_ref())
-                .user(user_doc.as_ref())
-                .data(payload.as_ref())
-                .build(),
-        )
-        .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
-
-        if matches!(result, AccessResult::Denied) {
-            return Err(RuntimeError("Trigger access denied".to_string()));
-        }
-
-        if matches!(result, AccessResult::Constrained(_)) {
-            return Err(RuntimeError(format!(
-                "Access hook for job '{slug}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead."
-            )));
-        }
-    }
-
     let data_json = match data {
         Some(tbl) => {
             let json_val = lua_api::lua_to_json(&Value::Table(tbl))?;
@@ -161,21 +122,33 @@ fn queue_job_inner(
 
     let queue_retries = state.queue_retries.get(&job_def.queue).copied();
 
-    let insert_opts = InsertJobOpts {
-        slug,
-        data: &data_json,
-        scheduled_by: "hook",
-        max_attempts: job_def.effective_max_attempts(queue_retries),
-        queue: &job_def.queue,
-        priority,
-        delay_secs,
-        unique_key: unique_key.as_deref(),
-    };
+    // Through the ONE queue chokepoint (`service::jobs::queue_job`) — the
+    // same access evaluation, payload contract, and delay/unique semantics
+    // as gRPC and MCP. `LuaWriteHooks` runs the access function in THIS VM,
+    // so a hook queuing a job never re-enters the VM pool.
+    let user = hook_user(lua);
+    let hooks = LuaWriteHooks::builder(lua).build();
+    let ctx = ServiceContext::slug_only(slug)
+        .conn(conn)
+        .write_hooks(&hooks)
+        .user(user.as_ref())
+        .build();
 
-    let result = query::jobs::insert_job_with(conn, &insert_opts)
-        .map_err(|e| RuntimeError(format!("queue error: {e:#}")))?;
+    let run = service::jobs::queue_job(
+        &ctx,
+        &service::jobs::QueueJobInput {
+            job_def: &job_def,
+            data: Some(&data_json),
+            scheduled_by: "hook",
+            priority,
+            queue_retries,
+            delay_secs,
+            unique_key: unique_key.as_deref(),
+        },
+    )
+    .map_err(|e| RuntimeError(format!("{e}")))?;
 
-    Ok(result.into_inner().id)
+    Ok(run.id)
 }
 
 /// Parse the `priority` option from a `crap.jobs.queue` opts table.

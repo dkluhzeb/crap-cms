@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Password strength requirements. Applied to all password-setting paths:
 /// user creation (admin, gRPC, CLI), password reset, and password update.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct PasswordPolicy {
     /// Minimum password length. Default: 8. Recommended: 12+ for modern security.

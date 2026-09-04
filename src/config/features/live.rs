@@ -16,7 +16,7 @@ pub enum LiveTransport {
 }
 
 /// Live event streaming configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.

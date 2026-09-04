@@ -194,3 +194,52 @@ field definitions.
 | `locale` | locale (string) |  | gRPC, MCP, Lua | Locale code (e.g. 'en', 'de') for localized fields |
 | `draft` | boolean |  | gRPC, MCP, Lua | Validate as a draft version (default: false) |
 
+## Job operations
+
+Job identifiers (`slug` on trigger, `id` on get/cancel) are real
+fields on every surface, so they appear in the tables below. On Lua,
+`slug`/`data`/`id` are positional arguments of `crap.jobs.queue` /
+`crap.jobs.get_run` / `crap.jobs.cancel_run`; the remaining fields
+form the options table. `list_jobs` takes no arguments and is not
+exposed on Lua (definitions are in-process there).
+
+**JSON payload** — an object on MCP/Lua, a JSON string on gRPC.
+**job status** — one of `pending`, `running`, `completed`, `failed`,
+`stale` (the `JobRunStatus` enum on gRPC).
+
+### `list_jobs`
+
+| Field | Type | Required | Surfaces | Description |
+|-------|------|----------|----------|-------------|
+
+### `trigger_job`
+
+| Field | Type | Required | Surfaces | Description |
+|-------|------|----------|----------|-------------|
+| `slug` | string | yes | gRPC, MCP, Lua | The job slug to trigger |
+| `data` | JSON payload |  | gRPC, MCP, Lua | JSON payload passed to the handler |
+| `priority` | integer |  | gRPC, MCP, Lua | Scheduling priority; higher runs sooner |
+| `delay` | duration (seconds or string) |  | gRPC, MCP, Lua | Seconds to wait before the run becomes claimable — an integer, or (MCP/Lua) a duration string ("30s", "5m", "1h"). Default 0 = immediate |
+| `unique` | string |  | gRPC, MCP, Lua | Dedup key: when another pending/running run of this job carries the same key, its id is returned instead of queuing a duplicate |
+
+### `cancel_job_run`
+
+| Field | Type | Required | Surfaces | Description |
+|-------|------|----------|----------|-------------|
+| `id` | id (string) | yes | gRPC, MCP, Lua | The job run id to cancel |
+
+### `get_job_run`
+
+| Field | Type | Required | Surfaces | Description |
+|-------|------|----------|----------|-------------|
+| `id` | id (string) | yes | gRPC, MCP, Lua | The job run id |
+
+### `list_job_runs`
+
+| Field | Type | Required | Surfaces | Description |
+|-------|------|----------|----------|-------------|
+| `slug` | string |  | gRPC, MCP, Lua | Only runs of this job slug |
+| `status` | job status (string) |  | gRPC, MCP, Lua | Only runs in this status |
+| `limit` | integer |  | gRPC, MCP, Lua | Max runs to return (default 50) |
+| `offset` | integer |  | gRPC, MCP, Lua | Runs to skip (default 0) |
+

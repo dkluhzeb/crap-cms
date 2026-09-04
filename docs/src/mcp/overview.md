@@ -218,7 +218,7 @@ Always available:
 | `list_jobs` | List defined jobs (slug, queue, schedule, timeout, priority) |
 | `get_job_run` | Status + result of one run by id — **use this to poll the `job_id` from a queued bulk operation** |
 | `list_job_runs` | Recent runs, newest first; filter by `slug` and/or `status` (e.g. `"failed"`) to triage |
-| `trigger_job` | Queue any defined job for immediate execution; returns the run id |
+| `trigger_job` | Queue any defined job; returns the run id. Takes `data` (object), `priority`, `delay` (seconds or `"5m"`-style duration), and `unique` (dedup key — an active run with the same key is returned instead of a duplicate) |
 
 The split exists because reading and executing carry different risk:
 `"all"` lets a client queue **any** defined job, and because MCP has no end

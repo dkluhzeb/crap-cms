@@ -29,7 +29,7 @@ use tracing::info;
 use crate::{
     config::McpJobTools,
     core::job::JobRun,
-    mcp::{protocol::ToolDefinition, tools::ToolExecCtx},
+    mcp::{protocol::ToolDefinition, schema, tools::ToolExecCtx},
     service::{
         self, ServiceContext,
         jobs::{
@@ -59,37 +59,19 @@ pub(in crate::mcp) fn job_tools(mode: McpJobTools) -> Vec<ToolDefinition> {
         ToolDefinition::new(
             TOOL_LIST_JOBS,
             "List defined background jobs (slug, queue, schedule, timeout, priority)",
-            json!({ "type": "object", "properties": {} }),
+            schema::job_input_schema("list_jobs"),
         ),
         ToolDefinition::new(
             TOOL_GET_JOB_RUN,
             "Get the status and result of one job run by id — use this to poll a \
              job_id returned by a queued bulk operation",
-            json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "The job run id" }
-                },
-                "required": ["id"]
-            }),
+            schema::job_input_schema("get_job_run"),
         ),
         ToolDefinition::new(
             TOOL_LIST_JOB_RUNS,
             "List recent job runs, newest first. Filter by job slug and/or status \
              to triage failures (e.g. status = \"failed\")",
-            json!({
-                "type": "object",
-                "properties": {
-                    "slug": { "type": "string", "description": "Only runs of this job slug" },
-                    "status": {
-                        "type": "string",
-                        "enum": ["pending", "running", "completed", "failed", "stale"],
-                        "description": "Only runs in this status"
-                    },
-                    "limit": { "type": "integer", "description": "Max runs to return (default 50)" },
-                    "offset": { "type": "integer", "description": "Runs to skip (default 0)" }
-                }
-            }),
+            schema::job_input_schema("list_job_runs"),
         ),
     ];
 
@@ -99,26 +81,12 @@ pub(in crate::mcp) fn job_tools(mode: McpJobTools) -> Vec<ToolDefinition> {
             "Cancel a job run that has not started yet — e.g. a queued bulk \
              operation you no longer want. A run already in flight cannot be \
              stopped",
-            json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "The job run id to cancel" }
-                },
-                "required": ["id"]
-            }),
+            schema::job_input_schema("cancel_job_run"),
         ));
         tools.push(ToolDefinition::new(
             TOOL_TRIGGER_JOB,
             "Queue a defined job for immediate execution. Returns the job run id",
-            json!({
-                "type": "object",
-                "properties": {
-                    "slug": { "type": "string", "description": "The job slug to trigger" },
-                    "data": { "type": "object", "description": "JSON payload passed to the handler" },
-                    "priority": { "type": "integer", "description": "Scheduling priority; higher runs sooner" }
-                },
-                "required": ["slug"]
-            }),
+            schema::job_input_schema("trigger_job"),
         ));
     }
 
@@ -397,6 +365,23 @@ fn exec_cancel_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     Ok(to_string_pretty(&json!({ "cancelled": cancelled }))?)
 }
 
+/// Parse the `delay` argument of `trigger_job`: integer seconds, or a
+/// duration string (`"30s"`, `"5m"`, `"1h"`) — the same forms
+/// `crap.jobs.queue` accepts on Lua.
+fn parse_delay_arg(delay: Option<&Value>) -> Result<u64> {
+    match delay {
+        None | Some(Value::Null) => Ok(0),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .context("'delay' must be a non-negative integer of seconds"),
+        Some(Value::String(s)) => crate::config::parse_duration_string(s)
+            .with_context(|| format!("invalid 'delay' duration '{s}'")),
+        Some(other) => bail!(
+            "'delay' must be an integer of seconds or a duration string like \"5m\" (got {other})"
+        ),
+    }
+}
+
 fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let slug = args
         .get("slug")
@@ -424,6 +409,12 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
         .and_then(|p| i32::try_from(p).ok())
         .unwrap_or(job_def.priority);
 
+    let delay_secs = parse_delay_arg(args.get("delay"))?;
+    let unique_key: Option<String> = args
+        .get("unique")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let queue_retries = ctx
         .config
         .jobs
@@ -439,6 +430,8 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             scheduled_by: "mcp",
             priority,
             queue_retries,
+            delay_secs,
+            unique_key: unique_key.as_deref(),
         },
     )
     .map_err(crate::service::ServiceError::into_anyhow)?;
@@ -629,5 +622,102 @@ mod tests {
         let parsed: Value = serde_json::from_str(&out).unwrap();
 
         assert!(parsed["jobs"].is_array(), "{parsed}");
+    }
+
+    /// The fold into the wire model must not have changed a single byte of
+    /// the advertised schemas: these literals are the hand-written JSON the
+    /// tools shipped with before the model became their source.
+    #[test]
+    fn model_rendered_schemas_match_the_previous_hand_written_ones() {
+        let pins = [
+            ("list_jobs", json!({ "type": "object", "properties": {} })),
+            (
+                "get_job_run",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "The job run id" }
+                    },
+                    "required": ["id"]
+                }),
+            ),
+            (
+                "list_job_runs",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": { "type": "string", "description": "Only runs of this job slug" },
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "running", "completed", "failed", "stale"],
+                            "description": "Only runs in this status"
+                        },
+                        "limit": { "type": "integer", "description": "Max runs to return (default 50)" },
+                        "offset": { "type": "integer", "description": "Runs to skip (default 0)" }
+                    }
+                }),
+            ),
+            (
+                "cancel_job_run",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "The job run id to cancel" }
+                    },
+                    "required": ["id"]
+                }),
+            ),
+            (
+                // `delay` and `unique` are the one deliberate post-fold
+                // addition (they were Lua-only before) — the pin includes
+                // them so any FURTHER change to the schema is a conscious
+                // edit here, not silent drift.
+                "trigger_job",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": { "type": "string", "description": "The job slug to trigger" },
+                        "data": { "type": "object", "description": "JSON payload passed to the handler" },
+                        "priority": { "type": "integer", "description": "Scheduling priority; higher runs sooner" },
+                        "delay": {
+                            "type": ["integer", "string"],
+                            "description": "Seconds to wait before the run becomes claimable — an integer, or (MCP/Lua) a duration string (\"30s\", \"5m\", \"1h\"). Default 0 = immediate"
+                        },
+                        "unique": {
+                            "type": "string",
+                            "description": "Dedup key: when another pending/running run of this job carries the same key, its id is returned instead of queuing a duplicate"
+                        }
+                    },
+                    "required": ["slug"]
+                }),
+            ),
+        ];
+
+        for (op, pinned) in pins {
+            assert_eq!(
+                crate::mcp::schema::job_input_schema(op),
+                pinned,
+                "job tool `{op}`: the model renders a different schema than the hand-written one it replaced"
+            );
+        }
+    }
+
+    // ── parse_delay_arg ──────────────────────────────────────────────────
+
+    #[test]
+    fn delay_arg_accepts_integer_seconds_and_duration_strings() {
+        assert_eq!(parse_delay_arg(None).unwrap(), 0);
+        assert_eq!(parse_delay_arg(Some(&Value::Null)).unwrap(), 0);
+        assert_eq!(parse_delay_arg(Some(&json!(90))).unwrap(), 90);
+        assert_eq!(parse_delay_arg(Some(&json!("30s"))).unwrap(), 30);
+        assert_eq!(parse_delay_arg(Some(&json!("5m"))).unwrap(), 300);
+        assert_eq!(parse_delay_arg(Some(&json!("1h"))).unwrap(), 3600);
+    }
+
+    #[test]
+    fn delay_arg_rejects_negatives_and_garbage() {
+        assert!(parse_delay_arg(Some(&json!(-5))).is_err());
+        assert!(parse_delay_arg(Some(&json!("soon"))).is_err());
+        assert!(parse_delay_arg(Some(&json!(true))).is_err());
     }
 }

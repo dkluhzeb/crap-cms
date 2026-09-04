@@ -637,6 +637,8 @@ async fn trigger_job_authenticated() {
         slug: "process".to_string(),
         data: Some(r#"{"key": "value"}"#.to_string()),
         priority: None,
+        delay: None,
+        unique: None,
     });
     add_auth(&mut req, &token);
 
@@ -644,6 +646,149 @@ async fn trigger_job_authenticated() {
     assert!(
         !resp.job_id.is_empty(),
         "triggered job should return a job_id"
+    );
+}
+
+#[tokio::test]
+async fn trigger_job_with_unique_key_returns_the_existing_run() {
+    let job = JobDefinitionBuilder::new("dedup", "hooks.jobs.dedup")
+        .queue("default")
+        .build();
+    let ts = setup_service_with_jobs(vec![make_posts_def(), make_users_def()], vec![], vec![job]);
+    let token = create_user_and_login(&ts).await;
+
+    let trigger = |unique: Option<&str>| content::TriggerJobRequest {
+        slug: "dedup".to_string(),
+        data: None,
+        priority: None,
+        delay: None,
+        unique: unique.map(str::to_string),
+    };
+
+    let mut first = Request::new(trigger(Some("nightly")));
+    add_auth(&mut first, &token);
+    let first_id = ts
+        .service
+        .trigger_job(first)
+        .await
+        .unwrap()
+        .into_inner()
+        .job_id;
+
+    let mut second = Request::new(trigger(Some("nightly")));
+    add_auth(&mut second, &token);
+    let second_id = ts
+        .service
+        .trigger_job(second)
+        .await
+        .unwrap()
+        .into_inner()
+        .job_id;
+
+    assert_eq!(
+        first_id, second_id,
+        "the same unique key must return the pending run instead of queuing a duplicate"
+    );
+
+    let mut third = Request::new(trigger(Some("other-key")));
+    add_auth(&mut third, &token);
+    let third_id = ts
+        .service
+        .trigger_job(third)
+        .await
+        .unwrap()
+        .into_inner()
+        .job_id;
+
+    assert_ne!(first_id, third_id, "a different key queues its own run");
+}
+
+#[tokio::test]
+async fn trigger_job_rejects_a_negative_delay() {
+    let job = JobDefinitionBuilder::new("later", "hooks.jobs.later")
+        .queue("default")
+        .build();
+    let ts = setup_service_with_jobs(vec![make_posts_def(), make_users_def()], vec![], vec![job]);
+    let token = create_user_and_login(&ts).await;
+
+    let mut req = Request::new(content::TriggerJobRequest {
+        slug: "later".to_string(),
+        data: None,
+        priority: None,
+        delay: Some(-5),
+        unique: None,
+    });
+    add_auth(&mut req, &token);
+
+    let err = ts.service.trigger_job(req).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+    assert!(err.message().contains("delay"), "{err}");
+}
+
+/// Regression: invalid JSON in `data` used to be stored verbatim and only
+/// blow up when the handler ran. It is rejected at queue time now.
+#[tokio::test]
+async fn trigger_job_rejects_invalid_json_data() {
+    let job = JobDefinitionBuilder::new("strict", "hooks.jobs.strict")
+        .queue("default")
+        .build();
+    let ts = setup_service_with_jobs(vec![make_posts_def(), make_users_def()], vec![], vec![job]);
+    let token = create_user_and_login(&ts).await;
+
+    let mut req = Request::new(content::TriggerJobRequest {
+        slug: "strict".to_string(),
+        data: Some("{not json".to_string()),
+        priority: None,
+        delay: None,
+        unique: None,
+    });
+    add_auth(&mut req, &token);
+
+    let err = ts.service.trigger_job(req).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+    assert!(err.message().contains("valid JSON"), "{err}");
+}
+
+/// A delayed run is queued but not claimable until its delay elapses.
+#[tokio::test]
+async fn trigger_job_with_delay_queues_a_non_claimable_run() {
+    let job = JobDefinitionBuilder::new("patient", "hooks.jobs.patient")
+        .queue("default")
+        .build();
+    let ts = setup_service_with_jobs(vec![make_posts_def(), make_users_def()], vec![], vec![job]);
+    let token = create_user_and_login(&ts).await;
+
+    let mut req = Request::new(content::TriggerJobRequest {
+        slug: "patient".to_string(),
+        data: None,
+        priority: None,
+        delay: Some(3600),
+        unique: None,
+    });
+    add_auth(&mut req, &token);
+    let job_id = ts
+        .service
+        .trigger_job(req)
+        .await
+        .unwrap()
+        .into_inner()
+        .job_id;
+    assert!(!job_id.is_empty());
+
+    // The run exists and is pending — but the scheduler's claim query must
+    // skip it until the delay elapses.
+    let conn = ts.pool.get().unwrap();
+    let claimed = crap_cms::db::query::jobs::claim_pending_jobs(
+        &conn,
+        10,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
+    assert!(
+        claimed.is_empty(),
+        "a run delayed by an hour must not be claimable now: {claimed:?}"
     );
 }
 
@@ -662,6 +807,8 @@ async fn list_job_runs_authenticated() {
         slug: "sync".to_string(),
         data: None,
         priority: None,
+        delay: None,
+        unique: None,
     });
     add_auth(&mut trigger_req, &token);
     ts.service.trigger_job(trigger_req).await.unwrap();

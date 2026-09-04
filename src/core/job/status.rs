@@ -12,6 +12,19 @@ pub enum JobStatus {
 }
 
 impl JobStatus {
+    /// Every status, in lifecycle order. The single source for surface
+    /// descriptions (the MCP `list_job_runs` enum, docs tables) — a variant
+    /// added here shows up on every surface, instead of a hand list
+    /// drifting (the MCP tool once advertised a `"cancelled"` status that
+    /// never existed and omitted `"stale"`).
+    pub const ALL: [JobStatus; 5] = [
+        JobStatus::Pending,
+        JobStatus::Running,
+        JobStatus::Completed,
+        JobStatus::Failed,
+        JobStatus::Stale,
+    ];
+
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {

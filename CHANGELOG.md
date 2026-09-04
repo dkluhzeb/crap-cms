@@ -652,6 +652,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **A data-gating job access rule could be evaluated against nothing while
+  the job still queued with the payload.** The trigger path parsed the
+  payload for the access check with a silent fallback: any `data` that was
+  not a JSON object — an array, a bare string, malformed JSON from the gRPC
+  wire — made the rule see `ctx.data == nil`, and the job queued with the
+  original payload anyway. A caller with trigger rights could bypass
+  payload-based restrictions by wrapping the payload in an array. Non-object
+  data is now an error whenever the job has an access function, and invalid
+  JSON is rejected at queue time on every surface (it used to be stored
+  verbatim and fail only when the handler ran).
+
+
 - **Login-path custom strategies honor `surfaces` and `activates_on`.** The admin
   login form and the gRPC `Login` RPC used to run *every* strategy on the
   collection with the submitted credentials, ignoring the method's scoping — a
@@ -1459,6 +1471,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **The S3 region default depended on whether the `[upload.s3]` section
+  header existed.** `S3Config` derived `Default` (`region = ""`) while the
+  serde field default was `"us-east-1"` — so a config with an `[upload.s3]`
+  section but no `region` key got `us-east-1`, and a config with no section
+  at all got an empty region. One manual `Default` impl now feeds both
+  paths, with a regression test pinning them together.
+
 
 - **A `{{data "name"}}` value vanished silently when the Lua VM pool was
   exhausted.** `call_template_data` dropped the pool error with `.ok()?`, so
@@ -2791,6 +2811,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`delay` and `unique` on every job-trigger surface.** They were Lua-only
+  options of `crap.jobs.queue`; the gRPC `TriggerJob` RPC (`delay` tag 4,
+  `unique` tag 5) and the MCP `trigger_job` tool now take them too. `delay`
+  defers the run by N seconds (MCP also accepts the `"5m"`-style duration
+  strings Lua takes; negative values are rejected); `unique` dedupes against
+  active work — when a pending/running run of the same job carries the same
+  key, its id is returned instead of queuing a duplicate. All three surfaces
+  now queue through the single `service::jobs::queue_job` chokepoint, so the
+  semantics are identical by construction.
+
+
 - **`crap.template_data` functions get the same read-only database access as
   `before_render`.** They are the two render-time extension points — a hook
   that reshapes the whole page context, and `{{data "name"}}` for a value one
@@ -3543,6 +3574,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- **The `crap.toml` reference is pinned to the config structs.** A new
+  `#[derive(ConfigKeys)]` enumerates every section struct's serde keys, and
+  `tests/config_doc_parity.rs` checks `docs/src/configuration/crap-toml.md`
+  against them — every key must have a table row, no row may name a key that
+  does not exist, every top-level section needs a documented section, the
+  `## Full Reference` example must parse through the real deserializer
+  (`deny_unknown_fields` makes phantom keys a red test), and scalar Default
+  cells must contain the code's actual default value. The tables stay
+  hand-curated (their Description column is real documentation); only their
+  facts are machine-checked — the same trade `tests/wire_parity.rs` makes.
+  The first run caught an entire missing `[routes]` section, five
+  undocumented keys (`database.backend`, `database.url`,
+  `database.stmt_cache_capacity`, `admin.site_name`,
+  `admin.csrf_cookie_lifetime`, `depth.max_nesting_depth`), the removed
+  `upload.s3.public_url_base` key still being documented, a stale
+  `jobs.auto_purge` default, and the S3 region bug above.
+
+
+- **Job operations joined the single-source wire model.** `list_jobs`,
+  `trigger_job`, `get_job_run`, `list_job_runs`, and `cancel_job_run` were
+  the last operation family described by hand on every surface — hand-written
+  proto messages, hand-written MCP `json!` schemas, hand lists of accepted
+  Lua option keys — which is exactly how the MCP run-status enum once
+  advertised a status that never existed. They are now declared once in
+  `service::op::wire::JOB_OPS`: the MCP tool schemas render from the model
+  (a pinned test proves the fold changed no byte of the advertised JSON),
+  the proto request bodies are generated from per-field tag pins like the
+  CRUD messages, the operation-options reference gains a generated Jobs
+  section, the Lua option tables reject unknown keys against the model
+  (`OpWire::lua_option_keys`), and the wire-parity test now covers job
+  messages. The MCP status enum itself derives from `JobStatus::ALL`.
+
 
 - **`Arc<CollectionDefinition>` registry storage.** The registry's four
   definition maps (collections, globals, jobs, richtext nodes) now hold

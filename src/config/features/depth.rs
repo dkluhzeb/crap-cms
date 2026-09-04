@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Controls relationship population depth defaults and limits.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct DepthConfig {
     /// Default population depth when the request doesn't specify one.

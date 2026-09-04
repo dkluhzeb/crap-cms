@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::parsing::serde_filesize;
 
 /// Settings for custom Lua-defined HTTP routes.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct RoutesConfig {
     /// URL prefix prepended to every custom route registered via

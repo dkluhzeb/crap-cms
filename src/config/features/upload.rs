@@ -18,7 +18,7 @@ pub enum UploadStorage {
 }
 
 /// Global upload settings (per-collection upload config is separate).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct UploadConfig {
     /// Storage backend: `local` (default), `s3`, or `custom`.
@@ -33,7 +33,7 @@ pub struct UploadConfig {
 }
 
 /// S3-compatible storage configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(deny_unknown_fields)]
 pub struct S3Config {
     /// S3 bucket name.
@@ -65,6 +65,25 @@ fn default_s3_region() -> String {
     "us-east-1".to_string()
 }
 
+/// Manual impl so the no-`[upload.s3]`-section path agrees with the
+/// serde field defaults. The derived impl gave `region = ""` while a
+/// *present* section with no `region` key got `"us-east-1"` — the same
+/// config meant two different regions depending on whether the empty
+/// section header existed.
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            bucket: String::new(),
+            region: default_s3_region(),
+            endpoint: None,
+            access_key: String::new(),
+            secret_key: S3SecretKey::default(),
+            prefix: String::new(),
+            path_style: false,
+        }
+    }
+}
+
 impl Default for UploadConfig {
     fn default() -> Self {
         Self {
@@ -78,6 +97,18 @@ impl Default for UploadConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the derived `Default` used to give `region = ""` while
+    /// parsing an empty `[upload.s3]` section gave `"us-east-1"` — the
+    /// absent-section and empty-section paths must agree.
+    #[test]
+    fn s3_default_region_matches_the_serde_default() {
+        let absent = S3Config::default();
+        let empty_section: S3Config = toml::from_str("").expect("empty section parses");
+
+        assert_eq!(absent.region, "us-east-1");
+        assert_eq!(absent.region, empty_section.region);
+    }
 
     #[test]
     fn upload_config_defaults() {

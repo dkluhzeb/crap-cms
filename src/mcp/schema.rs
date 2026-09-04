@@ -249,8 +249,17 @@ fn wire_prop(field: &WireField) -> Value {
         WireKind::Bool => json!({ "type": "boolean" }),
         WireKind::Int => json!({ "type": "integer" }),
         WireKind::Str | WireKind::Id | WireKind::Locale => json!({ "type": "string" }),
-        WireKind::FilterMap => json!({ "type": "object" }),
+        WireKind::FilterMap | WireKind::JsonData => json!({ "type": "object" }),
         WireKind::Select => json!({ "type": "array", "items": { "type": "string" } }),
+        WireKind::Duration => json!({ "type": ["integer", "string"] }),
+        WireKind::JobStatus => {
+            let statuses: Vec<&str> = crate::core::JobStatus::ALL
+                .iter()
+                .map(crate::core::JobStatus::as_str)
+                .collect();
+
+            json!({ "type": "string", "enum": statuses })
+        }
         WireKind::DataFields | WireKind::DataObject | WireKind::DocumentsArray => {
             unreachable!("def-dependent kinds are rendered by add_wire_props")
         }
@@ -305,6 +314,21 @@ fn add_wire_props(schema: &mut Value, wire: &OpWire, def: Option<&CollectionDefi
             push_required(schema, field.name);
         }
     }
+}
+
+/// Input schema for one job tool: an object holding exactly the wire
+/// model's fields for that op. Jobs have no collection definition, so this
+/// is [`options_schema`] with no def — public to `mcp` so `tools::jobs`
+/// renders its schemas from the model instead of hand-writing them.
+///
+/// # Panics
+///
+/// Panics when `op` is not a job operation — tool registration is static,
+/// so an unknown name is a programming error, not an input.
+pub(in crate::mcp) fn job_input_schema(op: &str) -> Value {
+    let wire = wire::job_op(op).unwrap_or_else(|| panic!("`{op}` is not a job operation"));
+
+    options_schema(wire, None)
 }
 
 /// Schema for an op with no top-level field-data spread — an object holding

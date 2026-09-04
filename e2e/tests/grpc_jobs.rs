@@ -143,6 +143,8 @@ async fn trigger_job_queues_run_visible_via_get_and_list() {
                 slug: "cleanup".to_string(),
                 data: Some(r#"{"foo":"bar"}"#.to_string()),
                 priority: None,
+                delay: None,
+                unique: None,
             },
             &token,
         ))
@@ -210,6 +212,8 @@ async fn trigger_job_unknown_slug_returns_not_found() {
                 slug: "no-such-job".to_string(),
                 data: None,
                 priority: None,
+                delay: None,
+                unique: None,
             },
             &token,
         ))

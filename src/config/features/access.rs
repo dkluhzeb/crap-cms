@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Access control defaults.
 /// When `default_deny` is true, collections/globals without explicit access functions
 /// deny all operations instead of allowing them. Default: true (secure by default).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct AccessConfig {
     /// When true (default), operations on collections/globals without an explicit access

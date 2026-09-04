@@ -60,7 +60,7 @@ pub enum RateLimitBackend {
 }
 
 /// JWT authentication settings.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
     /// JWT secret. If empty, a random secret is generated on first startup and

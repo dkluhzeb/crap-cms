@@ -11,7 +11,7 @@ use crate::config::parsing::serde_duration;
 
 /// CORS configuration.
 /// Empty `allowed_origins` = CORS layer not added (default, backward compatible).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct CorsConfig {
     /// Origins allowed to make cross-origin requests. Empty = CORS disabled.

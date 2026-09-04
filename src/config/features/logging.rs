@@ -20,7 +20,7 @@ pub enum LogRotation {
 /// When `file` is true, logs are written to rotating files in `path` (relative to
 /// the config directory, or an absolute path). Disabled by default -- stdout-only
 /// logging is the default for backward compatibility and Docker deployments.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Enable file logging. Default: false.

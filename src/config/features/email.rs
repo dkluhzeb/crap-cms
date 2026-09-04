@@ -36,7 +36,7 @@ pub enum EmailProvider {
 }
 
 /// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmailConfig {
     /// Email provider: `smtp` (default), `webhook`, `log`, or `custom`.

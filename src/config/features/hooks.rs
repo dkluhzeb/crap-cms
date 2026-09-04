@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::parsing::serde_filesize;
 
 /// Hook configuration -- `on_init` script references and recursion limits.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksConfig {
     /// List of Lua script names (without extension) to run once when the CMS starts up.

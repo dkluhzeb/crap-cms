@@ -964,8 +964,10 @@ Queue a job for execution. Requires authentication. Checks the job's `access` fu
 ```protobuf
 message TriggerJobRequest {
   string slug = 1;
-  optional string data = 2;      // JSON input data
-  optional int32 priority = 3;    // scheduling priority (higher = sooner; default 0)
+  optional string data = 2;      // JSON input data (must be valid JSON)
+  optional int32 priority = 3;   // scheduling priority (higher = sooner; default 0)
+  optional int64 delay = 4;      // seconds before the run becomes claimable (default 0)
+  optional string unique = 5;    // dedup key — see below
 }
 
 message TriggerJobResponse {
@@ -973,11 +975,27 @@ message TriggerJobResponse {
 }
 ```
 
+`data` is validated at queue time: a string that is not valid JSON is
+rejected with `INVALID_ARGUMENT` (it used to be stored verbatim and fail
+only when the handler ran). When the job has an `access` function, `data`
+must additionally be a JSON *object* so the rule can inspect it as
+`ctx.data`.
+
+`delay` defers the run: the scheduler will not claim it until the given
+number of seconds has passed. Negative values are rejected.
+
+`unique` dedupes against active work: when another pending/running run of
+the same job carries the same key, that run's `job_id` is returned instead
+of queuing a duplicate — the same semantics as `crap.jobs.queue`'s
+`unique` option on Lua and `trigger_job`'s on MCP.
+
 ```bash
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
     "slug": "cleanup_expired",
     "data": "{\"force\": true}",
-    "priority": 10
+    "priority": 10,
+    "delay": 300,
+    "unique": "cleanup-nightly"
 }' localhost:50051 crap.ContentAPI/TriggerJob
 ```
 

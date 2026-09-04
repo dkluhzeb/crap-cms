@@ -85,6 +85,13 @@ pending/running job, `queue()` returns that job's id instead of inserting a
 duplicate. See [`crap.jobs.queue` reference](../lua-api/jobs.md#crapjobsqueueslug-data-opts)
 for full opts.
 
+The same three options exist on every trigger surface — `priority`, `delay`,
+and `unique` on the gRPC [`TriggerJob`](../grpc-api/rpcs.md#triggerjob) RPC
+and the MCP `trigger_job` tool — and all of them go through one queue
+chokepoint, so the semantics cannot differ between surfaces. The
+[operation-options reference](../reference/operation-options.md#job-operations)
+lists the full cross-surface field matrix.
+
 ## Handler Context
 
 The handler function receives a context table:

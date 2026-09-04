@@ -52,6 +52,7 @@
 #![allow(clippy::needless_continue)]
 
 mod builder;
+mod config_keys;
 mod lua_alias;
 mod lua_annotation;
 mod lua_field_type_views;
@@ -67,6 +68,11 @@ use proc_macro::TokenStream;
 /// `#[derive(Builder)]` — generates the house builder convention
 /// (`Type::builder(<required>)` + chained `#[must_use]` setters + infallible
 /// `build()`). See `macros/src/builder.rs` for the field rules.
+#[proc_macro_derive(ConfigKeys)]
+pub fn derive_config_keys(input: TokenStream) -> TokenStream {
+    config_keys::run(input)
+}
+
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive_builder(input: TokenStream) -> TokenStream {
     builder::derive_builder(input)

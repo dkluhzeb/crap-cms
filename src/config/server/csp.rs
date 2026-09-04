@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Each field is a list of sources for the corresponding CSP directive.
 /// Theme developers can extend these lists to allow external resources
 /// (CDNs, fonts, analytics, etc.).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct CspConfig {
     /// Enable CSP header. Default: true. Set to false to disable entirely.
@@ -82,6 +82,7 @@ impl CspConfig {
     /// explicitly configured `'unsafe-inline'` in their overrides.
     ///
     /// Returns `None` if CSP is disabled entirely (`enabled = false`).
+    #[must_use]
     pub fn build_header_value(&self, nonce: Option<&str>) -> Option<String> {
         if !self.enabled {
             return None;

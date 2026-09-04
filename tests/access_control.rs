@@ -2602,6 +2602,8 @@ fn access_hook_filter_table_on_job_trigger_is_rejected() {
         scheduled_by: "test",
         priority: 0,
         queue_retries: None,
+        delay_secs: 0,
+        unique_key: None,
     };
 
     let err = queue_job(&ctx, &input).expect_err("Constrained on job trigger must be rejected");
@@ -3211,6 +3213,8 @@ return M
             scheduled_by: "test",
             priority: 0,
             queue_retries: None,
+            delay_secs: 0,
+            unique_key: None,
         };
         queue_job(&ctx, &input)
     };
@@ -3371,6 +3375,8 @@ return M
             scheduled_by: "test",
             priority: 0,
             queue_retries: None,
+            delay_secs: 0,
+            unique_key: None,
         };
         assert!(
             matches!(

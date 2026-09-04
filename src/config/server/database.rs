@@ -16,7 +16,7 @@ pub enum DatabaseBackend {
 }
 
 /// `SQLite` database path and pool configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Database backend: `sqlite` (default) or `postgres`.
