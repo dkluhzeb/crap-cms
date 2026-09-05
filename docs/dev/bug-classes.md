@@ -83,7 +83,7 @@ most).
 | S8 | Loose truthiness at a security gate (`_locked = "1"`); falsy-zero swallowing a real value (`\|\| 0.5`, `Number(0)` falsy) | typed coercion set at the evaluator; explicit `Number.isNaN`; Rust+JS evaluators fixed in lockstep | PARTIAL |
 | S9 | Duplicate keys/elements silently collapsed or double-applied (HashMap form parsing truncated `<select multiple>`, dup field names → one column, dup has-many IDs double-incremented refs) | `Vec<(String,String)>` ingress, parse-time dup-name error (wrapper-flattened), dedup + `SELECT DISTINCT` | PARTIAL |
 | S10 | Untrusted string used as filesystem/template path (traversal) | `validate_template_name` (15 vectors), storage `validate_key`, scaffold `validate_template_slug`, custom-page rules — 4 converging validators, no single chokepoint/meta-test | PARTIAL |
-| S11 | Degenerate or cross-field-inconsistent config accepted at load, detonates at runtime (`channel_capacity = 0` panic, zero intervals busy-loop, `default_locale` ∉ `locales`, `default_limit > max_limit`) | per-key startup validation; no completeness rule for new numeric knobs | PARTIAL |
+| S11 | Degenerate or cross-field-inconsistent config accepted at load, detonates at runtime | per-key startup validation in `config/validate.rs` + completeness pin `every_numeric_knob_is_validated_or_exempt` (pattern-matched numeric keys must be validated or carry a reviewed exemption with its reason) | GUARDED |
 
 ## F — Fail-closed security
 
@@ -102,7 +102,7 @@ most).
 | F11 | Check/strip ordering leaks data or budget (probe before auth, hook before strip) | per-site tests; convention | PARTIAL |
 | F12 | Fail-open under backpressure — lag/close swallowed or warned-instead-of-dropped on revocation and live-event buses | fail-closed drop (revocation), drop-lagged-subscriber (live); convention | PARTIAL |
 | F13 | Undecidable credential downgraded to anonymous instead of rejected | `Resolution::Invalid(Unaccepted)` variant in the one evaluator | GUARDED |
-| F14 | Untrusted value interpolated into an interpreter/protocol sink without the sink's escaper (SQL values, Lua source, HTML text vs attr, JSON-in-`<script>`/attr, email CRLF headers, NUL bytes) | per-sink: `conn.placeholder`, Lua `Table::set`, `html_escape` vs `html_escape_attr`, `{{{json}}}` dual-escape, `validate_no_crlf` (+ queue-side defense), NUL rejection — no sink inventory pin | PARTIAL |
+| F14 | Untrusted value interpolated into an interpreter/protocol sink without the sink's escaper | `tests/sink_escaping.rs`: the reviewed sink→escaper inventory (10 sinks: HTML text/attr, JSON-in-markup, SQL idents, email CRLF, Lua source, fs paths ×2, DOM `h()`) with per-anchor liveness pins + CRLF/NUL behavior pin + positive control | GUARDED |
 | F15 | Untrusted content interpreted as markup/code (39 `innerHTML` writes, HTML-payload uploads served as text/html, SVG entity expansion) | `h()` DOM builder (one annotated parse site left), MIME/extension cross-check + SVG `<!DOCTYPE>`/`<!ENTITY>` rejection at upload, nonce CSP without `unsafe-inline` | GUARDED |
 | F16 | Sandbox capability denylist incomplete — removing A and B but not sibling C (`load` after `loadfile`; **`io.popen` after `os.execute`** — found live by building this guard) | `sandbox_globals_match_reviewed_allowlist` pins the complete surviving global + `os`/`io`/`string` capability sets; per-capability regression tests; sandbox contract recorded in frozen-contracts.md | GUARDED |
 | F17 | Sensitive/internal detail escapes via a secondary channel — error bodies, `Debug`, logs, serialization, timing | redacting newtypes (`JwtSecret`, `S3SecretKey`, `SmtpPassword`, `McpApiKey`, + new `RedisUrl`, `WebhookHeaders` — the partition test found all three missing ones on its first run), sentinel partition test `tests/secret_redaction.rs` over Debug AND Serialize, scrubbed responders, constant-time compares | GUARDED |
@@ -121,7 +121,7 @@ most).
 | P8 | One concept spelled differently per surface (op names, casing, result keys) | `FilterOp::op_name`/`scalar_from_name`, snake_case decision, wire model option keys | GUARDED |
 | P9 | Backend/platform-specific assumption breaks the sibling target (SQLite-isms on PG, Unix-isms on Windows) | `DbConnection` trait (`ddl_type`, `quote_ident`, `now_expr`, `greatest_expr`, `supports_fts()`); CI runs `sqlite+postgres` and `postgres-only` build+clippy+suite jobs; live-server PG smoke and Windows remain manual | PARTIAL |
 | P10 | Create, alter, and table-rebuild paths provision differently (rebuild dropped FK/PK constraints) | `collect_system_columns` chokepoint; rebuild must preserve constraints — no pin | PARTIAL |
-| P11 | Process-local state assumed cluster-global (per-node rate limits multiply the attacker budget, memory event transport, unsynced purge tickers) | `rate_limit_backend`/`[live] transport` redis backends, `try_claim_cron_window` + `_crap_cron_fired`, `FOR UPDATE SKIP LOCKED`; no inventory pin over "state that must be shared when nodes > 1" | PARTIAL |
+| P11 | Process-local state assumed cluster-global | redis backends + cron dedup + `SKIP LOCKED`; `deployment/multi-server.md` is the operator checklist, now pinned by `multi_server_doc_covers_every_node_local_subsystem` (8 subsystems incl. the newly documented per-node MCP session labels); new node-local state = add mechanism + doc row + pin entry | GUARDED |
 
 ## M — Mechanism coverage
 
@@ -180,7 +180,7 @@ most).
 | L14 | Panic — or silent wrong answer — from untrusted input (byte-slicing UTF-8, byte-counted `min_length`, garbled `url_decode`, JS handlers aborted by `querySelector().value`/`JSON.parse(null)`/throwing `localStorage`) | char-safe helpers, `.chars().count()`, try/catch at client entry points; convention | PARTIAL |
 | L15 | Absent optional collapses to a hard default instead of inheriting — incl. a UI empty state defaulting into a data-narrowing filter | `effective_max_attempts`-style resolution points; empty filter drawer renders zero rows | PARTIAL |
 | L16 | Numeric overflow / lossy cast silently changes meaning | narrowing-`as` lints (`cast_possible_truncation`/`_wrap`/`_sign_loss`) are ALREADY denied in production code (clippy pedantic at warn + CI `-D warnings`; tests opt out explicitly); overflow on parsed input guarded per-site (`checked_mul`, `saturating_*`, `try_from`, `is_finite`) — that half stays convention | PARTIAL |
-| L17 | Partial outcome reported as complete success (skipped referenced docs uncounted, silent 10K bulk cap, first-error-only validation) | `skipped` counts, `RESOURCE_EXHAUSTED` on cap, full error lists; no pin that every clamped op signals truncation | PARTIAL |
+| L17 | Partial outcome reported as complete success | `skipped` counts (positive case now pinned: `delete_many_reports_referenced_documents_as_skipped`), `LimitExceeded` on the bulk cap (pinned in `bulk_ops.rs`), full error lists | GUARDED |
 | L18 | Ambiguous sentinel conflates two outcomes (`0` = "no refs" and "no document"; `None` = "disabled" and "invalid") | `Option`/enum return types at the fixed sites; convention | PARTIAL |
 
 ---
@@ -190,10 +190,9 @@ most).
 Remaining UNGUARDED: **D7** only — no structural fix exists for stale
 comments; folded into the review lens list below. Everything else from
 the founding queues is guarded (M7, P5, D2) or hardened (D4).
-High-value PARTIAL work left: F14 sink inventory, S11 config-validation
-completeness, P11 node-local-state inventory, L17 truncation-signal
-pin, P2 admin/MCP behavioral parity. (M8, M15 guarded and L16 verified
-in round 2026-09-05 (5).)
+High-value PARTIAL work left: **P2 admin/MCP behavioral parity** (the
+one large remaining project — a comparison harness over the surfaces).
+Everything else from the priority queues is guarded.
 
 High-value PARTIAL hardening (new since the full-CHANGELOG pass):
 **F14** sink inventory (one escaping-policy table over SQL/Lua/HTML/
@@ -304,3 +303,12 @@ memories; the load-bearing ones:
   narrowing-cast lints already denied via pedantic + `-D warnings`
   (row corrected — it understated existing machinery, a mini-D4).
   84 classes: 34 GUARDED, 49 PARTIAL, 1 UNGUARDED (D7).
+- 2026-09-05 (6) — Phase 2/3 round 4 (PARTIAL queue): F14 → GUARDED
+  (sink→escaper inventory, `tests/sink_escaping.rs`), S11 → GUARDED
+  (numeric-knob completeness pin with reviewed exemptions), L17 →
+  GUARDED (positive skip-signal pin), P11 → GUARDED (multi-server doc
+  as pinned operator checklist + MCP session-label stickiness row
+  added). Fallout from M15 cleaned: 3 more runtime register/remove
+  tests converted/unit-covered. 84 classes: 38 GUARDED, 45 PARTIAL,
+  1 UNGUARDED (D7). Priority queues exhausted — remaining large item:
+  P2 behavioral-parity harness.

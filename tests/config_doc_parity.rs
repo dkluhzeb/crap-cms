@@ -306,3 +306,212 @@ fn init_template_mentions_every_config_key() {
         missing.join("\n")
     );
 }
+
+/// Numeric-knob name patterns for the S11 completeness pin.
+const PATTERNS: &[&str] = &[
+    "_secs",
+    "_seconds",
+    "_interval",
+    "_capacity",
+    "_timeout",
+    "timeout_",
+    "_size",
+    "_limit",
+    "_depth",
+    "_attempts",
+    "_expiry",
+    "_age",
+    "_purge",
+    "max_",
+    "min_",
+    "_port",
+    "_window",
+    "_length",
+    "_files",
+    "_concurrent",
+    "_ms",
+];
+
+/// Keys where a degenerate value is safe by construction.
+const EXEMPT: &[(&str, &str)] = &[
+    (
+        "admin_port",
+        "0 = OS-assigned port; bind fails loud otherwise",
+    ),
+    (
+        "grpc_port",
+        "0 = OS-assigned port; bind fails loud otherwise",
+    ),
+    (
+        "smtp_port",
+        "validated only when smtp_host is set (log fallback otherwise)",
+    ),
+    (
+        "cache_size",
+        "SQLite-defined semantics: negative = KB, positive = pages",
+    ),
+    ("mmap_size", "0 is the documented off switch"),
+    (
+        "max_file_size",
+        "0/absent falls back; per-collection check still applies",
+    ),
+    (
+        "max_age_secs",
+        "0 is the documented off switch (no periodic clear)",
+    ),
+    (
+        "max_entries",
+        "0 = unbounded is acceptable for the in-memory soft cap",
+    ),
+    (
+        "max_sse_connections",
+        "0 is the documented unlimited sentinel",
+    ),
+    (
+        "max_subscribe_connections",
+        "0 is the documented unlimited sentinel",
+    ),
+    (
+        "grpc_rate_limit_requests",
+        "0 is the documented disabled sentinel",
+    ),
+    (
+        "max_message_size",
+        "parse rejects 0-byte sizes via the size-string parser",
+    ),
+    (
+        "grpc_max_message_size",
+        "parse rejects degenerate sizes via the size-string parser",
+    ),
+    (
+        "http_max_response_bytes",
+        "size-string parser handles it; 0 loud-fails first request",
+    ),
+    ("http_max_body_bytes", "size-string parser handles it"),
+    ("max_body", "size-string parser handles it"),
+    ("auto_purge", "0 is the documented off switch"),
+    (
+        "priority_decay",
+        "0 is the documented off switch (pure static priority)",
+    ),
+    ("max_instructions", "0 = unlimited is the mlua semantic"),
+    ("max_memory", "size-string parser handles it"),
+    ("session_absolute_max_age", "0 is the documented off switch"),
+    (
+        "csrf_cookie_lifetime",
+        "duration parser rejects malformed; 0 expires immediately (self-evident)",
+    ),
+    (
+        "token_expiry",
+        "0 = every token instantly invalid — self-evident at first login",
+    ),
+    ("reset_token_expiry", "0 self-evident at first reset"),
+    (
+        "max_login_attempts",
+        "0 = lockout on first attempt — fail-closed, not a trap",
+    ),
+    ("max_ip_login_attempts", "0 fail-closed"),
+    ("max_forgot_password_attempts", "0 fail-closed"),
+    (
+        "forgot_password_window_seconds",
+        "0 = no window — fail-open only toward MORE rate limiting",
+    ),
+    (
+        "login_lockout_seconds",
+        "0 = no lockout duration; limiter still counts",
+    ),
+    ("max_files", "0 keeps no rotated files — self-evident"),
+    (
+        "smtp_timeout",
+        "duration parser; degenerate value fails the first send loudly",
+    ),
+    (
+        "subscriber_send_timeout_ms",
+        "0 drops slow subscribers immediately — documented",
+    ),
+    (
+        "bulk_max_documents",
+        "0 is the documented no-limit sentinel",
+    ),
+    (
+        "request_timeout",
+        "validated (grpc_timeout sibling) — matched by pattern via _timeout",
+    ),
+    (
+        "busy_timeout",
+        "duration parser; SQLite accepts 0 (no wait) as valid semantics",
+    ),
+    (
+        "wal_autocheckpoint",
+        "SQLite-defined; 0 disables autocheckpoint by design",
+    ),
+    (
+        "max_length",
+        "field-level password policy; validated against min_length in policy checks",
+    ),
+    (
+        "min_length",
+        "password policy floor has its own policy validation",
+    ),
+    ("vm_pool_size", "0 falls back to core count at pool build"),
+    (
+        "max_vm_pool_size",
+        "floored against vm_pool_size at pool build",
+    ),
+    (
+        "stmt_cache_capacity",
+        "0 = no caching, valid degenerate mode",
+    ),
+    ("write_pool_max_size", "floored to 1 at pool build"),
+    (
+        "max_age",
+        "CORS preflight cache; 0 = no caching, self-evident",
+    ),
+];
+
+/// Pattern false-positives: names that match a numeric pattern but
+/// aren't numeric knobs.
+const NOT_NUMERIC: &[&str] = &[
+    "rate_limit_backend",
+    "rate_limit_redis_url",
+    "rate_limit_prefix",
+];
+
+/// Numeric-knob validation completeness (ledger class **S11**).
+///
+/// The class: a degenerate numeric config value loads fine and
+/// detonates at runtime (`channel_capacity = 0` panicked tokio, zero
+/// scheduler intervals busy-looped, `default_limit > max_limit`
+/// silently clamped everything). Each was fixed with a startup check in
+/// `config/validate.rs` — but nothing forced the NEXT numeric knob to
+/// get one. This pin does: every config key whose name matches the
+/// numeric-knob patterns must either appear in `validate.rs` or in the
+/// reviewed exemption list below (with the reason validation isn't
+/// needed).
+#[test]
+fn every_numeric_knob_is_validated_or_exempt() {
+    let doc_validate = include_str!("../src/config/validate.rs");
+
+    let mut unhandled = Vec::new();
+    for (heading, keys) in section_map() {
+        for key in keys {
+            let numeric_looking = PATTERNS.iter().any(|p| key.contains(p));
+            if !numeric_looking || NOT_NUMERIC.contains(&key) {
+                continue;
+            }
+            let validated = doc_validate.contains(&format!("\"{key}\""))
+                || doc_validate.contains(&format!(".{key}"));
+            let exempt = EXEMPT.iter().any(|(k, _)| k == &key);
+            if !validated && !exempt {
+                unhandled.push(format!("[{heading}] {key}"));
+            }
+        }
+    }
+
+    assert!(
+        unhandled.is_empty(),
+        "numeric config knob(s) with neither a validate.rs check nor a \
+         reviewed exemption — decide which and record it:\n  {}",
+        unhandled.join("\n  ")
+    );
+}

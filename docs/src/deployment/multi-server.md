@@ -201,6 +201,7 @@ Not every request benefits from sticky sessions, and not every route can tolerat
 |---------|------------|-----|
 | gRPC unary / regular HTTP (find, create, update, login, admin pages) | Not required | Each request is stateless. Round-robin freely. |
 | gRPC Subscribe / Admin SSE (long-lived streams) | **Recommended** | Reconnects to a different node lose the in-flight subscription state (sequence cursor, filter context). The client has to re-subscribe, which may miss events in the gap. |
+| MCP over HTTP (`Mcp-Session-Id`) | Recommended | The session→client-name map is per-node and exists for audit labeling only. On a different node the request still works, but the audit log falls back to the unlabeled `(http)` identity. |
 
 With `transport = "redis"` for live updates, a reconnecting subscriber on a different node will still see all future events — but the state that was held on the original node (current sequence position, any pending-but-undelivered events buffered in the broadcast channel) is gone. Sticky sessions keep that state warm across the connection's lifetime.
 

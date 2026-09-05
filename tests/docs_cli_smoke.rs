@@ -286,3 +286,36 @@ fn documented_template_workflow_executes_as_written() {
         "an edited same-version override must report `current`: {status}"
     );
 }
+
+/// Multi-node inventory pin (ledger class **P11**): the deployment doc
+/// must keep covering every subsystem that holds node-local state or a
+/// cluster-wide safety mechanism. The class instance was "per-node rate
+/// limits silently multiply an attacker's budget by node count" — the
+/// mechanisms exist; the risk is the doc silently dropping one during a
+/// rewrite while operators rely on it as the multi-node checklist.
+#[test]
+fn multi_server_doc_covers_every_node_local_subsystem() {
+    const REQUIRED_TOPICS: &[&str] = &[
+        "rate_limit_backend",     // per-node limiter budget multiplication
+        "transport = \"redis\"",  // live-event fan-out
+        "backend = \"redis\"",    // populate-cache invalidation
+        "_crap_cron_fired",       // cron dedup
+        "FOR UPDATE SKIP LOCKED", // job claiming
+        "NFS",                    // local storage single-writer assumption
+        "Mcp-Session-Id",         // per-node MCP audit-label map
+        "sticky",                 // stream stickiness guidance
+    ];
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = fs::read_to_string(root.join("docs/src/deployment/multi-server.md"))
+        .expect("multi-server.md must exist");
+
+    let missing: Vec<&&str> = REQUIRED_TOPICS
+        .iter()
+        .filter(|t| !doc.contains(**t))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "multi-server.md no longer covers node-local subsystem(s): {missing:?}"
+    );
+}

@@ -183,6 +183,21 @@ mod tests {
             .unwrap();
     }
 
+    /// Removing a function that was never registered is a no-op.
+    #[test]
+    fn remove_function_not_in_list_is_noop() {
+        let lua = lua_with_hooks();
+        lua.load(
+            r#"
+            crap.hooks.register("before_change", function(c) return c end)
+            crap.hooks.remove("before_change", function(c) return c end)
+            assert(#crap.hooks.list("before_change") == 1)
+        "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
     fn lua_with_hooks() -> Lua {
         let lua = Lua::new();
         lua.globals()

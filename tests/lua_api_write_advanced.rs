@@ -864,77 +864,11 @@ fn lua_crypto_random_bytes() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// crap.hooks.remove edge cases
-// ══════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn lua_hooks_remove_unknown_event_name_errors() {
-    let (_tmp, pool, _reg, runner) = setup_with_db();
-    // An UNKNOWN event name is a typo — `remove` now rejects it (matching
-    // `register`), instead of silently doing nothing.
-    let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(
-        r#"
-        local function my_fn(ctx) return ctx end
-        crap.hooks.remove("nonexistent_event", my_fn)
-        return "unreachable"
-        "#,
-        &conn,
-        None,
-    );
-    assert!(
-        result.is_err(),
-        "remove on an unknown event name must error"
-    );
-    assert!(
-        result.unwrap_err().to_string().contains("unknown event"),
-        "error should name the unknown event"
-    );
-}
-
-#[test]
-fn lua_hooks_remove_known_event_with_no_hooks_is_noop() {
-    let (_tmp, pool, _reg, runner) = setup_with_db();
-    // A VALID event that simply has no registered hooks is still a no-op.
-    let result = eval_lua_db(
-        &runner,
-        &pool,
-        r#"
-        local function my_fn(ctx) return ctx end
-        crap.hooks.remove("before_change", my_fn)
-        return "ok"
-    "#,
-    );
-    assert_eq!(result, "ok");
-}
-
-#[test]
-fn lua_hooks_remove_function_not_in_list() {
-    let (_tmp, pool, _reg, runner) = setup_with_db();
-    // Removing a function that isn't registered should be a no-op
-    let result = eval_lua_db(
-        &runner,
-        &pool,
-        r#"
-        local function fn1(ctx) return ctx end
-        local function fn2(ctx) return ctx end
-        -- Count hooks before registering
-        local before_count = 0
-        if crap.hooks.list("before_change") then
-            before_count = #crap.hooks.list("before_change")
-        end
-        crap.hooks.register("before_change", fn1)
-        -- fn2 is not registered, removing it should be fine
-        crap.hooks.remove("before_change", fn2)
-        -- fn1 should still be there (count should be before_count + 1)
-        local hooks = crap.hooks.list("before_change")
-        local expected = before_count + 1
-        if #hooks ~= expected then return "WRONG_COUNT:" .. tostring(#hooks) .. " expected:" .. tostring(expected) end
-        return "ok"
-    "#,
-    );
-    assert_eq!(result, "ok");
-}
+// crap.hooks.remove edge cases — the remove/register mechanics are
+// unit-tested in `hooks::lua_api::hooks` (with the InitPhase marker
+// set); runtime calls are rejected outright, which
+// `lua_api.rs::lua_hooks_register_and_remove_are_init_phase_only`
+// pins through the real pooled-VM path (ledger class M15).
 
 // ══════════════════════════════════════════════════════════════════════════════
 // crap.schema.* tests (covers hooks/api/schema.rs)

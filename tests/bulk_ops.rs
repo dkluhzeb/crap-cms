@@ -862,3 +862,66 @@ fn bulk_conn_paths_clear_cache() {
         "delete_many conn path must clear the cache"
     );
 }
+
+/// Truncation/skip signal pin (ledger class **L17**): an operation that
+/// silently does less than asked is the bug; the guard is that every
+/// clamped or skipping bulk op REPORTS it. Here: `delete_many` over a
+/// set containing a referenced document must count it in `skipped`
+/// (positive case — the zero case is asserted elsewhere), and the
+/// referenced doc must survive.
+#[test]
+fn delete_many_reports_referenced_documents_as_skipped() {
+    let s = setup(2);
+
+    // Register a second collection referencing posts, and create one
+    // referencing doc so exactly one post becomes undeletable.
+    let mut ref_def = CollectionDefinition::new("links");
+    ref_def.fields = vec![
+        FieldDefinition::builder("target", FieldType::Relationship)
+            .relationship(crap_cms::core::field::RelationshipConfig::new(
+                "posts", false,
+            ))
+            .build(),
+    ];
+    {
+        let shared = Registry::shared();
+        shared.write().unwrap().register_collection(ref_def.clone());
+        let registry = Registry::snapshot(&shared);
+        migrate::sync_all(&s.pool, &registry, &CrapConfig::test_default().locale).expect("sync");
+    }
+
+    let target_id = {
+        let conn = s.pool.get().expect("conn");
+        let q = query::FindQuery::builder().build();
+        query::find(&conn, "posts", &s.def, &q, None).expect("find")[0]
+            .id
+            .to_string()
+    };
+    {
+        let mut data = DocumentFields::new();
+        data.insert("target".to_string(), json!(target_id));
+        let mut conn = s.pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        let link = query::create(&tx, "links", &ref_def, &data, None).expect("create link");
+        query::ref_count::after_create(
+            &tx,
+            "links",
+            &link.id,
+            &ref_def.fields,
+            &CrapConfig::test_default().locale,
+        )
+        .expect("ref count");
+        tx.commit().expect("commit");
+    }
+
+    let ctx = ctx(&s);
+    let cfg = CrapConfig::test_default();
+    let result =
+        delete_many(&ctx, &[], &cfg.locale, &DeleteManyOptions::default()).expect("delete_many");
+
+    assert_eq!(
+        result.skipped, 1,
+        "the referenced document must be REPORTED as skipped, not silently kept"
+    );
+    assert_eq!(count_all(&s), 1, "the referenced doc survives");
+}

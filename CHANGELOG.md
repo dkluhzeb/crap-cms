@@ -3740,6 +3740,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Structural guards for seven more ledger classes.** New
+  `tests/sink_escaping.rs` (the reviewed sink→escaper inventory with
+  liveness pins), a numeric-config completeness pin (every numeric knob
+  validated or carrying a reviewed exemption), a positive
+  truncation-signal pin (`delete_many` must *report* skipped referenced
+  documents), a multi-node operator-checklist pin over
+  `deployment/multi-server.md` (which also gained the per-node
+  MCP-session-label stickiness note), exhaustive destructuring inside
+  the startup ref validator (a new hook slot/access key/auth variant
+  now fails to compile until validated), and the init-phase
+  completeness pin over registering Lua APIs.
 - **Structural guards for three ledger classes.** New
   `tests/wiring_completeness.rs`: every Lua-typegen render function must
   be wired (the class that silently dropped the `crap.jobs` run API from
