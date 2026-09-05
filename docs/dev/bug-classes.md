@@ -112,7 +112,7 @@ most).
 | ID | Class | Guard | Status |
 |----|-------|-------|--------|
 | P1 | Per-surface copies of one operation/grammar drift — incl. a second execution engine (`matches_constraints` in-memory evaluator) and duplicate parsers of one syntax | wire model + `wire_parity.rs` + one `decode_where_map`; the in-memory engine has no equivalence pin against SQL | GUARDED |
-| P2 | Sibling missing a fix its twins got — sibling axes: API surface, entity kind (globals vs collections: `_tz` columns, defaults, ref counts), delete-path set, browser-side restatement of server rules | `wire_parity`, `surface_behavior_parity` (gRPC↔Lua); entity-kind parity rests on shared DDL/column-spec chokepoints; admin/MCP + client not pinned | PARTIAL |
+| P2 | Sibling missing a fix its twins got — sibling axes: API surface, entity kind, delete-path set, browser-side restatement of server rules | `wire_parity` (fields), `surface_behavior_parity` Phase 2 (gRPC ↔ Lua ↔ **MCP through the real JSON-RPC dispatch**: totals, filters, validation, uniqueness); admin covered by browser e2e + the routing guard pinning it to the same op bodies; entity-kind parity rests on shared DDL/column-spec chokepoints | GUARDED |
 | P3 | Capability/policy gate lives in a per-surface codec instead of the service op | op bodies own gates; `surface_parity.rs` routing guard blocks reaching past the service layer | GUARDED |
 | P4 | Limit/depth/offset clamp missing on one surface | `apply_pagination_limits`, `clamp_depth`, `floor_optional_limit`, `PaginationCtx::resolve_limit`; frozen read-surface invariant | GUARDED |
 | P5 | A path bypasses service invariants — CLI raw SQL, an admin handler calling a deep helper, or re-admitted stored data skipping validation | `cli_commands_write_only_through_reviewed_paths` (surface_parity): write primitives in `src/commands` confined to a reviewed, staleness-checked allowlist documenting the invariants each site hand-maintains; `WriteHooks::validate_fields` on restore. Working the guard found + fixed two live instances: CLI `user create` skipped `ref_count::after_create`+`fts_upsert`, `user delete` skipped `fts_delete` | GUARDED |
@@ -190,9 +190,11 @@ most).
 Remaining UNGUARDED: **D7** only — no structural fix exists for stale
 comments; folded into the review lens list below. Everything else from
 the founding queues is guarded (M7, P5, D2) or hardened (D4).
-High-value PARTIAL work left: **P2 admin/MCP behavioral parity** (the
-one large remaining project — a comparison harness over the surfaces).
-Everything else from the priority queues is guarded.
+All priority-queue items are guarded. The remaining PARTIAL rows are
+the healthy chokepoint-backed kind that harden opportunistically when
+their code is touched; none currently warrants a dedicated project.
+Next program step: fresh-eyes convergence audits (two clean rounds),
+then the tag gates.
 
 High-value PARTIAL hardening (new since the full-CHANGELOG pass):
 **F14** sink inventory (one escaping-policy table over SQL/Lua/HTML/
@@ -312,3 +314,11 @@ memories; the load-bearing ones:
   tests converted/unit-covered. 84 classes: 38 GUARDED, 45 PARTIAL,
   1 UNGUARDED (D7). Priority queues exhausted — remaining large item:
   P2 behavioral-parity harness.
+- 2026-09-05 (7) — P2 → GUARDED: `surface_behavior_parity` Phase 2
+  folds MCP in through the public `McpServer::handle_message` JSON-RPC
+  entry (tool routing + argument parsing + result envelope all in the
+  loop); totals, filters, validation rejection, and unique enforcement
+  now pinned identical across gRPC/Lua/MCP. Admin stays with browser
+  e2e + the routing guard, documented in the row. FINAL queue state:
+  84 classes — 39 GUARDED, 44 PARTIAL, 1 UNGUARDED (D7). The guard
+  program is complete; convergence audits are next.

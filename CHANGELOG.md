@@ -3740,6 +3740,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **MCP joined the behavioral-parity harness.**
+  `surface_behavior_parity` Phase 2 drives MCP in-process through the
+  same JSON-RPC dispatch the stdio/HTTP transports use, and pins
+  count/find totals, `where` filtering, validation rejection, and
+  unique-constraint enforcement identical across gRPC, Lua, and MCP —
+  the layer that catches adapter drift the source-scan guards can't
+  see.
 - **Structural guards for seven more ledger classes.** New
   `tests/sink_escaping.rs` (the reviewed sink→escaper inventory with
   liveness pins), a numeric-config completeness pin (every numeric knob
