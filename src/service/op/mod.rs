@@ -1,5 +1,5 @@
 //! Operation core — every CRUD/bulk/global/version operation declared once
-//! (see `docs/src/internals/operation-core-migration.md`).
+//! (see `docs/dev/operation-core-migration.md`).
 //!
 //! A surface becomes a **codec**: it decodes its wire format into an
 //! [`Operation::Args`] + [`Principal`] + [`TargetRef`], calls

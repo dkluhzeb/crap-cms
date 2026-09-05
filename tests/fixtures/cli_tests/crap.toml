@@ -1,1 +1,5 @@
 # Minimal config for CLI integration tests
+
+[locale]
+default_locale = "en"
+locales = ["en", "de"]

@@ -346,6 +346,16 @@ crap.collections.define("users", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
+    // Startup validation resolves strategy `authenticate` refs — the
+    // referenced module must exist.
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        hooks_dir.join("auth.lua"),
+        "local M = {}\nfunction M.api_key(_ctx) end\nfunction M.oauth(_ctx) end\nreturn M\n",
+    )
+    .unwrap();
+
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let def = registry

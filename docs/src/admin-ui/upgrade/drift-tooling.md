@@ -16,7 +16,7 @@ writes the extracted file into your config dir):
 | `crap-cms templates extract` | Copies an upstream default into your config dir, with a source-version header. |
 | `crap-cms templates status` | Reports which of your overrides have drifted from upstream. |
 | `crap-cms templates diff` | Shows a unified diff between one of your overrides and its upstream counterpart. |
-| `crap-cms templates layout` | Reports old-layout files in your config dir and recommends `git mv` commands to migrate. |
+| `crap-cms templates layout` | One-time migration assistant for the pre-alpha.8 layout reshuffle — see [Migrating from the old layout](migrating-from-old-layout.md). No-op on current-layout config dirs. |
 
 All five run against your config dir; only `extract` writes (the
 file it extracts), the rest never touch the filesystem.
@@ -132,55 +132,24 @@ rather than producing lockstep noise.
 
 **Mutates filesystem:** no.
 
-## `templates layout` — migrate to a new layout
+## `templates layout` — one-time layout migration
 
-```
-$ crap-cms templates layout
-```
+`crap-cms templates layout` is the migration assistant for **one
+specific historical break**: the pre-alpha.8 overlay-layout reshuffle.
+It only matters when upgrading a config dir built against a release
+*older than alpha.8*; on a current-layout config dir it reports
+"already on the current layout — nothing to migrate".
 
-Walks your config dir, identifies files at *old* layout paths
-(pre-1.0 reshuffle), and prints an auto-generated migration recipe:
-
-```
-Old layout detected (3 files):
-  static/list-toolbar.css → static/styles/parts/lists.css
-  static/lists.css        → static/styles/parts/lists.css
-  static/styles.css       → static/styles/main.css
-
-Recommended migration (run from /path/to/config):
-  mkdir -p static/styles static/styles/parts
-  git mv static/styles.css static/styles/main.css
-  # MERGE — 2 old files into static/styles/parts/lists.css
-  cat static/list-toolbar.css static/lists.css > static/styles/parts/lists.css
-  git rm static/list-toolbar.css static/lists.css
-  git add static/styles/parts/lists.css
-
-After moving, verify these things the tool can't safely rewrite:
-  • `import` paths inside moved JS files (relative paths may break).
-  • `{{> "path/to/partial"}}` references in HBS (name lookups are safe).
-  • `@import url(...)` references in moved CSS files.
-  • `<link>` / `<script>` URLs in any layout HBS files you've overridden.
-
-Then run `crap-cms templates status` to confirm drift visibility re-attaches.
-```
-
-Includes `git mv` commands for simple moves and `cat ... > ...` /
-`git rm` recipes for files that *merge* into a single new file
-(e.g., `lists.css` + `list-toolbar.css` → `parts/lists.css`).
-
-**Mutates filesystem:** no — read-only. The recipe describes; you
-transform. The tool is honest about what it can't safely do (rewrite
-imports inside moved files), and lists those manual verifications.
-
-See [Migrating from the old layout](migrating-from-old-layout.md)
-for the full background on the pre-1.0 reshuffle and the
-compatibility-alias behavior.
+It is documented where that break is documented: see
+[Migrating from the old layout](migrating-from-old-layout.md#auto-generated-migration-recipe).
+Everything else on this page is version-agnostic and applies to every
+upgrade.
 
 ## Workflow — typical fork-maintenance cycle
 
 ```
 # After upgrading crap-cms to a new release:
-$ cargo install crap-cms --version 0.1.0-alpha.9
+$ cargo install crap-cms --version <new-version>
 
 # 1. See what's drifted in your config dir:
 $ crap-cms templates status

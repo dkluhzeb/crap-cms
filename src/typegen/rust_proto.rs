@@ -596,7 +596,10 @@ fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDe
     w!(out, "    fn from_struct(s: &DataMap) -> Self {{");
     w!(out, "        Self {{");
 
-    for f in fields {
+    // Flatten layout wrappers exactly like `render_field_extractions` and the
+    // client struct-definition side — a Row/Collapsible/Tabs nested inside an
+    // array/group otherwise reaches `resolve_ty` and panics.
+    for f in flatten_array_sub_fields(fields) {
         let extraction = sub_field_extraction(f, pascal);
         w!(
             out,
@@ -768,6 +771,29 @@ mod tests {
         def.timestamps = true;
         def.fields = fields;
         def
+    }
+
+    /// Regression: a layout wrapper (Row/Collapsible/Tabs) nested INSIDE an
+    /// array sub-type used to reach `resolve_ty` unflattened and panic with
+    /// "layout wrappers are flattened before type resolution". The example
+    /// project's collections hit this on `typegen proto`. The wrapped
+    /// sub-field must be promoted into the sub-type's `from_struct`.
+    #[test]
+    fn proto_sub_type_flattens_layout_wrappers_inside_arrays() {
+        let mut row = FieldDefinition::builder("stats_row", FieldType::Row).build();
+        row.fields = vec![text_field("label", false)];
+
+        let mut items = FieldDefinition::builder("items", FieldType::Array).build();
+        items.fields = vec![text_field("title", true), row];
+
+        let col = make_col("projects", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("label: s.fields.get(\"label\")"),
+            "the Row-wrapped sub-field must appear in from_struct: {out}"
+        );
     }
 
     /// Identifier safety: the `from_document` struct-field position must be the

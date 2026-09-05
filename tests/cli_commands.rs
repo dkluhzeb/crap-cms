@@ -705,9 +705,18 @@ fn load_config_and_sync_bad_dir() {
 
 #[test]
 fn has_locales_enabled_false_by_default() {
+    // Self-contained config WITHOUT a [locale] section — the shared
+    // fixture can't be used here because it configures locales for the
+    // localized export/import round-trip tests.
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
-    copy_dir(&fixture_dir(), &config_dir);
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    std::fs::write(
+        config_dir.join("crap.toml"),
+        "[server]\nadmin_port = 3000\n",
+    )
+    .unwrap();
 
     assert!(!commands::make::has_locales_enabled(&config_dir));
 }

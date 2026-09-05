@@ -30,7 +30,7 @@ layout.
   top level alongside `partials/`, `fields/`, `layout/`, `email/`.
 
 Run `crap-cms templates layout` against your config dir for an
-auto-generated migration recipe (`mkdir -p` + `git mv` lines plus
+auto-generated migration recipe (`mkdir -p` + move lines plus
 flagged manual cleanups). Run it **before** upgrading: once you're
 on alpha.8, overlays at the old paths simply stop serving and the
 admin falls back to the embedded defaults without a warning.
@@ -164,7 +164,7 @@ When the file is absent, the auto-import is a silent no-op.
 ## Path-by-path migration map
 
 The full move table. Every old path in this table returns 404 in
-alpha.8. Run `crap-cms templates layout` to get the exact `git mv`
+alpha.8. Run `crap-cms templates layout` to get the exact move
 lines for the files you actually have.
 
 ### Static — CSS
@@ -229,20 +229,81 @@ No template files moved. `templates/auth/`, `templates/collections/`,
 
 ## Auto-generated migration recipe
 
-For any config dir built against the old layout:
-
 ```
 $ crap-cms templates layout
 ```
 
-The command walks your config dir, prints every old-layout file it
-finds with its new-layout target, and emits copy-pasteable shell
-commands (`mkdir -p`, `git mv`, plus `cat ... > ...` for the merged
-`lists.css`/`list-toolbar.css` case). It also flags after-move
-verifications the tool can't safely automate (`@import` paths inside
-moved CSS, relative `import` paths inside moved JS).
+Walks your config dir, identifies files at *old* layout paths
+(pre-1.0 reshuffle), and prints an auto-generated migration recipe.
 
-The command is **read-only** — it describes; you transform.
+**Why moving is needed at all:** the files in question are *your
+override copies* of shipped admin files. An override only applies
+while its path matches the shipped file's path — and the pre-1.0
+reshuffle moved the shipped paths (e.g. the entry stylesheet from
+`static/styles.css` to `static/styles/main.css`). After upgrading,
+an override left at the old path silently stops serving and the admin
+falls back to the embedded default. Moving your copy to the new path
+re-attaches it. If you never overrode a file, there is nothing to
+move — the tool reports "already on the current layout".
+
+The commands operate on **your config dir** — the directory holding
+your `crap.toml`, templates, and static overrides — never on the
+crap-cms sources (you don't need those; you have the binary). The tool
+picks the command form from how that directory is managed:
+
+**Config dir without git** — plain shell commands:
+
+```
+Recommended migration (run from /path/to/config):
+  mkdir -p static/styles static/styles/parts
+  mv static/styles.css static/styles/main.css
+  # MERGE — 2 old files into static/styles/parts/lists.css
+  cat static/list-toolbar.css static/lists.css > static/styles/parts/lists.css
+  rm static/list-toolbar.css static/lists.css
+
+Tip: the config dir is not under git — the recipe uses plain `mv`.
+Version-controlling your config dir is recommended; with git,
+`git mv` would keep each file's history across the move.
+```
+
+**Config dir that is its own git repo** (recommended — `crap-cms init`
+already scaffolds a `.gitignore` for this) — the same moves as git
+operations, so each file's history follows it:
+
+```
+Old layout detected (3 files):
+  static/list-toolbar.css → static/styles/parts/lists.css
+  static/lists.css        → static/styles/parts/lists.css
+  static/styles.css       → static/styles/main.css
+
+Recommended migration (run from /path/to/config):
+  mkdir -p static/styles static/styles/parts
+  git mv static/styles.css static/styles/main.css
+  # MERGE — 2 old files into static/styles/parts/lists.css
+  cat static/list-toolbar.css static/lists.css > static/styles/parts/lists.css
+  git rm static/list-toolbar.css static/lists.css
+  git add static/styles/parts/lists.css
+
+After moving, verify these things the tool can't safely rewrite:
+  • `import` paths inside moved JS files (relative paths may break).
+  • `{{> "path/to/partial"}}` references in HBS (name lookups are safe).
+  • `@import url(...)` references in moved CSS files.
+  • `<link>` / `<script>` URLs in any layout HBS files you've overridden.
+
+Then run `crap-cms templates status` to confirm drift visibility re-attaches.
+```
+
+Includes move commands for simple moves and `cat ... > ...` recipes
+for files that *merge* into a single new file (e.g., `lists.css` +
+`list-toolbar.css` → `parts/lists.css`).
+
+**Mutates filesystem:** no — read-only. The recipe describes; you
+transform. The tool is honest about what it can't safely do (rewrite
+imports inside moved files), and lists those manual verifications.
+
+Drift tracking (`templates status` / `templates diff` — see
+[Drift tooling](drift-tooling.md)) re-attaches once your overrides sit
+at the new paths.
 
 ## Why no compatibility aliases?
 
@@ -250,7 +311,7 @@ Every alias is a permanent maintenance tax: it pins a second public
 URL to the same asset, has to be tested across upgrades, and tends to
 outlive the deprecation it was meant to soften. The reshuffle is
 small, mechanical, and tooling-assisted (`crap-cms templates layout`
-gives you the exact `git mv` lines), so a one-shot migration is less
+gives you the exact move lines), so a one-shot migration is less
 costly than maintaining aliases through 1.0 and beyond. If you need a
 soft rollout, stage the upgrade in pre-prod with the migration
 applied, verify under the strict CSP, then bump production.

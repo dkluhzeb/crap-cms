@@ -7,6 +7,9 @@ use serde::Serialize;
 
 use crate::{
     cli,
+    hooks::lua_api::parse::{
+        ACCESS_KEYS, COLLECTION_HOOK_KEYS, FIELD_HOOK_KEYS, GLOBAL_ACCESS_KEYS,
+    },
     scaffold::{guards::refuse_file_overwrite, paths, render::render},
 };
 
@@ -85,27 +88,19 @@ impl HookType {
         }
     }
 
-    /// Valid lifecycle positions for this hook type.
+    /// Valid lifecycle positions for this hook type. Collection, field,
+    /// and access positions come straight from the parser's accepted-key
+    /// constants — the scaffold can never drift from what the runtime
+    /// actually accepts. Globals get the narrower access-key subset
+    /// (`create`/`delete`/`trash`/`unlock` never fire on a single-row
+    /// global and are rejected at load).
     #[must_use]
-    pub fn valid_positions(&self) -> &'static [&'static str] {
+    pub fn valid_positions(&self, is_global: bool) -> &'static [&'static str] {
         match self {
-            Self::Collection => &[
-                "before_validate",
-                "before_change",
-                "after_change",
-                "before_read",
-                "after_read",
-                "before_delete",
-                "after_delete",
-                "before_broadcast",
-            ],
-            Self::Field => &[
-                "before_validate",
-                "before_change",
-                "after_change",
-                "after_read",
-            ],
-            Self::Access => &["read", "create", "update", "delete"],
+            Self::Collection => COLLECTION_HOOK_KEYS,
+            Self::Field => FIELD_HOOK_KEYS,
+            Self::Access if is_global => GLOBAL_ACCESS_KEYS,
+            Self::Access => ACCESS_KEYS,
             Self::Condition => &["table", "boolean"],
         }
     }
@@ -308,12 +303,16 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
         );
     }
 
-    if !opts.hook_type.valid_positions().contains(&opts.position) {
+    if !opts
+        .hook_type
+        .valid_positions(opts.is_global)
+        .contains(&opts.position)
+    {
         bail!(
             "Invalid position '{}' for {} hook -- valid: {}",
             opts.position,
             opts.hook_type.label(),
-            opts.hook_type.valid_positions().join(", ")
+            opts.hook_type.valid_positions(opts.is_global).join(", ")
         );
     }
 
@@ -445,17 +444,53 @@ mod tests {
     fn hook_type_valid_positions() {
         assert!(
             HookType::Collection
-                .valid_positions()
+                .valid_positions(false)
                 .contains(&"before_validate")
         );
         assert!(
             HookType::Collection
-                .valid_positions()
+                .valid_positions(false)
                 .contains(&"before_broadcast")
         );
-        assert!(HookType::Field.valid_positions().contains(&"after_read"));
-        assert!(HookType::Access.valid_positions().contains(&"read"));
-        assert!(HookType::Condition.valid_positions().contains(&"table"));
+        assert!(
+            HookType::Field
+                .valid_positions(false)
+                .contains(&"after_read")
+        );
+        assert!(
+            HookType::Condition
+                .valid_positions(false)
+                .contains(&"table")
+        );
+
+        // Access offers every key the parser accepts on an `access`
+        // sub-table — including the content-view keys (draft/trash/
+        // versions) and the surface keys (unlock/admin/mcp).
+        for key in [
+            "read", "create", "update", "delete", "trash", "draft", "versions", "unlock", "admin",
+            "mcp",
+        ] {
+            assert!(
+                HookType::Access.valid_positions(false).contains(&key),
+                "make hook access should offer '{key}'"
+            );
+        }
+
+        // Globals get the narrower subset — the four keys the parser
+        // rejects on a global are not offered.
+        let global_keys = HookType::Access.valid_positions(true);
+        for key in ["read", "draft", "update", "versions", "admin", "mcp"] {
+            assert!(
+                global_keys.contains(&key),
+                "make hook access (global) should offer '{key}'"
+            );
+        }
+        for key in ["create", "delete", "trash", "unlock"] {
+            assert!(
+                !global_keys.contains(&key),
+                "make hook access (global) must not offer '{key}'"
+            );
+        }
     }
 
     // == Validation ======================================================

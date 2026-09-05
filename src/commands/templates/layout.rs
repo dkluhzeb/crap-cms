@@ -1,5 +1,6 @@
 //! `crap-cms templates layout` — report old-layout files in the
-//! config dir and recommend `git mv` commands.
+//! config dir and recommend move commands (`git mv` when the config
+//! dir is under git, plain `mv` otherwise).
 //!
 //! **Read-only.** This command describes what should move; it never
 //! moves files, and never rewrites file contents. The user runs the
@@ -39,8 +40,12 @@ struct LayoutEntry {
 ///
 /// 1. **Old layout detected** — files whose path matches the old
 ///    layout but should move; printed as `OLD → NEW`.
-/// 2. **Recommended migration** — copy-pasteable `mkdir -p` and
-///    `git mv` commands.
+/// 2. **Recommended migration** — copy-pasteable `mkdir -p` and move
+///    commands. When the config dir is inside a git work tree the
+///    recipe uses `git mv` / `git rm` (history follows the file);
+///    otherwise plain `mv` / `rm` — an operator running the installed
+///    binary against an unversioned config dir must not be handed
+///    commands that fail with "not a git repository".
 /// 3. **Things the tool can't safely rewrite** — bullet list of
 ///    after-move verifications the user must perform.
 /// 4. **Files the tool can't categorize** — paths under the overlay
@@ -101,21 +106,19 @@ pub fn layout(config_dir: &Path) -> Result<()> {
         new_dirs.sort_unstable();
         new_dirs.dedup();
 
+        let use_git = in_git_work_tree(config_dir);
+
         println!("Recommended migration (run from {}):", config_dir.display());
-        if !new_dirs.is_empty() {
-            println!("  mkdir -p {}", new_dirs.join(" "));
+        for line in recipe_lines(&new_dirs, &by_new, use_git) {
+            println!("{line}");
         }
-        for (new, olds) in &by_new {
-            if olds.len() == 1 {
-                println!("  git mv {} {}", olds[0], new);
-            } else {
-                // Merge case: multiple old files into one new file.
-                // Concatenate, then delete the originals.
-                println!("  # MERGE — {} old files into {}", olds.len(), new);
-                println!("  cat {} > {}", olds.join(" "), new);
-                println!("  git rm {}", olds.join(" "));
-                println!("  git add {new}");
-            }
+        if !use_git {
+            println!();
+            println!(
+                "Tip: the config dir is not under git — the recipe uses plain `mv`. \
+                 Version-controlling your config dir is recommended; with git, \
+                 `git mv` would keep each file's history across the move."
+            );
         }
         println!();
 
@@ -142,6 +145,51 @@ pub fn layout(config_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Whether `dir` is inside a git work tree — any ancestor holding a
+/// `.git` entry (a directory for a normal checkout, a file for
+/// worktrees/submodules). No subprocess: the recipe only needs to pick
+/// between `git mv` and plain `mv`, and a false negative merely prints
+/// the plain form.
+fn in_git_work_tree(dir: &Path) -> bool {
+    dir.ancestors().any(|a| a.join(".git").exists())
+}
+
+/// Build the copy-pasteable migration recipe. `by_new` maps each new
+/// path to the old path(s) that move into it — one old path is a plain
+/// move, several are a merge (concatenate, then remove the originals).
+fn recipe_lines(
+    new_dirs: &[&str],
+    by_new: &BTreeMap<&str, Vec<&str>>,
+    use_git: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if !new_dirs.is_empty() {
+        lines.push(format!("  mkdir -p {}", new_dirs.join(" ")));
+    }
+
+    for (new, olds) in by_new {
+        if olds.len() == 1 {
+            let mv = if use_git { "git mv" } else { "mv" };
+            lines.push(format!("  {mv} {} {}", olds[0], new));
+            continue;
+        }
+
+        // Merge case: multiple old files into one new file.
+        // Concatenate, then delete the originals.
+        lines.push(format!("  # MERGE — {} old files into {}", olds.len(), new));
+        lines.push(format!("  cat {} > {}", olds.join(" "), new));
+        if use_git {
+            lines.push(format!("  git rm {}", olds.join(" ")));
+            lines.push(format!("  git add {new}"));
+        } else {
+            lines.push(format!("  rm {}", olds.join(" ")));
+        }
+    }
+
+    lines
 }
 
 /// Walk the config dir's overlay roots and classify every file.
@@ -408,6 +456,60 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// Git repo → `git mv`; plain dir → `mv` (an operator running the
+    /// installed binary against an unversioned config dir must never be
+    /// handed commands that fail with "not a git repository").
+    #[test]
+    fn recipe_uses_git_only_inside_a_work_tree() {
+        let mut by_new: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        by_new.insert("static/styles/main.css", vec!["static/styles.css"]);
+        by_new.insert(
+            "static/styles/parts/lists.css",
+            vec!["static/list-toolbar.css", "static/lists.css"],
+        );
+        let dirs = ["static/styles", "static/styles/parts"];
+
+        let git = recipe_lines(&dirs, &by_new, true).join("\n");
+        assert!(git.contains("git mv static/styles.css"), "{git}");
+        assert!(git.contains("git rm static/list-toolbar.css"), "{git}");
+        assert!(
+            git.contains("git add static/styles/parts/lists.css"),
+            "{git}"
+        );
+
+        let plain = recipe_lines(&dirs, &by_new, false).join("\n");
+        assert!(plain.contains("mv static/styles.css"), "{plain}");
+        assert!(
+            !plain.contains("git"),
+            "no git commands outside a repo: {plain}"
+        );
+        assert!(plain.contains("rm static/list-toolbar.css"), "{plain}");
+        // merge still concatenates in both modes
+        assert!(
+            plain.contains("cat static/list-toolbar.css static/lists.css"),
+            "{plain}"
+        );
+    }
+
+    /// `.git` detection walks ancestors and accepts both a directory
+    /// (normal checkout) and a file (worktree/submodule pointer).
+    #[test]
+    fn git_work_tree_detection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("deep").join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        assert!(!in_git_work_tree(&cfg));
+
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        assert!(in_git_work_tree(&cfg), "ancestor .git dir detected");
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        let cfg2 = tmp2.path().join("config");
+        fs::create_dir_all(&cfg2).unwrap();
+        fs::write(tmp2.path().join(".git"), "gitdir: ../somewhere").unwrap();
+        assert!(in_git_work_tree(&cfg2), ".git file (worktree) detected");
+    }
 
     /// `lookup_layout_move` returns `Some(new_sub)` for known
     /// old-layout paths and `None` for paths that aren't on the move

@@ -174,12 +174,7 @@
 
 - [Database](database/overview.md)
 - [Cache](internals/cache.md)
-- [API Surface Comparison](internals/api-surface-comparison.md)
 - [Frozen Contracts](internals/frozen-contracts.md)
-- [Operation Core — Migration Plan](internals/operation-core-migration.md)
-- [Lua Connection Injection — Hardening Plan](internals/lua-connection-injection.md)
-- [Performance Architecture — Plan](internals/performance-architecture.md)
-- [REST Surface — Analysis](internals/rest-surface-analysis.md)
 
 # Advanced
 

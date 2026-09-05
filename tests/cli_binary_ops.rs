@@ -146,11 +146,20 @@ fn setup_with_photos() -> (tempfile::TempDir, PathBuf) {
 fn setup_with_job() -> (tempfile::TempDir, PathBuf) {
     let (tmp, config_dir) = setup();
     std::fs::create_dir_all(config_dir.join("jobs")).unwrap();
-    let job_lua = r#"crap.jobs.define("cleanup", {
+    // The handler must actually exist — startup validation resolves job
+    // refs like any other hook ref.
+    let job_lua = r#"local M = {}
+
+M.run = crap.any.job_handler(function(_context)
+end)
+
+crap.jobs.define("cleanup", {
     handler = "jobs.cleanup.run",
     schedule = "0 3 * * *",
     queue = "maintenance",
-})"#;
+})
+
+return M"#;
     std::fs::write(config_dir.join("jobs/cleanup.lua"), job_lua).unwrap();
     (tmp, config_dir)
 }

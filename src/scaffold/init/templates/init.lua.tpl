@@ -9,4 +9,16 @@
 -- Example: load a plugin module
 -- require("plugins.seo")
 
+-- Example: register a custom HTTP route (scaffold one with `crap-cms make route`)
+-- crap.routes.register({
+--     path = "/health",
+--     method = "GET",
+--     handler = "routes.health",
+-- })
+
+-- Example: expose data to admin templates via the {{data "name"}} helper
+-- crap.template_data.register("stats", function()
+--     return { total = crap.collections.posts.count() }
+-- end)
+
 crap.log.info("init.lua loaded")

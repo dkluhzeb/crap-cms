@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow;
 use anyhow::{Context as _, Result, bail};
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -12,6 +13,7 @@ use serde_json::{Map, Value};
 use crate::{
     cli,
     commands::{export::file::ExportFile, load_config_and_sync},
+    config::CrapConfig,
     db::query,
 };
 
@@ -27,9 +29,17 @@ pub fn export(
     collection_filter: Option<&str>,
     output: Option<PathBuf>,
 ) -> Result<()> {
+    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
+    // Read in "all locales" mode so localized fields export as
+    // `{ "<locale>": value }` objects — lossless across every translation,
+    // and required at all: a bare-column read on a localized collection is
+    // a SQL error (the columns are `title__en`, not `title`).
+    let locale_ctx = query::LocaleContext::from_locale_string(Some("all"), &cfg.locale)
+        .map_err(|e| anyhow::anyhow!("locale context: {e}"))?;
 
     let mut collections_data = Map::new();
 
@@ -52,10 +62,10 @@ pub fn export(
         let def = &registry.collections[slug.as_str()];
         let find_query = query::FindQuery::default();
 
-        let mut docs = query::find(&conn, slug, def, &find_query, None)?;
+        let mut docs = query::find(&conn, slug, def, &find_query, locale_ctx.as_ref())?;
 
         for doc in &mut docs {
-            query::hydrate_document(&conn, slug, &def.fields, doc, None, None)?;
+            query::hydrate_document(&conn, slug, &def.fields, doc, None, locale_ctx.as_ref())?;
         }
 
         let docs_json: Vec<Value> = docs

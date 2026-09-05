@@ -86,6 +86,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_routes(&lua, &config.routes.prefix)
         .context("Custom route validation failed")?;
 
+    // The [admin] access gate ref must resolve — the runtime gate fails
+    // closed, so a typo here would lock everyone out of the admin panel.
+    super::startup_checks::validate_admin_access_ref(&lua, config.admin.access.as_ref())
+        .context("Admin access gate validation failed")?;
+
     // Reject field names that collide with the generated locale-suffixed
     // column pattern `{name}__{locale}`.
     super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)

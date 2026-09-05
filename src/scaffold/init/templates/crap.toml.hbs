@@ -9,11 +9,19 @@ host = "0.0.0.0"
 # grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)
 # grpc_rate_limit_window = 60     # sliding window in seconds (or "1m")
 # grpc_max_message_size = "16MB"  # max gRPC message size (default 16MB)
+# grpc_timeout = "30s"            # per-RPC deadline (unset = none); exceeding it returns DEADLINE_EXCEEDED
+# request_timeout = "30s"         # admin HTTP request timeout (unset = none; SSE exempt)
+# h2c = false                     # HTTP/2 cleartext for TLS-terminating reverse proxies
+# public_url = ""                 # public base URL for generated links (password reset emails etc.)
+# public_schema_introspection = true # gRPC ListCollections/DescribeCollection without auth
+# bulk_max_documents = 0          # max documents per bulk op (0 = no limit)
 # trust_proxy = false             # trust X-Forwarded-For (admin HTTP only)
 # trusted_proxies = ["10.0.0.0/8"] # REQUIRED when trust_proxy = true; accepts IPs, CIDRs, or "*"
 
 [database]
 path = "data/crap.db"
+# backend = "sqlite"             # "sqlite" (default) or "postgres" (requires --features postgres)
+# url = "host=localhost user=crap dbname=crap_cms"  # PostgreSQL connection string (backend = "postgres")
 # pool_max_size = 64             # max connections in the READ pool
 # write_pool_max_size = 4        # max connections in the WRITE pool (SQLite only)
 # busy_timeout = "30s"          # SQLite busy timeout (ms or "30s", "1m")
@@ -21,9 +29,12 @@ path = "data/crap.db"
 # cache_size = -16384            # page cache in KB (negative = KB; default 16MB)
 # mmap_size = 268435456          # memory-mapped I/O in bytes (default 256MB, 0 = off)
 # wal_autocheckpoint = 1000      # WAL auto-checkpoint threshold in pages
+# stmt_cache_capacity = 128      # per-connection prepared-statement cache (SQLite)
 
 [admin]
 dev_mode = false
+# site_name = "Crap CMS"            # display name in the admin header + <title>
+# default_timezone = ""             # default IANA timezone for date fields with timezone = true
 # require_auth = true               # block admin when no auth collection exists (default: true)
 # access = "access.admin_panel"     # Lua function: which users can access the admin UI
 # csrf_cookie_lifetime = "24h"      # lifetime of the crap_csrf double-submit cookie
@@ -33,6 +44,7 @@ dev_mode = false
 # script_src ships without 'unsafe-inline' -- a per-request nonce is emitted
 # instead and exposed to templates as {{crap.csp_nonce}}. Overlay templates
 # that use inline <script> MUST carry nonce="{{crap.csp_nonce}}".
+# default_src = ["'self'"]         # fallback for directives not set explicitly
 # script_src = ["'self'"]
 # style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
 # font_src = ["'self'", "https://fonts.gstatic.com"]
@@ -45,13 +57,17 @@ dev_mode = false
 [auth]
 secret = "{{{auth_secret}}}"
 # token_expiry = 7200              # seconds, default 2 hours
-# max_login_attempts = 5           # failed logins before lockout
+# max_login_attempts = 5           # failed logins per email before lockout
+# max_ip_login_attempts = 20       # failed logins per IP before lockout (higher: shared IPs)
 # login_lockout_seconds = 300      # lockout duration (5 minutes)
 # reset_token_expiry = 3600        # password reset token lifetime (1 hour)
 # max_forgot_password_attempts = 3 # rate limit forgot-password per email
 # forgot_password_window_seconds = 900  # rate limit window (15 minutes)
 # session_cookie_samesite = "lax"  # "lax" (default) or "strict"
 # session_absolute_max_age = "30d" # hard cap on cumulative session lifetime from login (0 = disabled)
+# rate_limit_backend = "memory"    # "memory" (default), "redis" (shared across nodes), or "none"
+# rate_limit_redis_url = ""        # Redis URL for the redis backend (falls back to cache.redis_url)
+# rate_limit_prefix = "crap:rl:"   # key prefix for the Redis rate-limit backend
 
 # [auth.password_policy]
 # min_length = 12               # minimum password length
@@ -111,6 +127,7 @@ fallback = true
 # access_key = "${AWS_ACCESS_KEY}"
 # secret_key = "${AWS_SECRET_KEY}"
 # path_style = false             # true for MinIO
+# prefix = ""                    # optional key prefix prepended to all storage keys
 
 # [email]
 # provider = "smtp"               # "smtp" (default), "webhook", "log", or "custom"
@@ -150,6 +167,7 @@ fallback = true
 #
 # Framework defaults applied if not overridden:
 #   images = { concurrency = 2 }   — AVIF/WebP encoders are CPU-bound
+#   bulk   = { concurrency = 1 }   — queued bulk operations run one at a time
 [jobs.queues]
 # Per-queue knobs: { concurrency, timeout, retries }. Operator-supplied
 # fields override the framework defaults; unspecified fields keep them.
@@ -167,6 +185,10 @@ images = { concurrency = 2 }
 # max_age = 3600                   # seconds or human-readable ("1h", "30m")
 # allow_credentials = false      # cannot be used with wildcard origin
 
+# [routes]
+# prefix = ""                    # URL prefix for all custom Lua routes (e.g. "/api")
+# max_body = "1MB"               # default request body limit (per-route max_body overrides)
+
 # [access]
 # default_deny = true            # when true (default), collections without access functions deny all
 
@@ -180,8 +202,12 @@ images = { concurrency = 2 }
 # enabled = false                # enable MCP (Model Context Protocol) server
 # http = false                   # enable HTTP transport on /mcp (POST)
 # config_tools = false           # enable config generation tools (write access to config dir)
+# job_tools = "read"              # job MCP tools: false (none), "read", or "all" (adds trigger/cancel)
 # api_key = ""                   # required when http = true; minimum 32 chars
                                   # generate with: openssl rand -hex 32
 # http_max_body_bytes = "1MB"    # max POST /mcp body size (int bytes or "16MB" string)
 # include_collections = []       # whitelist (empty = all)
 # exclude_collections = []       # blacklist (takes precedence over include)
+
+# [update]
+# check_on_startup = true        # print a notice on serve startup when a newer release is cached

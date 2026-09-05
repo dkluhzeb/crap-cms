@@ -8,10 +8,12 @@
 //! returns a single aggregated error listing every unresolved ref with its
 //! source location.
 //!
-//! Scope (intentionally reduced): collection + global + field hook and
-//! access refs. Job handlers and dynamic hook registrations (via
-//! `crap.hooks.register`) are NOT validated here — they may resolve through
-//! different mechanisms at runtime.
+//! Scope: every statically-known ref — collection + global + field hooks,
+//! access rules, field display conditions, job handler/access refs, auth
+//! method refs (strategy `authenticate`, `mfa_deliver`), and the
+//! `[admin] access` config gate. Only dynamic registrations (via
+//! `crap.hooks.register`, which passes a live function rather than a
+//! string ref) have nothing to validate here.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -66,6 +68,38 @@ pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
         check_hooks(lua, &def.hooks, &format!("global '{slug}'"), &mut missing);
         check_access(lua, &def.access, &format!("global '{slug}'"), &mut missing);
         check_field_list(lua, &def.fields, &format!("global '{slug}'"), &mut missing);
+    }
+
+    // Job handler + access refs resolve through the same
+    // `resolve_hook_function` mechanism as collection hooks, and jobs are
+    // init-only (the registry is immutable post-boot) — so a typo'd
+    // handler would otherwise only surface at the first scheduled run.
+    for (slug, def) in &registry.jobs {
+        if resolve_hook_function(lua, def.handler.reference()).is_err() {
+            missing.push(format!(
+                "job '{slug}': handler: '{}'",
+                def.handler.reference()
+            ));
+        }
+        if let Some(r) = &def.access
+            && resolve_hook_function(lua, r.reference()).is_err()
+        {
+            missing.push(format!("job '{slug}': access: '{}'", r.reference()));
+        }
+    }
+
+    // Auth method refs: a strategy's `authenticate` function and the
+    // `mfa_deliver` hook. `validate_auth_methods` checks their *shape*;
+    // this resolves them, so a typo fails to boot instead of stranding
+    // every login / MFA attempt at runtime.
+    for (slug, def) in &registry.collections {
+        let Some(auth) = &def.auth else { continue };
+        check_auth_method_refs(
+            lua,
+            &auth.methods,
+            &format!("collection '{slug}'"),
+            &mut missing,
+        );
     }
 
     if missing.is_empty() {
@@ -779,6 +813,55 @@ fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>)
 
 /// Render the `{source} field 'a' block 'b' …` source label for a field from
 /// its [`SchemaStep`] ancestor chain.
+/// Resolve the Lua refs carried by auth methods: `Strategy.authenticate`
+/// and `PasswordLogin.mfa_deliver`. The other method kinds carry no refs.
+fn check_auth_method_refs(lua: &Lua, methods: &[AuthMethod], source: &str, out: &mut Vec<String>) {
+    for m in methods {
+        match m {
+            AuthMethod::Strategy {
+                name, authenticate, ..
+            } if resolve_hook_function(lua, authenticate.reference()).is_err() => {
+                out.push(format!(
+                    "{source}: auth strategy '{name}' authenticate: '{}'",
+                    authenticate.reference()
+                ));
+            }
+            AuthMethod::PasswordLogin {
+                mfa_deliver: Some(r),
+                ..
+            } if resolve_hook_function(lua, r.reference()).is_err() => {
+                out.push(format!("{source}: mfa_deliver: '{}'", r.reference()));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Resolve the `[admin] access` config gate ref. The runtime gate fails
+/// CLOSED on an unresolvable ref — correct, but that means a typo locks
+/// every user (the operator included) out of the admin panel. Failing the
+/// boot with the ref named is the BUG-5 standard.
+///
+/// # Errors
+///
+/// Returns `Err` naming the ref when it does not resolve.
+pub fn validate_admin_access_ref(lua: &Lua, admin_access: Option<&HookRef>) -> Result<()> {
+    let Some(r) = admin_access else {
+        return Ok(());
+    };
+
+    if resolve_hook_function(lua, r.reference()).is_err() {
+        bail!(
+            "[admin] access = '{}' does not resolve to a Lua function — \
+             the admin gate fails closed, so this would lock everyone out \
+             of the admin panel. Fix the ref or remove the setting.",
+            r.reference()
+        );
+    }
+
+    Ok(())
+}
+
 fn field_source_label(source: &str, path: &[SchemaStep<'_>], field: &FieldDefinition) -> String {
     let mut label = String::from(source);
 
@@ -842,6 +925,14 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
                 out.push(format!("{field_src}: {kind}: '{r}'"));
             }
         }
+
+        // display condition — always a function ref (inline tables are
+        // not accepted on `admin.condition`)
+        if let Some(r) = &f.admin.condition
+            && resolve_hook_function(lua, r.reference()).is_err()
+        {
+            out.push(format!("{field_src}: admin.condition: '{}'", r.reference()));
+        }
     });
 }
 
@@ -849,7 +940,10 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
 mod tests {
     use mlua::{Lua, LuaOptions, StdLib};
 
-    use crate::core::{Access, CollectionDefinition, FieldDefinition, FieldType, Hooks, Registry};
+    use crate::core::{
+        Access, CollectionDefinition, FieldDefinition, FieldType, Hooks, Registry,
+        job::JobDefinition,
+    };
 
     use super::*;
 
@@ -898,6 +992,128 @@ mod tests {
         assert!(msg.contains("title"), "expected field name: {msg}");
         assert!(msg.contains("access.read"), "expected kind: {msg}");
         assert!(msg.contains("hooks.never.exists"), "expected ref: {msg}");
+    }
+
+    /// A job whose handler ref does not resolve fails the boot with the
+    /// job slug and ref named. (Jobs previously escaped validation on the
+    /// stale assumption that they resolve through a different mechanism —
+    /// they use the same `resolve_hook_function` as collection hooks.)
+    #[test]
+    fn validate_hook_references_reports_missing_job_handler() {
+        let lua = sandboxed_lua();
+        let registry = Registry::shared();
+        registry
+            .write()
+            .unwrap()
+            .register_job(JobDefinition::builder("cleanup", "jobs.cleanup.runn").build());
+
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("job 'cleanup'"), "expected job slug: {msg}");
+        assert!(msg.contains("handler"), "expected kind: {msg}");
+        assert!(msg.contains("jobs.cleanup.runn"), "expected ref: {msg}");
+    }
+
+    /// A job access ref that does not resolve is reported too.
+    #[test]
+    fn validate_hook_references_reports_missing_job_access() {
+        let lua = sandboxed_lua();
+        let mut job = JobDefinition::builder("cleanup", "jobs.cleanup.runn").build();
+        job.access = Some(HookRef::new("hooks.access.adminz"));
+        let registry = Registry::shared();
+        registry.write().unwrap().register_job(job);
+
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("job 'cleanup': access: 'hooks.access.adminz'"),
+            "expected job access line: {msg}"
+        );
+    }
+
+    /// A strategy `authenticate` ref that does not resolve fails the boot.
+    #[test]
+    fn validate_hook_references_reports_missing_strategy_authenticate() {
+        let lua = sandboxed_lua();
+        let mut def = CollectionDefinition::new("users");
+        let mut auth = Auth::enabled();
+        auth.methods.push(AuthMethod::Strategy {
+            name: "api-key".to_string(),
+            authenticate: HookRef::new("hooks.auth.api_keyy"),
+            activates_on: Activation::Always { always: true },
+            surfaces: SurfaceSet::all(),
+        });
+        def.auth = Some(auth);
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("auth strategy 'api-key'"),
+            "expected strategy name: {msg}"
+        );
+        assert!(msg.contains("hooks.auth.api_keyy"), "expected ref: {msg}");
+    }
+
+    /// An `mfa_deliver` ref that does not resolve fails the boot.
+    #[test]
+    fn validate_hook_references_reports_missing_mfa_deliver() {
+        let lua = sandboxed_lua();
+        let mut def = CollectionDefinition::new("users");
+        let mut auth = Auth::enabled();
+        for m in &mut auth.methods {
+            if let AuthMethod::PasswordLogin {
+                mfa, mfa_deliver, ..
+            } = m
+            {
+                *mfa = MfaMode::Custom;
+                *mfa_deliver = Some(HookRef::new("hooks.send_smss"));
+            }
+        }
+        def.auth = Some(auth);
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("mfa_deliver"), "expected kind: {msg}");
+        assert!(msg.contains("hooks.send_smss"), "expected ref: {msg}");
+    }
+
+    /// A field display-condition ref that does not resolve fails the boot.
+    #[test]
+    fn validate_hook_references_reports_missing_condition() {
+        let lua = sandboxed_lua();
+        let mut def = CollectionDefinition::new("posts");
+        let mut field = FieldDefinition::builder("url", FieldType::Text).build();
+        field.admin.condition = Some(HookRef::new("hooks.conditions.show_urll"));
+        def.fields = vec![field];
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("admin.condition"), "expected kind: {msg}");
+        assert!(
+            msg.contains("hooks.conditions.show_urll"),
+            "expected ref: {msg}"
+        );
+    }
+
+    /// A typo'd `[admin] access` ref fails the boot instead of locking
+    /// everyone out at runtime (the gate fails closed).
+    #[test]
+    fn validate_admin_access_ref_reports_missing_ref() {
+        let lua = sandboxed_lua();
+        let r = HookRef::new("access.admin_panle");
+
+        let err = validate_admin_access_ref(&lua, Some(&r)).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("access.admin_panle"), "expected ref: {msg}");
+        assert!(msg.contains("lock"), "expected consequence: {msg}");
+
+        validate_admin_access_ref(&lua, None).expect("absent gate is fine");
     }
 
     /// A clean registry (no hook refs) validates without error.

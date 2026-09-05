@@ -58,12 +58,11 @@ changes can land in any minor release. Used for features that work
 but haven't gone through the design review for a stable contract
 yet.
 
-Three components currently carry this tier (run a grep at HEAD to
-see the live list — they shift as features mature):
-
-```
-$ find static/components -name "*.js" -exec grep -l "@stability experimental" {} \;
-```
+Three components currently carry this tier — the
+[components reference](../reference/components.md) lists every
+module with its stability tier (the tables are generated from the
+`@stability` tags at release time, so they can't drift). The set
+shifts as features mature.
 
 **If you depend on an experimental module**, lock to a specific
 crap-cms version in your deployment and pin the override file too —
@@ -95,20 +94,19 @@ classified, and the absence of a tag means the maintainers haven't
 committed to a contract. Open an issue if you have a use case for
 overriding one; it might warrant promotion to `stable`.
 
-## Tier counts at HEAD
+## Where to see the current tiers
 
-```
-$ find static/components -name "*.js" -exec grep -l "@stability stable" {} \; | wc -l
-33
-$ find static/components -name "*.js" -exec grep -l "@stability experimental" {} \; | wc -l
-3
-$ find static/components -name "*.js" -exec grep -l "@stability internal" {} \; | wc -l
-21
-```
-
-Run these yourself to see the current split — the numbers shift as
-the inventory matures (an experimental module promoted to stable,
+The [components reference](../reference/components.md) is the
+authoritative per-module listing — tag, stability tier, summary,
+and source file for every component, generated from the
+`@stability` tags at release time. As of this release the split is
+33 stable / 3 experimental / 21 internal; the numbers shift as the
+inventory matures (an experimental module promoted to stable,
 internal helpers extracted from a stable module, etc.).
+
+If you have extracted a module into your config dir, its
+`@stability` tag travels with the file — the module-level JSDoc
+comment states the tier directly.
 
 ## Why tiers matter for overlays
 

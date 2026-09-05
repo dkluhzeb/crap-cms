@@ -502,7 +502,7 @@ Missing flags are resolved via interactive prompts. The wizard lists collections
 |------|-----------|
 | `collection` | `before_validate`, `before_change`, `after_change`, `before_read`, `after_read`, `before_delete`, `after_delete`, `before_broadcast` |
 | `field` | `before_validate`, `before_change`, `after_change`, `after_read` |
-| `access` | `read`, `create`, `update`, `delete` |
+| `access` | `read`, `create`, `update`, `delete`, `trash`, `draft`, `versions`, `unlock`, `admin`, `mcp` (globals: only `read`, `draft`, `update`, `versions`, `admin`, `mcp`) |
 | `condition` | `table`, `boolean` |
 
 Generated hooks use per-collection typed annotations for IDE support:

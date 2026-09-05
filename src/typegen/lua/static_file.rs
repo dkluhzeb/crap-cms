@@ -82,6 +82,7 @@ use crate::hooks::lua_api::{
             validate::{GlobalValidateOptions, render_crap_globals_validate_lua},
         },
         jobs::queue::render_crap_jobs_queue_lua,
+        jobs::runs::render_crap_jobs_runs_lua,
     },
     crypto::{render_crap_crypto_stateful_lua, render_crap_crypto_stateless_lua},
     email::{EmailOptions, render_crap_email_lua},
@@ -604,6 +605,7 @@ fn render_crap_jobs(out: &mut String) {
     JobHandlerContext::render_lua_annotation(out);
     JobInfo::render_lua_annotation(out);
     render_crap_jobs_queue_lua(out);
+    render_crap_jobs_runs_lua(out);
 }
 fn render_crap_pages(out: &mut String) {
     render_crap_pages_lua(out);

@@ -266,3 +266,43 @@ fn table_defaults_match_code_defaults() {
         drift.join("\n")
     );
 }
+
+/// The `crap-cms init` scaffold template mentions every config key.
+///
+/// The template (`src/scaffold/init/templates/crap.toml.hbs`) is the
+/// operator's first contact with the config surface — most keys appear
+/// as commented examples. This pins it to the same `ConfigKeys`
+/// inventory the doc tables are pinned to, so a new config key can't
+/// ship without the scaffold learning about it. A key counts as present
+/// when it appears as `key =` (active, commented, or inline-table form)
+/// or — for table-typed keys like `csp`/`s3`/`password_policy` — as a
+/// `[section.key]` heading.
+#[test]
+fn init_template_mentions_every_config_key() {
+    const TEMPLATE: &str = include_str!("../src/scaffold/init/templates/crap.toml.hbs");
+
+    let mut missing = Vec::new();
+
+    for (heading, keys) in section_map() {
+        // Section heading present, active or commented.
+        let heading_active = format!("[{heading}]");
+        if !TEMPLATE.contains(&heading_active) {
+            missing.push(format!("section heading `[{heading}]`"));
+        }
+
+        for key in keys {
+            let assignment = format!("{key} =");
+            let sub_table = format!("[{heading}.{key}]");
+            if !TEMPLATE.contains(&assignment) && !TEMPLATE.contains(&sub_table) {
+                missing.push(format!("`[{heading}]` key `{key}`"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "crap.toml.hbs scaffold template is missing config keys — add them \
+         (commented is fine) so `crap-cms init` output stays current:\n{}",
+        missing.join("\n")
+    );
+}

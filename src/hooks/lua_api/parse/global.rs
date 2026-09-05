@@ -153,6 +153,24 @@ mod tests {
     }
 
     #[test]
+    fn global_access_keys_partition_access_keys() {
+        // GLOBAL_ACCESS_KEYS + the four keys `reject_global_only_access_keys`
+        // rejects must exactly cover ACCESS_KEYS — a new access key can't be
+        // added without deciding whether globals support it.
+        use crate::hooks::lua_api::parse::{ACCESS_KEYS, GLOBAL_ACCESS_KEYS};
+
+        let rejected = ["create", "delete", "trash", "unlock"];
+        for key in ACCESS_KEYS {
+            assert!(
+                GLOBAL_ACCESS_KEYS.contains(key) != rejected.contains(key),
+                "access key '{key}' must be in exactly one of GLOBAL_ACCESS_KEYS / \
+                 the global reject list"
+            );
+        }
+        assert_eq!(ACCESS_KEYS.len(), GLOBAL_ACCESS_KEYS.len() + rejected.len());
+    }
+
+    #[test]
     fn test_global_rejects_collection_only_access_keys() {
         for key in ["create", "delete", "trash", "unlock"] {
             let lua = Lua::new();

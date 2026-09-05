@@ -1482,6 +1482,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Startup reference validation had four blind spots.** The boot-time pass
+  that resolves every hook/access ref (so typos fail the boot instead of
+  the first request) did not cover: **job refs** (`handler` and `access` —
+  excluded on the stale assumption that jobs resolve differently; they use
+  the same resolution as collection hooks), **auth method refs** (a
+  strategy's `authenticate` and `mfa_deliver` were shape-checked but never
+  resolved, so a typo stranded every login or MFA attempt at runtime),
+  **field display conditions** (`admin.condition`), and the **`[admin]
+  access` config gate** (which fails closed at runtime — a typo locked
+  everyone out of the admin panel with no boot-time hint). All four are
+  now validated at startup with the source and ref named in the error.
+- **Admin-UI docs assumed readers had the crap-cms sources.** A sweep of
+  the upgrade/scenario pages removed every instruction that only works
+  with a source checkout: the stability-tiers and atom-inventory pages
+  told readers to `grep`/`find` over `static/components` "at HEAD" to
+  see tier assignments (they now point at the generated components
+  reference, which carries a Stability column and can't drift — the
+  atom-inventory tier counts had in fact already drifted, 32/20 vs the
+  real 33/21); scenario 2's "make the column show by default" step
+  claimed columns must be registered in a Rust source file (the real
+  mechanism is `admin.list_columns` in the collection's Lua definition
+  plus the column picker, and the built-in default is `_status` +
+  `created_at`, not "all columns"); version-pinned `cargo install`
+  examples and "(this release)" phrasing around the alpha.8 reshuffle
+  were made version-agnostic. The `templates layout` walkthrough also
+  moved from the general drift-tooling page into the alpha.8 migration
+  guide it belongs to, leaving a version-scoped pointer.
+- **`templates layout` handed non-git users failing commands.** The
+  layout-migration recipe unconditionally printed `git mv` / `git rm` /
+  `git add` — an operator running the installed binary against an
+  unversioned config dir got commands that die with "not a git
+  repository". The recipe now detects whether the config dir is inside a
+  git work tree: git commands when it is (history follows the file),
+  plain `mv` / `rm` when it is not, plus a tip recommending
+  version-controlling the config dir. Docs updated to match.
+- **The `/ready` readiness probe blocked async worker threads.** The
+  handler ran the pool checkout and probe query directly on the async
+  runtime; with a stalled database each probe could park a worker for up
+  to `connection_timeout` — piling Kubernetes-style probes onto a
+  struggling server. The probe now runs on the blocking thread pool.
+- **`crap-cms make hook access` only offered 4 of the 10 access keys.** The
+  scaffold's position list predated the independent content-view access
+  model: `trash`, `draft`, `versions`, `unlock`, `admin`, and `mcp` were
+  rejected as invalid positions even though the runtime accepts them. The
+  scaffold now takes its position lists directly from the parser's
+  accepted-key constants (collection and field hook positions included), so
+  it can never drift again — and a global target is offered only the six
+  keys valid on globals (`create`/`delete`/`trash`/`unlock` never fire on a
+  single-row global). The generated access stub also documents filter-table
+  returns for scoping reads.
+- **`crap-cms init`'s `crap.toml` was missing 2 sections and ~20 keys.** The
+  scaffolded config had drifted from the real config surface: the `[routes]`
+  and `[update]` sections, the Postgres keys (`backend`, `url`), and later
+  additions such as `grpc_timeout`, `request_timeout`, `h2c`, `public_url`,
+  `public_schema_introspection`, `bulk_max_documents`, `stmt_cache_capacity`,
+  `site_name`, `default_timezone`, `default_src`, `max_ip_login_attempts`,
+  the `rate_limit_*` backend keys, the S3 `prefix`, and `[mcp] job_tools`
+  were absent. All are now present as commented examples, and a parity test
+  pins the template to the same `ConfigKeys` inventory the reference docs
+  are pinned to — a new config key can't ship without the scaffold learning
+  about it. The scaffolded `init.lua` also gained commented examples for
+  the custom-route and template-data registration APIs.
+
+- **`crap-cms export` errored on any collection with localized fields, and
+  `import` could not write them.** Export selected the bare column name
+  (`title`) where a localized schema has `title__en`/`title__de` — the
+  documented locale-context footgun, alive in this one CLI path — so the
+  command failed outright for such collections. It now reads in all-locales
+  mode and exports localized fields as `{"en": …, "de": …}` objects; import
+  writes each locale back to its own column, rejects a bare scalar on a
+  localized field (ambiguous) and unknown locale keys (would target a
+  nonexistent column), and refuses localized join-backed fields with a clear
+  message instead of silently importing one locale and dropping the rest.
+  Round-trip covered end-to-end through the real binary.
+
+- **`crap-cms typegen proto` panicked on a layout wrapper inside an array.**
+  A Row/Collapsible/Tabs nested in an array sub-type reached type resolution
+  unflattened and hit an `unreachable!` — the example project's collections
+  triggered it. The sub-type `from_struct` renderer now flattens wrappers
+  exactly like its siblings.
+
+- **The generated Lua types were missing the job-run API.** The
+  `crap.jobs.get_run` / `list_runs` / `cancel_run` functions shipped without
+  being wired into the static type file, so editors had no autocompletion or
+  signatures for them. Wired and regenerated.
+
+
 - **A draft-only document read as `_status: "published"` in the draft view.**
   The draft overlay served the version snapshot's fields verbatim, and the
   create path snapshotted the document *before* the draft stamp landed on the
@@ -3613,6 +3700,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Development documents moved out of the user-facing book.** The mdbook's
+  *Internals* section carried five internal engineering artefacts — the
+  Operation Core migration plan, the performance-architecture and
+  Lua-connection-injection proposals, the REST-surface analysis, and the
+  API-surface consistency-tracking table. They now live in `docs/dev/`
+  (with an index README) and no longer render in the documentation site.
+  The *Internals* section keeps the pages users actually need: Database,
+  Cache, and Frozen Contracts.
 - **The filter grammar has ONE description: `FILTER_OP_SPECS`.** A canonical
   operator table (name, value shape, doc) now lives beside `FilterOp`,
   pinned to the enum by a consistency test. The generated Lua annotations

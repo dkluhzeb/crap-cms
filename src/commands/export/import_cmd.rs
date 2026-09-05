@@ -61,38 +61,110 @@ fn collect_field_columns(
     parent_cols: &mut Vec<String>,
     parent_vals: &mut Vec<DbValue>,
     join_data: &mut DocumentFields,
-) {
+    locale: &LocaleConfig,
+) -> Result<()> {
     match field.field_type {
         FieldType::Group => {
-            collect_group_columns(field, doc_obj, parent_cols, parent_vals);
+            collect_group_columns(field, doc_obj, parent_cols, parent_vals, locale)?;
         }
         FieldType::Row | FieldType::Collapsible => {
-            collect_wrapper_columns(&field.fields, doc_obj, parent_cols, parent_vals);
+            collect_wrapper_columns(&field.fields, doc_obj, parent_cols, parent_vals, locale)?;
         }
         FieldType::Tabs => {
             for tab in &field.tabs {
-                collect_wrapper_columns(&tab.fields, doc_obj, parent_cols, parent_vals);
+                collect_wrapper_columns(&tab.fields, doc_obj, parent_cols, parent_vals, locale)?;
             }
         }
         _ if field.has_parent_column() => {
             if let Some(val) = doc_obj.get(&field.name) {
-                push_field_value(
-                    parent_cols,
-                    parent_vals,
-                    field.name.clone(),
-                    val,
-                    &field.field_type,
-                );
+                if field.is_locale_scoped(false) {
+                    push_localized_columns(
+                        parent_cols,
+                        parent_vals,
+                        &field.name,
+                        &field.name,
+                        val,
+                        &field.field_type,
+                        locale,
+                    )?;
+                } else {
+                    push_field_value(
+                        parent_cols,
+                        parent_vals,
+                        field.name.clone(),
+                        val,
+                        &field.field_type,
+                    );
+                }
             }
         }
         _ => {
             if let Some(val) = doc_obj.get(&field.name)
                 && !val.is_null()
             {
+                // Join-backed fields (arrays/blocks/has-many) that are
+                // themselves localized store per-locale rows; this raw
+                // upsert has no per-locale join writer, and silently
+                // importing under one locale would drop the others.
+                if field.localized {
+                    bail!(
+                        "field '{}' is a localized {} field — `crap-cms import` does not \
+                         support localized join-backed fields; import this collection \
+                         through the API instead",
+                        field.name,
+                        field.field_type.as_str(),
+                    );
+                }
+
                 join_data.insert(field.name.clone(), val.clone());
             }
         }
     }
+
+    Ok(())
+}
+
+/// Write one localized parent-column field: the JSON value must be an object
+/// of `locale → value`, each landing in its `{column}__{locale}` column.
+/// Fail-fast on anything else — importing a bare scalar into a localized
+/// field is ambiguous, and an unknown locale key would write a column that
+/// does not exist.
+#[allow(clippy::too_many_arguments)]
+fn push_localized_columns(
+    parent_cols: &mut Vec<String>,
+    parent_vals: &mut Vec<DbValue>,
+    field_name: &str,
+    base_col: &str,
+    val: &Value,
+    field_type: &FieldType,
+    locale: &LocaleConfig,
+) -> Result<()> {
+    let Value::Object(by_locale) = val else {
+        bail!(
+            "field '{field_name}' is localized — expected an object of locale → value \
+             (e.g. {{\"{}\": ...}}), got {val}",
+            locale.default_locale
+        );
+    };
+
+    for (loc, v) in by_locale {
+        if loc != &locale.default_locale && !locale.locales.contains(loc) {
+            bail!(
+                "field '{field_name}': unknown locale '{loc}' (configured: {:?})",
+                locale.locales
+            );
+        }
+
+        push_field_value(
+            parent_cols,
+            parent_vals,
+            format!("{base_col}__{loc}"),
+            v,
+            field_type,
+        );
+    }
+
+    Ok(())
 }
 
 /// Collect group sub-fields as `group__subfield` parent columns.
@@ -101,7 +173,8 @@ fn collect_group_columns(
     doc_obj: &Map<String, Value>,
     parent_cols: &mut Vec<String>,
     parent_vals: &mut Vec<DbValue>,
-) {
+    locale: &LocaleConfig,
+) -> Result<()> {
     for sub in &field.fields {
         let col_name = prefixed_name(&field.name, &sub.name);
 
@@ -111,9 +184,23 @@ fn collect_group_columns(
             .or_else(|| doc_obj.get(&col_name));
 
         if let Some(val) = val {
-            push_field_value(parent_cols, parent_vals, col_name, val, &sub.field_type);
+            if sub.is_locale_scoped(field.localized) {
+                push_localized_columns(
+                    parent_cols,
+                    parent_vals,
+                    &format!("{}.{}", field.name, sub.name),
+                    &col_name,
+                    val,
+                    &sub.field_type,
+                    locale,
+                )?;
+            } else {
+                push_field_value(parent_cols, parent_vals, col_name, val, &sub.field_type);
+            }
         }
     }
+
+    Ok(())
 }
 
 /// Collect sub-fields from layout wrappers (Row, Collapsible, Tabs) as parent columns.
@@ -122,18 +209,33 @@ fn collect_wrapper_columns(
     doc_obj: &Map<String, Value>,
     parent_cols: &mut Vec<String>,
     parent_vals: &mut Vec<DbValue>,
-) {
+    locale: &LocaleConfig,
+) -> Result<()> {
     for sub in fields {
         if let Some(val) = doc_obj.get(&sub.name) {
-            push_field_value(
-                parent_cols,
-                parent_vals,
-                sub.name.clone(),
-                val,
-                &sub.field_type,
-            );
+            if sub.is_locale_scoped(false) {
+                push_localized_columns(
+                    parent_cols,
+                    parent_vals,
+                    &sub.name,
+                    &sub.name,
+                    val,
+                    &sub.field_type,
+                    locale,
+                )?;
+            } else {
+                push_field_value(
+                    parent_cols,
+                    parent_vals,
+                    sub.name.clone(),
+                    val,
+                    &sub.field_type,
+                );
+            }
         }
     }
+
+    Ok(())
 }
 
 /// Collect parent columns and join data for a single document from its JSON representation.
@@ -141,7 +243,8 @@ fn collect_import_columns(
     doc_obj: &Map<String, Value>,
     def: &CollectionDefinition,
     id: &str,
-) -> ImportRow {
+    locale: &LocaleConfig,
+) -> Result<ImportRow> {
     let mut parent_cols: Vec<String> = vec!["id".to_string()];
     let mut parent_vals: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
     let mut join_data = DocumentFields::new();
@@ -165,14 +268,15 @@ fn collect_import_columns(
             &mut parent_cols,
             &mut parent_vals,
             &mut join_data,
-        );
+            locale,
+        )?;
     }
 
-    ImportRow {
+    Ok(ImportRow {
         parent_cols,
         parent_vals,
         join_data,
-    }
+    })
 }
 
 /// Import a single document into a collection via upsert + join table data.
@@ -200,7 +304,7 @@ fn import_single_document(
     let old_refs = query::ref_count::snapshot_outgoing_refs(tx, slug, id, &def.fields, locale)
         .with_context(|| format!("Failed to snapshot refs for {id} in '{slug}'"))?;
 
-    let row = collect_import_columns(doc_obj, def, id);
+    let row = collect_import_columns(doc_obj, def, id, locale)?;
 
     let placeholders: Vec<String> = (0..row.parent_cols.len())
         .map(|i| tx.placeholder(i + 1))

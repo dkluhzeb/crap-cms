@@ -49,6 +49,18 @@ end
 return M
 ```
 
+### Startup Validation
+
+Every statically-known reference is resolved at boot — collection, global,
+and field hooks; collection, global, and field access rules; field display
+conditions (`admin.condition`); job `handler` and `access` refs; auth
+method refs (a strategy's `authenticate`, `mfa_deliver`); custom route
+handlers; and the `[admin] access` gate. A typo fails the boot with the
+source and ref named, instead of surfacing at the first request (or, for
+the admin gate, locking everyone out — it fails closed at runtime). Only
+dynamic registrations (`crap.hooks.register`, which passes a live function
+rather than a string) have nothing to resolve.
+
 ## No Closures
 
 Hook references are always strings, never Lua functions. This keeps collection definitions serializable (important for the future visual builder).

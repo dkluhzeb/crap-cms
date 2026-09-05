@@ -58,7 +58,7 @@ use crate::{
         JwtSecret, SharedPasswordProvider, email::create_email_provider_with_lease,
         rate_limit::LoginRateLimiter,
     },
-    db::DbConnection,
+    db::{DbConnection, DbPool},
     service::AppInfra,
 };
 
@@ -585,14 +585,32 @@ async fn health_liveness() -> StatusCode {
 }
 
 /// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
+///
+/// The pool checkout + probe query are blocking (checkout can park up to
+/// `connection_timeout`), so they run on the blocking thread pool — a
+/// stalled database must not let piling-up probe requests occupy async
+/// worker threads. A join failure reports not-ready.
 async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
-    match state.infra.pool.get() {
-        Ok(conn) => match conn.query_one("SELECT 1", &[]) {
-            Ok(_) => StatusCode::OK,
-            Err(_) => StatusCode::SERVICE_UNAVAILABLE,
-        },
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    let pool = state.infra.pool.clone();
+
+    let healthy = tokio::task::spawn_blocking(move || db_probe(&pool))
+        .await
+        .unwrap_or(false);
+
+    if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+/// Check out a connection and run `SELECT 1` on it.
+fn db_probe(pool: &DbPool) -> bool {
+    let Ok(conn) = pool.get() else {
+        return false;
+    };
+
+    conn.query_one("SELECT 1", &[]).is_ok()
 }
 
 /// Security headers middleware — sets protective headers on every response.

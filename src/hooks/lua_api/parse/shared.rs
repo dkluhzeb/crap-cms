@@ -24,7 +24,9 @@ use super::{
 const ADMIN_MAX_FIELD_DEPTH: usize = 5;
 
 /// Lifecycle hook keys accepted on a collection/global `hooks` sub-table.
-pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
+/// `pub(crate)` so the `make hook` scaffold pins its position list to this
+/// (the runtime source of truth) in a parity test.
+pub(crate) const COLLECTION_HOOK_KEYS: &[&str] = &[
     "before_validate",
     "before_change",
     "after_change",
@@ -36,9 +38,19 @@ pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
 ];
 
 /// Access-control operation keys accepted on an `access` sub-table.
-pub(super) const ACCESS_KEYS: &[&str] = &[
+/// `pub(crate)` so the `make hook` scaffold offers exactly this list
+/// (the runtime source of truth).
+pub(crate) const ACCESS_KEYS: &[&str] = &[
     "read", "create", "update", "delete", "trash", "draft", "versions", "unlock", "admin", "mcp",
 ];
+
+/// The subset of [`ACCESS_KEYS`] valid on a *global* — a global is a
+/// single row with only get/update operations, so `create`/`delete`/
+/// `trash`/`unlock` never fire and are rejected at load
+/// (`reject_global_only_access_keys` in `parse::global`). The `make
+/// hook` scaffold offers this list when the target is a global.
+pub(crate) const GLOBAL_ACCESS_KEYS: &[&str] =
+    &["read", "draft", "update", "versions", "admin", "mcp"];
 
 /// Warn when an access key is set but the feature that would make it fire is
 /// disabled — the rule parses and is stored, but the runtime gates on the

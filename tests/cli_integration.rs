@@ -1024,7 +1024,8 @@ fn user_missing_collection_rejected() {
 
 #[test]
 fn export_all() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let cfg = CrapConfig::load(&tmp.path().join("config")).expect("load config");
     let posts_def = registry.get_collection("posts").unwrap();
     let users_def = registry.get_collection("users").unwrap();
 
@@ -1047,11 +1048,21 @@ fn export_all() {
         tx.commit().unwrap();
     }
 
-    // Replicate export logic
+    // Replicate export logic — including the all-locales read the real
+    // command uses (the fixture's `articles` collection is localized, and
+    // a bare-column read on it is a SQL error).
+    let locale_ctx = query::LocaleContext::from_locale_string(Some("all"), &cfg.locale).unwrap();
     let conn = pool.get().unwrap();
     let mut collections_data = serde_json::Map::new();
     for (slug, def) in &registry.collections {
-        let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
+        let docs = query::find(
+            &conn,
+            slug,
+            def,
+            &query::FindQuery::default(),
+            locale_ctx.as_ref(),
+        )
+        .unwrap();
         let docs_json: Vec<serde_json::Value> = docs
             .into_iter()
             .map(serde_json::to_value)
@@ -1064,6 +1075,141 @@ fn export_all() {
     assert!(collections_data.contains_key("users"));
     assert_eq!(collections_data["posts"].as_array().unwrap().len(), 1);
     assert_eq!(collections_data["users"].as_array().unwrap().len(), 1);
+}
+
+/// Regression: `crap-cms export` errored on any collection with localized
+/// fields (it selected the bare column name — `title` — where the schema
+/// has `title__en`/`title__de`), and `import` had no notion of per-locale
+/// columns at all. The pair now round-trips localized content losslessly:
+/// export reads in all-locales mode (`title: { "en": …, "de": … }`) and
+/// import writes each locale back to its own column.
+#[test]
+fn export_import_round_trip_localized() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Seed one article with two translations + a shared field, straight at
+    // the storage shape (per-locale columns).
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title__en, title__de, body) \
+             VALUES ('art1', 'Hello', 'Hallo', 'shared body')",
+            &[],
+        )
+        .unwrap();
+    }
+    drop(pool);
+
+    // Export through the real binary.
+    let export_path = tmp.path().join("export.json");
+    let out = std::process::Command::new(crap_bin())
+        .args(["export", "-C"])
+        .arg(&config_dir)
+        .arg("-o")
+        .arg(&export_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "export failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let exported: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&export_path).unwrap()).unwrap();
+    let article = &exported["collections"]["articles"][0];
+    assert_eq!(
+        article["title"],
+        json!({ "en": "Hello", "de": "Hallo" }),
+        "localized fields must export as locale → value objects: {article}"
+    );
+
+    // Import into a FRESH copy of the same project.
+    let (tmp2, pool2, _reg2) = full_setup();
+    let config_dir2 = tmp2.path().join("config");
+    drop(pool2);
+
+    let out = std::process::Command::new(crap_bin())
+        .args(["import", "-C"])
+        .arg(&config_dir2)
+        .arg(&export_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg2 = CrapConfig::load(&config_dir2).unwrap();
+    let pool2 = pool::create_pool(&config_dir2, &cfg2).unwrap();
+    let conn = pool2.get().unwrap();
+    let row = conn
+        .query_one(
+            "SELECT title__en, title__de, body FROM articles WHERE id = 'art1'",
+            &[],
+        )
+        .unwrap()
+        .expect("imported row");
+    assert_eq!(
+        row.get_opt_string("title__en").unwrap().as_deref(),
+        Some("Hello")
+    );
+    assert_eq!(
+        row.get_opt_string("title__de").unwrap().as_deref(),
+        Some("Hallo")
+    );
+    assert_eq!(
+        row.get_opt_string("body").unwrap().as_deref(),
+        Some("shared body")
+    );
+}
+
+/// Fail-fast contract of the localized import: a bare scalar on a localized
+/// field is ambiguous, and an unknown locale key would write a nonexistent
+/// column — both must error naming the problem, not guess.
+#[test]
+fn import_rejects_malformed_localized_values() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    let write = |content: &str| {
+        let p = tmp.path().join("bad.json");
+        std::fs::write(&p, content).unwrap();
+        p
+    };
+
+    // Scalar where a locale map is required.
+    let bad1 = write(
+        r#"{"format_version":1,"crap_version":"x","exported_at":"now",
+            "collections":{"articles":[{"id":"a1","title":"plain"}]}}"#,
+    );
+    let out = std::process::Command::new(crap_bin())
+        .args(["import", "-C"])
+        .arg(&config_dir)
+        .arg(&bad1)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("localized"), "got: {err}");
+
+    // Unknown locale key.
+    let bad2 = write(
+        r#"{"format_version":1,"crap_version":"x","exported_at":"now",
+            "collections":{"articles":[{"id":"a2","title":{"fr":"Bonjour"}}]}}"#,
+    );
+    let out = std::process::Command::new(crap_bin())
+        .args(["import", "-C"])
+        .arg(&config_dir)
+        .arg(&bad2)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown locale 'fr'"), "got: {err}");
 }
 
 #[test]

@@ -9,6 +9,8 @@
 
 mod constraints;
 mod single;
+
+pub(crate) use single::FIELD_HOOK_KEYS;
 mod top;
 
 pub(crate) use single::parse_required_locales;

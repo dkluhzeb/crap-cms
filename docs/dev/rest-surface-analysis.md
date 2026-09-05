@@ -65,7 +65,7 @@ of a REST surface.
 
 Revisit WebSocket only if a genuinely bidirectional feature appears
 (e.g. mutating subscription filters mid-stream, client presence). None is
-planned; [event-delivery future work](../live-updates/overview.md) —
+planned; [event-delivery future work](../src/live-updates/overview.md) —
 coalescing, replay, queue backends — is transport-agnostic and would land
 under SSE the same as under gRPC.
 

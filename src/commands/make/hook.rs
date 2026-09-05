@@ -33,7 +33,7 @@ pub(super) fn run_hook(config_dir: &Path, action: MakeAction) -> Result<()> {
     let registry = try_load_registry(config_dir);
 
     let (collection, is_global) = resolve_hook_collection(collection, registry.as_ref())?;
-    let position = resolve_hook_position(position, hook_type)?;
+    let position = resolve_hook_position(position, hook_type, is_global)?;
     let field = resolve_hook_field(field, hook_type, registry.as_ref(), &collection)?;
     let name = resolve_hook_name(name, &position)?;
     let condition_field =
@@ -143,19 +143,23 @@ fn resolve_hook_collection(
 
 /// Resolve lifecycle position from CLI arg or interactive prompt.
 #[cfg(not(tarpaulin_include))]
-fn resolve_hook_position(position: Option<String>, hook_type: HookType) -> Result<String> {
+fn resolve_hook_position(
+    position: Option<String>,
+    hook_type: HookType,
+    is_global: bool,
+) -> Result<String> {
     if let Some(p) = position {
-        if !hook_type.valid_positions().contains(&p.as_str()) {
+        if !hook_type.valid_positions(is_global).contains(&p.as_str()) {
             bail!(
                 "Invalid position '{}' for {} hook — valid: {}",
                 p,
                 hook_type.label(),
-                hook_type.valid_positions().join(", ")
+                hook_type.valid_positions(is_global).join(", ")
             );
         }
         Ok(p)
     } else {
-        let positions = hook_type.valid_positions();
+        let positions = hook_type.valid_positions(is_global);
 
         if positions.len() == 1 {
             return Ok(positions[0].to_string());

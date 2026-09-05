@@ -187,7 +187,8 @@ fn roundtrip_data_preserved() {
 
 #[test]
 fn roundtrip_multiple_collections() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let cfg = CrapConfig::load(&tmp.path().join("config")).expect("load config");
 
     // Seed both collections
     {
@@ -209,11 +210,21 @@ fn roundtrip_multiple_collections() {
         tx.commit().unwrap();
     }
 
-    // Export both
+    // Export both — with the all-locales read the real export command uses
+    // (the fixture's `articles` collection is localized; a bare-column read
+    // on it is a SQL error).
+    let locale_ctx = query::LocaleContext::from_locale_string(Some("all"), &cfg.locale).unwrap();
     let conn = pool.get().unwrap();
     let mut collections_data = serde_json::Map::new();
     for (slug, def) in &registry.collections {
-        let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
+        let docs = query::find(
+            &conn,
+            slug,
+            def,
+            &query::FindQuery::default(),
+            locale_ctx.as_ref(),
+        )
+        .unwrap();
         let docs_json: Vec<serde_json::Value> = docs
             .into_iter()
             .map(serde_json::to_value)

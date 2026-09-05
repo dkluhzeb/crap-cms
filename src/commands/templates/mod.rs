@@ -8,7 +8,7 @@
 //!   <version>` header from each, and reports the relationship to the
 //!   running crap-cms version. [`customization_counts`] returns the
 //!   same data as a struct for the main `crap-cms status` command.
-//! - [`layout`] reports old-layout files and recommends `git mv`
+//! - [`layout`] reports old-layout files and prints a migration recipe
 //!   commands (read-only).
 //! - [`diff`] takes one customized file and shows a unified-style diff
 //!   between the user's copy and the embedded default.

@@ -577,17 +577,18 @@ pub(in crate::hooks::lua_api::parse) fn parse_field_access(
     })
 }
 
+/// Lifecycle hook keys accepted on a field `hooks` sub-table.
+/// `pub(crate)` so the `make hook` scaffold pins its position list to this
+/// (the runtime source of truth) in a parity test.
+pub(crate) const FIELD_HOOK_KEYS: &[&str] = &[
+    "before_validate",
+    "before_change",
+    "after_change",
+    "after_read",
+];
+
 fn parse_field_hooks(hooks_tbl: &Table) -> Result<FieldHooks> {
-    deny_unknown_keys(
-        hooks_tbl,
-        "field hooks",
-        &[
-            "before_validate",
-            "before_change",
-            "after_change",
-            "after_read",
-        ],
-    )?;
+    deny_unknown_keys(hooks_tbl, "field hooks", FIELD_HOOK_KEYS)?;
 
     Ok(FieldHooks {
         before_validate: parse_hook_ref_list(hooks_tbl, "before_validate")?,

@@ -126,14 +126,29 @@ new column appears.
 
 If `dev_mode = false`, restart crap-cms.
 
-## Step 5 — make the column show by default
+## Step 5 — how this relates to the column picker
 
-The list view respects user-saved column selections. By default,
-crap-cms shows all columns; users can hide some via the column
-picker. Default columns are computed by `resolve_columns` in
-`src/admin/handlers/collections/list_helpers.rs` (per-user saved
-selections come from the user-settings store) — you may need to
-register `word_count` as a known column.
+A template-added `<th>` / `<td>` pair is invisible to the column
+picker: it renders unconditionally, alongside whatever columns the
+picker manages. That's the right tool for a **computed** value like
+word count, which isn't a document field.
+
+For columns that *are* document fields, you don't need a template
+override at all: set the collection's default column set in its Lua
+definition —
+
+```lua
+admin = {
+    list_columns = { "title", "word_count_field", "_status", "created_at" },
+},
+```
+
+— and users can adjust their personal selection via the column
+picker (per-user selections override the default; with no
+`list_columns` the built-in default is `_status` — if the collection
+has drafts — plus `created_at`). See the
+[definition schema](../../collections/definition-schema.md) for
+`list_columns` details.
 
 ## What this scenario *doesn't* cover
 

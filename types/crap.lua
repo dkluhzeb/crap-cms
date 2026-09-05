@@ -1989,6 +1989,21 @@ function crap.jobs.define(slug, config) end
 --- @return string # The queued job run ID.
 function crap.jobs.queue(slug, data, opts) end
 
+--- Look up one job run by id.
+--- @param id string  Job run id (as returned by `crap.jobs.queue`).
+--- @return table? # The run table (`id`, `slug`, `status`, `queue`, `attempt`, `max_attempts`, and `result` / `error` / `created_at` when set), or nil when it does not exist or is not visible.
+function crap.jobs.get_run(id) end
+
+--- List recent job runs, newest first.
+--- @param opts table?  Options table. Supports `slug` (string — only this job's runs), `status` (`"pending"` | `"running"` | `"completed"` | `"failed"` | `"stale"`), `limit` (integer, default 50) and `offset` (integer, default 0).
+--- @return table # A table with `runs` (array of run tables) and `total`.
+function crap.jobs.list_runs(opts) end
+
+--- Cancel a job run that has not been claimed yet.
+--- @param id string  Job run id to cancel.
+--- @return boolean # True when a pending run was cancelled; false when it does not exist, is not visible, or has already been claimed.
+function crap.jobs.cancel_run(id) end
+
 -- ── crap.pages ───────────────────────────────────────────────
 
 --- Declare custom admin pages and their sidebar metadata. The page

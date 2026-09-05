@@ -1,4 +1,10 @@
 --- {{position}} access control for {{collection}}.
 return crap.any.access(function(context)
+    -- Return true/false, or (for read-style rules) a filter table to
+    -- scope which documents the request may see:
+    --
+    --   return { author_id = { equals = context.user.id } }
+    --
+    -- context.user is nil for unauthenticated requests.
     return true -- allow all (change to your logic)
 end)

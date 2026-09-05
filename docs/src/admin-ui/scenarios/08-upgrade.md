@@ -14,7 +14,7 @@ inspection workflow.
 
 ```
 # 1. Bump the binary (release-pinned: cargo, distro pkg, container, etc.).
-$ cargo install crap-cms --version 0.1.0-alpha.9
+$ cargo install crap-cms --version <new-version>   # or your distro pkg / container tag
 
 # 2. Inspect drift — what overlays of yours are now behind upstream?
 $ crap-cms templates status
@@ -104,8 +104,8 @@ Old layout detected (3 files):
 
 You're on the pre-1.0 reshuffle layout. **Old paths are not served
 — they 404** — so migrate now: follow the auto-generated migration
-recipe printed by `templates layout` (typically a set of `git mv`
-commands).
+recipe printed by `templates layout` (move commands — `git mv` when
+your config dir is under git, plain `mv` otherwise).
 
 See [Migrating from the old layout](../upgrade/migrating-from-old-layout.md)
 for the full path map and recipe.
@@ -129,9 +129,10 @@ defense.
 
 ## Releases that broke things
 
-The pre-1.0 reshuffle (this release) is the largest layout change
-crap-cms has done. From 1.0 onwards, breakage of this magnitude is
-governed by the [stability tiers](../upgrade/stability-tiers.md):
+The pre-1.0 reshuffle (landed in **alpha.8**) is the largest layout
+change crap-cms has done. From the stabilization freeze onwards,
+breakage of this magnitude is governed by the
+[stability tiers](../upgrade/stability-tiers.md):
 `stable` modules get a deprecation cycle; `experimental` modules
 can break in any minor; `internal` modules can break without
 warning.

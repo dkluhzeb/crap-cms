@@ -1364,6 +1364,15 @@ crap.jobs.define("cleanup", {
     )
     .unwrap();
 
+    // Startup validation resolves the handler ref — the module must exist.
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        hooks_dir.join("jobs.lua"),
+        "local M = {}\nfunction M.cleanup(_ctx) end\nreturn M\n",
+    )
+    .unwrap();
+
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let job = registry.get_job("cleanup").expect("cleanup job");
