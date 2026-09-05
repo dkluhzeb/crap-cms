@@ -662,6 +662,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **MCP `delete_many`/`update_many` could wipe a whole collection from a
+  wrong-shaped `where`.** (Ledger class F2.) A `where` that wasn't a
+  JSON object — notably the JSON-*string* spelling the gRPC field uses —
+  decoded to zero filters instead of erroring, and an empty filter on a
+  bulk op means "every document". MCP now hard-errors on a
+  present-but-non-object `where`, matching gRPC and Lua, with a message
+  naming the expected shape; a cross-surface parity test pins it.
 - **The Postgres password leaked through the "sanitized" config
   channels.** (Ledger class F17 — found by the convergence audit as a
   gap in the F17 partition test itself, whose fixture never used a
@@ -1543,6 +1550,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A rolled-back `crap.transaction(fn)` still published its writes'
+  events.** (Ledger class L3.) The transaction reused the ambient
+  job-level event queue, which flushes unconditionally after the
+  handler, so an update made inside a transaction that then rolled back
+  was still delivered to subscribers. The transaction now gets fresh
+  event/verification queues handed up only on commit and dropped on
+  rollback, matching `run_pool_write`.
+- **Conn-mode hard deletes removed upload files before the enclosing
+  transaction committed.** (Ledger class L4.) A hook that deleted an
+  upload document deleted its storage bytes immediately; if the outer
+  write then rolled back, the DB row was restored pointing at files that
+  were already gone. File deletion is now queued and flushed only after
+  the transaction commits (a rollback leaves harmless orphaned files).
+- **A completed queued-bulk run became invisible to the caller who
+  queued it.** (Ledger class D9.) Finishing a run strips its payload to
+  just the identity, but `GetJobRun` required the full `BulkJobData`
+  shape to authorize the read — so every completed run failed to decode
+  and returned not-found. Authorization now decodes only the identity
+  projection; a failed run's request body is also stripped (it's
+  terminal too).
+- **Version restore left the search index stale.** (Ledger class P5.)
+  Restoring an older version never re-synced FTS, so search kept
+  matching the pre-restore text until an unrelated edit; `restore_version`
+  now re-upserts FTS like its `undelete` sibling.
+- **Admin user-settings writes could lose a concurrent update.** (Ledger
+  class L5.) Column-preference saves and locale switches each did a
+  whole-blob read-modify-write with no transaction, so two concurrent
+  saves clobbered each other. Both now run in an IMMEDIATE transaction.
+- **Postgres job claiming enforced per-slug concurrency caps only
+  advisorily across nodes.** (Ledger class L5/P9.) The `FOR UPDATE SKIP
+  LOCKED` claim ran on a bare autocommit connection, releasing its row
+  locks per statement, so two nodes could each claim past a
+  `concurrency = 1` cap in one tick. Both backends now claim inside one
+  transaction (no job ever ran twice — the CAS held — the cap itself was
+  the loss).
 - **Nested admin components captured each other's events and elements.**
   (Ledger class M13, five instances found by applying the client-side
   lens the class was mined from.) Nested tabs: a click on an inner tab

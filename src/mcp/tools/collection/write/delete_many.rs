@@ -67,9 +67,10 @@ pub(in crate::mcp::tools) fn exec_delete_many(
                 hooks: run_hooks,
                 events,
                 documents: None,
-                // Serialize the SAME object `parse_where_filters` accepted,
-                // so a queued run decodes exactly what a synchronous call
-                // would have used (a non-object `where` is ignored by both).
+                // Serialize the SAME object `parse_where_filters` accepted
+                // (it already hard-errored above on a present non-object
+                // `where` — never-silently-widen), so a queued run decodes
+                // exactly what a synchronous call would have used.
                 where_clause: args
                     .get("where")
                     .and_then(Value::as_object)

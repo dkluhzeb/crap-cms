@@ -58,15 +58,14 @@ fn render_error_page(state: &AdminState, template: &str, data: Value) -> Result<
     })
 }
 
-/// Run a hook+render section without parking an async worker (ledger
-/// classes L12/P2 — `render_blocking` documents the contract: Lua can
-/// block from either side of the render, via `crap.http`'s blocking
-/// client or a VM-pool acquire of up to 5s). `render_blocking` uses
-/// `spawn_blocking`; these synchronous siblings (auth pages, error
-/// pages) use `block_in_place`, which converts the current worker
-/// instead of requiring every caller to go async. Outside a
-/// multi-thread runtime (unit tests) the closure runs inline.
-fn on_blocking_section<T>(f: impl FnOnce() -> T) -> T {
+/// Run a synchronous section that may block (a Lua VM acquire of up to
+/// 5s, a `crap.http` blocking call, pooled DB work) WITHOUT parking an
+/// async worker thread (ledger class L12). Converts the current
+/// multi-thread-runtime worker via `block_in_place`; outside such a
+/// runtime (unit tests, `current_thread`) it runs the closure inline.
+/// Shared by the auth/error page renders and other admin handlers that
+/// do inline Lua/DB work in an `async fn` body.
+pub(crate) fn on_blocking_section<T>(f: impl FnOnce() -> T) -> T {
     use tokio::runtime::{Handle, RuntimeFlavor};
 
     match Handle::try_current() {

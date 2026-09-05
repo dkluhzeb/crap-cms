@@ -267,3 +267,118 @@ fn registration_outside_transaction_errors() {
     );
     assert!(log_messages(&pool, &registry).is_empty());
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Frozen contract: a rolled-back write never emits an event — including
+// writes made INSIDE `crap.transaction(fn)` from a job handler (ledger
+// class L3; the transaction previously routed inner-CRUD events straight
+// into the job-level queue, which flushes unconditionally post-handler).
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn rolled_back_transaction_publishes_no_events_committed_one_does() {
+    use crap_cms::core::SharedEventTransport;
+    use crap_cms::core::event::InProcessEventBus;
+    use crap_cms::hooks::lifecycle::LuaCrudInfra;
+    use std::sync::Arc as StdArc;
+
+    let (_tmp, pool, registry, _fixture_runner) = setup("hooks.tx.noop");
+
+    // A runner whose config_dir is the TEMP dir, so the test can write
+    // its own job-handler module there.
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    let runner = HookRunner::builder()
+        .config_dir(_tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("tmp runner");
+
+    let bus: SharedEventTransport = StdArc::new(InProcessEventBus::new(64));
+    let mut rx = bus.subscribe();
+
+    // The collection's `before_change` ref must resolve on this runner —
+    // provide the no-op module the setup registered.
+    std::fs::create_dir_all(_tmp.path().join("hooks")).unwrap();
+    std::fs::write(
+        _tmp.path().join("hooks/tx.lua"),
+        "local M = {}\nfunction M.noop(ctx) return ctx end\nreturn M\n",
+    )
+    .unwrap();
+
+    let run_handler = |name: &str, lua_body: &str| {
+        // Distinct module per invocation: `require` caches in
+        // `package.loaded`, so re-writing the same filename would re-run
+        // the FIRST body on a pooled VM.
+        let handler_file = _tmp.path().join("hooks");
+        std::fs::create_dir_all(&handler_file).unwrap();
+        std::fs::write(
+            handler_file.join(format!("{name}.lua")),
+            format!("local M = {{}}\nfunction M.run(ctx)\n{lua_body}\nend\nreturn M"),
+        )
+        .unwrap();
+
+        let job_run = JobRun::builder(format!("run-{name}"), name).build();
+        let infra = LuaCrudInfra {
+            event_transport: Some(bus.clone()),
+            cache: None,
+            event_queue: None,
+            verification_queue: None,
+            file_cleanup: None,
+            deferred: None,
+        };
+        runner
+            .run_job_handler(
+                &crap_cms::core::HookRef::new(format!("hooks.{name}.run")),
+                &job_run,
+                &pool,
+                Some(infra),
+            )
+            .expect("handler runs");
+    };
+
+    // 1. Rolled-back transaction: the update MUST NOT publish.
+    run_handler(
+        "txjob_rollback",
+        r#"
+        local d = crap.collections.create("tx_articles", { title = "ev-rollback" })
+        local ok = pcall(function()
+            crap.transaction(function()
+                crap.collections.update("tx_articles", d.id, { title = "changed" })
+                error("boom")
+            end)
+        end)
+        assert(not ok)
+    "#,
+    );
+
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        seen.push(format!("{:?}:{}", ev.operation, ev.collection));
+    }
+    assert!(
+        !seen.iter().any(|e| e.starts_with("Update")),
+        "a rolled-back transaction must not publish its update event; got {seen:?}"
+    );
+
+    // 2. Committed transaction: the update MUST publish.
+    run_handler(
+        "txjob_commit",
+        r#"
+        local d = crap.collections.create("tx_articles", { title = "ev-commit" })
+        crap.transaction(function()
+            crap.collections.update("tx_articles", d.id, { title = "changed2" })
+        end)
+    "#,
+    );
+
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        seen.push(format!("{:?}:{}", ev.operation, ev.collection));
+    }
+    assert!(
+        seen.iter().any(|e| e.starts_with("Update")),
+        "a committed transaction must publish its update event; got {seen:?}"
+    );
+}

@@ -70,9 +70,11 @@ pub(crate) fn run_pool_write<T>(
     // Transaction-outcome effects (`crap.tx.on_commit` / `on_rollback`)
     // registered by hooks at any nesting depth inside this transaction.
     let dq: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
+    let fq: crate::hooks::lifecycle::FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
 
     let mut infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
     infra.deferred = Some(dq.clone());
+    infra.file_cleanup = Some(fq.clone());
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -100,6 +102,7 @@ pub(crate) fn run_pool_write<T>(
         .inherit_write_infra(ctx)
         .ui_locale(ctx.ui_locale.clone())
         .event_queue(queue.clone())
+        .file_cleanup(fq.clone())
         .verification_queue(vqueue.clone())
         .email_ctx(ctx.email_ctx.clone())
         .locale_config(ctx.locale_config)
@@ -114,22 +117,44 @@ pub(crate) fn run_pool_write<T>(
     let result = match result {
         Ok(v) => v,
         Err(e) => {
-            // Roll back (and release the write lock) BEFORE compensations
-            // run — their pool-mode CRUD needs the write path.
+            // Roll back AND release the pooled connection BEFORE
+            // compensations run — their pool-mode CRUD takes a fresh
+            // write-pool checkout (ledger class L12: holding `conn`
+            // across the flush is the two-connection deadlock shape;
+            // with `write_pool_max_size` writers all in their flush
+            // phase, every nested acquire would starve).
             drop(tx);
+            drop(conn);
             flush_deferred_effects(ctx, &dq, EffectOutcome::Rollback);
 
             return Err(e);
         }
     };
 
-    if let Err(e) = tx.commit().context("Commit transaction") {
+    let commit_result = tx.commit().context("Commit transaction");
+    // Same release-before-effects rule on the commit side: everything
+    // from here on (cache clear, post-commit callback, event/email/
+    // effect flushes) runs pool-mode CRUD or Lua and must not execute
+    // while this write-pool slot is still held.
+    drop(conn);
+
+    if let Err(e) = commit_result {
         flush_deferred_effects(ctx, &dq, EffectOutcome::Rollback);
 
         return Err(e.into());
     }
 
     ctx.clear_cache();
+
+    // Files after commit: hard deletes performed by hooks inside this
+    // transaction queued their upload field-maps; the bytes go only now
+    // that the rows are durably gone. (On rollback the queue is simply
+    // dropped — orphaned files are the safe direction.)
+    if let Some(storage) = &ctx.storage {
+        for fields in fq.borrow_mut().drain(..) {
+            crate::core::upload::delete_upload_files(storage.as_ref(), &fields);
+        }
+    }
 
     post_commit(ctx, &result);
 

@@ -147,7 +147,15 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
 
     match outcome {
         Ok(summary) => record_bulk_success(p, &label, &summary, &queued_by),
-        Err(error_msg) => record_permanent_job_failure(p.pool, p.job_run, &label, &error_msg),
+        Err(error_msg) => {
+            let result = record_permanent_job_failure(p.pool, p.job_run, &label, &error_msg);
+            // `failed` is terminal too (frozen contract: a finished run's
+            // request body is dropped once it reaches a terminal status) —
+            // the caller's documents/patch/filter must not sit at rest for
+            // the retention window just because the run failed.
+            strip_finished_payload(p.pool, p.job_run, &queued_by);
+            result
+        }
     }
 }
 

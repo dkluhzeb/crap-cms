@@ -64,9 +64,18 @@ fn delete_document_pool(
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
     if !def.soft_delete
-        && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)
+        && let Some(fields) = result.upload_doc_fields
     {
-        upload::delete_upload_files(s, &fields);
+        // Files after commit (ledger class L4): in conn mode this runs
+        // INSIDE the caller's transaction — deleting bytes now and then
+        // rolling back would restore the DB row pointing at nothing. With
+        // an enclosing scope, queue for its post-commit flush; without
+        // one (legacy direct conn callers), keep the immediate behavior.
+        if let Some(queue) = &ctx.file_cleanup {
+            queue.borrow_mut().push(fields);
+        } else if let Some(s) = storage {
+            upload::delete_upload_files(s, &fields);
+        }
     }
 
     Ok(result.context)
@@ -92,9 +101,18 @@ fn delete_document_conn(
     invalidate_user_streams_if_auth(ctx, id);
 
     if !def.soft_delete
-        && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)
+        && let Some(fields) = result.upload_doc_fields
     {
-        upload::delete_upload_files(s, &fields);
+        // Files after commit (ledger class L4): in conn mode this runs
+        // INSIDE the caller's transaction — deleting bytes now and then
+        // rolling back would restore the DB row pointing at nothing. With
+        // an enclosing scope, queue for its post-commit flush; without
+        // one (legacy direct conn callers), keep the immediate behavior.
+        if let Some(queue) = &ctx.file_cleanup {
+            queue.borrow_mut().push(fields);
+        } else if let Some(s) = storage {
+            upload::delete_upload_files(s, &fields);
+        }
     }
 
     Ok(result.context)

@@ -98,6 +98,13 @@ pub struct ServiceContext<'a> {
     /// `publish_mutation_event` pushes to this queue instead of publishing
     /// immediately. The caller flushes after commit via `flush_event_queue`.
     pub event_queue: Option<EventQueue>,
+    /// Post-commit upload-file cleanup queue (conn mode): a hard delete
+    /// inside an enclosing transaction pushes its upload field-map here
+    /// instead of deleting files immediately — files after commit, never
+    /// before (a rollback must not orphan DB rows pointing at deleted
+    /// files). `None` = no enclosing scope; conn-mode deletes fall back
+    /// to immediate deletion.
+    pub file_cleanup: Option<crate::hooks::lifecycle::FileCleanupQueue>,
     /// Queue for verification emails accumulated during a transaction.
     /// Flushed after commit by the parent alongside events.
     pub verification_queue: Option<VerificationQueue>,
@@ -555,6 +562,7 @@ pub struct ServiceContextBuilder<'a> {
     event_transport: Option<SharedEventTransport>,
     emit_events: bool,
     event_queue: Option<EventQueue>,
+    file_cleanup: Option<crate::hooks::lifecycle::FileCleanupQueue>,
     verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     locale_config: Option<&'a LocaleConfig>,
@@ -582,6 +590,7 @@ impl<'a> ServiceContextBuilder<'a> {
             event_transport: None,
             emit_events: true,
             event_queue: None,
+            file_cleanup: None,
             verification_queue: None,
             invalidation_transport: None,
             locale_config: None,
@@ -717,6 +726,11 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    pub fn file_cleanup(mut self, queue: crate::hooks::lifecycle::FileCleanupQueue) -> Self {
+        self.file_cleanup = Some(queue);
+        self
+    }
+
     /// Attach a verification queue for deferred email sending (used inside transactions).
     pub fn verification_queue(mut self, queue: VerificationQueue) -> Self {
         self.verification_queue = Some(queue);
@@ -738,6 +752,7 @@ impl<'a> ServiceContextBuilder<'a> {
             self.cache.clone_from(&infra.cache);
         }
         self.event_queue.clone_from(&infra.event_queue);
+        self.file_cleanup.clone_from(&infra.file_cleanup);
         self.verification_queue
             .clone_from(&infra.verification_queue);
         self
@@ -813,6 +828,7 @@ impl<'a> ServiceContextBuilder<'a> {
             event_transport: self.event_transport,
             emit_events: self.emit_events,
             event_queue: self.event_queue,
+            file_cleanup: self.file_cleanup,
             verification_queue: self.verification_queue,
             invalidation_transport: self.invalidation_transport,
             slug: self.slug,

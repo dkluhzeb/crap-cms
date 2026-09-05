@@ -53,8 +53,18 @@ fn save_column_preferences(
     collection_slug: &str,
     columns: &[String],
 ) -> Result<(), Error> {
-    let conn = pool.get().context("Failed to get DB connection")?;
-    let existing = user_settings::get_user_settings(&conn, user_id)?;
+    // IMMEDIATE tx so the read-modify-write of the whole-blob settings
+    // JSON can't lose a concurrent update from a sibling handler
+    // (ledger class L5: two tabs / auto-save + locale switch each read
+    // the blob, merge their own key, and the second write clobbered the
+    // first). The IMMEDIATE lock serializes the read against other
+    // writers.
+    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start settings transaction")?;
+
+    let existing = user_settings::get_user_settings(&tx, user_id)?;
 
     let mut settings: Value = existing
         .as_deref()
@@ -65,7 +75,8 @@ fn save_column_preferences(
 
     let json_str = to_string(&settings)?;
 
-    user_settings::set_user_settings(&conn, user_id, &json_str)?;
+    user_settings::set_user_settings(&tx, user_id, &json_str)?;
+    tx.commit().context("Failed to commit settings")?;
 
     Ok(())
 }

@@ -76,7 +76,7 @@ pub async fn search_collection(
     Query(params): Query<SearchQuery>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Json<Value> {
-    let Some(def) = state.infra.registry.get_collection(&slug) else {
+    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return Json(json!([]));
     };
 
@@ -86,76 +86,87 @@ pub async fn search_collection(
     let requested = params.limit.map(|l| i64::try_from(l).unwrap_or(i64::MAX));
     let limit = state.config.pagination.resolve_limit(requested);
 
-    // Autocomplete endpoint: always answers with a JSON array. A missing
-    // collection is silent (client/config issue), but a real DB failure is
-    // logged so it isn't invisibly masked as "no results".
-    let conn = match state.infra.pool.get() {
-        Ok(conn) => conn,
-        Err(e) => {
-            warn!("Relationship search: DB pool unavailable for '{slug}': {e}");
-            return Json(json!([]));
-        }
-    };
+    // The DB checkout, the FTS/LIKE search, and its `after_read` /
+    // field-read-strip Lua post-processing (VM acquire up to 5s) all run
+    // synchronously — do them on the blocking pool, not the async worker
+    // (ledger class L12). This endpoint fires on every keystroke in a
+    // relationship picker, so parking a runtime worker here is the worst
+    // case for the whole admin. Runs inline under a current-thread
+    // runtime (tests).
+    crate::admin::handlers::shared::response::on_blocking_section(move || {
+        // Autocomplete endpoint: always answers with a JSON array. A missing
+        // collection is silent (client/config issue), but a real DB failure is
+        // logged so it isn't invisibly masked as "no results".
+        let conn = match state.infra.pool.get() {
+            Ok(conn) => conn,
+            Err(e) => {
+                warn!("Relationship search: DB pool unavailable for '{slug}': {e}");
+                return Json(json!([]));
+            }
+        };
 
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
-    let user_doc = get_user_doc(auth_user.as_ref());
+        let locale_ctx =
+            LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
+        let user_doc = get_user_doc(auth_user.as_ref());
 
-    let read_hooks = service::RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
+        let read_hooks =
+            service::RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
 
-    let search = if search_term.is_empty() {
-        None
-    } else {
-        Some(search_term.clone())
-    };
+        let search = if search_term.is_empty() {
+            None
+        } else {
+            Some(search_term.clone())
+        };
 
-    let fq = FindQuery::builder()
-        .limit(Some(limit))
-        .search(search)
-        .build();
+        let fq = FindQuery::builder()
+            .limit(Some(limit))
+            .search(search)
+            .build();
 
-    let ctx = service::ServiceContext::collection(&slug, def)
-        .pool(&state.infra.pool)
-        .conn(&conn)
-        .read_hooks(&read_hooks)
-        .user(user_doc)
-        .build();
+        let ctx = service::ServiceContext::collection(&slug, &def)
+            .pool(&state.infra.pool)
+            .conn(&conn)
+            .read_hooks(&read_hooks)
+            .user(user_doc)
+            .build();
 
-    // Request drafts unconditionally — the service search downgrades (never
-    // rejects): an editor sees work-in-progress draft candidates, a read-only
-    // admin sees published candidates only. The draft gate is the service's job.
-    let search_input = service::SearchDocumentsInput {
-        query: &fq,
-        locale_ctx: locale_ctx.as_ref(),
-        cursor_enabled: false,
-        include_drafts: true,
-    };
+        // Request drafts unconditionally — the service search downgrades (never
+        // rejects): an editor sees work-in-progress draft candidates, a read-only
+        // admin sees published candidates only. The draft gate is the service's job.
+        let search_input = service::SearchDocumentsInput {
+            query: &fq,
+            locale_ctx: locale_ctx.as_ref(),
+            cursor_enabled: false,
+            include_drafts: true,
+        };
 
-    let result = match service::search_documents(&ctx, &search_input) {
-        Ok(result) => result,
-        Err(e) => {
-            warn!("Relationship search failed for '{slug}': {e}");
-            return Json(json!([]));
-        }
-    };
+        let result = match service::search_documents(&ctx, &search_input) {
+            Ok(result) => result,
+            Err(e) => {
+                warn!("Relationship search failed for '{slug}': {e}");
+                return Json(json!([]));
+            }
+        };
 
-    let title_field = def.title_field().map(std::string::ToString::to_string);
-    let is_upload = def.is_upload_collection();
-    let admin_thumbnail = def.upload.as_ref().and_then(|u| u.admin_thumbnail.clone());
+        let title_field = def.title_field().map(std::string::ToString::to_string);
+        let is_upload = def.is_upload_collection();
+        let admin_thumbnail = def.upload.as_ref().and_then(|u| u.admin_thumbnail.clone());
 
-    let results: Vec<_> = result
-        .docs
-        .iter()
-        .map(|doc| {
-            build_search_result(
-                doc,
-                title_field.as_deref(),
-                is_upload,
-                admin_thumbnail.as_deref(),
-            )
-        })
-        .collect();
+        let results: Vec<_> = result
+            .docs
+            .iter()
+            .map(|doc| {
+                build_search_result(
+                    doc,
+                    title_field.as_deref(),
+                    is_upload,
+                    admin_thumbnail.as_deref(),
+                )
+            })
+            .collect();
 
-    Json(json!(results))
+        Json(json!(results))
+    })
 }
 
 #[cfg(test)]

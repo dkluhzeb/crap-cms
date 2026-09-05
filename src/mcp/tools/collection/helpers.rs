@@ -84,11 +84,37 @@ pub(in crate::mcp::tools) fn reserved_data_keys(
 /// `or` groups, identical to gRPC and Lua. (The old MCP-local decoder
 /// rejected `or` and silently dropped non-scalar `in` elements.)
 pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Result<Vec<query::FilterClause>> {
-    let Some(where_obj) = args.get("where").and_then(|v| v.as_object()) else {
+    let Some(where_val) = args.get("where") else {
         return Ok(Vec::new());
     };
 
+    // Never-silently-widen (ledger class F2): a present-but-wrong-shaped
+    // `where` must hard-error, not decay to zero filters — on
+    // `delete_many`/`update_many` an empty filter means "every
+    // document". The classic mistake is sending gRPC's JSON-*string*
+    // spelling to the JSON-native MCP surface.
+    let Some(where_obj) = where_val.as_object() else {
+        bail!(
+            "MCP where: must be a JSON object (e.g. {{\"status\": {{\"equals\": \"draft\"}}}}), \
+             got {} — on this surface `where` is a real object, not the \
+             JSON-encoded string the gRPC field uses",
+            json_type_name(where_val)
+        );
+    };
+
     decode_where_map(where_obj).map_err(|e| anyhow!("MCP where: {e}"))
+}
+
+/// Human-readable JSON type name for error messages.
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
 }
 
 /// Convert a Document to a JSON Value — the top-level (untagged) envelope. Shares
@@ -455,9 +481,19 @@ mod tests {
 
     #[test]
     fn parse_where_non_object_where() {
-        let args = json!({ "where": "not-an-object" });
-        let clauses = parse_where_filters(&args).unwrap();
-        assert!(clauses.is_empty());
+        // Never-silently-widen (ledger class F2): a present-but-non-object
+        // `where` MUST hard-error, not decay to zero filters — an empty
+        // filter on a bulk op means "every document". The classic mistake
+        // is the gRPC JSON-string spelling on the object-native MCP surface.
+        for bad in [json!("not-an-object"), json!(["x"]), json!(42)] {
+            let err = parse_where_filters(&json!({ "where": bad }))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("JSON object"), "must name the shape: {err}");
+        }
+
+        // Absent `where` is still the honest empty-filter case.
+        assert!(parse_where_filters(&json!({})).unwrap().is_empty());
     }
 
     // ── doc_to_json ────────────────────────────────────────────────────────

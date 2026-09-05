@@ -20,7 +20,9 @@ pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
     PublishEventInput, RenderCrud, RenderInfo, RenderParams,
 };
-pub use types::{DisplayConditionResult, FieldHookEvent, HookEvent, InitPhase, LuaCrudInfra};
+pub use types::{
+    DisplayConditionResult, FieldHookEvent, FileCleanupQueue, HookEvent, InitPhase, LuaCrudInfra,
+};
 // Internal types needed by sibling submodules (access.rs, context.rs)
 // and by `lua_api/crud/` (the runtime CRUD layer was relocated there
 // to sit alongside the rest of the `crap.*` registration code).

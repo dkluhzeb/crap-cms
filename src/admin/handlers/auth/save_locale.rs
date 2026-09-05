@@ -17,8 +17,13 @@ use crate::{
 
 /// Read the user's settings JSON, update the `ui_locale` field, and write it back.
 fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), Error> {
-    let conn = pool.get()?;
-    let existing = user_settings::get_user_settings(&conn, user_id)?;
+    // IMMEDIATE tx: same whole-blob read-modify-write lost-update guard
+    // as `save_column_preferences` (ledger class L5) — a concurrent
+    // column-preference save must not clobber this locale change.
+    let mut conn = pool.get()?;
+    let tx = conn.transaction_immediate()?;
+
+    let existing = user_settings::get_user_settings(&tx, user_id)?;
 
     let mut settings: Value = existing
         .as_deref()
@@ -29,7 +34,8 @@ fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), 
 
     let json_str = to_string(&settings)?;
 
-    user_settings::set_user_settings(&conn, user_id, &json_str)?;
+    user_settings::set_user_settings(&tx, user_id, &json_str)?;
+    tx.commit()?;
 
     Ok(())
 }

@@ -57,6 +57,16 @@ pub enum QueuedBy {
     System,
 }
 
+/// The identity-only projection of [`BulkJobData`] — the shape a
+/// FINISHED run's stripped payload still carries, and all the
+/// visibility rule ([`can_read_bulk_run`]) needs. `GetJobRun` decodes
+/// this, never the full struct, so stripping can't hide a run from its
+/// queuer.
+#[derive(Deserialize)]
+pub struct BulkRunIdentity {
+    pub queued_by: QueuedBy,
+}
+
 /// The stored `_system_bulk` job payload — everything needed to rebuild
 /// the operation at execution time.
 #[derive(Serialize, Deserialize)]

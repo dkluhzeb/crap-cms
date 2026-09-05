@@ -31,13 +31,14 @@ use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
+use tracing::warn;
 
 use crate::{
     hooks::{
         lifecycle::{LuaCrudInfra, PoolContext, TxContext, run_effects_on_vm},
         lua_api::crud::{TxSlot, ensure_writable},
     },
-    service::{DeferredEffect, DeferredQueue, EffectOutcome},
+    service::{DeferredEffect, DeferredQueue, EffectOutcome, EventQueue, VerificationQueue},
 };
 
 /// Wrap a Lua closure in a single IMMEDIATE transaction.
@@ -91,8 +92,22 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
         event_queue: None,
         verification_queue: None,
         deferred: None,
+        file_cleanup: None,
     });
     infra.deferred = Some(dq.clone());
+
+    // FRESH event/verification queues scoped to THIS transaction (frozen
+    // contract: a rolled-back write never emits an event). The ambient
+    // job-level queues flush unconditionally after the handler — routing
+    // inner-CRUD events there directly would publish them even when this
+    // transaction rolls back. On commit the events are handed up; on
+    // rollback they are dropped, exactly like `run_pool_write`.
+    let tx_events: EventQueue = Rc::new(RefCell::new(Vec::new()));
+    let tx_verifications: VerificationQueue = Rc::new(RefCell::new(Vec::new()));
+    let outer_events = infra.event_queue.replace(tx_events.clone());
+    let outer_verifications = infra.verification_queue.replace(tx_verifications.clone());
+    let tx_files: crate::hooks::lifecycle::FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
+    let outer_files = infra.file_cleanup.replace(tx_files.clone());
     lua.set_app_data(infra);
 
     // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on this
@@ -121,10 +136,42 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     match call_result {
         Ok(value) => {
             if let Err(e) = tx.commit() {
-                // A failed commit is a rollback outcome.
+                // A failed commit is a rollback outcome — the queued
+                // events/verifications die with the transaction.
                 run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
 
                 return Err(RuntimeError(format!("crap.transaction: commit: {e}")));
+            }
+
+            // Committed: hand the transaction's events/verifications up to
+            // the ambient (job-level) queues, which flush post-handler.
+            if let Some(outer) = &outer_events {
+                outer.borrow_mut().extend(tx_events.borrow_mut().drain(..));
+            } else if !tx_events.borrow().is_empty() {
+                warn!(
+                    "crap.transaction: {} event(s) from a committed transaction had \
+                     no ambient queue to flush into and were dropped",
+                    tx_events.borrow().len()
+                );
+            }
+            if let Some(outer) = &outer_verifications {
+                outer
+                    .borrow_mut()
+                    .extend(tx_verifications.borrow_mut().drain(..));
+            }
+
+            // Upload files from hard deletes inside this transaction:
+            // hand up to an enclosing scope, or — with none — delete NOW
+            // (we are post-commit) via the VM's storage handle.
+            if let Some(outer) = &outer_files {
+                outer.borrow_mut().extend(tx_files.borrow_mut().drain(..));
+            } else if let Some(storage) = lua
+                .app_data_ref::<crate::hooks::lifecycle::LuaVmInfra>()
+                .and_then(|i| i.storage.clone())
+            {
+                for fields in tx_files.borrow_mut().drain(..) {
+                    crate::core::upload::delete_upload_files(&*storage, &fields);
+                }
             }
 
             // Effects run in THIS VM: `PoolContext` is live again (job

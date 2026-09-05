@@ -33,8 +33,12 @@ pub fn get_job_run(
     // the run's `data` carries the full request payload. Unparseable data
     // fails closed.
     if run.slug == crate::core::job::SYSTEM_BULK_JOB {
-        let readable =
-            serde_json::from_str::<super::bulk_queue::BulkJobData>(&run.data).is_ok_and(|d| {
+        // Decode ONLY the identity, not the full `BulkJobData`: a finished
+        // run's payload is stripped down to `{"queued_by": …}` (frozen
+        // contract), and requiring the full shape here made every
+        // completed run decode-fail → invisible to its own queuer.
+        let readable = serde_json::from_str::<super::bulk_queue::BulkRunIdentity>(&run.data)
+            .is_ok_and(|d| {
                 super::bulk_queue::can_read_bulk_run(&d.queued_by, ctx.user, ctx.override_access)
             });
 

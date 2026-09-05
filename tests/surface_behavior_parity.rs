@@ -398,3 +398,43 @@ async fn unique_constraint_is_enforced_across_grpc_lua_and_mcp() {
         "MCP allowed a duplicate unique title"
     );
 }
+
+/// Ledger class F2 (never-silently-widen): a present-but-wrong-shaped
+/// `where` must hard-error on MCP exactly like its siblings — before
+/// this fix, sending gRPC's JSON-*string* spelling to MCP decoded to
+/// ZERO filters, so `delete_many` would have wiped the collection.
+#[tokio::test]
+async fn mcp_rejects_a_non_object_where_instead_of_matching_everything() {
+    let h = harness();
+    h.seed_two_published_one_draft();
+
+    for bad_where in [
+        json!("{\"status\":{\"equals\":\"draft\"}}"), // the gRPC string spelling
+        json!(["status"]),
+        json!(42),
+    ] {
+        let err = h
+            .mcp_call("delete_many_articles", &json!({ "where": bad_where }))
+            .expect_err("non-object where must be rejected");
+        assert!(
+            err.contains("JSON object"),
+            "error must explain the expected shape: {err}"
+        );
+    }
+
+    // Nothing was deleted by any of the rejected calls.
+    assert_eq!(h.lua_count(""), 3, "collection must be untouched");
+
+    // The real object form still works.
+    let ok = h
+        .mcp_call(
+            "delete_many_articles",
+            &json!({ "where": { "status": { "equals": "draft" } } }),
+        )
+        .expect("object where works");
+    assert_eq!(
+        ok["hard_deleted"].as_i64(),
+        Some(1),
+        "one draft deleted: {ok}"
+    );
+}

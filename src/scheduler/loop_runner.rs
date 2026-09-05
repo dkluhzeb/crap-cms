@@ -27,7 +27,7 @@ use crate::{
         job::{SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
         upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_upload_files},
     },
-    db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
+    db::{BoxedConnection, DbPool, query::jobs as job_query},
     hooks::{HookRunner, LuaCrudInfra},
     service::AppInfra,
 };
@@ -196,6 +196,7 @@ fn job_crud_infra(infra: &AppInfra) -> LuaCrudInfra {
         event_queue: None,
         verification_queue: None,
         deferred: None,
+        file_cleanup: None,
     }
 }
 
@@ -584,28 +585,28 @@ fn claim_pending_jobs(
     queue_concurrency: &HashMap<String, u32>,
     decay_secs: u64,
 ) -> Result<Vec<JobRun>> {
-    if conn.is_sqlite() {
-        let tx = conn
-            .transaction_immediate()
-            .context("Failed to start claim transaction")?;
-        let result = job_query::claim_pending_jobs(
-            &tx,
-            available,
-            job_concurrency,
-            queue_concurrency,
-            decay_secs,
-        )?;
-        tx.commit().context("Failed to commit claim transaction")?;
-        Ok(result)
-    } else {
-        Ok(job_query::claim_pending_jobs(
-            conn,
-            available,
-            job_concurrency,
-            queue_concurrency,
-            decay_secs,
-        )?)
-    }
+    // One transaction path for BOTH backends (ledger classes L5/P9): the
+    // `FOR UPDATE SKIP LOCKED` row locks (Postgres) and the IMMEDIATE
+    // write lock (SQLite) must be held across the whole select-count-claim
+    // sequence, or the per-slug/per-queue concurrency caps are only
+    // advisory across concurrent claimers. Postgres previously ran the
+    // claim on a bare autocommit connection, releasing each statement's
+    // locks immediately — so two nodes could each claim past a
+    // `concurrency = 1` cap in the same tick. `transaction_immediate` is
+    // plain BEGIN on Postgres (MVCC needs no IMMEDIATE) and IMMEDIATE on
+    // SQLite.
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start claim transaction")?;
+    let result = job_query::claim_pending_jobs(
+        &tx,
+        available,
+        job_concurrency,
+        queue_concurrency,
+        decay_secs,
+    )?;
+    tx.commit().context("Failed to commit claim transaction")?;
+    Ok(result)
 }
 
 /// A `running` job is treated as dead (its worker stopped heartbeating) once

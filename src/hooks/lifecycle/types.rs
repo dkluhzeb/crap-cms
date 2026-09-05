@@ -1,5 +1,7 @@
 //! Core types used across the lifecycle module.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use mlua::Lua;
@@ -254,7 +256,18 @@ pub struct LuaCrudInfra {
     /// `crap.transaction(fn)`); `None` in contexts with no enclosing
     /// transaction to attach to — registration then errors (fail-closed).
     pub deferred: Option<DeferredQueue>,
+    /// Per-transaction queue of upload field-maps whose files must be
+    /// deleted AFTER the enclosing transaction commits (frozen rule:
+    /// files after commit — a rollback must leave orphaned files, never
+    /// DB rows pointing at deleted files). `None` = no enclosing
+    /// transaction scope; conn-mode deletes then fall back to their
+    /// legacy immediate behavior.
+    pub file_cleanup: Option<FileCleanupQueue>,
 }
+
+/// Queue of deleted upload documents' field maps, drained post-commit
+/// to remove their storage files.
+pub type FileCleanupQueue = Rc<RefCell<Vec<crate::core::DocumentFields>>>;
 
 impl LuaCrudInfra {
     /// Build from a parent `ServiceContext`, attaching the given queues.
@@ -271,6 +284,7 @@ impl LuaCrudInfra {
             event_queue,
             verification_queue,
             deferred: None,
+            file_cleanup: None,
         }
     }
 }

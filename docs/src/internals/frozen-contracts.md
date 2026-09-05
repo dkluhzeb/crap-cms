@@ -206,6 +206,41 @@ changing a representation is a breaking change to every consumer.
   runs with `override_access`, so per-row/field access rules do **not** further
   restrict an authorized MCP caller.
 
+## Auth — TOTP (RFC 6238)
+
+- **Storage columns** `_totp_secret` / `_totp_confirmed` /
+  `_totp_last_step` on an auth collection with `mfa = "totp"`, added by
+  the ungated per-column migration.
+- **At-rest secret format** (versioned `v1`): AES-256-GCM over
+  `base64(12-byte nonce ‖ ciphertext)`, key =
+  `SHA-256("crap-cms:totp-secret:v1" ‖ "\n" ‖ [auth] secret)`. Rotating
+  `[auth] secret` permanently invalidates enrolled secrets — enrollment
+  restarts (fail-closed, `error!`-logged).
+- **Parameters**: SHA-1, 30-second step, 6 digits, ±1 step verification
+  window; replay guarded by a monotonic `_totp_last_step` CAS.
+
+## MCP HTTP sessions (`Mcp-Session-Id`)
+
+- Identity-for-audit **only** — the API key still authenticates every
+  request; a missing/unknown/expired session id is **never an error**
+  (fail-soft). Caps: `IDLE_TTL = 30 min`, `MAX_SESSIONS = 1024`
+  (oldest-evicted).
+
+## Job trigger options (`delay` / `unique` / `priority`)
+
+- `unique`: a colliding key returns the **existing** run's id (not an
+  error); collision scope is **pending+running only** (partial unique
+  index). `delay`: integer seconds or a duration string (`"5m"`);
+  negative rejected. `_crap_jobs` carries `unique_key`, `priority`,
+  `retry_after` columns beyond `data`/`result`/`error`/`scheduled_by`.
+
+## Ranked FTS search (`order_by = "_rank"`)
+
+- Requires a `search` term; rejected with cursor pagination; `-_rank` is
+  a hard error; `_rank` is carved out of the `select`-valid and
+  sortable-column sets. (Supersedes the earlier "ranked search removed"
+  note.)
+
 ## Hooks
 
 - **The Lua sandbox capability contract.** Hook code can never execute
