@@ -38,6 +38,7 @@ mod cors;
 mod features;
 /// Newtype wrapper for MCP API keys.
 pub mod mcp_api_key;
+pub mod redis_url;
 mod routes;
 /// Newtype wrapper for S3 secret access keys.
 pub mod s3_secret_key;
@@ -46,6 +47,7 @@ mod server;
 pub mod smtp_password;
 mod types;
 mod validate;
+pub mod webhook_headers;
 
 pub use auth::{AuthConfig, PasswordPolicy, RateLimitBackend, SessionCookieSameSite};
 pub use cors::CorsConfig;
@@ -61,6 +63,7 @@ pub(crate) use features::{
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
+pub use redis_url::RedisUrl;
 pub use routes::RoutesConfig;
 pub use s3_secret_key::S3SecretKey;
 pub use server::{
@@ -68,3 +71,4 @@ pub use server::{
 };
 pub use smtp_password::SmtpPassword;
 pub use types::{ConfigKeys, CrapConfig};
+pub use webhook_headers::WebhookHeaders;

@@ -662,6 +662,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **`io.popen` was reachable from Lua hooks.** (Ledger class F16.) The
+  sandbox has always removed `os.execute`, but its sibling `io.popen` —
+  the other process-execution entry point — survived, so any hook,
+  plugin, or job handler could run arbitrary shell commands with the
+  server's privileges. Removed. The rest of `io` stays deliberately
+  (custom storage backends may touch the filesystem — now documented as
+  part of the frozen sandbox contract), and the complete sandboxed
+  capability surface is pinned by a new allowlist test, so a future
+  Lua/mlua upgrade introducing a new global forces a review instead of
+  silently widening the sandbox.
+- **Redis passwords and webhook credentials leaked through `Debug`,
+  logs, and the Lua config exposure.** (Ledger class F17.)
+  `cache.redis_url` and `auth.rate_limit_redis_url` printed embedded
+  `redis://user:password@…` credentials in `Debug` output, in the
+  startup `info!` lines of the cache/rate-limit/event factories, and
+  through config serialization (`crap.config`-style reads);
+  `[email.webhook_headers]` values (`Authorization: Bearer …`) leaked
+  the same three ways. Both now use redacting newtypes (`RedisUrl`
+  masks the URL password everywhere but the connect path;
+  `WebhookHeaders` masks values everywhere but the send path), joining
+  `JwtSecret`/`S3SecretKey`/`SmtpPassword`/`McpApiKey` — and a
+  sentinel-based partition test pins the whole class: any new bare
+  `String` secret in the config fails the suite.
+
 - **A data-gating job access rule could be evaluated against nothing while
   the job still queued with the payload.** The trigger path parsed the
   payload for the access check with a silent fallback: any `data` that was

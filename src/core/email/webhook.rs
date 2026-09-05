@@ -53,7 +53,7 @@ impl WebhookEmailProvider {
 
         Ok(Self {
             url,
-            headers: config.webhook_headers.clone(),
+            headers: config.webhook_headers.to_map(),
             from_address: config.from_address.clone(),
             from_name: config.from_name.clone(),
             client,

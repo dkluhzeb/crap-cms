@@ -208,6 +208,17 @@ changing a representation is a breaking change to every consumer.
 
 ## Hooks
 
+- **The Lua sandbox capability contract.** Hook code can never execute
+  processes (`os.execute` and `io.popen` both removed), load code
+  dynamically (`load`/`loadstring`/`loadfile`/`dofile` removed), or load
+  native modules (`package.cpath` emptied, `package.loadlib` and
+  `string.dump` removed); `os` is reduced to
+  `clock`/`date`/`difftime`/`time`. The `io` file API is **deliberately
+  available** — custom storage backends are documented as
+  Lua-may-map-to-filesystem. The complete surviving global set is pinned
+  by `sandbox_globals_match_reviewed_allowlist`; extending it is a
+  reviewed decision, re-adding a removed capability is a breaking
+  security change.
 - **The 9 `HookEvent`s** and their per-operation firing order:
   field `before_validate` → richtext-attr `before_validate` → collection
   `before_validate` → validate → field `before_change` → collection

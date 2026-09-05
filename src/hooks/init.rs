@@ -214,8 +214,15 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
 }
 
 /// Apply sandbox restrictions to a Lua VM.
-/// Re-adds the `os` library with only safe functions (time, date, clock, difftime)
-/// and removes dangerous globals (loadfile, dofile).
+///
+/// The capability contract (pinned by
+/// `sandbox_globals_match_reviewed_allowlist`):
+/// - no process execution (`os.execute` AND its sibling `io.popen`),
+/// - no dynamic code loading (`load`/`loadstring`/`loadfile`/`dofile`),
+/// - no native module loading (`package.cpath`/`loadlib`, `string.dump`),
+/// - `os` reduced to time functions,
+/// - `io` file access stays available **deliberately** — custom storage
+///   backends are documented as Lua-may-map-to-filesystem.
 pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     lua.load_std_libs(StdLib::OS)?;
 
@@ -239,6 +246,12 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
 
     let string_table: Table = lua.globals().get("string")?;
     string_table.set("dump", Value::Nil)?;
+
+    // `io.popen` is process execution — the sibling of `os.execute`,
+    // which this sandbox has always removed. (The rest of `io` stays:
+    // custom storage backends legitimately touch the filesystem.)
+    let io: Table = lua.globals().get("io")?;
+    io.set("popen", Value::Nil)?;
 
     Ok(())
 }
@@ -313,6 +326,96 @@ mod tests {
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
         sandbox_lua(&lua).unwrap();
         lua
+    }
+
+    /// Ledger class **F16**: the sandbox is a denylist, and denylists
+    /// rot ("removed `loadfile`/`dofile` but not `load`"; "removed
+    /// `os.execute` but not `io.popen`" — both really happened). This
+    /// pins the COMPLETE reviewed capability surface: a new global
+    /// appearing (an mlua upgrade, a stdlib change) or a removed one
+    /// resurfacing fails here and forces the review decision.
+    #[test]
+    fn sandbox_globals_match_reviewed_allowlist() {
+        let lua = sandboxed_lua();
+
+        let collect = |table: &mlua::Table| -> Vec<String> {
+            let mut names: Vec<String> = table
+                .pairs::<String, Value>()
+                .filter_map(|p| p.ok().map(|(k, _)| k))
+                .collect();
+            names.sort();
+            names
+        };
+
+        let globals = collect(&lua.globals());
+        assert_eq!(
+            globals,
+            [
+                "_G",
+                "_VERSION",
+                "assert",
+                "collectgarbage",
+                "coroutine",
+                "error",
+                "getmetatable",
+                "io",
+                "ipairs",
+                "math",
+                "next",
+                "os",
+                "package",
+                "pairs",
+                "pcall",
+                "print",
+                "rawequal",
+                "rawget",
+                "rawlen",
+                "rawset",
+                "require",
+                "select",
+                "setmetatable",
+                "string",
+                "table",
+                "tonumber",
+                "tostring",
+                "type",
+                "utf8",
+                "warn",
+                "xpcall",
+            ],
+            "sandboxed global set changed — review the new/removed capability"
+        );
+
+        let os: mlua::Table = lua.globals().get("os").unwrap();
+        assert_eq!(collect(&os), ["clock", "date", "difftime", "time"]);
+
+        let io: mlua::Table = lua.globals().get("io").unwrap();
+        assert_eq!(
+            collect(&io),
+            [
+                "close", "flush", "input", "lines", "open", "output", "read", "stderr", "stdin",
+                "stdout", "tmpfile", "type", "write",
+            ],
+            "io capability set changed — `popen` must never return"
+        );
+
+        let string_table: mlua::Table = lua.globals().get("string").unwrap();
+        assert!(
+            !collect(&string_table).contains(&"dump".to_string()),
+            "string.dump must stay removed"
+        );
+    }
+
+    /// `io.popen` is process execution — `os.execute`'s sibling — and
+    /// must be unreachable from hook code.
+    #[test]
+    fn sandbox_removes_io_popen() {
+        let lua = sandboxed_lua();
+        let result: Value = lua.load("return io.popen").eval().unwrap();
+        assert!(matches!(result, Value::Nil), "io.popen must be nil");
+
+        let err = lua.load(r#"io.popen("echo pwned")"#).exec();
+        assert!(err.is_err(), "calling io.popen must fail");
     }
 
     #[test]

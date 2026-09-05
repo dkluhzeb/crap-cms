@@ -104,8 +104,8 @@ most).
 | F13 | Undecidable credential downgraded to anonymous instead of rejected | `Resolution::Invalid(Unaccepted)` variant in the one evaluator | GUARDED |
 | F14 | Untrusted value interpolated into an interpreter/protocol sink without the sink's escaper (SQL values, Lua source, HTML text vs attr, JSON-in-`<script>`/attr, email CRLF headers, NUL bytes) | per-sink: `conn.placeholder`, Lua `Table::set`, `html_escape` vs `html_escape_attr`, `{{{json}}}` dual-escape, `validate_no_crlf` (+ queue-side defense), NUL rejection — no sink inventory pin | PARTIAL |
 | F15 | Untrusted content interpreted as markup/code (39 `innerHTML` writes, HTML-payload uploads served as text/html, SVG entity expansion) | `h()` DOM builder (one annotated parse site left), MIME/extension cross-check + SVG `<!DOCTYPE>`/`<!ENTITY>` rejection at upload, nonce CSP without `unsafe-inline` | GUARDED |
-| F16 | Sandbox capability denylist incomplete — removing A and B but not sibling C (`load`/`loadstring` after `loadfile`/`dofile`; `package.cpath`/`loadlib`/`string.dump`) | regression tests over the four globals + bypass attempt; needs an enumerated-allowlist pin over surviving globals | PARTIAL |
-| F17 | Sensitive/internal detail escapes via a secondary channel — error bodies, `Debug`, logs, response shape, timing (SSRF error naming the IP, `Transient` detail echoed, bare-`String` secrets, account-state oracle, non-constant-time compares) | redacting newtypes (`JwtSecret`, `S3SecretKey`, …), scrubbed responders, `subtle::ConstantTimeEq`/`crap.crypto.constant_time_eq`; no partition test "every secret field is a redacting newtype" | PARTIAL |
+| F16 | Sandbox capability denylist incomplete — removing A and B but not sibling C (`load` after `loadfile`; **`io.popen` after `os.execute`** — found live by building this guard) | `sandbox_globals_match_reviewed_allowlist` pins the complete surviving global + `os`/`io`/`string` capability sets; per-capability regression tests; sandbox contract recorded in frozen-contracts.md | GUARDED |
+| F17 | Sensitive/internal detail escapes via a secondary channel — error bodies, `Debug`, logs, serialization, timing | redacting newtypes (`JwtSecret`, `S3SecretKey`, `SmtpPassword`, `McpApiKey`, + new `RedisUrl`, `WebhookHeaders` — the partition test found all three missing ones on its first run), sentinel partition test `tests/secret_redaction.rs` over Debug AND Serialize, scrubbed responders, constant-time compares | GUARDED |
 
 ## P — Surface parity & chokepoints
 
@@ -149,7 +149,7 @@ most).
 | ID | Class | Guard | Status |
 |----|-------|-------|--------|
 | D1 | Two artifacts describe one truth and drift | per-pair: gen-* gates, `config_doc_parity` (docs + init template), `FILTER_OP_SPECS`, scaffold wiring, `TZ_SUFFIX` consts, `is_system_column` | GUARDED per known pair — full inventory sweep is Phase 2 |
-| D2 | Docs/scaffold/example asserts a mechanism that doesn't exist, moved, needs the repo — or examples silently break on a default flip (`overrideAccess`) | fixed instances (git-mv recipe, grep-at-HEAD, Scenario 2); example boots in smokes but nothing executes example flows | UNGUARDED |
+| D2 | Docs/scaffold/example asserts a mechanism that doesn't exist, moved, needs the repo | `tests/docs_cli_smoke.rs`: every documented `crap-cms` invocation validated against the live CLI tree (fence-aware, with positive control), and the load-bearing template workflows (scenario 08 loop, scenario 02 extract targets, clean-layout answer) executed against a scaffolded config dir | GUARDED |
 | D3 | Dead limb documented/advertised (field no code reads, phantom feature) | wire model kills the API side (schemas render from model); docs side manual | PARTIAL |
 | D4 | **A guard that silently stopped guarding** — vacuous matcher, never-read heartbeat, always-0 exit, `debug_assert!`-only invariant, a suite CI never ran (139 browser tests, a full cycle) | positive controls on the structural scanners (`invalidation_scan_fires_on_synthetic_violation`, `cli_write_scan_fires_…`, `render_scan_fires_…`), `invalidation_write_ops_vocabulary_is_live`, allowlist staleness tests ×2, `ci_workflow_still_runs_every_gate` pin; gen gates self-check by diffing committed files | PARTIAL |
 | D5 | Type model expresses a constraint the runtime ignores | e2e evaluator pins (`grpc_methods_evaluator`); per-feature | PARTIAL |
@@ -187,10 +187,13 @@ most).
 
 ## Priority queue (what Phase 2/3 should guard next)
 
-Remaining UNGUARDED: **D2** — smoke-execute documented CLI recipes and
-example flows (`cli_binary_ops` style); **D7** — no structural fix,
-folded into the review lens list below. (M7, P5 guarded and D4 hardened
-in round 2026-09-05 (3).)
+Remaining UNGUARDED: **D7** only — no structural fix exists for stale
+comments; folded into the review lens list below. Everything else from
+the founding queues is guarded (M7, P5, D2) or hardened (D4).
+High-value PARTIAL work left: F14 sink inventory, S11 config-validation
+completeness, P11 node-local-state inventory, L16 narrowing-cast lint,
+L17 truncation-signal pin, P2 admin/MCP behavioral parity, M8 HookRef
+meta-pin, M15 InitPhase completeness pin.
 
 High-value PARTIAL hardening (new since the full-CHANGELOG pass):
 **F14** sink inventory (one escaping-policy table over SQL/Lua/HTML/
@@ -282,3 +285,12 @@ memories; the load-bearing ones:
   `cli_user_paths_maintain_ref_counts_and_fts`, fail-before proven),
   D4 → PARTIAL (positive controls + vocabulary liveness + CI-gate pin).
   84 classes: 29 GUARDED, 53 PARTIAL, 2 UNGUARDED (D2, D7).
+- 2026-09-05 (4) — Phase 2/3 round 2: D2 → GUARDED
+  (`tests/docs_cli_smoke.rs`; its first run caught 3 scan-calibration
+  cases), F17 → GUARDED (`tests/secret_redaction.rs`; first run found
+  3 REAL leaks — both redis-URL passwords and webhook Authorization
+  values readable via Debug/logs/serialize — fixed with `RedisUrl` +
+  `WebhookHeaders` newtypes), F16 → GUARDED (allowlist pin; building it
+  found **`io.popen` live in the hook sandbox** — process execution,
+  `os.execute`'s sibling — removed, contract frozen). 84 classes:
+  32 GUARDED, 51 PARTIAL, 1 UNGUARDED (D7).

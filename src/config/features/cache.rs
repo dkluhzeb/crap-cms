@@ -48,7 +48,7 @@ pub struct CacheConfig {
     pub max_age_secs: u64,
     /// Redis connection URL. Only used when `backend = "redis"`.
     #[serde(default = "default_redis_url")]
-    pub redis_url: String,
+    pub redis_url: crate::config::RedisUrl,
     /// Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`.
     #[serde(default = "default_cache_prefix")]
     pub prefix: String,
@@ -58,8 +58,8 @@ fn default_cache_max_entries() -> usize {
     10_000
 }
 
-fn default_redis_url() -> String {
-    "redis://127.0.0.1:6379".to_string()
+fn default_redis_url() -> crate::config::RedisUrl {
+    crate::config::RedisUrl::from("redis://127.0.0.1:6379")
 }
 
 fn default_cache_prefix() -> String {
@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(cache.backend, CacheBackend::Memory);
         assert_eq!(cache.max_entries, 10_000);
         assert_eq!(cache.max_age_secs, 0);
-        assert_eq!(cache.redis_url, "redis://127.0.0.1:6379");
+        assert_eq!(cache.redis_url.as_str(), "redis://127.0.0.1:6379");
         assert_eq!(cache.prefix, "crap:");
     }
 
@@ -117,7 +117,7 @@ mod tests {
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.cache.backend, CacheBackend::Redis);
         assert_eq!(config.cache.max_entries, 10_000);
-        assert_eq!(config.cache.redis_url, "redis://127.0.0.1:6379");
+        assert_eq!(config.cache.redis_url.as_str(), "redis://127.0.0.1:6379");
         assert_eq!(config.cache.prefix, "crap:");
     }
 

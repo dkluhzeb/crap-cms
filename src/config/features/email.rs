@@ -1,7 +1,5 @@
 //! SMTP / webhook email configuration.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::config::{SmtpPassword, parsing::serde_duration};
@@ -63,7 +61,7 @@ pub struct EmailConfig {
     pub webhook_url: Option<String>,
     /// Extra HTTP headers for webhook requests (e.g., Authorization).
     #[serde(default)]
-    pub webhook_headers: HashMap<String, String>,
+    pub webhook_headers: crate::config::WebhookHeaders,
 }
 
 fn default_smtp_timeout() -> u64 {
@@ -83,7 +81,7 @@ impl Default for EmailConfig {
             smtp_tls: SmtpTls::default(),
             smtp_timeout: 30,
             webhook_url: None,
-            webhook_headers: HashMap::new(),
+            webhook_headers: crate::config::WebhookHeaders::default(),
         }
     }
 }

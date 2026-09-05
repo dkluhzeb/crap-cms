@@ -36,7 +36,7 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
             info!(url = %config.redis_url, prefix = %config.prefix, "Using Redis cache backend");
 
             Ok(Arc::new(super::redis::RedisCache::new(
-                &config.redis_url,
+                config.redis_url.as_str(),
                 &config.prefix,
                 config.max_age_secs,
             )?))

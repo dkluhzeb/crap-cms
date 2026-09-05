@@ -24,7 +24,7 @@ use crate::core::event::{
 /// fails to initialize.
 pub fn create_event_transport(
     live: &LiveConfig,
-    redis_url: &str,
+    redis_url: &crate::config::RedisUrl,
 ) -> Result<Option<SharedEventTransport>> {
     if !live.enabled {
         info!("Live event streaming disabled");
@@ -47,7 +47,7 @@ pub fn create_event_transport(
             info!(url = %redis_url, "Using Redis event transport");
 
             Ok(Some(Arc::new(
-                super::redis_transport::RedisEventTransport::new(redis_url)?,
+                super::redis_transport::RedisEventTransport::new(redis_url.as_str())?,
             )))
         }
         #[cfg(not(feature = "redis"))]
@@ -70,13 +70,13 @@ pub fn create_event_transport(
 /// fails to initialize.
 pub fn create_invalidation_transport(
     live: &LiveConfig,
-    redis_url: &str,
+    redis_url: &crate::config::RedisUrl,
 ) -> Result<SharedInvalidationTransport> {
     match live.transport {
         LiveTransport::Memory => Ok(Arc::new(InProcessInvalidationBus::new())),
         #[cfg(feature = "redis")]
         LiveTransport::Redis => Ok(Arc::new(
-            super::redis_transport::RedisInvalidationTransport::new(redis_url)?,
+            super::redis_transport::RedisInvalidationTransport::new(redis_url.as_str())?,
         )),
         #[cfg(not(feature = "redis"))]
         LiveTransport::Redis => {
@@ -96,9 +96,12 @@ mod tests {
     #[test]
     fn memory_transport_is_default() {
         let cfg = LiveConfig::default();
-        let transport = create_event_transport(&cfg, "redis://127.0.0.1:6379")
-            .unwrap()
-            .expect("enabled");
+        let transport = create_event_transport(
+            &cfg,
+            &crate::config::RedisUrl::from("redis://127.0.0.1:6379"),
+        )
+        .unwrap()
+        .expect("enabled");
         assert_eq!(transport.kind(), "in_process");
     }
 
@@ -108,14 +111,14 @@ mod tests {
             enabled: false,
             ..LiveConfig::default()
         };
-        let transport = create_event_transport(&cfg, "").unwrap();
+        let transport = create_event_transport(&cfg, &crate::config::RedisUrl::default()).unwrap();
         assert!(transport.is_none());
     }
 
     #[test]
     fn invalidation_transport_memory_default() {
         let cfg = LiveConfig::default();
-        let t = create_invalidation_transport(&cfg, "").unwrap();
+        let t = create_invalidation_transport(&cfg, &crate::config::RedisUrl::default()).unwrap();
         assert_eq!(t.kind(), "in_process");
     }
 
@@ -126,7 +129,7 @@ mod tests {
             transport: LiveTransport::Redis,
             ..LiveConfig::default()
         };
-        let Err(err) = create_event_transport(&cfg, "") else {
+        let Err(err) = create_event_transport(&cfg, &crate::config::RedisUrl::default()) else {
             panic!("expected error when redis feature is disabled");
         };
         assert!(
@@ -142,7 +145,8 @@ mod tests {
             transport: LiveTransport::Redis,
             ..LiveConfig::default()
         };
-        let Err(err) = create_invalidation_transport(&cfg, "") else {
+        let Err(err) = create_invalidation_transport(&cfg, &crate::config::RedisUrl::default())
+        else {
             panic!("expected error when redis feature is disabled");
         };
         assert!(err.to_string().contains("redis` feature"));

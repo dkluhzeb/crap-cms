@@ -17,7 +17,7 @@ use super::{MemoryRateLimitBackend, NoneRateLimitBackend, SharedRateLimitBackend
 /// unused-warnings the way unused fn parameters do.
 pub struct RateLimitFactoryConfig<'a> {
     pub backend: RateLimitBackend,
-    pub redis_url: &'a str,
+    pub redis_url: &'a crate::config::RedisUrl,
     pub prefix: &'a str,
 }
 
@@ -47,7 +47,7 @@ pub fn create_rate_limit_backend(
                 "Using Redis rate limit backend"
             );
             Ok(Arc::new(super::redis::RedisRateLimitBackend::new(
-                cfg.redis_url,
+                cfg.redis_url.as_str(),
                 cfg.prefix,
             )?))
         }
@@ -66,9 +66,12 @@ mod tests {
     use super::*;
 
     fn cfg(backend: RateLimitBackend) -> RateLimitFactoryConfig<'static> {
+        static EMPTY_URL: std::sync::LazyLock<crate::config::RedisUrl> =
+            std::sync::LazyLock::new(crate::config::RedisUrl::default);
+
         RateLimitFactoryConfig {
             backend,
-            redis_url: "",
+            redis_url: &EMPTY_URL,
             prefix: "",
         }
     }

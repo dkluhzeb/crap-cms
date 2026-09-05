@@ -94,7 +94,7 @@ pub struct AuthConfig {
     pub rate_limit_backend: RateLimitBackend,
     /// Redis URL for rate limit backend. Defaults to `cache.redis_url` if empty.
     #[serde(default)]
-    pub rate_limit_redis_url: String,
+    pub rate_limit_redis_url: crate::config::RedisUrl,
     /// Key prefix for Redis rate limit backend.
     #[serde(default = "default_rate_limit_prefix")]
     pub rate_limit_prefix: String,
@@ -145,7 +145,7 @@ impl Default for AuthConfig {
             max_forgot_password_attempts: 3,
             forgot_password_window_seconds: 900,
             rate_limit_backend: RateLimitBackend::default(),
-            rate_limit_redis_url: String::new(),
+            rate_limit_redis_url: crate::config::RedisUrl::default(),
             rate_limit_prefix: default_rate_limit_prefix(),
             password_policy: PasswordPolicy::default(),
             session_cookie_samesite: SessionCookieSameSite::default(),
