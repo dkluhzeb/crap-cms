@@ -358,7 +358,8 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
     let url = config
         .database
         .url
-        .as_deref()
+        .as_ref()
+        .map(crate::config::DbUrl::as_str)
         .ok_or_else(|| anyhow!("database.url is required for postgres backend"))?;
 
     let pg_config: tokio_postgres::Config = url.parse().context("Invalid postgres URL")?;

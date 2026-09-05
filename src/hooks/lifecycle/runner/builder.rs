@@ -303,7 +303,7 @@ fn execute_init_lua(lua: &Lua, config_dir: &Path, vm_index: usize) -> Result<()>
             .with_context(|| format!("Failed to read {}", init_path.display()))?;
 
         lua.load(&code)
-            .set_name(init_path.to_string_lossy())
+            .set_name(crate::hooks::init::chunk_name(&init_path))
             .exec()
             .with_context(|| "HookRunner: failed to execute init.lua")?;
     }

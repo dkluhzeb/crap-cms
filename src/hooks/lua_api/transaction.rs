@@ -102,18 +102,19 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     lua.set_app_data(TxContext::new(&tx));
     let call_result = {
         let _slot = TxSlot(lua);
+        // RAII like `TxSlot` above: a Rust panic unwinding out of a
+        // `crap.*` callback must not return this VM to the pool with the
+        // transaction-scoped `LuaCrudInfra` (deferred queue, caches) still
+        // installed — a later request would then see a live deferred
+        // queue outside any transaction and `crap.tx.on_commit` would
+        // silently no-op into it.
+        let _infra_slot = InfraRestore {
+            lua,
+            prev: prev_infra,
+        };
 
         fn_arg.call::<Value>(())
     };
-
-    match prev_infra {
-        Some(p) => {
-            lua.set_app_data(p);
-        }
-        None => {
-            lua.remove_app_data::<LuaCrudInfra>();
-        }
-    }
 
     let effects: Vec<DeferredEffect> = dq.borrow_mut().drain(..).collect();
 
@@ -140,6 +141,30 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
             run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
 
             Err(e)
+        }
+    }
+}
+
+/// RAII restore for the transaction-scoped [`LuaCrudInfra`] swap. On
+/// drop — return OR unwind — the previous infra (or absence) is put
+/// back, mirroring the stack discipline `TxSlot` gives `TxContext`.
+struct InfraRestore<'a> {
+    lua: &'a Lua,
+    /// The infra to put back on drop; `None` = there was none before,
+    /// so the slot is removed. (`Drop` runs exactly once, so a plain
+    /// `Option` suffices — `take()` just moves the value out.)
+    prev: Option<LuaCrudInfra>,
+}
+
+impl Drop for InfraRestore<'_> {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(p) => {
+                self.lua.set_app_data(p);
+            }
+            None => {
+                self.lua.remove_app_data::<LuaCrudInfra>();
+            }
         }
     }
 }

@@ -67,6 +67,11 @@ class CrapArrayRow extends HTMLElement {
     for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (
       this.querySelectorAll('input, select, textarea')
     )) {
+      // Ownership check: a nested array's rows carry inputs whose names
+      // also end with `[label]` and can precede this row's own input in
+      // document order — binding one would rewrite THIS row's header
+      // from a child row's field.
+      if (input.closest('crap-array-row') !== this) continue;
       if (!input.name?.endsWith(suffix)) continue;
       input.addEventListener('input', () => {
         if (input.value) titleEl.textContent = input.value;

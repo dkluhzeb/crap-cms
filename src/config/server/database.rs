@@ -24,7 +24,7 @@ pub struct DatabaseConfig {
     /// `PostgreSQL` connection URL (only used when `backend = "postgres"`).
     /// e.g., `"host=localhost user=crap dbname=crap_cms"`
     #[serde(default)]
-    pub url: Option<String>,
+    pub url: Option<crate::config::DbUrl>,
     /// Path to the `SQLite` database file (only used when `backend = "sqlite"`).
     pub path: String,
     /// Maximum number of connections in the **read** pool. Default: 64.

@@ -61,7 +61,12 @@ class CrapListSettings extends HTMLElement {
 
   disconnectedCallback() {
     if (!this._connected) return;
-    this._connected = false;
+    // Deliberately do NOT reset `_connected` (matching array-fields /
+    // confirm / relationship-search): the `this`-bound click listener
+    // from connectedCallback is never removed, so re-arming on a DOM
+    // move (disconnect → reconnect) would stack a second handler and
+    // open N drawers per click. The document-level listeners below are
+    // the only ones that must detach with the element.
     if (this._onBeforeRequest)
       document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     if (this._onAfterSettle) document.removeEventListener('htmx:afterSettle', this._onAfterSettle);

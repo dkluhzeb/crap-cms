@@ -93,7 +93,7 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP delete_many {}: {} hard, {} soft, {} skipped [client={}]",

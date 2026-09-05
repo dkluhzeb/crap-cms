@@ -36,7 +36,10 @@ impl fmt::Debug for McpApiKey {
 
 impl fmt::Display for McpApiKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        // Redact like Debug: `info!(key = %cfg.mcp.api_key)` is the log
+        // idiom a future line will reach for. The compare path uses
+        // `AsRef<str>`.
+        f.write_str("[REDACTED]")
     }
 }
 

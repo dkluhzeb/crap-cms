@@ -65,6 +65,73 @@ impl Serialize for RedisUrl {
     }
 }
 
+/// A database connection string (Postgres URL or libpq conninfo) whose
+/// password never escapes through Debug/Display/Serialize (ledger class
+/// F17 — the same treatment `RedisUrl` gives the Redis password).
+#[derive(Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(from = "String")]
+pub struct DbUrl(String);
+
+impl DbUrl {
+    /// The real connection string, for the connect path only.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The connection string with any password masked as `***` — both
+    /// the URL form (`postgres://user:pw@host`) and the libpq
+    /// key=value form (`password=pw`).
+    #[must_use]
+    pub fn masked(&self) -> String {
+        mask_conninfo_password(&mask_url_password(&self.0))
+    }
+}
+
+impl From<String> for DbUrl {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for DbUrl {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl fmt::Debug for DbUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DbUrl({:?})", self.masked())
+    }
+}
+
+impl fmt::Display for DbUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.masked())
+    }
+}
+
+impl Serialize for DbUrl {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.masked())
+    }
+}
+
+/// Mask `password=...` in a libpq key=value conninfo string.
+fn mask_conninfo_password(s: &str) -> String {
+    s.split_whitespace()
+        .map(|kv| {
+            if kv.starts_with("password=") {
+                "password=***".to_string()
+            } else {
+                kv.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Replace the password half of a URL's userinfo with `***`.
 ///
 /// `scheme://user:secret@host` → `scheme://user:***@host`. URLs without
@@ -122,6 +189,21 @@ mod tests {
         assert_eq!(
             RedisUrl::from("redis://:pw@host").masked(),
             "redis://:***@host"
+        );
+    }
+
+    #[test]
+    fn db_url_masks_both_conninfo_forms() {
+        let url = DbUrl::from("postgres://crap:hunter2@db.internal/crap_cms");
+        assert!(!format!("{url}").contains("hunter2"));
+        assert!(!format!("{url:?}").contains("hunter2"));
+        assert!(!serde_json::to_string(&url).unwrap().contains("hunter2"));
+        assert_eq!(url.as_str(), "postgres://crap:hunter2@db.internal/crap_cms");
+
+        let kv = DbUrl::from("host=localhost user=crap password=hunter2 dbname=crap_cms");
+        assert_eq!(
+            kv.masked(),
+            "host=localhost user=crap password=*** dbname=crap_cms"
         );
     }
 

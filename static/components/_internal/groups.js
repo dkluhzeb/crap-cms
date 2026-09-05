@@ -39,6 +39,11 @@ class CrapCollapsible extends HTMLElement {
     if (!(e.target instanceof Element)) return;
     const btn = e.target.closest('[data-action="toggle-group"]');
     if (!btn) return;
+    // Ownership check: groups nest (group-in-group each wrap in their own
+    // <crap-collapsible>); the same click bubbles to every ancestor, and
+    // without this the outer instance re-toggles the inner fieldset right
+    // back (nested groups could never collapse).
+    if (btn.closest('crap-collapsible') !== this) return;
     const fieldset = btn.closest('[data-collapsible]');
     if (!fieldset) return;
 

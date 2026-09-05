@@ -34,7 +34,7 @@ pub(in crate::mcp::tools) fn exec_undelete(
         &TargetRef::collection(slug),
         UndeleteArgs::new(id).events(events_flag(args)),
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP undelete {}: {} [client={}]",

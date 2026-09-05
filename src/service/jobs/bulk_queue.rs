@@ -166,13 +166,16 @@ pub fn check_queue_access(
     // service functions, never the query layer directly (the surface-parity
     // test enforces exactly this).
     let user = match &data.queued_by {
-        QueuedBy::User { id, collection, .. } => {
-            registry.get_collection(collection).and_then(|user_def| {
-                query::find_by_id(conn, collection, user_def, id, None)
-                    .ok()
-                    .flatten()
-            })
-        }
+        QueuedBy::User { id, collection, .. } => match registry.get_collection(collection) {
+            // A DB error resolving the principal must PROPAGATE (ledger
+            // class L9/F4): swallowing it into `None` would run the
+            // queue-time access gate with an anonymous principal on a
+            // transient failure. (Execution re-gates fail-closed either
+            // way; this keeps the early answer honest too.)
+            Some(user_def) => query::find_by_id(conn, collection, user_def, id, None)
+                .map_err(|e| ServiceError::Internal(e.context("resolving queuing user")))?,
+            None => None,
+        },
         QueuedBy::System => None,
     };
 

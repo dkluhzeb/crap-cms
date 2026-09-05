@@ -60,7 +60,7 @@ const FORBIDDEN_CALLS: &[&str] = &[
     "query::update_global(",
     "query::delete(",
     "query::soft_delete(",
-    "query::undelete(",
+    "query::restore(",
     "query::create_version(",
     // Raw snapshot / draft-overlay read primitives — these skip the
     // view-scope/access path entirely and exist only inside `service::read`.
@@ -388,6 +388,21 @@ const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
     // Offline user deletion: before_hard_delete + fts_delete,
     // mirroring service delete.
     ("commands/user/modify.rs", "query::delete("),
+    // Bootstrap password set (create) and offline password change —
+    // both run the password policy first; hashing is inside the
+    // primitive itself.
+    ("commands/user/create.rs", "query::update_password("),
+    ("commands/user/modify.rs", "query::update_password("),
+    // `user reset-totp`: TOTP-mode check + destructive confirm; clears
+    // the three `_totp_*` system columns in one atomic UPDATE (outside
+    // FTS/ref-count scope by design).
+    ("commands/user/modify.rs", "query::reset_totp("),
+    // Offline trash restore: FTS re-upsert in the same IMMEDIATE tx,
+    // mirroring service undelete (soft-delete never touched ref counts,
+    // so none to adjust). Previously invisible — the scan's `undelete`
+    // entry was vacuous (the primitive is named `restore`), caught by
+    // the new vocabulary-liveness pin on its first run.
+    ("commands/trash.rs", "query::restore("),
     // NOTE: `import_cmd.rs` writes via hand-built SQL + `tx.execute`
     // (with its own ref-count replay) — invisible to this textual
     // primitive scan, per the scan limits documented at the top of
@@ -485,17 +500,54 @@ fn cli_write_allowlist_has_no_stale_entries() {
 
 /// Write-primitive subset of [`FORBIDDEN_CALLS`].
 fn is_write_primitive(call: &str) -> bool {
-    const WRITES: &[&str] = &[
-        "query::create(",
-        "query::update(",
-        "query::update_partial(",
-        "query::update_global(",
-        "query::delete(",
-        "query::soft_delete(",
-        "query::undelete(",
-        "query::create_version(",
-    ];
-    WRITES.contains(&call)
+    WRITE_PRIMITIVES.contains(&call)
+}
+
+/// Document + credential write primitives the CLI scan looks for.
+/// Auth-credential writes (`update_password`, `reset_totp`) joined
+/// after the TOTP CLI shipped a raw credential write the original
+/// document-only list couldn't see (ledger class D4 — a guard whose
+/// vocabulary didn't grow with the feature).
+const WRITE_PRIMITIVES: &[&str] = &[
+    "query::create(",
+    "query::update(",
+    "query::update_partial(",
+    "query::update_global(",
+    "query::delete(",
+    "query::soft_delete(",
+    "query::restore(",
+    "query::create_version(",
+    "query::update_password(",
+    "query::reset_totp(",
+];
+
+/// Vocabulary-liveness pin (ledger class **D4**): every write-primitive
+/// name must still exist in the query layer — a renamed primitive would
+/// otherwise leave this scan matching nothing for that operation, the
+/// exact decay that made the invalidation matcher vacuous once.
+#[test]
+fn write_primitive_vocabulary_is_live() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = String::new();
+    let mut files = Vec::new();
+    rust_files(&root.join("src/db/query"), &mut files);
+    for f in files {
+        sources.push_str(&fs::read_to_string(f).unwrap_or_default());
+    }
+
+    let stale: Vec<&&str> = WRITE_PRIMITIVES
+        .iter()
+        .filter(|call| {
+            let fn_name = call.trim_start_matches("query::").trim_end_matches('(');
+            !sources.contains(&format!("fn {fn_name}"))
+        })
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "WRITE_PRIMITIVES entries with no matching `fn` in src/db/query — \
+         the CLI scan is going vacuous for them: {stale:?}"
+    );
 }
 
 #[test]
@@ -537,7 +589,7 @@ fn allowlist_contains_no_write_primitives() {
         "query::update",
         "query::delete(",
         "query::soft_delete(",
-        "query::undelete(",
+        "query::restore(",
         "query::create_version(",
     ];
     for (path, call) in ALLOWLIST {

@@ -114,7 +114,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP update_many {}: {} modified [client={}]",

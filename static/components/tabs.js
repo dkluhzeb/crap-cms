@@ -33,7 +33,21 @@ class CrapTabs extends HTMLElement {
   _onClick(e) {
     if (!(e.target instanceof Element)) return;
     const btn = /** @type {HTMLElement|null} */ (e.target.closest(TAB_SELECTOR));
-    if (btn) this._activateTab(btn);
+    // Ownership check: tabs nest (a Tabs field inside a tab panel), and a
+    // click on an inner group's tab bubbles here — only handle our own.
+    if (btn && btn.closest('crap-tabs') === this) this._activateTab(btn);
+  }
+
+  /**
+   * Descendant elements matching `selector` that belong to THIS tab
+   * group — a nested <crap-tabs> manages its own tabs and panels.
+   * @param {string} selector
+   * @returns {HTMLElement[]}
+   */
+  _own(selector) {
+    return /** @type {HTMLElement[]} */ ([...this.querySelectorAll(selector)]).filter(
+      (el) => el.closest('crap-tabs') === this,
+    );
   }
 
   /** @param {KeyboardEvent} e */
@@ -41,7 +55,8 @@ class CrapTabs extends HTMLElement {
     if (!(e.target instanceof HTMLElement)) return;
     if (!e.target.matches(TAB_SELECTOR)) return;
 
-    const tabs = /** @type {HTMLElement[]} */ ([...this.querySelectorAll(TAB_SELECTOR)]);
+    if (e.target.closest('crap-tabs') !== this) return;
+    const tabs = this._own(TAB_SELECTOR);
     if (tabs.length === 0) return;
 
     const next = this._neighborTab(e.key, tabs, tabs.indexOf(e.target));
@@ -79,17 +94,17 @@ class CrapTabs extends HTMLElement {
     const index = tab.dataset.tabIndex;
     if (index == null) return;
 
-    for (const t of this.querySelectorAll('.form__tabs-tab')) {
+    for (const t of this._own('.form__tabs-tab')) {
       t.classList.remove(ACTIVE_TAB);
       t.setAttribute('aria-selected', 'false');
     }
-    for (const p of this.querySelectorAll('.form__tabs-panel')) {
+    for (const p of this._own('.form__tabs-panel')) {
       p.classList.add(HIDDEN_PANEL);
     }
 
     tab.classList.add(ACTIVE_TAB);
     tab.setAttribute('aria-selected', 'true');
-    this.querySelector(`[data-tab-panel="${index}"]`)?.classList.remove(HIDDEN_PANEL);
+    this._own(`[data-tab-panel="${index}"]`)[0]?.classList.remove(HIDDEN_PANEL);
 
     this._updateTabindex();
   }
@@ -100,7 +115,7 @@ class CrapTabs extends HTMLElement {
    * group (standard ARIA tablist pattern).
    */
   _updateTabindex() {
-    for (const tab of this.querySelectorAll(TAB_SELECTOR)) {
+    for (const tab of this._own(TAB_SELECTOR)) {
       tab.setAttribute('tabindex', tab.classList.contains(ACTIVE_TAB) ? '0' : '-1');
     }
   }

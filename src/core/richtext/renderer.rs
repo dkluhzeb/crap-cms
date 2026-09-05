@@ -220,11 +220,16 @@ where
             let attrs: Value = attrs_str
                 .as_deref()
                 .map(|s| {
+                    // Exact inverse of `html_escape_attr`: `&` was escaped
+                    // FIRST on encode, so `&amp;` must decode LAST — decoding
+                    // it earlier double-decodes author-typed literal entity
+                    // text (`&lt;` stored → `&amp;lt;` encoded → would become
+                    // `<` instead of the literal `&lt;`).
                     s.replace("&#39;", "'")
-                        .replace("&amp;", "&")
                         .replace("&lt;", "<")
                         .replace("&gt;", ">")
                         .replace("&quot;", "\"")
+                        .replace("&amp;", "&")
                 })
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
@@ -302,6 +307,25 @@ pub(crate) fn html_escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Ledger class D8: the attr decode must be the exact inverse of
+    /// `html_escape_attr`. Author-typed literal entity text (`&lt;`)
+    /// must survive the encode/decode round-trip as literal text, not
+    /// get promoted to markup by a premature `&amp;` decode.
+    #[test]
+    fn attr_entity_decode_is_the_inverse_of_the_encode() {
+        let original = "literal &lt; stays literal";
+        let encoded = html_escape_attr(original);
+        assert_eq!(encoded, "literal &amp;lt; stays literal");
+
+        let decoded = encoded
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&");
+        assert_eq!(decoded, original, "round-trip must be lossless");
+    }
+
     use super::*;
 
     fn no_custom(_name: &str, _attrs: &Value) -> Option<String> {

@@ -55,7 +55,7 @@ pub(in crate::mcp::tools) fn exec_count(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     Ok(to_string_pretty(&CountResponse { count })?)
 }

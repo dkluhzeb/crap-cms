@@ -48,7 +48,7 @@ pub(in crate::mcp::tools) fn exec_validate_global(
         &TargetRef::global(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     let (valid, errors) = match outcome {
         None => (true, std::collections::HashMap::new()),

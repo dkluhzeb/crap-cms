@@ -1005,7 +1005,19 @@ class CrapRelationshipSearch extends HTMLElement {
       'div',
       {
         class: ['rs-drawer__card', isSelected && 'rs-drawer__card--selected'],
+        // Keyboard/AT parity with the inline dropdown options (which
+        // carry role=option + full keyboard handling): drawer results
+        // must be reachable and activatable without a mouse.
+        role: 'button',
+        tabindex: '0',
+        'aria-pressed': isSelected ? 'true' : 'false',
         onClick: () => this._onDrawerPick(item, drawer),
+        onKeydown: (/** @type {KeyboardEvent} */ e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            this._onDrawerPick(item, drawer);
+          }
+        },
       },
       visual,
       h('span', { class: 'rs-drawer__card-label', text: item.label || item.id }),
@@ -1028,7 +1040,16 @@ class CrapRelationshipSearch extends HTMLElement {
       'div',
       {
         class: ['rs-drawer__row', isSelected && 'rs-drawer__row--selected'],
+        role: 'button',
+        tabindex: '0',
+        'aria-pressed': isSelected ? 'true' : 'false',
         onClick: () => this._onDrawerPick(item, drawer),
+        onKeydown: (/** @type {KeyboardEvent} */ e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            this._onDrawerPick(item, drawer);
+          }
+        },
       },
       h('span', { text: item.label || item.id }),
       isSelected &&

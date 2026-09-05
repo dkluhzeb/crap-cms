@@ -64,7 +64,7 @@ pub(in crate::mcp::tools) fn exec_update(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!("MCP update {}: {} [client={}]", slug, id, ctx.client_label);
 

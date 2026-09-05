@@ -39,7 +39,9 @@ fn validate_api_key(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let expected = format!("Bearer {expected_key}");
+    // `Display` on McpApiKey is REDACTED (F17) — the compare path must go
+    // through `AsRef<str>` to see the real key.
+    let expected = format!("Bearer {}", AsRef::<str>::as_ref(expected_key));
     let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
 
     if bool::from(is_valid) {

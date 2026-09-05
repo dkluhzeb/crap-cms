@@ -76,7 +76,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     match doc {
         Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),

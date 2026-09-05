@@ -142,7 +142,11 @@ impl HelperDef for AdminI18nHelper {
         }
 
         let json_str = serde_json::to_string(&Value::Object(map)).unwrap_or_default();
-        let json_str = json_str.replace("</", r"<\/");
+        // Mirror `JsonHelper` exactly: `</` so the payload can't close a
+        // <script> element, AND `'` so the same payload stays inert if an
+        // overlay ever moves it into a single-quoted attribute (both are
+        // valid JSON escapes that parsers decode back).
+        let json_str = json_str.replace("</", r"<\/").replace('\'', r"\u0027");
 
         Ok(ScopedJson::Derived(Value::String(json_str)))
     }
@@ -150,6 +154,32 @@ impl HelperDef for AdminI18nHelper {
 
 #[cfg(test)]
 mod tests {
+    /// Mirrors `json_escapes_single_quotes_for_html_attributes` on
+    /// `JsonHelper` — the two raw-JSON-into-markup producers must share
+    /// one escaping policy (ledger classes P2/F14): a translation value
+    /// containing `'` or `</script>` stays inert in both a script
+    /// element and a single-quoted attribute.
+    #[test]
+    fn admin_i18n_escapes_mirror_the_json_helper() {
+        let payload = serde_json::json!({ "k": "it's </script> tricky" });
+        let json_str = serde_json::to_string(&payload).unwrap();
+        let escaped = json_str.replace("</", r"<\/").replace('\'', r"\u0027");
+
+        assert!(
+            !escaped.contains("</"),
+            "script-close must be broken: {escaped}"
+        );
+        assert!(
+            !escaped.contains('\''),
+            "single quotes must be escaped: {escaped}"
+        );
+        let back: serde_json::Value = serde_json::from_str(&escaped).unwrap();
+        assert_eq!(
+            back["k"], "it's </script> tricky",
+            "escapes must be valid JSON"
+        );
+    }
+
     use super::ADMIN_JS_KEYS;
     use std::fs;
 

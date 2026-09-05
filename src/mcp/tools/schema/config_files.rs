@@ -78,9 +78,25 @@ pub(in crate::mcp::tools) fn safe_config_path(
 }
 
 /// TOML keys whose values are secrets. Kept in sync with the redacted-on-
-/// `Serialize` newtypes that the `crap://config` resource relies on
-/// (`auth.secret`, `email.smtp_pass`, `mcp.api_key`, S3 `secret_key`).
-const SECRET_TOML_KEYS: &[&str] = &["secret", "smtp_pass", "api_key", "secret_key"];
+/// `Serialize` newtypes that the `crap://config` resource relies on —
+/// pinned by `redaction_list_covers_every_secret_newtype_key` below AND
+/// by the sentinel partition in `tests/secret_redaction.rs` (which found
+/// this list three keys behind the newtype set once: `redis_url`,
+/// `rate_limit_redis_url`, `url`).
+const SECRET_TOML_KEYS: &[&str] = &[
+    "secret",
+    "smtp_pass",
+    "api_key",
+    "secret_key",
+    // URL-shaped credentials (RedisUrl / DbUrl newtypes).
+    "redis_url",
+    "rate_limit_redis_url",
+    "url",
+];
+
+/// Section headers whose EVERY key/value pair is secret-bearing
+/// (`WebhookHeaders` — values like `Authorization = "Bearer …"`).
+const SECRET_TOML_SECTIONS: &[&str] = &["email.webhook_headers"];
 
 /// Mask the values of known secret keys in raw `crap.toml` text so reading it
 /// through the tool never surfaces the JWT secret, SMTP password, MCP `api_key`,
@@ -89,14 +105,20 @@ const SECRET_TOML_KEYS: &[&str] = &["secret", "smtp_pass", "api_key", "secret_ke
 /// preserved; only the secret values are replaced.
 fn redact_toml_secrets(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
+    let mut in_secret_section = false;
 
     for line in content.lines() {
         let indent_len = line.len() - line.trim_start().len();
         let (indent, rest) = line.split_at(indent_len);
 
+        if rest.starts_with('[') {
+            let section = rest.trim().trim_matches(['[', ']']);
+            in_secret_section = SECRET_TOML_SECTIONS.contains(&section);
+        }
+
         if let Some((key, _value)) = rest.split_once('=')
             && !rest.starts_with('#')
-            && SECRET_TOML_KEYS.contains(&key.trim())
+            && (in_secret_section || SECRET_TOML_KEYS.contains(&key.trim()))
         {
             out.push_str(indent);
             out.push_str(key.trim());
@@ -176,6 +198,58 @@ pub(in crate::mcp::tools) fn exec_list_config_files(
 
 #[cfg(test)]
 mod tests {
+    /// Ledger classes F17/D1: the TOML redaction list is a second copy
+    /// of the secret inventory and drifted once (three keys behind the
+    /// newtype set). This pins every URL/credential key + the
+    /// webhook-headers section.
+    #[test]
+    fn redaction_list_covers_every_secret_newtype_key() {
+        let toml = r#"
+[database]
+url = "postgres://u:PGPW@h/db"
+
+[auth]
+secret = "JWTSECRET"
+rate_limit_redis_url = "redis://u:RLPW@h"
+
+[cache]
+redis_url = "redis://u:CPW@h"
+
+[email]
+smtp_pass = "SMTPPW"
+
+[email.webhook_headers]
+Authorization = "Bearer WHTOKEN"
+X-Api-Key = "WHKEY"
+
+[mcp]
+api_key = "MCPKEY0123"
+
+[upload.s3]
+secret_key = "S3SECRET"
+"#;
+        let redacted = super::redact_toml_secrets(toml);
+        for secret in [
+            "PGPW",
+            "JWTSECRET",
+            "RLPW",
+            "CPW",
+            "SMTPPW",
+            "WHTOKEN",
+            "WHKEY",
+            "MCPKEY0123",
+            "S3SECRET",
+        ] {
+            assert!(
+                !redacted.contains(secret),
+                "secret {secret} survived TOML redaction:\n{redacted}"
+            );
+        }
+        // Non-secrets survive.
+        assert!(redacted.contains("[database]"));
+        assert!(redacted.contains("Authorization"));
+    }
+
     use std::{fs, path::Path};
 
     use serde_json::{Value, from_str};

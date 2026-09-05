@@ -43,7 +43,7 @@ fn validate_signable_path(url: &str) -> Result<(), String> {
 
     if url
         .chars()
-        .any(|c| c == '?' || c == '#' || c == ' ' || c.is_control())
+        .any(|c| c == '?' || c == '#' || c == ' ' || c == '%' || c.is_control())
     {
         return Err(format!(
             "'{url}' contains characters that cannot survive in a URL \

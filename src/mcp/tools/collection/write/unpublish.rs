@@ -33,7 +33,7 @@ pub(in crate::mcp::tools) fn exec_unpublish(
         &TargetRef::collection(slug),
         UnpublishArgs::new(id).events(events_flag(args)),
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP unpublish {}: {} [client={}]",

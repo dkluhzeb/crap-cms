@@ -140,7 +140,7 @@ fn execute_init_lua(lua: &Lua, config_dir: &Path) -> Result<bool> {
         .with_context(|| format!("Failed to read {}", init_path.display()))?;
 
     lua.load(&code)
-        .set_name(init_path.to_string_lossy())
+        .set_name(chunk_name(&init_path))
         .exec()
         .with_context(|| "Failed to execute init.lua")?;
 
@@ -200,6 +200,23 @@ fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
             apply_default_timezone(&mut tab.fields, default_tz);
         }
     }
+}
+
+/// Chunk name for Lua error messages: the last two path components
+/// (`hooks/posts.lua`, `init.lua`) instead of the absolute server path.
+/// Lua prefixes `error()` text with `chunkname:line:`, and hook errors
+/// travel verbatim to API clients (gRPC `INVALID_ARGUMENT`, admin toasts,
+/// MCP tool results) — an absolute name would disclose the server's
+/// filesystem layout on every hook error (ledger class F17).
+pub(crate) fn chunk_name(path: &Path) -> String {
+    let mut parts: Vec<&str> = path
+        .iter()
+        .rev()
+        .take(2)
+        .filter_map(|c| c.to_str())
+        .collect();
+    parts.reverse();
+    parts.join("/")
 }
 
 fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
@@ -296,7 +313,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
 
         let returned: Value = lua
             .load(&code)
-            .set_name(path.to_string_lossy())
+            .set_name(chunk_name(&path))
             .eval()
             .with_context(|| format!("Failed to execute {}", path.display()))?;
 
@@ -416,6 +433,48 @@ mod tests {
 
         let err = lua.load(r#"io.popen("echo pwned")"#).exec();
         assert!(err.is_err(), "calling io.popen must fail");
+    }
+
+    /// F17: chunk names are config-dir-relative, so the `chunkname:line:`
+    /// prefix Lua puts on `error()` text (which travels verbatim to API
+    /// clients) names `hooks/x.lua`, never `/srv/app/hooks/x.lua`.
+    #[test]
+    fn chunk_names_are_relative_not_absolute() {
+        assert_eq!(
+            chunk_name(Path::new("/srv/app/config/hooks/posts.lua")),
+            "hooks/posts.lua"
+        );
+        assert_eq!(
+            chunk_name(Path::new("/srv/app/config/init.lua")),
+            "config/init.lua"
+        );
+        assert_eq!(chunk_name(Path::new("init.lua")), "init.lua");
+    }
+
+    /// End-to-end: a Lua `error()` raised from loaded code carries the
+    /// relative chunk name in its message, not the absolute path.
+    #[test]
+    fn lua_error_text_carries_relative_chunk_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deep = tmp.path().join("secret-dir");
+        std::fs::create_dir_all(&deep).unwrap();
+        let file = deep.join("boom.lua");
+        std::fs::write(&file, "error('kaboom')").unwrap();
+
+        let lua = sandboxed_lua();
+        let code = std::fs::read_to_string(&file).unwrap();
+        let err = lua
+            .load(&code)
+            .set_name(chunk_name(&file))
+            .exec()
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("secret-dir/boom.lua"), "chunk visible: {err}");
+        assert!(
+            !err.contains(&tmp.path().to_string_lossy().to_string()),
+            "absolute path must not leak: {err}"
+        );
     }
 
     #[test]

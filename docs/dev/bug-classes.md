@@ -322,3 +322,22 @@ memories; the load-bearing ones:
   e2e + the routing guard, documented in the row. FINAL queue state:
   84 classes — 39 GUARDED, 44 PARTIAL, 1 UNGUARDED (D7). The guard
   program is complete; convergence audits are next.
+- 2026-09-05 (8) — **CONVERGENCE ROUND 1** (4 adversarial lenses:
+  client-side, sink call-sites, disclosure, newest-feature fail-open).
+  **21 findings — every one an instance of an existing class; 0 new
+  classes.** Highest-severity: F17 guard failure (`database.url`
+  Postgres password readable via MCP `crap://config` + `crap.config` —
+  the partition fixture never used a PG URL), `read_config_file`
+  redaction 3 keys behind the newtype set, absolute hook paths in
+  client error text, MCP raw internal error text, the non-RAII
+  `LuaCrudInfra` restore, and 5 nested-component M13s (2 HIGH: nested
+  tabs blank out, nested groups can't collapse). 4 guard failures
+  fixed AS guards (partition fixture + Display channel, redaction sync
+  pin, CLI-scan vocabulary + liveness pin — which immediately exposed
+  the pre-existing vacuous `query::undelete(` entry and a previously
+  invisible `trash restore` write site — and the sink-inventory scope).
+  All 21 fixed same-round with regression tests. Also cleared-and-
+  recorded: SQL binding everywhere, all triple-stashes judged, email
+  funneling, no process sinks, TOTP/signed-URL/MCP-session/queued-bulk
+  verdicts CLEAN, no live secret-log sites. **Convergence: 1 of 2
+  consecutive all-guarded rounds achieved.**

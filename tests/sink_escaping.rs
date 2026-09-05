@@ -39,6 +39,21 @@ const SINK_INVENTORY: &[(&str, &str, &str)] = &[
         r"'",
     ),
     (
+        "JSON i18n island (second raw-JSON producer — must mirror json.rs)",
+        "src/admin/templates/helpers/admin_i18n.rs",
+        r"\u0027",
+    ),
+    (
+        "SQL string literals in DDL DEFAULT clauses (placeholders can't bind DDL)",
+        "src/db/migrate/collection/create.rs",
+        r#"replace('\'', "''")"#,
+    ),
+    (
+        "Locale fragments in DDL (strip-validator, not escaper)",
+        "src/db/query/validation.rs",
+        "fn sanitize_locale",
+    ),
+    (
         "SQL identifiers (reserved words, quoting)",
         "src/db/query/helpers.rs",
         "fn quote_ident",

@@ -50,10 +50,29 @@ impl<'a> PageRequest<'a> {
 /// 403/404/500; it cannot make the page depend on a database that may be
 /// the very thing that failed.
 fn render_error_page(state: &AdminState, template: &str, data: Value) -> Result<String, String> {
-    let data = hook_without_crud(state, template, data);
-    let _scope = RenderScope::enter(RenderCrud::none());
+    on_blocking_section(|| {
+        let data = hook_without_crud(state, template, data);
+        let _scope = RenderScope::enter(RenderCrud::none());
 
-    state.render(template, &data)
+        state.render(template, &data)
+    })
+}
+
+/// Run a hook+render section without parking an async worker (ledger
+/// classes L12/P2 — `render_blocking` documents the contract: Lua can
+/// block from either side of the render, via `crap.http`'s blocking
+/// client or a VM-pool acquire of up to 5s). `render_blocking` uses
+/// `spawn_blocking`; these synchronous siblings (auth pages, error
+/// pages) use `block_in_place`, which converts the current worker
+/// instead of requiring every caller to go async. Outside a
+/// multi-thread runtime (unit tests) the closure runs inline.
+fn on_blocking_section<T>(f: impl FnOnce() -> T) -> T {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+
+    match Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
 }
 
 /// Run `before_render` with **no** database access, for pages that have no
@@ -196,13 +215,16 @@ async fn render_blocking(
 /// `before_render` hook runs without database access.
 pub fn render_auth_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
     let data = to_value(ctx).expect("admin page context serializes infallibly");
-    let data = hook_without_crud(state, template, data);
 
-    // Declared, not merely absent: a `{{data "name"}}` function on an
-    // unauthenticated page gets no database, the same as the hook above.
-    let _scope = RenderScope::enter(RenderCrud::none());
+    on_blocking_section(|| {
+        let data = hook_without_crud(state, template, data);
 
-    render_or_error(state, template, &data)
+        // Declared, not merely absent: a `{{data "name"}}` function on an
+        // unauthenticated page gets no database, the same as the hook above.
+        let _scope = RenderScope::enter(RenderCrud::none());
+
+        render_or_error(state, template, &data)
+    })
 }
 
 /// Render a 403 Forbidden page with the given message.
@@ -396,13 +418,18 @@ pub fn toast_only_error(msg: &str) -> Response {
 /// — a handler reaching for a raw render would silently opt its page out.
 fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
     match state.render(template, data) {
-        Ok(html) => Html(html),
+        Ok(html) => Html(html).into_response(),
         Err(e) => {
             error!("Template render error: {}", e);
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            // 500, not 200 (ledger class L8): an infrastructure failure
+            // must not read as success to monitors or htmx.
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string()),
+            )
+                .into_response()
         }
     }
-    .into_response()
 }
 
 /// Render a 400 Bad Request page with the given message. Used when a

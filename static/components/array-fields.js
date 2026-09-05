@@ -176,12 +176,31 @@ class CrapArrayField extends HTMLElement {
   _isAtMax() {
     const fs = this._fieldset;
     if (!fs) return false;
-    const addBtn = /** @type {HTMLElement|null} */ (fs.querySelector('[data-max-rows]'));
+    const addBtn = this._ownEl('[data-max-rows]');
     if (!addBtn?.dataset.maxRows) return false;
     const max = parseInt(addBtn.dataset.maxRows, 10);
     if (!Number.isFinite(max)) return false;
-    const container = fs.querySelector('.form__array-rows');
+    const container = this._ownEl('.form__array-rows');
     return !!container && container.children.length >= max;
+  }
+
+  /**
+   * First descendant matching `selector` that belongs to THIS field —
+   * nested array/blocks fields carry their own add buttons, rows
+   * containers, and empty-state elements, and an unscoped
+   * `querySelector` can land on a nested field's element (the classic
+   * case: the field's own add button sits AFTER its rows container, so
+   * a nested field's button wins document order).
+   * @param {string} selector
+   * @returns {HTMLElement|null}
+   */
+  _ownEl(selector) {
+    const fs = this._fieldset;
+    if (!fs) return null;
+    for (const el of /** @type {NodeListOf<HTMLElement>} */ (fs.querySelectorAll(selector))) {
+      if (el.closest('crap-array-field') === this) return el;
+    }
+    return null;
   }
 
   _updateRowCount() {
@@ -196,18 +215,14 @@ class CrapArrayField extends HTMLElement {
   }
 
   _toggleEmptyState() {
-    const fs = this._fieldset;
-    if (!fs) return;
-    const container = fs.querySelector('.form__array-rows');
-    const empty = /** @type {HTMLElement|null} */ (fs.querySelector('.form__array-empty'));
+    const container = this._ownEl('.form__array-rows');
+    const empty = this._ownEl('.form__array-empty');
     if (!container || !empty) return;
     empty.hidden = container.children.length > 0;
   }
 
   _enforceMaxRows() {
-    const fs = this._fieldset;
-    if (!fs) return;
-    const addBtn = /** @type {HTMLButtonElement|null} */ (fs.querySelector('[data-max-rows]'));
+    const addBtn = /** @type {HTMLButtonElement|null} */ (this._ownEl('[data-max-rows]'));
     if (addBtn) addBtn.disabled = this._isAtMax();
   }
 

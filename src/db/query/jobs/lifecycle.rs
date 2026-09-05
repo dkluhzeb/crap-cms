@@ -327,17 +327,21 @@ pub fn complete_job_repairing(
         None => DbValue::Null,
     };
 
-    conn.execute(
-        &format!(
-            "UPDATE _crap_jobs SET status = 'completed', error = NULL, result = {p2}, \
-             completed_at = {} WHERE id = {p1}",
-            conn.now_expr()
-        ),
-        &[DbValue::Text(id.to_string()), result_val],
-    )
-    .context("Failed to repair job completion")?;
+    let affected = conn
+        .execute(
+            &format!(
+                "UPDATE _crap_jobs SET status = 'completed', error = NULL, result = {p2}, \
+                 completed_at = {} WHERE id = {p1}",
+                conn.now_expr()
+            ),
+            &[DbValue::Text(id.to_string()), result_val],
+        )
+        .context("Failed to repair job completion")?;
 
-    Ok(true)
+    // `affected == 0` = the run row vanished (cancel/purge) between the
+    // CAS and this repair — report "not repaired" instead of firing the
+    // loud committed-batch alarm for a row that no longer exists.
+    Ok(affected > 0)
 }
 
 /// Mark a run completed. Guarded compare-and-set on `status = 'running'`

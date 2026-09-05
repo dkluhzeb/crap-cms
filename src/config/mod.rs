@@ -63,7 +63,7 @@ pub(crate) use features::{
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
-pub use redis_url::RedisUrl;
+pub use redis_url::{DbUrl, RedisUrl};
 pub use routes::RoutesConfig;
 pub use s3_secret_key::S3SecretKey;
 pub use server::{

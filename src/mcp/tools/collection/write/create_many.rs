@@ -123,7 +123,7 @@ pub(in crate::mcp::tools) fn exec_create_many(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP create_many {}: {} created [client={}]",

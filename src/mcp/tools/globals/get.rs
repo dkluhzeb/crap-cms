@@ -50,7 +50,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
             Ok(to_string_pretty(&json!({}))?)
         }
 
-        Err(e) => Err(e.into_anyhow()).context(format!("Failed to read global '{slug}'")),
+        Err(e) => Err(e.into_anyhow_scrubbed()).context(format!("Failed to read global '{slug}'")),
     }
 }
 

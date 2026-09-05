@@ -30,7 +30,9 @@ impl HookRunner {
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         // Load the migration module
-        let chunk = lua.load(&code).set_name(path.to_string_lossy());
+        let chunk = lua
+            .load(&code)
+            .set_name(crate::hooks::init::chunk_name(path));
         let module: mlua::Table = chunk
             .eval()
             .with_context(|| format!("Failed to load migration {}", path.display()))?;

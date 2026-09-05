@@ -27,7 +27,11 @@ pub fn console(config_dir: &Path) -> Result<()> {
     let conn = p.get().context("Failed to get connection")?;
 
     let db_path = cfg.db_path(&config_dir);
-    let mut cmd = console_command(conn.kind(), &db_path, cfg.database.url.as_deref())?;
+    let mut cmd = console_command(
+        conn.kind(),
+        &db_path,
+        cfg.database.url.as_ref().map(crate::config::DbUrl::as_str),
+    )?;
     let program = cmd.get_program().to_string_lossy().into_owned();
 
     cli::info(&format!("Opening {} console ({program})", conn.kind()));

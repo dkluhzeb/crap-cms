@@ -103,7 +103,7 @@ pub(in crate::mcp::tools) fn exec_find(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     let docs: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
     let response = FindResponse {

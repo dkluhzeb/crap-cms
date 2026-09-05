@@ -662,6 +662,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The Postgres password leaked through the "sanitized" config
+  channels.** (Ledger class F17 — found by the convergence audit as a
+  gap in the F17 partition test itself, whose fixture never used a
+  Postgres URL.) `database.url` was a bare `String`, so the full
+  `postgres://user:password@…` credential was readable through the
+  default-on MCP `crap://config` resource and Lua's `crap.config.get` —
+  the exact channels both Redis URLs were newtyped for. Now wrapped in
+  `DbUrl` (masks the password in URL and libpq `password=` forms across
+  Debug/Display/Serialize), with the partition test extended to cover
+  it and the `Display` channel for every URL/key secret.
+- **`read_config_file`'s redaction list had drifted three keys behind
+  the secret-newtype set.** With `[mcp] config_tools` enabled, raw
+  `crap.toml` reads returned both Redis passwords, the Postgres URL,
+  and every `[email.webhook_headers]` value (`Authorization: Bearer …`)
+  in cleartext. The list now covers the URL keys, the webhook-headers
+  section is redacted wholesale, and a pin test keeps the two
+  inventories in sync.
+- **Hook error text carried absolute server paths to API clients.** Lua
+  prefixes `error()` messages with `chunkname:line:`, chunks were named
+  with the canonicalized config dir, and hook errors travel verbatim to
+  gRPC (`INVALID_ARGUMENT`), admin toasts, and MCP tool results — so
+  every hook error disclosed the server's filesystem layout
+  (`/srv/app/config/hooks/posts.lua:14: …`). Chunk names are now
+  config-dir-relative (`hooks/posts.lua:14:` — still actionable for the
+  operator), enforced at all four load sites with an end-to-end test.
+- **MCP returned raw internal error text where every other surface
+  scrubs.** `Internal`/`Transient` service errors reached MCP tool
+  results with their full backend chains (DB identifiers, driver and
+  pool vocabulary) while gRPC and the upload surface return generic
+  text. MCP tools now use a scrubbing conversion that logs the full
+  chain server-side and returns the same generic messages (class P2 —
+  the responder contract's last bypass site).
+- **`McpApiKey` printed the key through `Display`.** `Debug` redacted
+  but `format!("{key}")` did not — and the auth compare itself used the
+  `Display` path. `Display` now redacts like `Debug`, the compare goes
+  through `AsRef<str>`, and the partition test gained a Display-channel
+  check for every URL/key secret.
 - **`io.popen` was reachable from Lua hooks.** (Ledger class F16.) The
   sandbox has always removed `os.execute`, but its sibling `io.popen` —
   the other process-execution entry point — survived, so any hook,
@@ -1506,6 +1543,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Nested admin components captured each other's events and elements.**
+  (Ledger class M13, five instances found by applying the client-side
+  lens the class was mined from.) Nested tabs: a click on an inner tab
+  group bubbled to the outer one and blanked the whole field; nested
+  collapsible groups could never collapse (the outer instance re-toggled
+  them right back); a nested array's `max_rows` cap froze the parent's
+  Add button while the parent's own cap went unenforced; the
+  collapsed-row label watcher could bind a nested row's input; removing
+  a parent row hid a nested array's empty-state message. All five now
+  use ownership checks (`closest(<tag>) === this`) matching the
+  established `array-fields` idiom.
+- **Relationship/upload drawer results were mouse-only.** The browse
+  drawer's cards and rows had no role, no tab stop, and no keyboard
+  handler — a keyboard or screen-reader user could not pick a result at
+  all (the inline dropdown was already fully accessible). They are now
+  focusable buttons with Enter/Space activation and selection state
+  exposed via `aria-pressed`.
+- **A Rust panic could leak the transaction-scoped Lua infra into the
+  VM pool.** `crap.transaction`'s `LuaCrudInfra` swap was restored by a
+  plain statement after the closure call (its `TxContext` sibling was
+  already RAII-guarded) — a panic unwinding out of a `crap.*` callback
+  returned the VM to the pool with a live deferred queue, after which
+  `crap.tx.on_commit` on an unrelated request silently queued effects
+  nobody would ever run. The restore is now an RAII guard like
+  `TxSlot`.
+- **The queue-time gate for queued bulk ops could run as anonymous on a
+  DB error.** Resolving the queuing user swallowed query failures into
+  `None` (`.ok().flatten()`); a transient failure made the early access
+  gate evaluate with no principal. Now propagates as an internal error
+  (execution-time gating was always fail-closed; this makes the early
+  answer honest too).
+- **Unauthenticated admin pages ran Lua hooks on async worker
+  threads.** `render_blocking` documents that `before_render`/template
+  data can block (Lua `crap.http`, a 5s VM-pool acquire) and uses
+  `spawn_blocking`; its auth-page and error-page siblings ran the same
+  hooks inline on the tokio worker — one slow hook on the login page
+  could stall the runtime. Both now convert the worker via
+  `block_in_place`. Template render failure also now returns 500, not a
+  200 "Something went wrong".
+- **Job-completion repair reported success for a vanished run.** The
+  post-timeout repair `UPDATE` never checked affected rows, so a run
+  cancelled between the compare-and-set and the repair still fired the
+  loud "batch COMMITTED — run corrected" alarm for a row that no longer
+  existed.
+- **`crap.uploads.sign_url` accepted `%` in paths that can never
+  verify.** The mint-side validator rejects characters that don't
+  survive URL round-trips, but missed percent (the serve route
+  percent-decodes, so the recomputed path never matches). Now rejected
+  with the same re-upload guidance.
 - **`crap.hooks.register`/`remove` silently half-applied at runtime.**
   (Ledger class M15.) Called from a running hook instead of init.lua,
   the registration landed in a single VM of the pool — the hook fired

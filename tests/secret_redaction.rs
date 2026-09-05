@@ -40,6 +40,7 @@ grpc_port = 50051
 
 [database]
 path = "data/crap.db"
+url = "postgres://crap:SENTINEL-PG-PASSWORD@db.internal/crap_cms"
 
 [auth]
 secret = "SENTINEL-JWT-0123456789abcdef0123456789abcdef"

@@ -50,7 +50,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         &TargetRef::collection(slug),
         op_args,
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     let versions: Vec<Value> = result
         .docs
@@ -86,7 +86,7 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         &TargetRef::collection(slug),
         RestoreVersionArgs::new(id, version_id),
     )
-    .map_err(|e| e.into_service_error().into_anyhow())?;
+    .map_err(|e| e.into_service_error().into_anyhow_scrubbed())?;
 
     info!(
         "MCP restore_version {}: {} -> {} [client={}]",
