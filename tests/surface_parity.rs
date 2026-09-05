@@ -220,15 +220,7 @@ fn write_surfaces_attach_invalidation_transport() {
         for file in files {
             let contents = fs::read_to_string(&file).unwrap_or_default();
 
-            let builds_ctx = contents.contains("ServiceContext::collection");
-            let does_write = INVALIDATION_WRITE_OPS
-                .iter()
-                .any(|op| contents.contains(op));
-
-            let attaches_transport =
-                contents.contains("invalidation_transport") || contents.contains(".infra(");
-
-            if builds_ctx && does_write && !attaches_transport {
+            if misses_invalidation_transport(&contents) {
                 let rel = file
                     .strip_prefix(root)
                     .unwrap_or(&file)
@@ -249,6 +241,80 @@ fn write_surfaces_attach_invalidation_transport() {
          `.infra(...)` (which bundles it) — like the sibling \
          update/undelete/restore handlers do.\n\n{}",
         offenders.join("\n")
+    );
+}
+
+/// The decision core of [`write_surfaces_attach_invalidation_transport`],
+/// extracted so the positive control below can prove it still fires.
+fn misses_invalidation_transport(contents: &str) -> bool {
+    let builds_ctx = contents.contains("ServiceContext::collection");
+    let does_write = INVALIDATION_WRITE_OPS
+        .iter()
+        .any(|op| contents.contains(op));
+    let attaches_transport =
+        contents.contains("invalidation_transport") || contents.contains(".infra(");
+
+    builds_ctx && does_write && !attaches_transport
+}
+
+/// Positive control (ledger class **D4**): the invalidation matcher must
+/// fire on a synthetic violating handler. This exact guard was once
+/// vacuous — after the op-core migration it matched only retired service
+/// fn names and flagged nothing.
+#[test]
+fn invalidation_scan_fires_on_synthetic_violation() {
+    let synthetic = r"
+        let ctx = ServiceContext::collection(slug, &def).conn(conn).build();
+        Delete::run(&ctx, input)?;
+    ";
+    assert!(
+        misses_invalidation_transport(synthetic),
+        "a ServiceContext + write op with no transport must be flagged"
+    );
+
+    let compliant = r"
+        let ctx = ServiceContext::collection(slug, &def).infra(&state.infra).build();
+        Delete::run(&ctx, input)?;
+    ";
+    assert!(
+        !misses_invalidation_transport(compliant),
+        ".infra() bundles the transport and must pass"
+    );
+}
+
+/// Liveness check for the matcher's vocabulary (ledger class **D4**):
+/// every `INVALIDATION_WRITE_OPS` name must still occur in the codebase
+/// (service layer, op bodies, or the surfaces themselves). This is the
+/// exact decay mode that made the guard vacuous once — the op-core
+/// migration renamed the write entry points and the old list matched
+/// nothing.
+#[test]
+fn invalidation_write_ops_vocabulary_is_live() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = String::new();
+    for dir in [
+        "src/service",
+        "src/admin",
+        "src/api",
+        "src/mcp",
+        "src/hooks",
+    ] {
+        let mut files = Vec::new();
+        rust_files(&root.join(dir), &mut files);
+        for f in files {
+            sources.push_str(&fs::read_to_string(f).unwrap_or_default());
+        }
+    }
+
+    let stale: Vec<&&str> = INVALIDATION_WRITE_OPS
+        .iter()
+        .filter(|op| !sources.contains(**op))
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "INVALIDATION_WRITE_OPS entries match nothing in the codebase — \
+         the guard is going vacuous again; update the vocabulary: {stale:?}"
     );
 }
 
@@ -308,6 +374,128 @@ fn auth_invalidation_is_derived_from_the_action() {
          flag.\n\n{}",
         offenders.join("\n")
     );
+}
+
+/// Reviewed offline-admin CLI write paths: `(path suffix, write call)`.
+/// Every entry documents which invariants the site maintains by hand.
+const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
+    // Offline trash purge: ref-count guard + before_hard_delete +
+    // fts_delete + upload-file cleanup, mirroring service delete.
+    ("commands/trash.rs", "query::delete("),
+    // Bootstrap user creation: password policy + ref_count::after_create
+    // + fts_upsert, mirroring service create.
+    ("commands/user/create.rs", "query::create("),
+    // Offline user deletion: before_hard_delete + fts_delete,
+    // mirroring service delete.
+    ("commands/user/modify.rs", "query::delete("),
+    // NOTE: `import_cmd.rs` writes via hand-built SQL + `tx.execute`
+    // (with its own ref-count replay) — invisible to this textual
+    // primitive scan, per the scan limits documented at the top of
+    // this file.
+];
+
+/// CLI write primitives are confined to reviewed offline-admin paths.
+///
+/// Ledger class **P5**: a CLI (or any non-surface) path that mutates
+/// documents with raw `query::*` writes silently bypasses the service
+/// layer's invariants — validation, hooks, ref counting, FTS sync,
+/// delete protection. The reviewed paths below hand-replicate exactly
+/// the invariants they need (and regression tests pin them:
+/// `cli_user_paths_maintain_ref_counts_and_fts`,
+/// `import_adjusts_ref_counts`, trash-purge ref-count tests). A new
+/// write call anywhere else in `src/commands` must either route through
+/// a service op or be added here with a justification — which forces
+/// the decision through review.
+#[test]
+fn cli_commands_write_only_through_reviewed_paths() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let mut files = Vec::new();
+    rust_files(&Path::new(root).join("src/commands"), &mut files);
+    assert!(!files.is_empty(), "src/commands must exist");
+
+    let mut violations = Vec::new();
+    for file in &files {
+        let contents = fs::read_to_string(file).unwrap_or_default();
+        let rel = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        for call in FORBIDDEN_CALLS.iter().filter(|c| is_write_primitive(c)) {
+            for (lineno, line) in contents.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") || !line.contains(call) {
+                    continue;
+                }
+                let allowed = CLI_WRITE_ALLOWLIST
+                    .iter()
+                    .any(|(suffix, c)| rel.ends_with(suffix) && c == call);
+                if !allowed {
+                    violations.push(format!("{rel}:{} → {call}", lineno + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "CLI write primitive outside the reviewed offline-admin paths — \
+         route it through a service op, or add it to CLI_WRITE_ALLOWLIST \
+         with the invariants it maintains by hand:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Positive control for the scan above (ledger class **D4**): the
+/// matcher must actually fire on a synthetic violation, so the guard
+/// can never go silently vacuous the way the invalidation-transport
+/// matcher once did.
+#[test]
+fn cli_write_scan_fires_on_synthetic_violation() {
+    let synthetic = "    query::delete(&tx, slug, id)?;\n";
+    let hit = FORBIDDEN_CALLS
+        .iter()
+        .filter(|c| is_write_primitive(c))
+        .any(|call| synthetic.contains(call));
+    assert!(
+        hit,
+        "the write-primitive list must match a plain query::delete call"
+    );
+}
+
+/// The CLI allowlist itself must stay live: every entry's file must
+/// still contain its call, or the entry is stale and gets removed
+/// (mirrors `allowlist_has_no_stale_entries`).
+#[test]
+fn cli_write_allowlist_has_no_stale_entries() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for (suffix, call) in CLI_WRITE_ALLOWLIST {
+        let path = root.join("src").join(suffix);
+        let present = fs::read_to_string(&path)
+            .ok()
+            .is_some_and(|c| c.contains(call));
+        assert!(
+            present,
+            "stale CLI_WRITE_ALLOWLIST entry: {suffix} no longer contains {call}"
+        );
+    }
+}
+
+/// Write-primitive subset of [`FORBIDDEN_CALLS`].
+fn is_write_primitive(call: &str) -> bool {
+    const WRITES: &[&str] = &[
+        "query::create(",
+        "query::update(",
+        "query::update_partial(",
+        "query::update_global(",
+        "query::delete(",
+        "query::soft_delete(",
+        "query::undelete(",
+        "query::create_version(",
+    ];
+    WRITES.contains(&call)
 }
 
 #[test]

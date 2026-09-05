@@ -1482,6 +1482,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **CLI `user create`/`user delete` skipped write invariants the service
+  path maintains.** (Ledger class P5.) `user create` never ran
+  `ref_count::after_create` or the FTS upsert — a user created with a
+  relationship field left the target's `_ref_count` too low, punching a
+  hole in delete protection, and the user was missing from admin search
+  indexes; `user delete` never ran `fts_delete`, leaving a stale FTS
+  row. Both now maintain the same invariants as service create/delete
+  (safe no-ops when the collection has no refs or searchable fields).
+  Found by building the new CLI write-primitive structural guard.
 - **Startup reference validation had four blind spots.** The boot-time pass
   that resolves every hook/access ref (so typos fail the boot instead of
   the first request) did not cover: **job refs** (`handler` and `access` —
@@ -3700,6 +3709,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Structural guards for three ledger classes.** New
+  `tests/wiring_completeness.rs`: every Lua-typegen render function must
+  be wired (the class that silently dropped the `crap.jobs` run API from
+  the generated types), every defined web component must be placed
+  somewhere (the class that shipped a non-functional inline-create
+  panel), and the CI workflow must still carry every enforcement gate
+  (the class that silently skipped 139 browser tests for a release
+  cycle). `surface_parity.rs` gained a CLI write-primitive scan with a
+  reviewed allowlist (class P5), positive synthetic-violation controls
+  for its structural matchers, and a vocabulary-liveness check on the
+  invalidation-transport scan — the exact decay mode that once made
+  that guard vacuous (class D4).
+- **Bug-Class Ledger founded (`docs/dev/bug-classes.md`).** Every
+  recurring bug class from the audit programs (66 classes mined from
+  ~2,300 CHANGELOG entries plus the sweep records) is now registered
+  with its structural guard — the test, generation gate, chokepoint, or
+  partition pin that makes recurrence loud — or an explicit
+  PARTIAL/UNGUARDED status. New findings are triaged against the ledger
+  (a guarded-class instance means the guard failed and gets fixed
+  first); the unguarded count and the rate of genuinely new classes are
+  the convergence metrics for the pre-tag audit rounds.
 - **Development documents moved out of the user-facing book.** The mdbook's
   *Internals* section carried five internal engineering artefacts — the
   Operation Core migration plan, the performance-architecture and

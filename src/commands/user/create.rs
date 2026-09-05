@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     cli::{self, crap_theme},
-    config::PasswordPolicy,
+    config::{LocaleConfig, PasswordPolicy},
     core::{DocumentFields, Registry},
     db::{DbPool, query},
     hooks::lifecycle::is_valid_email_format,
@@ -38,6 +38,7 @@ pub struct UserCreateParams<'a> {
     pub password: Option<String>,
     pub fields: Vec<(String, String)>,
     pub password_policy: &'a PasswordPolicy,
+    pub locale: &'a LocaleConfig,
 }
 
 /// Create a new user in an auth collection.
@@ -76,6 +77,15 @@ pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
 
     query::update_password(&tx, p.collection, &doc.id, &password)
         .context("Failed to set password")?;
+
+    // Same invariants the service create path maintains: outgoing
+    // relationship refs count toward the targets' delete protection, and
+    // the FTS index (a no-op when the collection has no searchable
+    // fields) stays in sync.
+    query::ref_count::after_create(&tx, p.collection, &doc.id, &def.fields, p.locale)
+        .context("Failed to adjust ref counts")?;
+    query::fts::fts_upsert(&tx, p.collection, &doc, Some(&def))
+        .context("Failed to sync FTS index")?;
 
     tx.commit().context("Failed to commit transaction")?;
 

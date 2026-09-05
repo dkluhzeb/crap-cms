@@ -487,6 +487,7 @@ fn cmd_user_create_missing_collection_errors() {
         password: Some("pw".to_string()),
         fields: vec![],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &crap_cms::config::LocaleConfig::default(),
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();

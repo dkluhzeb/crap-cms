@@ -65,6 +65,8 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
     query::ref_count::before_hard_delete(&tx, p.collection, &doc.id, &def.fields, p.locale)
         .context("Failed to adjust ref counts")?;
 
+    query::fts::fts_delete(&tx, p.collection, &doc.id).context("Failed to clear FTS entry")?;
+
     query::delete(&tx, p.collection, &doc.id).context("Failed to delete user")?;
 
     tx.commit().context("Failed to commit delete transaction")?;

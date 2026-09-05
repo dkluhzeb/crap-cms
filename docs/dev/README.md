@@ -8,6 +8,7 @@ use it.
 
 | Document | Kind | Status |
 |----------|------|--------|
+| [Bug-Class Ledger](bug-classes.md) | class registry + guards | living — append-only, drives audit convergence |
 | [Operation Core — Migration Plan](operation-core-migration.md) | migration plan | all stages landed (Aug 2026) |
 | [Performance Architecture — Plan](performance-architecture.md) | proposal | partially landed; rest deferred |
 | [Lua Connection Injection — Hardening Plan](lua-connection-injection.md) | proposal | deferred (no known bug) |

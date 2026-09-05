@@ -24,7 +24,7 @@ use crap_cms::commands;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
-use crap_cms::db::{DbPool, migrate, pool, query};
+use crap_cms::db::{DbConnection as _, DbPool, migrate, pool, query};
 use crap_cms::hooks;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -295,6 +295,7 @@ fn cmd_user_create_via_library() {
         password: Some("password123".to_string()),
         fields: vec![("name".to_string(), "Lib User".to_string())],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &crap_cms::config::LocaleConfig::default(),
     })
     .unwrap();
 
@@ -329,6 +330,7 @@ fn cmd_user_create_extra_fields() {
             ("role".to_string(), "admin".to_string()),
         ],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &crap_cms::config::LocaleConfig::default(),
     })
     .unwrap();
 
@@ -353,6 +355,7 @@ fn cmd_user_create_non_auth_errors() {
         password: Some("password".to_string()),
         fields: vec![],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &crap_cms::config::LocaleConfig::default(),
     });
     assert!(
         result.is_err(),
@@ -926,4 +929,133 @@ fn cmd_user_list_missing_collection_errors() {
     );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not found"), "error: {err}");
+}
+
+/// Regression (ledger P5): the CLI `user create`/`user delete` offline
+/// paths must maintain the same invariants as the service write path —
+/// outgoing relationship refs count toward the targets' delete
+/// protection, and the FTS index stays in sync on both create and
+/// hard-delete. Before the fix, `user create` skipped
+/// `ref_count::after_create` + `fts_upsert` and `user delete` skipped
+/// `fts_delete`.
+#[test]
+fn cli_user_paths_maintain_ref_counts_and_fts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(config_dir.join("collections")).unwrap();
+
+    std::fs::write(
+        config_dir.join("crap.toml"),
+        "[server]\nadmin_port = 3000\n[database]\npath = \"data/test.db\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config_dir.join("collections/media.lua"),
+        r#"crap.collections.define("media", { fields = { { name = "alt", type = "text" } } })"#,
+    )
+    .unwrap();
+    std::fs::write(
+        config_dir.join("collections/users.lua"),
+        r#"crap.collections.define("users", {
+    auth = true,
+    fields = {
+        { name = "name", type = "text" },
+        { name = "avatar", type = "relationship", relation_to = "media" },
+    },
+    admin = { list_searchable_fields = { "name" } },
+})"#,
+    )
+    .unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&pool, &registry, &cfg.locale).expect("sync schema");
+
+    // Seed a media target document.
+    {
+        let media_def = registry.get_collection("media").unwrap();
+        let mut data = DocumentFields::new();
+        data.insert("alt".to_string(), json!("pic"));
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        query::create(&tx, "media", media_def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+    let conn = pool.get().unwrap();
+    let media_def = registry.get_collection("media").unwrap();
+    let media_id = query::find(
+        &conn,
+        "media",
+        media_def,
+        &query::FindQuery::default(),
+        None,
+    )
+    .unwrap()
+    .pop()
+    .unwrap()
+    .id;
+    drop(conn);
+
+    // CLI create referencing the media doc.
+    commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("ref@example.com".to_string()),
+        password: Some("password-12345".to_string()),
+        fields: vec![
+            ("name".to_string(), "Ref User".to_string()),
+            ("avatar".to_string(), media_id.to_string()),
+        ],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &cfg.locale,
+    })
+    .unwrap();
+
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        query::ref_count::get_ref_count(&conn, "media", &media_id).unwrap(),
+        Some(1),
+        "CLI user create must count the outgoing relationship ref"
+    );
+
+    let users_def = registry.get_collection("users").unwrap();
+    let user_id = query::find_by_email(&conn, "users", users_def, "ref@example.com", false)
+        .unwrap()
+        .unwrap()
+        .id;
+    let fts_rows = |conn: &crap_cms::db::BoxedConnection| -> i64 {
+        let row = conn
+            .query_one("SELECT COUNT(*) AS n FROM _fts_users", &[])
+            .unwrap()
+            .expect("count row");
+        row.get_i64("n").expect("integer count")
+    };
+    assert_eq!(fts_rows(&conn), 1, "CLI user create must index into FTS");
+    drop(conn);
+
+    // CLI delete: refs decremented back, FTS row removed.
+    commands::user_delete(commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        locale: &cfg.locale,
+        collection: "users",
+        email: None,
+        id: Some(user_id.to_string()),
+        confirm: true,
+    })
+    .unwrap();
+
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        query::ref_count::get_ref_count(&conn, "media", &media_id).unwrap(),
+        Some(0),
+        "CLI user delete must release the relationship ref"
+    );
+    assert_eq!(
+        fts_rows(&conn),
+        0,
+        "CLI user delete must clear the FTS entry"
+    );
 }
