@@ -208,3 +208,57 @@ fn ci_workflow_still_runs_every_gate() {
          project relies on is no longer enforced:\n  {missing:?}"
     );
 }
+
+/// Init-phase completeness pin (ledger class **M15**): every Lua API
+/// that registers into a process-wide registry (`crap.*.define`,
+/// `crap.*.register*`) must carry an init-phase guard — a runtime call
+/// would land in one pooled VM and be intermittent across requests, or
+/// bypass migration/scheduler enrollment. Building this pin found
+/// `crap.hooks.register`/`remove` unguarded. A file counts as guarded
+/// when it references `require_init_phase` (the helper) or `InitPhase`
+/// (the direct app-data check `pages.rs` uses).
+#[test]
+fn every_registering_lua_api_is_init_phase_guarded() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hooks/lua_api");
+    let mut files = Vec::new();
+    files_with_ext(&root, "rs", &mut files);
+    assert!(!files.is_empty(), "src/hooks/lua_api must exist");
+
+    let mut violations = Vec::new();
+    let mut registering_files = 0;
+
+    for file in &files {
+        let contents = fs::read_to_string(file).unwrap_or_default();
+
+        let registers = contents.lines().any(|l| {
+            l.contains("path = \"crap.") && (l.contains(".define\"") || l.contains(".register"))
+        });
+        if !registers {
+            continue;
+        }
+        registering_files += 1;
+
+        let guarded = contents.contains("require_init_phase") || contents.contains("InitPhase");
+        if !guarded {
+            violations.push(
+                file.strip_prefix(root.parent().unwrap().parent().unwrap())
+                    .unwrap_or(file)
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+
+    assert!(
+        registering_files >= 10,
+        "expected the full register/define API inventory, found \
+         {registering_files} files — the detection pattern may have rotted \
+         (itself a D4)"
+    );
+    assert!(
+        violations.is_empty(),
+        "Lua registration API(s) without an init-phase guard — a runtime \
+         call lands in one pooled VM and misbehaves intermittently:\n  {}",
+        violations.join("\n  ")
+    );
+}

@@ -222,15 +222,28 @@ fn check_resolvable(lua: &Lua, value: Value, field: &str, label: &str, out: &mut
 
 /// Collect any unresolved refs in a `Hooks` struct.
 fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
+    // Exhaustive destructuring (ledger class M8): a new hook slot on
+    // `Hooks` fails to compile HERE until this validator learns it.
+    let Hooks {
+        before_validate,
+        before_change,
+        after_change,
+        before_read,
+        after_read,
+        before_delete,
+        after_delete,
+        before_broadcast,
+    } = hooks;
+
     let pairs: [(&str, &[HookRef]); 8] = [
-        ("before_validate", &hooks.before_validate),
-        ("before_change", &hooks.before_change),
-        ("after_change", &hooks.after_change),
-        ("before_read", &hooks.before_read),
-        ("after_read", &hooks.after_read),
-        ("before_delete", &hooks.before_delete),
-        ("after_delete", &hooks.after_delete),
-        ("before_broadcast", &hooks.before_broadcast),
+        ("before_validate", before_validate),
+        ("before_change", before_change),
+        ("after_change", after_change),
+        ("before_read", before_read),
+        ("after_read", after_read),
+        ("before_delete", before_delete),
+        ("after_delete", after_delete),
+        ("before_broadcast", before_broadcast),
     ];
 
     for (kind, refs) in pairs {
@@ -766,41 +779,32 @@ fn collect_field_tables(
 
 /// Collect any unresolved refs in an `Access` struct.
 fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>) {
+    // Exhaustive destructuring (ledger class M8): a new access key on
+    // `Access` fails to compile HERE until this validator learns it.
+    let Access {
+        read,
+        create,
+        update,
+        delete,
+        trash,
+        draft,
+        versions,
+        unlock,
+        admin,
+        mcp,
+    } = access;
+
     let pairs: [(&str, Option<&str>); 10] = [
-        ("access.read", access.read.as_ref().map(HookRef::reference)),
-        (
-            "access.create",
-            access.create.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.update",
-            access.update.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.delete",
-            access.delete.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.trash",
-            access.trash.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.draft",
-            access.draft.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.versions",
-            access.versions.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.unlock",
-            access.unlock.as_ref().map(HookRef::reference),
-        ),
-        (
-            "access.admin",
-            access.admin.as_ref().map(HookRef::reference),
-        ),
-        ("access.mcp", access.mcp.as_ref().map(HookRef::reference)),
+        ("access.read", read.as_ref().map(HookRef::reference)),
+        ("access.create", create.as_ref().map(HookRef::reference)),
+        ("access.update", update.as_ref().map(HookRef::reference)),
+        ("access.delete", delete.as_ref().map(HookRef::reference)),
+        ("access.trash", trash.as_ref().map(HookRef::reference)),
+        ("access.draft", draft.as_ref().map(HookRef::reference)),
+        ("access.versions", versions.as_ref().map(HookRef::reference)),
+        ("access.unlock", unlock.as_ref().map(HookRef::reference)),
+        ("access.admin", admin.as_ref().map(HookRef::reference)),
+        ("access.mcp", mcp.as_ref().map(HookRef::reference)),
     ];
 
     for (kind, maybe_ref) in pairs {
@@ -832,7 +836,13 @@ fn check_auth_method_refs(lua: &Lua, methods: &[AuthMethod], source: &str, out: 
             } if resolve_hook_function(lua, r.reference()).is_err() => {
                 out.push(format!("{source}: mfa_deliver: '{}'", r.reference()));
             }
-            _ => {}
+            // Exhaustive on purpose (ledger class M8): a new AuthMethod
+            // variant fails to compile HERE until this validator decides
+            // whether it carries resolvable refs.
+            AuthMethod::Strategy { .. }
+            | AuthMethod::PasswordLogin { .. }
+            | AuthMethod::Bearer { .. }
+            | AuthMethod::SessionCookie { .. } => {}
         }
     }
 }
@@ -889,12 +899,19 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
     walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
         let field_src = field_source_label(source, path, f);
 
-        // field-level hooks
+        // field-level hooks — exhaustively destructured (ledger class
+        // M8): a new field-hook slot fails to compile here.
+        let crate::core::FieldHooks {
+            before_validate,
+            before_change,
+            after_change,
+            after_read,
+        } = &f.hooks;
         let hook_pairs: [(&str, &[HookRef]); 4] = [
-            ("before_validate", &f.hooks.before_validate),
-            ("before_change", &f.hooks.before_change),
-            ("after_change", &f.hooks.after_change),
-            ("after_read", &f.hooks.after_read),
+            ("before_validate", before_validate),
+            ("before_change", before_change),
+            ("after_change", after_change),
+            ("after_read", after_read),
         ];
         for (kind, refs) in hook_pairs {
             for r in refs {

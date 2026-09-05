@@ -134,14 +134,14 @@ most).
 | M5 | Hook/callback context missing a field it needs | typed context structs (single source for Lua shape); inner ctx is a deliberate superset | GUARDED |
 | M6 | Unbounded recursion/size/connections on user-influenced input | hook-depth guard, `max_nesting_depth`, `lua_to_json` 64-level cap, HTTP/download/body/message size caps, SSE+Subscribe connection caps (CAS), pixel-per-byte ratio cap, bulk batch caps | PARTIAL |
 | M7 | Component written but never wired in — typegen renderer not in `BLOCK_RENDERS`, web component defined but never placed in the DOM | `tests/wiring_completeness.rs`: every `render_*` fn must be referenced beyond its definition; every defined `crap-*` element must be placed in a template or another JS file; both with positive controls | GUARDED |
-| M8 | Startup validation blind to a statically-known ref kind | `validate_hook_references` now covers collection/global/field hooks+access, conditions, jobs, auth methods, routes, admin gate; no meta-pin that every `HookRef`-typed field is visited | PARTIAL |
+| M8 | Startup validation blind to a statically-known ref kind | `validate_hook_references` covers every ref kind; `Hooks`, `Access`, `FieldHooks` exhaustively destructured and the `AuthMethod` match wildcard-free inside the validator — a new hook slot/access key/auth variant fails to COMPILE until the validator learns it. JobDefinition/config-level refs stay review-time | GUARDED |
 | M9 | Hazardous idiom at every call site, only symptom site fixed (deferred tx upgrade) | one-time audit (`transaction_immediate`); no lint | PARTIAL |
 | M10 | Test/dev harness diverges from production wiring, hiding a surface | fixed instances (e2e Handlebars runner, `served_url` pair); convention | PARTIAL |
 | M11 | Coverage stops at the in-process seam; transport layer untested | wire-level gRPC e2e (all 31 RPCs), browser e2e for admin | GUARDED |
 | M12 | Client component lifecycle non-idempotence — connect/disconnect accumulates listeners or destroys state (14 components; SSE dup `EventSource`; editors losing state on row reorder) | `_connected` guards (19 components); the guard-flag/DOM-lifetime pairing is reasoned per component; browser e2e | PARTIAL |
 | M13 | Nested component instance captures its descendants' events/DOM (double-fired bubbling events, drag selecting nested rows, `__INDEX__` replacing child placeholders) | event-target ownership checks, `:scope >` selectors; per-site | PARTIAL |
 | M14 | Browser/platform semantics re-implemented by hand instead of delegated (FormData without submitter, multipart-vs-urlencoded, textarea LF rule, htmx shadow-root discovery) | delegate-to-platform principle (declarative htmx, native submission, `formnovalidate`); per-site | PARTIAL |
-| M15 | Init-phase-only API silently half-applies when called at runtime (six registration APIs landing in one VM / bypassing migration) | `InitPhase` app-data marker + per-API rejection tests; needs completeness pin over registry-mutating Lua APIs | GUARDED |
+| M15 | Init-phase-only API silently half-applies when called at runtime | `InitPhase` marker + per-API rejection tests + completeness pin `every_registering_lua_api_is_init_phase_guarded` — building the pin found `crap.hooks.register`/`remove` UNGUARDED (runtime registration landed in one pooled VM, intermittent); both now rejected outside init | GUARDED |
 | M16 | Accessibility/semantic contract missing on injected or custom UI (modals without `<dialog>`, dropdowns invisible to screen readers, missing `role="alert"`, broken label/for) | native `<dialog>`, WAI-ARIA roles per component; convention | PARTIAL |
 
 ## D — Drift (artifacts & meta)
@@ -179,7 +179,7 @@ most).
 | L13 | Formatter/codegen mutates or mis-tokenizes its own input | **proptests**: idempotency + content-preservation; verbatim byte-ranges; golden compile tests (`generated_rust_parses`, kitchen-sink goldens) | GUARDED |
 | L14 | Panic — or silent wrong answer — from untrusted input (byte-slicing UTF-8, byte-counted `min_length`, garbled `url_decode`, JS handlers aborted by `querySelector().value`/`JSON.parse(null)`/throwing `localStorage`) | char-safe helpers, `.chars().count()`, try/catch at client entry points; convention | PARTIAL |
 | L15 | Absent optional collapses to a hard default instead of inheriting — incl. a UI empty state defaulting into a data-narrowing filter | `effective_max_attempts`-style resolution points; empty filter drawer renders zero rows | PARTIAL |
-| L16 | Numeric overflow / lossy cast silently changes meaning (unchecked `*` on parsed sizes, `as` narrowing a PID to a process group, f64→u32 image casts) | `checked_mul`, `saturating_add`/`saturating_mul`, `i32::try_from`, `is_finite()`; lint candidate: ban narrowing `as` on input-derived values | PARTIAL |
+| L16 | Numeric overflow / lossy cast silently changes meaning | narrowing-`as` lints (`cast_possible_truncation`/`_wrap`/`_sign_loss`) are ALREADY denied in production code (clippy pedantic at warn + CI `-D warnings`; tests opt out explicitly); overflow on parsed input guarded per-site (`checked_mul`, `saturating_*`, `try_from`, `is_finite`) — that half stays convention | PARTIAL |
 | L17 | Partial outcome reported as complete success (skipped referenced docs uncounted, silent 10K bulk cap, first-error-only validation) | `skipped` counts, `RESOURCE_EXHAUSTED` on cap, full error lists; no pin that every clamped op signals truncation | PARTIAL |
 | L18 | Ambiguous sentinel conflates two outcomes (`0` = "no refs" and "no document"; `None` = "disabled" and "invalid") | `Option`/enum return types at the fixed sites; convention | PARTIAL |
 
@@ -191,9 +191,9 @@ Remaining UNGUARDED: **D7** only — no structural fix exists for stale
 comments; folded into the review lens list below. Everything else from
 the founding queues is guarded (M7, P5, D2) or hardened (D4).
 High-value PARTIAL work left: F14 sink inventory, S11 config-validation
-completeness, P11 node-local-state inventory, L16 narrowing-cast lint,
-L17 truncation-signal pin, P2 admin/MCP behavioral parity, M8 HookRef
-meta-pin, M15 InitPhase completeness pin.
+completeness, P11 node-local-state inventory, L17 truncation-signal
+pin, P2 admin/MCP behavioral parity. (M8, M15 guarded and L16 verified
+in round 2026-09-05 (5).)
 
 High-value PARTIAL hardening (new since the full-CHANGELOG pass):
 **F14** sink inventory (one escaping-policy table over SQL/Lua/HTML/
@@ -294,3 +294,13 @@ memories; the load-bearing ones:
   found **`io.popen` live in the hook sandbox** — process execution,
   `os.execute`'s sibling — removed, contract frozen). 84 classes:
   32 GUARDED, 51 PARTIAL, 1 UNGUARDED (D7).
+- 2026-09-05 (5) — Phase 2/3 round 3 (PARTIAL queue): M15 → GUARDED —
+  the completeness pin found **`crap.hooks.register`/`remove` live at
+  runtime** (landed in one pooled VM, intermittent across requests);
+  both now init-phase-gated with regression tests. M8 → GUARDED —
+  `Hooks`/`Access`/`FieldHooks` exhaustively destructured and the
+  `AuthMethod` match wildcard-free inside `validate_hook_references`,
+  so new ref slots fail to compile at the validator. L16 verified:
+  narrowing-cast lints already denied via pedantic + `-D warnings`
+  (row corrected — it understated existing machinery, a mini-D4).
+  84 classes: 34 GUARDED, 49 PARTIAL, 1 UNGUARDED (D7).

@@ -106,12 +106,19 @@ async fn in_process_invalidation_transport_roundtrip() {
 #[test]
 fn factory_defaults_to_memory_transport() {
     let cfg = LiveConfig::default();
-    let transport = create_event_transport(&cfg, "redis://127.0.0.1:6379")
-        .expect("factory ok")
-        .expect("live enabled -> Some transport");
+    let transport = create_event_transport(
+        &cfg,
+        &crap_cms::config::RedisUrl::from("redis://127.0.0.1:6379"),
+    )
+    .expect("factory ok")
+    .expect("live enabled -> Some transport");
     assert_eq!(transport.kind(), "in_process");
 
-    let inv = create_invalidation_transport(&cfg, "redis://127.0.0.1:6379").expect("factory ok");
+    let inv = create_invalidation_transport(
+        &cfg,
+        &crap_cms::config::RedisUrl::from("redis://127.0.0.1:6379"),
+    )
+    .expect("factory ok");
     assert_eq!(inv.kind(), "in_process");
 }
 
@@ -122,7 +129,8 @@ fn factory_honours_disabled_live() {
         ..LiveConfig::default()
     };
 
-    let transport = create_event_transport(&cfg, "").expect("factory ok");
+    let transport =
+        create_event_transport(&cfg, &crap_cms::config::RedisUrl::default()).expect("factory ok");
     assert!(transport.is_none());
 }
 
@@ -134,7 +142,9 @@ fn factory_rejects_redis_without_feature() {
         ..LiveConfig::default()
     };
 
-    let Err(err) = create_event_transport(&cfg, "redis://localhost") else {
+    let Err(err) =
+        create_event_transport(&cfg, &crap_cms::config::RedisUrl::from("redis://localhost"))
+    else {
         panic!("expected error when redis feature is disabled");
     };
     assert!(

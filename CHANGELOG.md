@@ -1506,6 +1506,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`crap.hooks.register`/`remove` silently half-applied at runtime.**
+  (Ledger class M15.) Called from a running hook instead of init.lua,
+  the registration landed in a single VM of the pool — the hook fired
+  on some requests and not others, with no error. Both now reject
+  runtime calls with the same init-phase error every other registration
+  API raises, and a new completeness pin verifies every registering
+  Lua API carries the guard.
 - **CLI `user create`/`user delete` skipped write invariants the service
   path maintains.** (Ledger class P5.) `user create` never ran
   `ref_count::after_create` or the FTS upsert — a user created with a

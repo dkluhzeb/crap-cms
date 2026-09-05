@@ -3,6 +3,7 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
 
+use super::utils::require_init_phase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Known lifecycle event names. Registering any other event name is a hard error.
@@ -33,6 +34,13 @@ fn hooks_register(
     )]
     func: Function,
 ) -> LuaResult<()> {
+    require_init_phase(
+        lua,
+        "crap.hooks.register must be called from init.lua or a definition \
+         file — runtime registration only lands in one VM of the pool and \
+         is intermittent across requests",
+    )?;
+
     if !is_known_event(&event) {
         return Err(RuntimeError(format!(
             "crap.hooks.register: unknown event '{event}'. Known events: {}",
@@ -54,6 +62,13 @@ fn hooks_remove(
     )]
     func: Function,
 ) -> LuaResult<()> {
+    require_init_phase(
+        lua,
+        "crap.hooks.remove must be called from init.lua or a definition \
+         file — runtime removal only affects one VM of the pool and is \
+         intermittent across requests",
+    )?;
+
     if !is_known_event(&event) {
         return Err(RuntimeError(format!(
             "crap.hooks.remove: unknown event '{event}'. Known events: {}",
@@ -133,6 +148,40 @@ fn get_or_create_hook_list(lua: &Lua, event: &str) -> LuaResult<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::lifecycle::InitPhase;
+
+    /// Ledger class **M15**: a runtime `crap.hooks.register`/`remove`
+    /// (no `InitPhase` marker) must be rejected — it would land in one
+    /// pooled VM and fire intermittently across requests.
+    #[test]
+    fn register_and_remove_are_rejected_outside_init_phase() {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_hooks(&lua).unwrap();
+
+        let err = lua
+            .load(r#"crap.hooks.register("before_change", function(c) return c end)"#)
+            .exec()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("init.lua"),
+            "runtime register must name the init-phase rule: {err}"
+        );
+
+        let err = lua
+            .load(r#"crap.hooks.remove("before_change", function(c) return c end)"#)
+            .exec()
+            .unwrap_err();
+        assert!(err.to_string().contains("init.lua"), "{err}");
+
+        // With the marker set, registration works.
+        lua.set_app_data(InitPhase);
+        lua.load(r#"crap.hooks.register("before_change", function(c) return c end)"#)
+            .exec()
+            .unwrap();
+    }
 
     fn lua_with_hooks() -> Lua {
         let lua = Lua::new();
@@ -140,6 +189,7 @@ mod tests {
             .set("crap", lua.create_table().unwrap())
             .unwrap();
         register_hooks(&lua).unwrap();
+        lua.set_app_data(InitPhase);
         lua
     }
 

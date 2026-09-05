@@ -1,6 +1,6 @@
 # Registered Hooks
 
-Registered hooks fire for **all collections** at a given lifecycle event. Register them in `init.lua` using `crap.hooks.register()`.
+Registered hooks fire for **all collections** at a given lifecycle event. Register them in `init.lua` using `crap.hooks.register()` — registration (and `crap.hooks.remove`) is **init-phase only** and errors at runtime: a runtime registration would land in a single VM of the pool and fire intermittently.
 
 ## Registration
 

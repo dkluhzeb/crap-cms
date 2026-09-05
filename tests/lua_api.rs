@@ -322,46 +322,27 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 // ── crap.hooks.remove ────────────────────────────────────────────────────────
 
 #[test]
-fn lua_hooks_remove() {
+fn lua_hooks_register_and_remove_are_init_phase_only() {
+    // Ledger class M15: runtime registration used to land in ONE pooled
+    // VM and fire intermittently. Both APIs now reject runtime calls;
+    // the register/remove mechanics themselves are unit-tested in
+    // `hooks::lua_api::hooks` (with the InitPhase marker set).
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let result = eval_lua_db(
         &runner,
         &pool,
         r#"
-        -- Track how many times the hook fires
-        local count = 0
-        local function my_hook(ctx)
-            count = count + 1
-            return ctx
-        end
+        local ok, err = pcall(function()
+            crap.hooks.register("before_change", function(c) return c end)
+        end)
+        if ok then return "REGISTER_ALLOWED_AT_RUNTIME" end
+        if not tostring(err):find("init.lua") then return "WRONG_ERROR: " .. tostring(err) end
 
-        -- Register
-        crap.hooks.register("before_change", my_hook)
-
-        -- Verify it's in the table
-        local hooks = crap.hooks.list("before_change")
-        local found = false
-        for i = 1, #hooks do
-            if rawequal(hooks[i], my_hook) then
-                found = true
-                break
-            end
-        end
-        if not found then return "NOT_REGISTERED" end
-
-        -- Remove
-        crap.hooks.remove("before_change", my_hook)
-
-        -- Verify it's gone
-        local still_found = false
-        hooks = crap.hooks.list("before_change")
-        for i = 1, #hooks do
-            if rawequal(hooks[i], my_hook) then
-                still_found = true
-                break
-            end
-        end
-        if still_found then return "NOT_REMOVED" end
+        ok, err = pcall(function()
+            crap.hooks.remove("before_change", function(c) return c end)
+        end)
+        if ok then return "REMOVE_ALLOWED_AT_RUNTIME" end
+        if not tostring(err):find("init.lua") then return "WRONG_ERROR: " .. tostring(err) end
 
         return "ok"
     "#,
