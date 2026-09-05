@@ -73,6 +73,7 @@ use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
     publish_upload_event, service_error_to_response,
 };
+use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::admin::parse_multipart_form;
 
 #[cfg(not(tarpaulin_include))]
@@ -82,39 +83,47 @@ pub(super) async fn update_upload(
     headers: HeaderMap,
     request: axum::extract::Request,
 ) -> Response {
-    let auth_user = match extract_bearer_user(&state, &headers) {
-        Ok(u) => u,
-        Err(e) => return *e,
+    // L12: run the synchronous auth + Lua access gate on the blocking
+    // pool, not the async worker. The multipart parse below stays async.
+    let (auth_user, def) = match on_blocking_section(|| {
+        let auth_user = extract_bearer_user(&state, &headers)?;
+
+        let def = state
+            .infra
+            .registry
+            .get_collection(&slug)
+            .cloned()
+            .ok_or_else(|| {
+                Box::new(json_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Collection '{slug}' not found"),
+                ))
+            })?;
+
+        if !def.is_upload_collection() {
+            return Err(Box::new(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Collection '{slug}' is not an upload collection"),
+            )));
+        }
+
+        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
+        check_upload_access(
+            &state,
+            def.access.update.as_ref(),
+            user_doc,
+            Some(&id),
+            "Update access denied",
+            "update",
+            &def.slug,
+        )?;
+
+        Ok((auth_user, def))
+    }) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
     };
-
-    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            &format!("Collection '{slug}' not found"),
-        );
-    };
-
-    if !def.is_upload_collection() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            &format!("Collection '{slug}' is not an upload collection"),
-        );
-    }
-
-    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-    // Defense-in-depth: pre-check access before parsing the multipart body.
-    if let Err(resp) = check_upload_access(
-        &state,
-        def.access.update.as_ref(),
-        user_doc,
-        Some(&id),
-        "Update access denied",
-        "update",
-        &def.slug,
-    ) {
-        return *resp;
-    }
 
     let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,

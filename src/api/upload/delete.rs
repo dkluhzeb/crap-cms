@@ -12,7 +12,7 @@ use axum::{
 use tokio::task;
 
 use crate::{
-    admin::AdminState,
+    admin::{AdminState, handlers::shared::response::on_blocking_section},
     config::LocaleConfig,
     core::{
         CollectionDefinition, Document, ReqContext, SharedInvalidationTransport, SharedStorage,
@@ -111,52 +111,59 @@ pub(super) async fn delete_upload(
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let auth_user = match extract_bearer_user(&state, &headers) {
-        Ok(u) => u,
-        Err(e) => return *e,
-    };
+    // L12: the entire gate prologue — auth, the Lua access hook, and the
+    // existence probe — is synchronous DB/VM work; run it on the blocking
+    // pool instead of parking an async worker.
+    let (auth_user, def) = match on_blocking_section(|| {
+        let auth_user = extract_bearer_user(&state, &headers)?;
 
-    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            &format!("Collection '{slug}' not found"),
-        );
-    };
+        let def = state
+            .infra
+            .registry
+            .get_collection(&slug)
+            .cloned()
+            .ok_or_else(|| {
+                Box::new(json_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Collection '{slug}' not found"),
+                ))
+            })?;
 
-    if !def.is_upload_collection() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            &format!("Collection '{slug}' is not an upload collection"),
-        );
-    }
+        if !def.is_upload_collection() {
+            return Err(Box::new(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Collection '{slug}' is not an upload collection"),
+            )));
+        }
 
-    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let access_fn = if def.soft_delete {
-        def.access.resolve_trash()
-    } else {
-        def.access.delete.as_ref()
-    };
-
-    if let Err(resp) = check_upload_access(
-        &state,
-        access_fn,
-        user_doc,
-        Some(&id),
-        // Soft delete → "trash" (trash access fn); hard delete → "delete".
-        if def.soft_delete {
-            "Trash access denied"
+        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+        let access_fn = if def.soft_delete {
+            def.access.resolve_trash()
         } else {
-            "Delete access denied"
-        },
-        if def.soft_delete { "trash" } else { "delete" },
-        &def.slug,
-    ) {
-        return *resp;
-    }
+            def.access.delete.as_ref()
+        };
 
-    if let Err(resp) = ensure_upload_exists(&state, &def, &slug, &id) {
-        return *resp;
-    }
+        check_upload_access(
+            &state,
+            access_fn,
+            user_doc,
+            Some(&id),
+            if def.soft_delete {
+                "Trash access denied"
+            } else {
+                "Delete access denied"
+            },
+            if def.soft_delete { "trash" } else { "delete" },
+            &def.slug,
+        )?;
+
+        ensure_upload_exists(&state, &def, &slug, &id)?;
+
+        Ok((auth_user, def))
+    }) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
 
     let input = UploadDeleteBlockingInput {
         pool: state.infra.pool.clone(),

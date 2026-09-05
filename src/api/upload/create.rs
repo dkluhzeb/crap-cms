@@ -26,6 +26,7 @@ use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
     publish_upload_event, service_error_to_response,
 };
+use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::admin::parse_multipart_form;
 
 /// Owned bundle for the upload-create spawn-blocking body.
@@ -76,39 +77,50 @@ pub(super) async fn create_upload(
     headers: HeaderMap,
     request: axum::extract::Request,
 ) -> Response {
-    let auth_user = match extract_bearer_user(&state, &headers) {
-        Ok(u) => u,
-        Err(e) => return *e,
+    // Auth (a read-pool checkout + queries) and the Lua access hook (a
+    // VM-pool acquire of up to 5s) are synchronous and must not park an
+    // async worker (ledger class L12) — run the whole gate prologue on
+    // the blocking pool. The multipart body parse below stays async.
+    let (auth_user, def) = match on_blocking_section(|| {
+        let auth_user = extract_bearer_user(&state, &headers)?;
+
+        let def = state
+            .infra
+            .registry
+            .get_collection(&slug)
+            .cloned()
+            .ok_or_else(|| {
+                Box::new(json_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Collection '{slug}' not found"),
+                ))
+            })?;
+
+        if !def.is_upload_collection() {
+            return Err(Box::new(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Collection '{slug}' is not an upload collection"),
+            )));
+        }
+
+        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
+        // Defense-in-depth: pre-check access before parsing the body.
+        check_upload_access(
+            &state,
+            def.access.create.as_ref(),
+            user_doc,
+            None,
+            "Create access denied",
+            "create",
+            &def.slug,
+        )?;
+
+        Ok((auth_user, def))
+    }) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
     };
-
-    let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            &format!("Collection '{slug}' not found"),
-        );
-    };
-
-    if !def.is_upload_collection() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            &format!("Collection '{slug}' is not an upload collection"),
-        );
-    }
-
-    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-    // Defense-in-depth: pre-check access before parsing the multipart body.
-    if let Err(resp) = check_upload_access(
-        &state,
-        def.access.create.as_ref(),
-        user_doc,
-        None,
-        "Create access denied",
-        "create",
-        &def.slug,
-    ) {
-        return *resp;
-    }
 
     let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,

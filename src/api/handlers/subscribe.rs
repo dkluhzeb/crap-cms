@@ -175,10 +175,19 @@ async fn handle_event(
 
     let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
 
-    for event in &outcome.events {
-        if let Some(out) = process_event(event, ctx) {
-            forward(tx, Ok(out), send_timeout_dur).await?;
-        }
+    // Per-event field-strip + `after_read` Lua (a VM acquire up to 5s)
+    // runs for the whole batch in ONE blocking hop, off the async pump
+    // worker (ledger class L12); forwarding stays async.
+    let outs = crate::admin::handlers::shared::response::on_blocking_section(|| {
+        outcome
+            .events
+            .iter()
+            .filter_map(|event| process_event(event, ctx))
+            .collect::<Vec<_>>()
+    });
+
+    for out in outs {
+        forward(tx, Ok(out), send_timeout_dur).await?;
     }
 
     // Mid-sweep lag/close: the survivors above were still delivered; now

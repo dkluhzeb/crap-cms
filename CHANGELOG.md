@@ -1550,6 +1550,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Blocking auth/Lua work moved off async workers on the remaining
+  request paths.** (Ledger class L12, extending the earlier auth-page
+  fix.) The REST upload create/update/delete handlers ran token
+  validation and the Lua access hook (a VM-pool acquire of up to 5s)
+  inline before their `spawn_blocking` tail; the upload-serve route ran
+  auth inline; and the SSE and gRPC-Subscribe pumps ran per-event
+  field-strip/`after_read` Lua on the async pump task. All now run their
+  synchronous DB/VM work on the blocking pool (the pumps batch a whole
+  drained event group into one hop), so a slow hook or DB can't park a
+  runtime worker.
+- **The Postgres checkbox-column retype could skip a later-added
+  collection.** (Ledger class D9.) The one-time SMALLINT retype was gated
+  by a single global `_crap_meta` flag stamped after walking the registry
+  once, so a collection added after the first run kept an oversized
+  BIGINT checkbox column. The gate is now per-slug, matching the
+  reference-count backfill.
 - **A rolled-back `crap.transaction(fn)` still published its writes'
   events.** (Ledger class L3.) The transaction reused the ambient
   job-level event queue, which flushes unconditionally after the

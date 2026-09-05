@@ -175,7 +175,7 @@ most).
 | L9 | Error silently swallowed into absent/default (`let _`, `.ok()`) — and its sibling: a statement that succeeded but affected 0 rows, unchecked | `inspect_err` convention; fallible cache types; `affected == 0` checks; no lint | PARTIAL |
 | L10 | Read path type-blind, returns raw storage form | write-edge canonicalization + shared converters; per-type tests | PARTIAL |
 | L11 | N+1 / hot path pays for machinery it doesn't need | batched hydrate/populate; loadtest is the detector (manual) | PARTIAL |
-| L12 | Resource lifetime/pool discipline violated (UAF slot, two-conn deadlock, blocking on async) | RAII guards (`TxSlot`, `InfraRestore`), one-conn rule, `spawn_blocking`/`block_in_place` (`on_blocking_section`); `run_pool_write` drops its write conn before post-commit flushes. TRACKED remaining instances (convergence R2, fix when touched): REST upload handlers run auth+access-hook inline before their `spawn_blocking` tail (`src/api/upload/{create,update,delete}.rs`, `admin/handlers/uploads/serve.rs`); SSE/Subscribe pumps run per-event field-strip/`after_read` Lua on the async pump (`admin/handlers/events/sse.rs`, `api/handlers/subscribe.rs`) — config-gated early-out when no such hooks exist | PARTIAL |
+| L12 | Resource lifetime/pool discipline violated (UAF slot, two-conn deadlock, blocking on async) | RAII guards (`TxSlot`, `InfraRestore`), one-conn rule, `spawn_blocking`/`block_in_place` via shared `on_blocking_section` (now on the REST upload handlers' auth+gate prologue, `serve` auth, and both SSE/Subscribe pumps' batched Lua transform); `run_pool_write` drops its write conn before post-commit flushes. No known blocking-in-async site remains; a lint would make it GUARDED | PARTIAL |
 | L13 | Formatter/codegen mutates or mis-tokenizes its own input | **proptests**: idempotency + content-preservation; verbatim byte-ranges; golden compile tests (`generated_rust_parses`, kitchen-sink goldens) | GUARDED |
 | L14 | Panic — or silent wrong answer — from untrusted input (byte-slicing UTF-8, byte-counted `min_length`, garbled `url_decode`, JS handlers aborted by `querySelector().value`/`JSON.parse(null)`/throwing `localStorage`) | char-safe helpers, `.chars().count()`, try/catch at client entry points; convention | PARTIAL |
 | L15 | Absent optional collapses to a hard default instead of inheriting — incl. a UI empty state defaulting into a data-narrowing filter | `effective_max_attempts`-style resolution points; empty filter drawer renders zero rows | PARTIAL |
@@ -322,6 +322,19 @@ memories; the load-bearing ones:
   e2e + the routing guard, documented in the row. FINAL queue state:
   84 classes — 39 GUARDED, 44 PARTIAL, 1 UNGUARDED (D7). The guard
   program is complete; convergence audits are next.
+- 2026-09-05 (10) — **Deferred-item cleanup + convergence-bar
+  correction.** Fixed everything rounds 1–2 had recorded-but-deferred:
+  the four L12 blocking-in-async sites (REST upload create/update/delete
+  prologues + `serve` auth on the blocking pool; both live-event pumps
+  batch their per-event Lua strip/`after_read` into one blocking hop
+  before async forwarding), the `checkbox_columns` migration gate made
+  **per-slug** (was a global flag that would skip a later-added table —
+  D9 granularity), and a frozen-contract note on the create-only
+  `_versions_{slug}` path. **Corrected the premature "converged" call:**
+  two rounds finding ~20 real bugs each is not convergence. The criterion
+  is a genuinely quiet round; more audit rounds are needed before the tag
+  gates. Tag-gate work (loadtest, release-target cross-builds) is
+  DEFERRED until a round comes back clean.
 - 2026-09-05 (9) — **CONVERGENCE ROUND 2** (4 adversarial lenses:
   concurrency/ordering, wire-option honesty, freeze/upgrade gates,
   resource/lifetime). **~18 findings — every one an instance of an
@@ -342,9 +355,13 @@ memories; the load-bearing ones:
   checkbox + `_versions_` migration-gate granularity notes; upload/SSE
   L12 instances tracked on the L12 row. Migration gates + decode-compat
   (cursor, snapshot, `_totp_*`, `result_json`) all proved sound.
-  **Convergence: 2 of 2 consecutive all-guarded rounds achieved — the
-  stopping criterion is MET.** Next: tag gates (loadtest + release
-  builds).
+  **NOTE (corrected 2026-09-05 (10)): NOT yet converged.** Rounds 1 and 2
+  each found ~20 real, fixable bugs — several serious. "Every finding is
+  an instance of an existing class" is too weak a bar once the ledger has
+  84 rows (almost anything matches some class). Real convergence = a
+  round that comes back genuinely quiet. Rounds 1–2 also LEFT deferred
+  items (the L12 upload/SSE instances, migration-gate granularity) — not
+  legitimate for a "converged" verdict.
 - 2026-09-05 (8) — **CONVERGENCE ROUND 1** (4 adversarial lenses:
   client-side, sink call-sites, disclosure, newest-feature fail-open).
   **21 findings — every one an instance of an existing class; 0 new

@@ -147,16 +147,28 @@ async fn handle_broadcast_recv(
 
     let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
 
-    for event in &outcome.events {
-        if let Some(sse_event) = event_to_sse(
-            event,
-            &ctx.access,
-            &ctx.hook_runner,
-            &ctx.registry,
-            ctx.user_doc.as_ref(),
-        ) {
-            forward_event(tx, sse_event, ctx.send_timeout).await?;
-        }
+    // Build the SSE payloads for the whole drained batch in ONE blocking
+    // hop (ledger class L12): `event_to_sse` runs the per-event field-read
+    // strip and `after_read` hooks, which acquire a Lua VM (up to 5s) —
+    // that must not run on the async pump worker. Forwarding stays async.
+    let sse_events = crate::admin::handlers::shared::response::on_blocking_section(|| {
+        outcome
+            .events
+            .iter()
+            .filter_map(|event| {
+                event_to_sse(
+                    event,
+                    &ctx.access,
+                    &ctx.hook_runner,
+                    &ctx.registry,
+                    ctx.user_doc.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+
+    for sse_event in sse_events {
+        forward_event(tx, sse_event, ctx.send_timeout).await?;
     }
 
     // Mid-sweep lag/close: survivors were delivered; apply the same

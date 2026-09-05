@@ -28,15 +28,24 @@ use crate::{
     },
 };
 
-/// `_crap_meta` key tracking this migration.
-const META_KEY: &str = "checkbox_columns_smallint";
+/// `_crap_meta` key PREFIX tracking this migration — the gate is
+/// **per-slug** (`checkbox_columns_smallint:{slug}`), not a single global
+/// flag, so a collection added to the registry *after* the initial
+/// migration still gets retyped on its first startup (the same
+/// granularity the ref-count backfill uses; a global flag would skip
+/// later-added tables — a class-D9 gap).
+const META_KEY_PREFIX: &str = "checkbox_columns_smallint";
 
-/// Current migration version, stored as the meta *value*. Bump to force
-/// existing databases to re-run the pass once on upgrade.
+/// Current migration version, stored as each per-slug meta *value*. Bump
+/// to force existing databases to re-run the pass once on upgrade.
 const MIGRATION_VERSION: &str = "1";
 
+fn meta_key(slug: &str) -> String {
+    format!("{META_KEY_PREFIX}:{slug}")
+}
+
 /// Run the checkbox-column retype when needed (Postgres only, once per
-/// [`MIGRATION_VERSION`]).
+/// [`MIGRATION_VERSION`] per slug).
 ///
 /// # Errors
 ///
@@ -47,19 +56,33 @@ pub(super) fn migrate_if_needed(conn: &dyn DbConnection, registry: &Registry) ->
         return Ok(());
     }
 
-    if meta::get(conn, META_KEY)?.as_deref() == Some(MIGRATION_VERSION) {
-        return Ok(());
-    }
-
     for (slug, def) in &registry.collections {
-        migrate_field_tree(conn, slug, &def.fields)?;
+        migrate_one(conn, slug, slug, &def.fields)?;
     }
 
     for (slug, def) in &registry.globals {
-        migrate_field_tree(conn, &global_table(slug), &def.fields)?;
+        migrate_one(conn, slug, &global_table(slug), &def.fields)?;
     }
 
-    meta::upsert(conn, META_KEY, MIGRATION_VERSION)?;
+    Ok(())
+}
+
+/// Per-slug gate + retype: skip if this slug is already at the current
+/// version, otherwise walk its field tree and stamp its own meta key.
+fn migrate_one(
+    conn: &dyn DbConnection,
+    slug: &str,
+    table: &str,
+    fields: &[crate::core::FieldDefinition],
+) -> Result<()> {
+    let key = meta_key(slug);
+    if meta::get(conn, &key)?.as_deref() == Some(MIGRATION_VERSION) {
+        return Ok(());
+    }
+
+    migrate_field_tree(conn, table, fields)?;
+
+    meta::upsert(conn, &key, MIGRATION_VERSION)?;
     Ok(())
 }
 

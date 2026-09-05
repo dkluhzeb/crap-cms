@@ -276,7 +276,12 @@ pub async fn serve_upload(
     let cache_control: String = if let Some(cache) = signed_cache {
         cache
     } else {
-        let auth_user = extract_auth_user(&request, &state);
+        // L12: token validation + user load is synchronous DB work — run
+        // it on the blocking pool. (The access gate below is already async
+        // / `spawn_blocking` internally.)
+        let auth_user = crate::admin::handlers::shared::response::on_blocking_section(|| {
+            extract_auth_user(&request, &state)
+        });
 
         let Some(cache) = check_upload_access(&state, &collection_slug, &filename, auth_user).await
         else {
