@@ -45,18 +45,6 @@ fn verify_code_blocking(input: &VerifyCodeInput) -> anyhow::Result<bool> {
     .map_err(crate::service::ServiceError::into_anyhow)
 }
 
-/// Re-load the user post-verification. Fails CLOSED: a user that was locked,
-/// deleted, or session-invalidated inside the pending window must not
-/// complete the login.
-fn load_user_blocking(
-    infra: &Arc<AppInfra>,
-    claims: &crate::core::auth::Claims,
-) -> Option<crate::core::AuthUser> {
-    let conn = infra.pool.get().ok()?;
-
-    auth::load_authenticated_user(claims, &infra.registry, &conn)
-}
-
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Complete an MFA-gated login: validate the challenge token and the
@@ -123,7 +111,7 @@ impl ContentService {
         let claims_for_load = pending.clone();
 
         let Some(resolved) =
-            task::spawn_blocking(move || load_user_blocking(&infra, &claims_for_load))
+            task::spawn_blocking(move || auth::reload_authenticated_user(&infra, &claims_for_load))
                 .await
                 .inspect_err(|e| error!("VerifyMfa load task error: {e}"))
                 .map_err(|_| Status::internal("Internal error"))?

@@ -11,6 +11,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::db::query::helpers::like_escape;
 use crate::db::{DbConnection, query};
 
 /// System job slug for queued image format conversions.
@@ -117,6 +118,13 @@ pub fn delete_image_jobs_for_document(
     // Cheaper than parsing JSON in SQL on every delete; entries that
     // somehow survive will fail at process-time and `images purge`
     // collects them.
+    // Escape LIKE wildcards in the interpolated id/slug: a document id from
+    // `nanoid!()` can contain `_`, which is a single-char LIKE wildcard — an
+    // unescaped `abc_def` would also match a sibling `abcXdef` and delete its
+    // still-live conversions. The surrounding `%` stay real wildcards.
+    let collection = like_escape(collection);
+    let document_id = like_escape(document_id);
+
     let patterns = vec![
         format!("%\"collection\":\"{collection}\"%"),
         format!("%\"document_id\":\"{document_id}\"%"),

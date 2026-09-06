@@ -146,7 +146,8 @@ async fn handle_broadcast_recv(
         Err(RecvError::Closed) => return Err(()),
     };
 
-    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
+    // Admin SSE delivers every operation (no per-op scoping), so keep all.
+    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN, |_| true);
 
     // Build the SSE payloads for the whole drained batch in ONE blocking
     // hop: `event_to_sse` runs the per-event field-read

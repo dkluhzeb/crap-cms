@@ -40,6 +40,8 @@ pub mod connection;
 pub mod document;
 pub mod migrate;
 pub mod ops;
+#[cfg(all(test, feature = "postgres"))]
+mod pg_test;
 pub mod pool;
 pub mod query;
 pub mod types;

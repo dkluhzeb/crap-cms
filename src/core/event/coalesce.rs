@@ -46,21 +46,40 @@ pub struct DrainOutcome {
 }
 
 /// Drain everything already queued on `rx` (starting from `first`, the event
-/// a successful `recv` just returned), then coalesce latest-wins per
-/// document. Never blocks.
+/// a successful `recv` just returned), keep only the events `keep` accepts,
+/// then coalesce the survivors latest-wins per document. Never blocks.
+///
+/// `keep` is applied to the RAW batch BEFORE coalescing — this ordering is
+/// load-bearing for op-scoped gRPC subscribers: coalescing collapses to the
+/// document's latest event, so filtering afterward can drop a requested event
+/// (a subscriber to `create` would lose the create when a later `update` won
+/// the coalesce). Admin SSE, which wants every operation, passes a pass-all
+/// predicate. `max_drain` bounds how many events are pulled from `rx`, not how
+/// many survive `keep`.
 #[must_use]
 pub fn drain_and_coalesce(
     first: MutationEvent,
     rx: &mut EventReceiver,
     max_drain: usize,
+    keep: impl Fn(&MutationEvent) -> bool,
 ) -> DrainOutcome {
-    let mut raw = vec![first];
+    let mut raw = Vec::new();
+    if keep(&first) {
+        raw.push(first);
+    }
+
+    let mut pulled = 1;
     let mut lagged = None;
     let mut closed = false;
 
-    while raw.len() < max_drain {
+    while pulled < max_drain {
         match rx.try_recv() {
-            Ok(event) => raw.push(event),
+            Ok(event) => {
+                pulled += 1;
+                if keep(&event) {
+                    raw.push(event);
+                }
+            }
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Lagged(n)) => {
                 lagged = Some(n);
@@ -117,6 +136,7 @@ mod tests {
         event::transport::EventTransport,
         event::{EventOperation, InProcessEventBus, MutationEventInput},
     };
+    use tokio::sync::broadcast;
 
     fn mk(sequence: u64, target: EventTarget, collection: &str, id: &str) -> MutationEvent {
         MutationEvent {
@@ -182,6 +202,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keep_filter_applies_before_coalescing() {
+        let (tx, rx) = broadcast::channel(16);
+        let mut rx = EventReceiver::from_broadcast(rx);
+
+        // Same document, created then updated within one burst.
+        let mut create = mk(1, EventTarget::Collection, "posts", "a");
+        create.operation = EventOperation::Create;
+        let update = mk(2, EventTarget::Collection, "posts", "a"); // mk defaults to Update
+        tx.send(update).unwrap();
+
+        // A subscriber scoped to `create` must still see the create: filtering
+        // before coalescing keeps it, whereas coalescing first would collapse
+        // to the update and the op filter would then drop everything.
+        let outcome = drain_and_coalesce(create, &mut rx, 16, |e| {
+            e.operation == EventOperation::Create
+        });
+
+        assert_eq!(outcome.events.len(), 1, "the requested create must survive");
+        assert_eq!(outcome.events[0].operation, EventOperation::Create);
+    }
+
     fn publish(bus: &InProcessEventBus, collection: &str, id: &str) {
         bus.publish(MutationEventInput {
             target: EventTarget::Collection,
@@ -205,7 +247,7 @@ mod tests {
         publish(&bus, "posts", "a");
 
         let first = rx.recv().await.unwrap();
-        let outcome = drain_and_coalesce(first, &mut rx, MAX_DRAIN);
+        let outcome = drain_and_coalesce(first, &mut rx, MAX_DRAIN, |_| true);
 
         assert!(outcome.lagged.is_none());
         assert!(!outcome.closed);
@@ -225,7 +267,7 @@ mod tests {
         }
 
         let first = rx.recv().await.unwrap();
-        let outcome = drain_and_coalesce(first, &mut rx, 3);
+        let outcome = drain_and_coalesce(first, &mut rx, 3, |_| true);
 
         assert_eq!(outcome.events.len(), 3, "cap bounds the sweep");
         // The rest stays queued for the next sweep.
@@ -245,7 +287,7 @@ mod tests {
             publish(&bus, "posts", &format!("doc{i}"));
         }
 
-        let outcome = drain_and_coalesce(first, &mut rx, MAX_DRAIN);
+        let outcome = drain_and_coalesce(first, &mut rx, MAX_DRAIN, |_| true);
 
         assert!(outcome.lagged.is_some(), "mid-sweep lag must be surfaced");
         assert_eq!(

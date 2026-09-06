@@ -94,12 +94,8 @@ struct SubscriberCtx {
 /// event should be skipped. The gate is shared with the admin SSE stream so the
 /// security-critical pipeline can't drift between the two surfaces.
 fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::MutationEvent> {
-    // gRPC subscribers can scope to a subset of operations; the SSE admin stream
-    // always wants all, so this filter is subscribe-specific and stays here.
-    if !ctx.requested_ops.contains(event_op_str(&event.operation)) {
-        return None;
-    }
-
+    // The requested-op filter runs in `drain_and_coalesce` (before coalescing),
+    // so events reaching here already match the subscriber's operations.
     let visible = EventGate {
         collection_views: &ctx.access.maps.collection_views,
         global_views: &ctx.access.maps.global_views,
@@ -174,7 +170,13 @@ async fn handle_event(
         Err(RecvError::Closed) => return Err(()),
     };
 
-    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
+    // Apply the requested-op filter to the raw burst BEFORE coalescing — a
+    // later op winning the latest-wins collapse must not shadow an earlier,
+    // requested operation out of existence (e.g. a `create` followed by an
+    // `update` for a subscriber scoped to `create`).
+    let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN, |e| {
+        ctx.requested_ops.contains(event_op_str(&e.operation))
+    });
 
     // Per-event field-strip + `after_read` Lua (a VM acquire up to 5s)
     // runs for the whole batch in ONE blocking hop, off the async pump

@@ -52,6 +52,17 @@ pub fn floor_optional_limit(limit: Option<i64>) -> Option<i64> {
     limit.map(|l| l.max(0))
 }
 
+/// Escape the `LIKE` wildcards (`\`, `%`, `_`) in a value so it matches
+/// literally under a `... LIKE ? ESCAPE '\'` clause. Backslash is escaped
+/// first so the escapes this adds aren't re-escaped. Callers that interpolate
+/// untrusted or wildcard-bearing text into a LIKE pattern MUST use this and
+/// pair the query with `ESCAPE '\'`.
+pub(crate) fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 /// Normalize a date value for storage.
 ///
 /// - Full ISO 8601 with timezone (`2026-01-15T09:00:00Z`, `2026-01-15T09:00:00+05:00`)

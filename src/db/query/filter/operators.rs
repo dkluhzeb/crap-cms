@@ -6,7 +6,10 @@ use tracing::warn;
 use crate::core::{FieldType, parse_bool};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
-    query::{helpers::normalize_date_value, is_valid_identifier},
+    query::{
+        helpers::{like_escape, normalize_date_value},
+        is_valid_identifier,
+    },
 };
 
 /// Coerce a filter input string to the correct [`DbValue`] variant for the
@@ -104,7 +107,7 @@ pub(super) fn build_op_condition(
             format!("{} {} {}", expr, conn.like_operator(), ph)
         }
         FilterOp::Contains(v) => {
-            let escaped = v.replace('%', "\\%").replace('_', "\\_");
+            let escaped = like_escape(v);
             let ph = conn.placeholder(params.len() + 1);
             params.push(DbValue::Text(format!("%{escaped}%")));
             format!("{} {} {} ESCAPE '\\'", expr, conn.like_operator(), ph)

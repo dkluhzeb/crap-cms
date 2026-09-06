@@ -95,7 +95,14 @@ pub fn delete_pending_failed_jobs_matching(
 
     for pat in data_patterns {
         params.push(DbValue::Text(pat.clone()));
-        let _ = write!(sql, " AND data LIKE {}", conn.placeholder(params.len()));
+        // ESCAPE '\' so a caller can escape LIKE wildcards (`\_`, `\%`) in the
+        // literal parts of a pattern (see `like_escape`) while keeping its own
+        // surrounding `%` as real wildcards.
+        let _ = write!(
+            sql,
+            " AND data LIKE {} ESCAPE '\\'",
+            conn.placeholder(params.len())
+        );
     }
 
     conn.execute(&sql, &params)
@@ -107,6 +114,7 @@ pub fn delete_pending_failed_jobs_matching(
 mod tests {
     use super::*;
     use crate::core::JobStatus;
+    use crate::core::upload::{SYSTEM_IMAGE_CONVERT_JOB, delete_image_jobs_for_document};
     use crate::db::query::jobs::test_helpers::setup_db;
     use crate::db::query::jobs::{insert_job, list_job_runs};
 
@@ -212,6 +220,50 @@ mod tests {
         assert!(
             remaining.iter().any(|r| r.slug == "other"),
             "a different slug must be kept even with matching data"
+        );
+    }
+
+    /// Regression: a document id contains `_` (a single-char LIKE wildcard),
+    /// so cleaning up `abc_def`'s image jobs must NOT also delete a sibling
+    /// `abcXdef`'s still-live conversions. Without `like_escape` + `ESCAPE`,
+    /// the `_` matched `X` and over-deleted.
+    #[test]
+    fn delete_image_jobs_for_document_escapes_underscore_id() {
+        let (_dir, conn) = setup_db();
+
+        insert_job(
+            &conn,
+            SYSTEM_IMAGE_CONVERT_JOB,
+            r#"{"collection":"media","document_id":"abc_def"}"#,
+            "sys",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+        insert_job(
+            &conn,
+            SYSTEM_IMAGE_CONVERT_JOB,
+            r#"{"collection":"media","document_id":"abcXdef"}"#,
+            "sys",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+
+        delete_image_jobs_for_document(&conn, "media", "abc_def").unwrap();
+
+        let remaining = list_job_runs(&conn, None, None, 100, 0).unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only the exact-id job is deleted; the `_`-wildcard must not over-match the sibling"
+        );
+        assert!(
+            remaining[0].data.contains("abcXdef"),
+            "the surviving job must be the sibling `abcXdef`, got: {}",
+            remaining[0].data
         );
     }
 }

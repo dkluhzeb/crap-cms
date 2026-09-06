@@ -36,7 +36,7 @@ use crate::core::{
 };
 use crate::db::{DbConnection, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
-use crate::service::{self, ServiceContext};
+use crate::service::{self, AppInfra, ServiceContext};
 
 /// Per-request inputs for [`evaluate`].
 ///
@@ -569,6 +569,20 @@ pub fn load_authenticated_user(
     }
 
     Some(AuthUser::new(claims.clone(), doc))
+}
+
+/// Re-resolve an [`AuthUser`] from validated claims against a fresh pooled
+/// connection, fail-closed. This is the single pooled wrapper both MFA
+/// completion paths (gRPC `VerifyMfa` and admin `verify_mfa_action`) call
+/// before minting a session, so a lock / delete / session-version bump inside
+/// the pending-MFA window invalidates the challenge on every surface. Returns
+/// `None` on pool-acquire failure or any fail-closed reason from
+/// [`load_authenticated_user`].
+#[must_use]
+pub fn reload_authenticated_user(infra: &AppInfra, claims: &Claims) -> Option<AuthUser> {
+    let conn = infra.pool.get().ok()?;
+
+    load_authenticated_user(claims, &infra.registry, &conn)
 }
 
 /// Build claims + `AuthUser` for a strategy-authenticated request.

@@ -24,7 +24,7 @@ use crate::{
         },
     },
     core::auth::Claims,
-    service,
+    service::{self, auth::reload_authenticated_user},
 };
 
 /// Owned inputs for the second-factor verification `spawn_blocking` body.
@@ -148,6 +148,19 @@ pub async fn verify_mfa_action(
 
     if !verified {
         return render_mfa(&state, &pending_claims, Some("error_mfa_invalid_code")).await;
+    }
+
+    // Re-resolve the user fail-closed before completing login: a lock / delete
+    // / session-version bump inside the pending-MFA window must invalidate the
+    // challenge. Mirrors the gRPC VerifyMfa path via the shared
+    // `reload_authenticated_user`, so both surfaces refuse to complete login
+    // for an account that changed under the challenge.
+    let infra = std::sync::Arc::clone(&state.infra);
+    let claims_for_load = pending_claims.clone();
+    let reloaded =
+        task::spawn_blocking(move || reload_authenticated_user(&infra, &claims_for_load)).await;
+    if !matches!(reloaded, Ok(Some(_))) {
+        return Redirect::to(paths::LOGIN).into_response();
     }
 
     // MFA verified — login is now fully complete, so clear the MFA limiters

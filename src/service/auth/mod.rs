@@ -34,7 +34,7 @@ pub use account::{
 };
 pub use evaluator::{
     AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,
-    evaluate, load_authenticated_user,
+    evaluate, load_authenticated_user, reload_authenticated_user,
 };
 pub use local::{AuthResult, authenticate_local};
 pub use login_flow::{LoginFlowRequest, LoginOutcome, LoginVerified, verify_login};

@@ -227,7 +227,15 @@ fn pg_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) {
 }
 
 fn pg_json_extract_expr(column: &str, field: &str) -> String {
-    format!("{column}::jsonb->>'{field}'")
+    // `field` may be a dotted path (`meta.title`) for a Group sub-field nested
+    // inside a Blocks/Array value. Postgres `->>` takes a single key, so a
+    // dotted field must use the `#>>'{a,b}'` path form (SQLite's `json_extract`
+    // walks the dotted path natively). A single segment yields `#>>'{field}'`,
+    // which is equivalent to `->>'field'`. Segments are validated identifiers
+    // upstream (`is_valid_identifier`), so the path literal carries no
+    // injection surface.
+    let path = field.split('.').collect::<Vec<_>>().join(",");
+    format!("{column}::jsonb#>>'{{{path}}}'")
 }
 
 fn pg_json_each_source(source: &str, alias: &str) -> String {
