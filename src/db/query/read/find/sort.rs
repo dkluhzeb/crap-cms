@@ -96,9 +96,19 @@ pub(super) fn apply_order_by(
     if sort_col == "id" {
         let _ = write!(sql, " ORDER BY {status_prefix}id {effective_dir}");
     } else {
+        // Pin NULL placement explicitly. SQLite defaults to NULLs-first on ASC
+        // / NULLs-last on DESC; Postgres defaults to the opposite, which
+        // silently duplicated/dropped rows when paginating a nullable sort
+        // column (the keyset clause assumes SQLite's placement). Emitting the
+        // clause on both backends makes them agree with the keyset. `id` is a
+        // non-null primary key, so its tiebreaker needs no NULLS clause.
+        let nulls = match effective_dir {
+            SortDirection::Asc => "NULLS FIRST",
+            SortDirection::Desc => "NULLS LAST",
+        };
         let _ = write!(
             sql,
-            " ORDER BY {status_prefix}{resolved} {effective_dir}, id {effective_dir}"
+            " ORDER BY {status_prefix}{resolved} {effective_dir} {nulls}, id {effective_dir}"
         );
     }
 
@@ -150,6 +160,29 @@ mod tests {
     use crate::db::FindQuery;
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
+
+    /// Regression: the sort column's ORDER BY must pin NULL placement
+    /// explicitly (`NULLS FIRST` on ASC, `NULLS LAST` on DESC) so Postgres
+    /// orders NULLs the same as `SQLite` — without it, PG's opposite default
+    /// broke keyset pagination on a nullable sort column.
+    #[test]
+    fn order_by_emits_explicit_nulls_placement() {
+        let def = test_def();
+
+        let mut asc = String::new();
+        apply_order_by("title", SortDirection::Asc, false, &def, None, &mut asc).unwrap();
+        assert!(
+            asc.contains("NULLS FIRST"),
+            "ASC must pin NULLS FIRST for SQLite/PG parity, got: {asc}"
+        );
+
+        let mut desc = String::new();
+        apply_order_by("title", SortDirection::Desc, false, &def, None, &mut desc).unwrap();
+        assert!(
+            desc.contains("NULLS LAST"),
+            "DESC must pin NULLS LAST for SQLite/PG parity, got: {desc}"
+        );
+    }
 
     #[test]
     fn invalid_sort_column_returns_error_not_500() {

@@ -121,6 +121,21 @@ macro_rules! pg_shared_methods {
             pg_json_extract_expr(column, field)
         }
 
+        fn json_number_cast(&self, expr: &str) -> String {
+            pg_json_number_cast(expr)
+        }
+
+        fn lock_row(&self, table: &str, id: &str) -> Result<()> {
+            self.execute(
+                &format!(
+                    "SELECT 1 FROM \"{table}\" WHERE id = {} FOR UPDATE",
+                    self.placeholder(1)
+                ),
+                &[DbValue::Text(id.to_string())],
+            )?;
+            Ok(())
+        }
+
         fn json_each_source(&self, source: &str, alias: &str) -> String {
             pg_json_each_source(source, alias)
         }
@@ -236,6 +251,15 @@ fn pg_json_extract_expr(column: &str, field: &str) -> String {
     // injection surface.
     let path = field.split('.').collect::<Vec<_>>().join(",");
     format!("{column}::jsonb#>>'{{{path}}}'")
+}
+
+/// Cast a JSON-extract (`#>>`/`->>` yield `text`) to a number so a `Number`
+/// sub-field compares numerically instead of `text <op> float8` erroring or
+/// comparing lexically. `double precision` matches the `Number` column type and
+/// the operand, which binds as `f64`/`float8` (a `numeric` cast would make PG
+/// infer the operand as `numeric`, which the `f64` binder can't produce).
+fn pg_json_number_cast(expr: &str) -> String {
+    format!("({expr})::double precision")
 }
 
 fn pg_json_each_source(source: &str, alias: &str) -> String {

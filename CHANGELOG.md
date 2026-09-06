@@ -662,6 +662,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **gRPC and admin MFA completion now re-check the account fail-closed
+  through one shared path.** The admin `verify_mfa_action` minted a
+  session straight from the pending challenge, while its gRPC twin
+  re-loaded the user (lock / delete / session-version bump inside the
+  pending window). Both now call the shared `reload_authenticated_user`
+  and refuse to complete login for an account that changed under the
+  challenge. (Defense-in-depth: the admin cookie was already dead on the
+  next request via the per-request evaluator — this closes the surface
+  inconsistency.)
+
 - **A deeply-nested gRPC write payload could crash the server (pre-auth
   denial of service).** The protobuf→JSON converter that runs first on
   every write RPC's `data` recursed with no depth limit, so a request
@@ -1555,6 +1565,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Concurrent updates to the same document could corrupt its reference
+  count on Postgres.** The update path snapshotted outgoing refs with an
+  unlocked read before the row was write-locked, so under MVCC two updates
+  to one document could both read a stale `old_refs` and double-apply a
+  count delta — under-counting into a delete-protection bypass (a still-
+  referenced document becomes hard-deletable) or over-counting into a
+  phantom ref that blocks a legitimate delete. The document row is now
+  locked (`SELECT … FOR UPDATE`) before the snapshot; SQLite was
+  unaffected (its IMMEDIATE transaction already serializes writers).
+
+- **Keyset pagination on a nullable sort column duplicated or dropped rows
+  on Postgres.** The `ORDER BY` carried no explicit NULL placement, and
+  Postgres defaults to the opposite of SQLite (NULLs last vs first on
+  ASC) while the keyset resume clause assumes SQLite's placement. The sort
+  now emits `NULLS FIRST` (ASC) / `NULLS LAST` (DESC) on both backends, so
+  the row order and the keyset agree. SQLite behavior is unchanged.
+
+- **A filter on a Group sub-field nested inside a Blocks/Array field never
+  matched on Postgres.** The JSON path reached the extractor as a dotted
+  string (`meta.title`), but Postgres `->>` takes a single key, so it
+  looked for a literal key `meta.title` and returned NULL. It now uses the
+  `#>>'{meta,title}'` path form (SQLite already walked the dotted path).
+
+- **Numeric/date comparisons on a JSON Number sub-field errored on
+  Postgres.** The extracted value is `text`, so comparing it against a
+  numerically-bound operand raised `operator does not exist: text >
+  double precision` (or compared lexically). A `Number` sub-field's
+  extract is now cast to `double precision` for the comparison.
+
+- **A gRPC `Subscribe` scoped to specific operations could miss a matching
+  event under write bursts.** Burst coalescing collapsed a document's
+  queued events to the latest one *before* the requested-operation filter
+  ran, so a subscriber to `create` lost the create when a later `update`
+  won the collapse. The op filter now runs on the raw batch before
+  coalescing; admin SSE (all operations) is unaffected.
+
+- **Deleting a document could over-delete a sibling's queued image
+  conversions.** The cleanup matched jobs with a `LIKE` pattern built from
+  the raw document id, and a `_` in a `nanoid` id acts as a single-char
+  wildcard — so `abc_def` also matched `abcXdef`. LIKE metacharacters in
+  the id are now escaped (shared `like_escape`) and the query carries
+  `ESCAPE '\'` (which also closed a stray `\` gap in the `contains`
+  filter operator).
 
 - **Editing a has-many Upload field and saving a draft deleted the
   live published file.** A draft save leaves the published document
@@ -3967,6 +4021,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- **Postgres behavioral test harness (dual-backend suite seed).** The
+  unit suite ran only on SQLite, so Postgres-specific behavior (NULL sort
+  order, JSON path extraction, MVCC concurrency) was never exercised — the
+  reason four Postgres-only bugs above shipped. `db/pg_test.rs` connects to
+  a live Postgres from `TEST_DATABASE_URL` and skips cleanly when it is
+  unset, so `cargo test` stays green without Postgres while
+  `TEST_DATABASE_URL=… cargo test --features postgres` runs the PG checks;
+  each of the four fixes above carries a red-green regression test here.
 
 - **Field-tree composite dispatch unified through one classifier.** The
   `FieldType` → sub-tree mapping (Group nests, Row/Collapsible/Tabs are

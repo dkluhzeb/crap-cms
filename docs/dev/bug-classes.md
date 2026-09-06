@@ -468,3 +468,35 @@ memories; the load-bearing ones:
   self-referential message is a separate recursion the converter
   guard doesn't cover — message size is bounded (grpc_max_msg) but
   not depth; flagged for a decode-level mitigation decision.
+- 2026-09-06 (14) — **CONVERGENCE ROUND 5** (5 fresh lenses:
+  auth/session/token, concurrency/TOCTOU, jobs/scheduler,
+  query/filter/FTS, cache/events). Auth came back **fully CLEAN**
+  (session-version invalidation, JWT alg-pinning, atomic email-keyed
+  rate limiting, single-use MFA/TOTP with replay guards, reset tokens,
+  OAuth scoping — all fail-closed). 6 actionable findings, all
+  personally verified and fixed test-first: **2 HIGH** — (1) ref-count
+  TOCTOU: concurrent updates to one doc snapshot outgoing refs unlocked
+  → double-applied delta → delete-protection bypass / phantom ref
+  (PG-only, L/F; fixed with a `lock_row` FOR-UPDATE before the
+  snapshot, no-op on SQLite); (2) keyset pagination NULL-order drift:
+  `ORDER BY` lacked `NULLS FIRST/LAST`, PG default opposite SQLite →
+  dup/dropped rows (PG-only, D; fixed by pinning the clause). **2 MED**
+  — nested-JSON dot-path filter (`->>` vs `#>>`) and nested-JSON Number
+  compare (text vs float8) both PG-only (D). **1 MED** — gRPC Subscribe
+  op-filter running after burst coalescing dropped a requested event
+  (M/L). **1 LOW** — image-job cleanup LIKE over-delete via unescaped
+  `_` in a nanoid id (S; fixed + `contains` `\` gap). Plus a
+  harmonization: gRPC/admin MFA completion now share one fail-closed
+  `reload_authenticated_user`. **The headline: 4 of 6 were PG-only, all
+  from SQL builders written to SQLite semantics — the D class (SQLite/PG
+  drift) was systematically UNGUARDED because there was NO behavioral
+  Postgres testing anywhere** (no CI service, no PG-connecting test;
+  the `--features postgres` CI jobs only compile). Seeded the fix: a
+  dual-backend harness (`db/pg_test.rs`, env-gated on
+  `TEST_DATABASE_URL`) — the four PG bugs were found AND fixed red-green
+  against a real Postgres with it. D-class stays PARTIAL (harness
+  exists, coverage is still thin — 4 targeted tests, not the full
+  suite ported). **Round 5 did NOT converge** (2 HIGH) — but a
+  security-critical fresh lens (auth) came back clean, like round 3's
+  access model. Round 6 pending; the biggest lever now is broadening PG
+  behavioral coverage + adding a CI Postgres service.

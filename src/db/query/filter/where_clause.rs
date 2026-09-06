@@ -97,7 +97,14 @@ fn build_subquery_sql(
             for (source, alias) in each_joins {
                 from_parts.push(conn.json_each_source(source, alias));
             }
-            let op_sql = build_op_condition(conn, extract_expr, op, field_type.as_ref(), params);
+            // A Number sub-field's JSON extract is text on Postgres — cast it
+            // so the comparison is numeric, not lexical (or a type error).
+            let extract = if matches!(field_type.as_ref(), Some(FieldType::Number)) {
+                conn.json_number_cast(extract_expr)
+            } else {
+                extract_expr.clone()
+            };
+            let op_sql = build_op_condition(conn, &extract, op, field_type.as_ref(), params);
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM {} WHERE \"{join_table}\".parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})",

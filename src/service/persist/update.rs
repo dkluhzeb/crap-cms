@@ -33,6 +33,14 @@ pub fn persist_update(
     // Only snapshot + adjust ref counts when the write data actually changes
     // relationship fields. Skipping saves ~10 queries for non-ref updates.
     let old_refs = if touches_refs {
+        // Lock the document row BEFORE the (unlocked) outgoing-ref snapshot so a
+        // concurrent update to the same document can't read a stale `old_refs`
+        // and double-apply a ref-count delta (Postgres MVCC lets both updates
+        // snapshot before either commits → target under/over-counted →
+        // delete-protection bypass or a phantom ref). No-op on SQLite, whose
+        // IMMEDIATE transaction already serializes writers.
+        conn.lock_row(slug, id)?;
+
         query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
 
         Some(query::ref_count::snapshot_outgoing_refs(

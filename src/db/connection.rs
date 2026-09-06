@@ -28,6 +28,21 @@ pub trait DbConnection {
     /// Returns a backend error if any statement in the batch fails.
     fn execute_batch(&self, sql: &str) -> Result<()>;
 
+    /// Lock a single row for the rest of the transaction so concurrent writers
+    /// to the same row serialize. Postgres issues `SELECT … FOR UPDATE`;
+    /// `SQLite`'s IMMEDIATE transaction already holds the write lock (writers
+    /// are serialized), so the default is a no-op. Used before an unlocked
+    /// read-then-write (e.g. the ref-count snapshot) to close a TOCTOU on the
+    /// document row under Postgres MVCC.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the lock query fails.
+    fn lock_row(&self, table: &str, id: &str) -> Result<()> {
+        let _ = (table, id);
+        Ok(())
+    }
+
     /// Execute a DDL statement (CREATE TABLE, ALTER TABLE, etc.).
     /// On Postgres, automatically adjusts `INTEGER` to `BIGINT` since
     /// `DbValue::Integer` is `i64` which tokio-postgres binds to `int8`.
@@ -171,6 +186,15 @@ pub trait DbConnection {
     ///
     /// `SQLite`: `"json_extract(data, '$.body')"`
     fn json_extract_expr(&self, column: &str, field: &str) -> String;
+
+    /// Wrap a JSON-extract expression so a `Number` sub-field compares
+    /// numerically. `SQLite`'s `json_extract` already yields the native numeric
+    /// type (default identity), but Postgres `#>>`/`->>` yield `text`, so a
+    /// `text <op> float8` comparison would error or compare lexically — PG
+    /// overrides this to add a numeric cast.
+    fn json_number_cast(&self, expr: &str) -> String {
+        expr.to_string()
+    }
 
     /// FROM-clause fragment for iterating a JSON array.
     ///
@@ -359,6 +383,12 @@ macro_rules! impl_db_connection_delegate {
             }
             fn json_extract_expr(&self, column: &str, field: &str) -> String {
                 self.inner.json_extract_expr(column, field)
+            }
+            fn json_number_cast(&self, expr: &str) -> String {
+                self.inner.json_number_cast(expr)
+            }
+            fn lock_row(&self, table: &str, id: &str) -> Result<()> {
+                self.inner.lock_row(table, id)
             }
             fn json_each_source(&self, source: &str, alias: &str) -> String {
                 self.inner.json_each_source(source, alias)
