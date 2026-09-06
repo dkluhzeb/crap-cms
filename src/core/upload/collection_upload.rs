@@ -79,6 +79,27 @@ impl CollectionUpload {
 
         names
     }
+
+    /// The server-**derived** subset of the system fields: exactly the columns
+    /// `inject_upload_metadata` computes from the processed file (`filename`,
+    /// `mime_type`, `filesize`, `width`, `height`, `url`, and every
+    /// `{size}[_fmt]_url` / `{size}_width` / `{size}_height`). These must never
+    /// be settable from user input — the serve access gate matches a request
+    /// against the stored `url`/`*_url` columns and `delete_upload_files` uses
+    /// them as deletion targets, so a user-forged value there defeats the
+    /// per-document read gate and can delete another document's file. The write
+    /// chokepoint strips these from untrusted input.
+    ///
+    /// `focal_x` / `focal_y` are deliberately excluded: the focal point is a
+    /// legitimate user-editable setting, not derived from the file.
+    #[must_use]
+    pub fn derived_field_names(&self) -> HashSet<String> {
+        let mut names = self.system_field_names();
+        names.remove("focal_x");
+        names.remove("focal_y");
+
+        names
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +154,45 @@ mod tests {
         assert!(names.contains("thumb_height"));
         assert!(names.contains("thumb_webp_url"));
         assert!(names.contains("thumb_avif_url"));
+    }
+
+    /// The derived set is the file-computed columns only — every URL-bearing and
+    /// dimension column the serve gate / cleanup path trust — and must EXCLUDE
+    /// the user-editable focal point, or focal-point edits would be silently
+    /// dropped by the write chokepoint's strip.
+    #[test]
+    fn derived_field_names_excludes_focal_but_keeps_url_bearing() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(300)
+                .height(300)
+                .build(),
+        ];
+        upload.format_options.avif = Some(FormatQuality::new(60, true));
+
+        let derived = upload.derived_field_names();
+
+        // Focal point is user-editable, never derived from the file.
+        assert!(!derived.contains("focal_x"));
+        assert!(!derived.contains("focal_y"));
+
+        // Everything the serve gate / delete path trusts must be locked.
+        for name in [
+            "filename",
+            "mime_type",
+            "filesize",
+            "width",
+            "height",
+            "url",
+        ] {
+            assert!(derived.contains(name), "derived set missing {name}");
+        }
+        assert!(derived.contains("thumb_url"));
+        assert!(derived.contains("thumb_avif_url"));
+        assert!(derived.contains("thumb_width"));
+
+        // Exactly system_field_names minus the two focal columns.
+        assert_eq!(derived.len(), upload.system_field_names().len() - 2);
     }
 }

@@ -62,6 +62,11 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
 ) -> Result<UploadResult, Response> {
     let upload_config = p.def.upload.clone().expect("upload config required");
 
+    // Server-derived columns to strip from caller input before injecting the
+    // real ones (computed here because `upload_config` is moved into the
+    // blocking task below).
+    let derived_cols = upload_config.derived_field_names();
+
     // For updates, load old document to get old file paths for cleanup.
     // Internal lookup for file cleanup planning, not a user-facing read.
     // Runs BEFORE the new file is stored so a failure cannot orphan it.
@@ -95,6 +100,13 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
 
     match result {
         Ok(Ok((processed, guard))) => {
+            // Drop any caller-supplied server-derived columns before injecting
+            // the real ones, so a forged `url`/`*_url` (incl. a not-yet-processed
+            // queued-format size) can't survive on this trusted upload path.
+            for name in &derived_cols {
+                form_data.remove(name);
+            }
+
             inject_upload_metadata(form_data, &processed);
 
             Ok(UploadResult {

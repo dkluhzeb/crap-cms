@@ -76,6 +76,13 @@ pub fn create_upload(
         )]))
     })?;
 
+    // Drop any caller-supplied server-derived columns before injecting the real
+    // ones, so a forged `url`/`*_url` (incl. a not-yet-processed queued-format
+    // size) can never survive even on this trusted, file-bearing path.
+    for name in upload_config.derived_field_names() {
+        form_data.remove(&name);
+    }
+
     let queued_conversions = processed.queued_conversions.clone();
     inject_upload_metadata(&mut form_data, &processed);
 
@@ -93,6 +100,7 @@ pub fn create_upload(
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
+            .trusted_upload_metadata(true)
             .build(),
     )?;
 
@@ -164,6 +172,16 @@ pub fn update_upload(
     let def = ctx.collection_def()?;
     let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
+    // Strip caller-supplied server-derived upload columns up front: on a no-file
+    // update they must stay unchanged (absent = keep stored), and on a file
+    // update `inject_upload_metadata` sets the real values below. Prevents a
+    // forged `url`/`*_url` from reaching the DB on either branch.
+    if let Some(upload) = def.upload.as_ref() {
+        for name in upload.derived_field_names() {
+            form_data.remove(&name);
+        }
+    }
+
     // A draft save leaves the published row untouched — it still references the
     // current file — so on a draft the old files must NOT be cleaned up here.
     // Only a published update actually replaces them.
@@ -220,6 +238,7 @@ pub fn update_upload(
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
+            .trusted_upload_metadata(true)
             .build(),
     )?;
 

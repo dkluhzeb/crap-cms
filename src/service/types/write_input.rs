@@ -33,6 +33,12 @@ pub struct WriteInput<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
     pub draft: bool,
     pub ui_locale: Option<String>,
+    /// Set only by the upload multipart handlers after they have processed a
+    /// real file and injected the server-derived metadata columns. When false
+    /// (every other surface: Lua, gRPC, MCP, generic admin), the write
+    /// chokepoint strips the derived upload columns from `data` so a caller
+    /// can't forge `url`/`*_url`/dimensions. See `CollectionUpload::derived_field_names`.
+    pub trusted_upload_metadata: bool,
 }
 
 impl<'a> WriteInput<'a> {
@@ -49,6 +55,7 @@ pub struct WriteInputBuilder<'a> {
     pub(in crate::service) locale_ctx: Option<&'a LocaleContext>,
     pub(in crate::service) draft: bool,
     pub(in crate::service) ui_locale: Option<String>,
+    pub(in crate::service) trusted_upload_metadata: bool,
 }
 
 impl<'a> WriteInputBuilder<'a> {
@@ -59,6 +66,7 @@ impl<'a> WriteInputBuilder<'a> {
             locale_ctx: None,
             draft: false,
             ui_locale: None,
+            trusted_upload_metadata: false,
         }
     }
 
@@ -86,6 +94,15 @@ impl<'a> WriteInputBuilder<'a> {
         self
     }
 
+    /// Mark this write as carrying trusted, server-computed upload metadata
+    /// (the multipart upload handlers, after `inject_upload_metadata`). Leaves
+    /// the derived upload columns untouched by the write-chokepoint strip.
+    pub fn trusted_upload_metadata(mut self, trusted: bool) -> Self {
+        self.trusted_upload_metadata = trusted;
+
+        self
+    }
+
     pub fn build(self) -> WriteInput<'a> {
         WriteInput {
             data: self.data,
@@ -93,6 +110,7 @@ impl<'a> WriteInputBuilder<'a> {
             locale_ctx: self.locale_ctx,
             draft: self.draft,
             ui_locale: self.ui_locale,
+            trusted_upload_metadata: self.trusted_upload_metadata,
         }
     }
 }

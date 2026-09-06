@@ -1667,3 +1667,128 @@ fn bulk_hard_delete_processes_beyond_one_batch() {
         .unwrap();
     assert_eq!(remaining, 0, "no rows should remain after bulk delete");
 }
+
+/// Regression: restoring a version onto a soft-deleted (trashed) document must
+/// be rejected, not silently applied. A restore is an update op; applying it to
+/// a trashed row would rewrite its fields and record new version history while
+/// the row stays invisible in the trash view.
+#[tokio::test]
+async fn restore_onto_a_trashed_document_is_rejected() {
+    let mut def = make_versioned_def();
+    def.soft_delete = true;
+    let ts = setup_service(vec![def]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "articles".to_string(),
+            data: Some(make_struct(&[("title", "Live")])),
+            locale: None,
+            draft: Some(false),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let versions = ts
+        .service
+        .list_versions(Request::new(content::ListVersionsRequest {
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            limit: None,
+            offset: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let version_id = versions
+        .versions
+        .first()
+        .expect("a version exists after create")
+        .id
+        .clone();
+
+    // Soft-delete (trash) the document.
+    ts.service
+        .delete(Request::new(content::DeleteRequest {
+            events: None,
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            force_hard_delete: false,
+        }))
+        .await
+        .unwrap();
+
+    let err = ts
+        .service
+        .restore_version(Request::new(content::RestoreVersionRequest {
+            collection: "articles".to_string(),
+            document_id: doc.id.clone(),
+            version_id,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.code(),
+        tonic::Code::NotFound,
+        "restoring onto a trashed row must be rejected as NotFound, got: {err:?}"
+    );
+}
+
+/// Regression: restoring a DRAFT version must validate at draft strictness — a
+/// draft may legitimately carry an empty required field, so the restore must not
+/// reject it. Previously restore validated at publish strictness regardless of
+/// the status it restored to, spuriously rejecting the draft.
+#[tokio::test]
+async fn restoring_a_draft_version_does_not_enforce_required() {
+    let ts = setup_service(vec![make_versioned_def()]);
+
+    // A draft create is allowed to leave the required `title` empty.
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "articles".to_string(),
+            data: Some(make_struct(&[("title", "")])),
+            locale: None,
+            draft: Some(true),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let versions = ts
+        .service
+        .list_versions(Request::new(content::ListVersionsRequest {
+            collection: "articles".to_string(),
+            id: doc.id.clone(),
+            limit: None,
+            offset: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let version_id = versions
+        .versions
+        .first()
+        .expect("a draft version exists after a draft create")
+        .id
+        .clone();
+
+    // The draft snapshot restore must succeed (draft-aware validation), not
+    // reject the empty required field the way a published restore would.
+    ts.service
+        .restore_version(Request::new(content::RestoreVersionRequest {
+            collection: "articles".to_string(),
+            document_id: doc.id.clone(),
+            version_id,
+        }))
+        .await
+        .expect("restoring a draft version must not enforce required fields");
+}

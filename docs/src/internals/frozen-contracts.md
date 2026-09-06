@@ -275,6 +275,11 @@ changing a representation is a breaking change to every consumer.
   field before-validate/before-change/after-change) vs which do not (`before_read`,
   `after_read`, `before_broadcast`, validators, conditions). `before_render` is the
   one **read-only** tier — see below.
+- **A present-null field survives the hook context round-trip.** Lua collapses
+  JSON null to `nil` and drops the key, so a field explicitly set to null (a
+  clear-to-null request) that a hook does not replace is re-inserted as null when
+  `ctx.data` is rebuilt — the clear is never silently downgraded to "no change",
+  matching the field-hook `was_present` rule.
 - **Hook-return semantics.** Only `data` and `context` are read back; `data`
   **replaces** `ctx.data` wholesale. A normal hook returning `false` is ignored
   (only `error()` aborts); `before_broadcast`/live-filter returning `false`/`nil`
@@ -337,6 +342,26 @@ changing a representation is a breaking change to every consumer.
   — one construction point and one enforcement point. Both are fail-closed (an
   access hook that errors or a global returning a row-filter drops the view) and
   a new stream surface must reuse both, never re-derive the access mapping.
+- **A live stream fails closed on a lost revocation signal.** Both the gRPC
+  `Subscribe` and admin SSE pumps drop the subscriber when the fixed-capacity
+  user-invalidation broadcast reports `Lagged` or `Closed` — an overflow may have
+  dropped this session's own revocation, so the stream cannot be proven still
+  valid and is torn down to force a re-authenticating reconnect. Staying
+  connected on a lost signal is forbidden.
+- **Server-derived upload columns are never user-writable.** `url`, every
+  `{size}[_fmt]_url`, `filename`, `mime_type`, `filesize`, `width`, and `height`
+  (`CollectionUpload::derived_field_names`) are computed by the upload pipeline
+  from the processed file. The write chokepoint (`create_/update_document_in_conn`)
+  strips them from untrusted input on every surface; only the file-processing
+  upload handlers, which set `trusted_upload_metadata`, may write them. The serve
+  access gate and `delete_upload_files` trust these columns as truthful
+  back-pointers, so a user-forged value would read or delete another document's
+  file. `focal_x`/`focal_y` stay user-editable (a setting, not file-derived).
+- **Version restore validates at the write path's strictness.** Restore builds
+  its `ValidationCtx` draft-aware, locale-scoped, and `required_locales`-aware
+  exactly like create/update, and refuses a soft-deleted (trashed) target with
+  `NotFound`. A published restore must satisfy the localized-completeness gate; a
+  draft restore is exempt; a trashed row is never silently rewritten.
 
 ## Server-config posture (frozen defaults)
 

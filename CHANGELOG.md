@@ -662,6 +662,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **An upload document's file URL could be forged to read another document's
+  file, bypassing the per-document access gate.** The injected upload columns
+  (`url`, every `{size}[_fmt]_url`, `filename`, and the dimensions) were plain
+  hidden — but writable — fields, and a no-file update wrote them verbatim. The
+  serve gate authorizes a file request by matching it against the stored
+  `url`/`*_url` columns, so a caller with write access could point their own
+  readable document's `url` at a victim's file path (same collection) and read
+  the bytes through the gate — defeating the per-row/draft/trash read
+  protection. The same forged value also let hard-delete/replace remove another
+  document's file (`delete_upload_files`). These server-derived columns are now
+  stripped from untrusted input at the one write chokepoint every surface passes
+  through (Lua, gRPC, MCP, admin); only the file-processing upload handlers,
+  which compute the real values, may set them. `focal_x`/`focal_y` stay
+  user-editable. A cross-surface strip test and an end-to-end upload-update test
+  pin it.
+
+- **A revoked admin session could keep receiving live updates after logout.**
+  The admin SSE stream dropped a subscriber on a user-invalidation signal, but
+  treated a lagged or closed invalidation bus as "stay connected" — so a burst
+  of revocations that overflowed the fixed-capacity bus could drop this
+  subscriber's own revocation and leave its live stream open, streaming mutation
+  events to a session whose normal requests were already rejected. It now fails
+  closed on lag/close exactly like the gRPC `Subscribe` sibling, forcing a
+  reconnect that re-authenticates.
+
 - **A hook that called `error()` leaked the server's absolute filesystem
   path to the API client.** Hook files resolved at runtime via `require`
   were loaded by Lua's stock searcher, which names a chunk by the exact
@@ -1585,6 +1610,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Restoring a version validated the snapshot inconsistently with the write
+  path.** Restore built its validation context without the locale context,
+  `required_locales`, or draft flag that create/update thread, so it (1) skipped
+  the localized-completeness publish gate — a snapshot could restore as
+  *published* with a required localized field empty; (2) validated a *draft*
+  snapshot at publish strictness, spuriously rejecting a draft that legitimately
+  left a required field empty; and (3) could restore onto a soft-deleted
+  (trashed) row, silently rewriting it while it stayed invisible in the trash
+  view. Restore now validates draft-aware and locale-scoped like the write path,
+  and refuses a trashed target with `NotFound`.
+
+- **A gRPC request that set a field to null to clear it was silently ignored
+  when a before-hook was present.** Lua collapses a JSON null to `nil`, which
+  drops the key from the hook's context table, so a field explicitly set to null
+  vanished when `ctx.data` was rebuilt from a returning hook — downgrading
+  "clear this column" to "no change", while the same write with no hook cleared
+  the column. Present-null fields are now preserved across the hook round-trip,
+  matching the field-hook path's existing `was_present` rule.
 
 - **A Global's scalar `has_many` column that drifted to a numeric type on an
   older Postgres database was never reconciled on upgrade.** The collection

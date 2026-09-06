@@ -3,7 +3,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, FieldDefinition, RequiredLocales, collection::Hooks, nest_group_fields},
+    core::{
+        CollectionDefinition, Document, FieldDefinition, RequiredLocales, collection::Hooks,
+        nest_group_fields,
+    },
     db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
     service::{WriteInput, hooks::WriteHooks},
@@ -12,6 +15,36 @@ use crate::{
 use super::ServiceError;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Remove the server-derived upload columns from an untrusted write's data.
+///
+/// On an upload collection, `url` / `{size}[_fmt]_url` / `filename` / dimensions
+/// are computed by the upload pipeline (`inject_upload_metadata`) from the
+/// processed file — a caller must never set them directly. The serve access
+/// gate authorizes a file request by matching it against the stored
+/// `url`/`*_url` columns, and `delete_upload_files` deletes the files those
+/// columns name, so a forged value there discloses or deletes another
+/// document's file. Only the multipart upload handlers (which processed a real
+/// file and set `trusted_upload_metadata`) bypass this; every other surface
+/// (Lua, gRPC, MCP, generic admin) has these columns stripped here — the one
+/// chokepoint all write paths pass through. `focal_x`/`focal_y` are left
+/// writable: the focal point is a legitimate user setting, not file-derived.
+pub(super) fn strip_untrusted_upload_metadata(
+    input: &mut WriteInput<'_>,
+    def: &CollectionDefinition,
+) {
+    if input.trusted_upload_metadata {
+        return;
+    }
+
+    let Some(upload) = def.upload.as_ref() else {
+        return;
+    };
+
+    for name in upload.derived_field_names() {
+        input.data.remove(&name);
+    }
+}
 
 /// Split a [`validate_document`] result into the surface-agnostic
 /// `(valid, per_field_errors)` pair shared by every validate handler
@@ -115,4 +148,86 @@ pub fn validate_document(
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::strip_untrusted_upload_metadata;
+    use crate::core::upload::CollectionUpload;
+    use crate::core::{CollectionDefinition, DocumentFields};
+    use crate::service::WriteInput;
+    use serde_json::json;
+
+    fn upload_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload::new());
+
+        def
+    }
+
+    /// Untrusted writes (Lua / gRPC / MCP / generic admin) must not set the
+    /// server-derived upload columns — a forged `url` there bypasses the serve
+    /// access gate and lets `delete_upload_files` target another doc's file.
+    /// `focal_x`/`focal_y` stay writable (user-editable focal point).
+    #[test]
+    fn strip_removes_derived_columns_from_untrusted_write() {
+        let def = upload_def();
+        let mut data = DocumentFields::new();
+        data.insert("url".into(), json!("/uploads/media/victim.jpg"));
+        data.insert("filename".into(), json!("victim.jpg"));
+        data.insert("focal_x".into(), json!(0.5));
+        data.insert("caption".into(), json!("hi"));
+
+        let mut input = WriteInput::builder(data).build();
+        strip_untrusted_upload_metadata(&mut input, &def);
+
+        assert!(
+            !input.data.contains_key("url"),
+            "a forged url must be stripped from an untrusted write"
+        );
+        assert!(!input.data.contains_key("filename"));
+        assert_eq!(
+            input.data.get("focal_x"),
+            Some(&json!(0.5)),
+            "focal point stays writable"
+        );
+        assert_eq!(
+            input.data.get("caption"),
+            Some(&json!("hi")),
+            "user fields are untouched"
+        );
+    }
+
+    /// The multipart upload handlers inject real server metadata and mark the
+    /// write trusted; the strip must leave those values intact.
+    #[test]
+    fn strip_preserves_derived_columns_on_trusted_write() {
+        let def = upload_def();
+        let mut data = DocumentFields::new();
+        data.insert("url".into(), json!("/uploads/media/real.jpg"));
+
+        let mut input = WriteInput::builder(data)
+            .trusted_upload_metadata(true)
+            .build();
+        strip_untrusted_upload_metadata(&mut input, &def);
+
+        assert_eq!(
+            input.data.get("url"),
+            Some(&json!("/uploads/media/real.jpg")),
+            "trusted (server-injected) metadata must survive"
+        );
+    }
+
+    /// A non-upload collection is never touched (a real field named `url`).
+    #[test]
+    fn strip_is_noop_on_non_upload_collection() {
+        let def = CollectionDefinition::new("posts");
+        let mut data = DocumentFields::new();
+        data.insert("url".into(), json!("/whatever"));
+
+        let mut input = WriteInput::builder(data).build();
+        strip_untrusted_upload_metadata(&mut input, &def);
+
+        assert_eq!(input.data.get("url"), Some(&json!("/whatever")));
+    }
 }

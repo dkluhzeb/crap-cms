@@ -1706,3 +1706,99 @@ async fn upload_update_fails_before_storing_when_old_doc_read_errors() {
         "upload must not store a file when the old-document read fails"
     );
 }
+
+/// Multipart body with only text fields (no `_file` part) — an upload update
+/// that changes metadata without replacing the file.
+fn build_fields_only_multipart(fields: &[(&str, &str)]) -> (String, Vec<u8>) {
+    let boundary = "----CrapTestBoundary";
+    let mut body = Vec::new();
+
+    for (name, value) in fields {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+/// Security regression: the server-derived `url` column must not be settable
+/// from user input. An upload document's `url` is what the serve access gate
+/// matches to authorize the file bytes; if a caller could forge it, they could
+/// point their own (readable) document at another document's file path and read
+/// it through the gate. A no-file update carrying a forged `url` must leave the
+/// stored value unchanged while still applying legitimate field edits.
+#[tokio::test]
+async fn upload_update_cannot_forge_the_url_column() {
+    let app = setup_app(vec![make_users_def(), make_media_def()], vec![]);
+    let user_id = create_test_user(&app, "uploader@test.com", "secret123");
+    let bearer = make_bearer_token(&app, &user_id, "uploader@test.com");
+
+    let png = tiny_png();
+    let (ct, body) = build_multipart_body("real.png", "image/png", &png, &[("alt", "Real")]);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/api/upload/media")
+                .header("content-type", &ct)
+                .header("authorization", &bearer)
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let create_json: serde_json::Value =
+        serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+    let doc_id = create_json["document"]["id"].as_str().unwrap().to_string();
+    let real_url = create_json["document"]["url"]
+        .as_str()
+        .expect("created upload has a server-derived url")
+        .to_string();
+
+    // A no-file update that tries to forge `url` at a victim's file path while
+    // legitimately editing `alt`.
+    let (ct2, body2) = build_fields_only_multipart(&[
+        ("url", "/uploads/media/victim-file.png"),
+        ("alt", "Updated"),
+    ]);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::patch(format!("/api/upload/media/{doc_id}"))
+                .header("content-type", ct2)
+                .header("authorization", &bearer)
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(body2))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let update_json: serde_json::Value =
+        serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+
+    assert_eq!(
+        update_json["document"]["url"].as_str(),
+        Some(real_url.as_str()),
+        "the forged url must be ignored — the stored server-derived url stays put"
+    );
+    assert_eq!(
+        update_json["document"]["alt"], "Updated",
+        "a legitimate field edit still applies"
+    );
+}

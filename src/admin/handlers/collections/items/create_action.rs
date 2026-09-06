@@ -89,6 +89,8 @@ struct CreateInput {
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
+    /// A file was processed and server-derived metadata injected into `form`.
+    trusted_upload: bool,
 }
 
 /// Owned bundle for the spawn-blocking create body. Process-stable dependencies
@@ -118,6 +120,7 @@ fn create_document_blocking(
         .password(args.input.password)
         .locale_ctx(args.input.locale_ctx)
         .draft(args.input.draft)
+        .trusted_upload_metadata(args.input.trusted_upload)
         .build();
 
     Create::run(&ctx, op_args)
@@ -230,6 +233,7 @@ pub async fn create_action(
             password,
             locale_ctx,
             draft,
+            trusted_upload: upload_result.is_some(),
         },
     )
     .await;

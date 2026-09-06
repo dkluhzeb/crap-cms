@@ -6,6 +6,7 @@ use std::{collections::HashSet, time::Instant};
 
 use anyhow::{Context as _, Result, bail};
 use mlua::{Function as LuaFunction, Lua, Table, Value};
+use serde_json::Value as JsonValue;
 use tracing::{debug, warn};
 
 use crate::{
@@ -165,7 +166,28 @@ pub(crate) fn call_registered_hooks(
 /// Read hook result data and context back from a returned Lua table into the `HookContext`.
 pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()> {
     if let Ok(data_tbl) = tbl.get::<Table>("data") {
-        ctx.data = DocumentFields::from(lua_table_to_json_map(&data_tbl)?);
+        // Lua collapses a JSON null to `nil`, and setting a table key to `nil`
+        // removes it — so a field the caller explicitly set to null (the "clear
+        // this column" request the gRPC surface can send) is invisible inside the
+        // hook's `data` table and would be lost when we rebuild `ctx.data` from
+        // it, silently downgrading present-null to absent (no write) even though
+        // the no-hook write path clears the column. Preserve any key that was
+        // present-as-null before the hook and the hook did not replace with a
+        // real value, mirroring the field-hook `was_present` rule — a hook can't
+        // intentionally drop a null key it was never handed.
+        let null_keys: Vec<String> = ctx
+            .data
+            .iter()
+            .filter(|(_, v)| v.is_null())
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        let mut rebuilt = lua_table_to_json_map(&data_tbl)?;
+        for key in null_keys {
+            rebuilt.entry(key).or_insert(JsonValue::Null);
+        }
+
+        ctx.data = DocumentFields::from(rebuilt);
     }
 
     ctx.read_context_back(tbl)?;
@@ -267,6 +289,37 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Regression: a caller sends `subtitle = null` to clear a column; a
+    /// before-hook that returns its context table (the ubiquitous "mutate and
+    /// return ctx" idiom) must NOT drop that null. Lua collapses JSON null → nil
+    /// → the key vanishes from the `data` table, so without preservation the
+    /// clear-to-null request was silently downgraded to "no change" — while the
+    /// same write with no hook clears the column.
+    #[test]
+    fn present_null_field_survives_a_passthrough_hook() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"package.loaded["h"] = function(ctx)
+                return ctx
+            end"#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut ctx = HookContext::builder("posts", "update").build();
+        ctx.data.insert("subtitle".to_string(), json!(null));
+        ctx.data.insert("title".to_string(), json!("hi"));
+
+        let out = call_hook_ref(&lua, &HookRef::new("h"), ctx).unwrap();
+
+        assert_eq!(
+            out.data.get("subtitle"),
+            Some(&json!(null)),
+            "an explicit null (clear-to-null) must survive a passthrough hook"
+        );
+        assert_eq!(out.data.get("title"), Some(&json!("hi")));
+    }
 
     /// A `{ ref, options }` hook config surfaces its `options` to the hook as
     /// `ctx.options`. Regression for the config-customizable-hooks feature: a

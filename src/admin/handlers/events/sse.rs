@@ -195,10 +195,13 @@ fn warn_sse_lag(n: u64) {
 
 /// Handle a user-invalidation signal. Returns `Err(())` if it matches this
 /// subscriber's user.
-fn handle_invalidation(ctx: &PumpCtx, recv: Result<String, RecvError>) -> Result<(), ()> {
+fn handle_invalidation(
+    my_user_id: Option<&str>,
+    recv: Result<String, RecvError>,
+) -> Result<(), ()> {
     match recv {
         Ok(user_id) => {
-            let Some(my_id) = ctx.user_id.as_deref() else {
+            let Some(my_id) = my_user_id else {
                 return Ok(());
             };
 
@@ -209,11 +212,18 @@ fn handle_invalidation(ctx: &PumpCtx, recv: Result<String, RecvError>) -> Result
 
             Ok(())
         }
-        // On lag or closed we treat as "stay connected" — missing a stale
-        // invalidation signal is harmless; the session still gets dropped on
-        // the next one. `Closed` is unreachable in practice (bus lives as long
-        // as the process).
-        Err(_) => Ok(()),
+        // Fail closed on lag or close, matching the gRPC `Subscribe` sibling: the
+        // invalidation bus is a fixed-capacity broadcast, so a lag may have
+        // dropped *this* subscriber's own revocation and a close means no future
+        // revocation can ever arrive. Either way the session can no longer be
+        // proven valid — drop the stream to force a reconnect (which
+        // re-authenticates) rather than keep streaming live data to a
+        // possibly-revoked session.
+        Err(RecvError::Lagged(n)) => {
+            warn!("SSE invalidation stream lagged by {n} — dropping subscriber to force re-auth");
+            Err(())
+        }
+        Err(RecvError::Closed) => Err(()),
     }
 }
 
@@ -235,7 +245,7 @@ fn spawn_pump(
                     }
                 }
                 recv = invalidation_rx.recv() => {
-                    if handle_invalidation(&ctx, recv).is_err() {
+                    if handle_invalidation(ctx.user_id.as_deref(), recv).is_err() {
                         break;
                     }
                 }
@@ -314,6 +324,32 @@ pub async fn sse_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the admin SSE invalidation handler must fail CLOSED on a
+    /// lagged or closed revocation bus, exactly like the gRPC `Subscribe`
+    /// sibling. A fixed-capacity broadcast can drop this subscriber's own
+    /// revocation on overflow; staying connected would keep streaming live data
+    /// to a revoked session. (Previously it returned `Ok` — stayed connected.)
+    #[test]
+    fn invalidation_fails_closed_on_lag_and_close() {
+        assert!(
+            handle_invalidation(Some("u1"), Err(RecvError::Lagged(99))).is_err(),
+            "a lagged invalidation bus must drop the subscriber (a revocation may have been missed)"
+        );
+        assert!(
+            handle_invalidation(Some("u1"), Err(RecvError::Closed)).is_err(),
+            "a closed invalidation bus must drop the subscriber"
+        );
+    }
+
+    /// A revocation targeting this subscriber drops it; one for another user, or
+    /// with no user id (anonymous), keeps it connected.
+    #[test]
+    fn invalidation_drops_only_the_targeted_user() {
+        assert!(handle_invalidation(Some("u1"), Ok("u1".to_string())).is_err());
+        assert!(handle_invalidation(Some("u1"), Ok("u2".to_string())).is_ok());
+        assert!(handle_invalidation(None, Ok("u1".to_string())).is_ok());
+    }
 
     #[test]
     fn sse_slot_acquire_within_limit() {

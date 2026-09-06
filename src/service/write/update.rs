@@ -133,6 +133,10 @@ pub(crate) fn update_document_in_conn(
     // whole pipeline sees one shape, the DB edge flattens to columns.
     input.data = nest_group_fields(&input.data, &def.fields);
 
+    // Drop server-derived upload columns from untrusted input (all surfaces
+    // but the multipart upload handlers) so `url`/`*_url` can't be forged.
+    super::validate::strip_untrusted_upload_metadata(&mut input, def);
+
     reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
 
     check_update_access(

@@ -83,6 +83,10 @@ pub fn create_document_in_conn(
     // through; the DB write edge flattens back to columns.
     input.data = nest_group_fields(&input.data, &def.fields);
 
+    // Drop server-derived upload columns from untrusted input (all surfaces
+    // but the multipart upload handlers) so `url`/`*_url` can't be forged.
+    super::validate::strip_untrusted_upload_metadata(&mut input, def);
+
     // A document is created in its default (canonical) locale. A new row has no
     // default-locale value to translate from, so creating under a non-default
     // locale would write shared columns from the wrong locale AND leave the

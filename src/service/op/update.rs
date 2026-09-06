@@ -24,6 +24,10 @@ pub struct UpdateArgs {
     /// Publish a mutation event for this write (request `events` flag).
     #[builder(default = true)]
     pub events: bool,
+    /// The caller has already injected server-derived upload metadata (the admin
+    /// upload path). Bypasses the write chokepoint's derived-column strip.
+    #[builder(default = false)]
+    pub trusted_upload_metadata: bool,
 }
 
 /// Update a document with the full write lifecycle.
@@ -49,6 +53,7 @@ impl Operation for Update {
             locale_ctx,
             draft,
             events: _,
+            trusted_upload_metadata,
         } = args;
 
         update_document(
@@ -59,6 +64,7 @@ impl Operation for Update {
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(draft)
                 .ui_locale(ctx.ui_locale.clone())
+                .trusted_upload_metadata(trusted_upload_metadata)
                 .build(),
         )
     }

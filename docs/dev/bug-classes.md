@@ -526,3 +526,39 @@ memories; the load-bearing ones:
   round — a quiet-ish round. Round 7 pending; the biggest lever remains
   broadening PG behavioral coverage on the new harness + landing the
   drafted CI Postgres service job.
+- 2026-09-06 (16) — **CONVERGENCE ROUND 7** (5 fresh lenses:
+  output-escaping, serialization round-trip, soft-delete/versions/restore,
+  live-updates/SSE, storage/uploads/signed-URLs). **8 findings — 1 HIGH,
+  4 MED, 3 LOW — NOT a quiet round**, and the HIGH is a genuinely NEW
+  class, so convergence is not reached. Output-escaping came back fully
+  CLEAN (triple-mustache inventory all escaped, richtext `is_safe_url`,
+  SQL identifier validation, no open-redirect/CRLF); signed-URL HMAC,
+  `validate_key` on all backends, and image-bomb guards verified solid.
+  Fixed test-first: **(1) HIGH, NEW class — upload serve-gate bypass via
+  forgeable `url`:** the injected upload columns (`url`/`*_url`/filename/
+  dims) were hidden but WRITABLE, and a no-file update wrote them verbatim;
+  the serve gate authorizes by matching the request against the stored
+  `url`, so a caller with write access could point their own readable doc's
+  `url` at a victim's file path (same collection) and read the bytes
+  through the gate — and `delete_upload_files` would delete the referenced
+  file (the MED E-2, same root). Fixed by stripping the server-derived
+  columns (`CollectionUpload::derived_field_names` = system minus focal) at
+  the ONE write chokepoint (`create_/update_document_in_conn`) for all
+  untrusted surfaces; only the file-processing handlers set
+  `trusted_upload_metadata` and may write them. New class GUARDED (chokepoint
+  strip + cross-surface unit test + end-to-end upload-update test). **(2)
+  MED, F12/F9/P2 — admin SSE failed OPEN on a lagged/closed revocation bus**
+  while the gRPC `Subscribe` twin failed closed; SSE now fails closed too.
+  **(3) MED, L18/D8 — clear-to-null lost across a before-hook:** Lua nil
+  drops the key, so a gRPC `field = null` clear vanished when a returning
+  hook rebuilt `ctx.data`; present-null now preserved (mirrors the field-hook
+  `was_present` rule). **(4) MED+LOW+LOW, P2 — version restore validated
+  inconsistently with the write path:** no locale-ctx/`required_locales`
+  (published restore could skip localized completeness), no draft flag
+  (draft restore rejected at publish strictness), and no live-target guard
+  (restore onto a trashed row silently rewrote it) — all three fixed by
+  harmonizing restore's `ValidationCtx` + a `NotFound` guard. **(5) LOW,
+  D8 latent — empty `[]`→`{}` across a Lua round-trip:** no reachable
+  corruption today (every write edge treats them alike); documented, not
+  fixed. Round 8 pending; the streak of quiet rounds is broken by the HIGH,
+  so at least two consecutive quiet rounds are still required.

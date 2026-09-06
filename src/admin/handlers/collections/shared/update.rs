@@ -79,6 +79,8 @@ struct UpdateInput {
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     action: String,
+    /// A file was processed and server-derived metadata injected into `form`.
+    trusted_upload: bool,
 }
 
 /// Owned bundle for the spawn-blocking update body. Process-stable dependencies
@@ -119,6 +121,7 @@ fn update_document_blocking(
             .password(args.input.password)
             .locale_ctx(args.input.locale_ctx)
             .draft(args.input.draft)
+            .trusted_upload_metadata(args.input.trusted_upload)
             .build();
 
         Update::run(&ctx, op_args)
@@ -267,6 +270,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
             locale_ctx,
             draft,
             action,
+            trusted_upload: upload_result.is_some(),
         },
     )
     .await;

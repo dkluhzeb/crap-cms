@@ -12,7 +12,7 @@ use crate::{
         field_children,
     },
     db::{
-        AccessResult, query,
+        AccessResult, LocaleContext, query,
         query::helpers::{global_table, prefixed_name, tz_column},
     },
     hooks::{AccessCheckInput, ValidationCtx},
@@ -270,6 +270,33 @@ pub(crate) fn restore_collection_version_core(
         )));
     }
 
+    // The default-locale context, reused below for the trashed-target guard and
+    // the completeness-aware validation.
+    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
+        .ok()
+        .flatten();
+
+    // A restore must target a LIVE document. Restoring onto a soft-deleted
+    // (trashed) row would silently rewrite its fields and record new version
+    // history while the row stays invisible in the trash view — an update op
+    // must not apply to a trashed target. `find_by_id` excludes trashed rows,
+    // so a missing row here means the target is trashed or gone → NotFound
+    // (the same fail-closed shape as the cross-document guard above).
+    if def.soft_delete
+        && query::find_by_id(
+            conn,
+            ctx.slug,
+            def,
+            document_id,
+            restore_locale_ctx.as_ref(),
+        )?
+        .is_none()
+    {
+        return Err(ServiceError::NotFound(format!(
+            "Document '{document_id}' not found"
+        )));
+    }
+
     // Restore returns the document to its exact state at that point in time —
     // including its publication status. A draft snapshot restores as a draft,
     // a published one as published (rather than force-publishing every
@@ -294,9 +321,19 @@ pub(crate) fn restore_collection_version_core(
     // re-run — restore is meant to be transparent — but type / required /
     // unique / regex constraints from the current schema bite.
     let validation_data = snapshot_to_validation_data(&snapshot);
+
+    // Validate at the strictness the write path uses: a snapshot restored as
+    // PUBLISHED must satisfy the localized-completeness (`required_locales`)
+    // gate, a draft restore is exempt — mirroring create/update. Without the
+    // locale context and required-locales the completeness check silently
+    // no-ops, so a published snapshot missing a required localized value (a
+    // field added or tightened after the snapshot) would restore anyway.
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(document_id))
         .soft_delete(def.soft_delete)
+        .draft(restored_status == "draft")
+        .locale_ctx(restore_locale_ctx.as_ref())
+        .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
         .build();
     write_hooks
@@ -394,7 +431,19 @@ pub(crate) fn restore_global_version_core(
     // Re-run schema validation against the restored data — see the
     // collection variant above for the full rationale.
     let validation_data = snapshot_to_validation_data(&snapshot);
-    let val_ctx = ValidationCtx::builder(conn, &gtable).user(ctx.user).build();
+
+    // Mirror the global update path's validation strictness: draft-aware and
+    // locale-scoped, so a published restore enforces localized completeness and
+    // a draft restore is exempt (see the collection variant above).
+    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
+        .ok()
+        .flatten();
+    let val_ctx = ValidationCtx::builder(conn, &gtable)
+        .exclude_id(Some("default"))
+        .draft(restored_status == "draft")
+        .locale_ctx(restore_locale_ctx.as_ref())
+        .user(ctx.user)
+        .build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)
         .map_err(ServiceError::Validation)?;
