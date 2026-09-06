@@ -931,7 +931,7 @@ fn cmd_user_list_missing_collection_errors() {
     assert!(err.contains("not found"), "error: {err}");
 }
 
-/// Regression (ledger P5): the CLI `user create`/`user delete` offline
+/// Regression: the CLI `user create`/`user delete` offline
 /// paths must maintain the same invariants as the service write path —
 /// outgoing relationship refs count toward the targets' delete
 /// protection, and the FTS index stays in sync on both create and

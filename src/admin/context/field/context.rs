@@ -131,6 +131,99 @@ impl FieldContext {
             FieldContext::Blocks(f) => &mut f.base,
         }
     }
+
+    /// Read-only sub-field slices of this rendered field — the `FieldContext`
+    /// analogue of `core::walk::field_children`. ONE exhaustive match, so a
+    /// new composite variant is a compile error here and every read-only
+    /// `FieldContext` walker (error counting, …) routes through it instead of
+    /// re-spelling the dispatch. Includes REPEATING children (array/blocks
+    /// rows), which per-instance walkers may choose to skip via
+    /// [`Self::non_repeating_children_mut`].
+    #[must_use]
+    pub fn child_field_slices(&self) -> Vec<&[FieldContext]> {
+        match self {
+            FieldContext::Group(f) | FieldContext::Collapsible(f) => vec![&f.sub_fields],
+            FieldContext::Row(f) => vec![&f.sub_fields],
+            FieldContext::Tabs(f) => f.tabs.iter().map(|t| t.sub_fields.as_slice()).collect(),
+            FieldContext::Array(f) => f
+                .rows
+                .as_ref()
+                .map(|rs| rs.iter().map(|r| r.sub_fields.as_slice()).collect())
+                .unwrap_or_default(),
+            FieldContext::Blocks(f) => f
+                .rows
+                .as_ref()
+                .map(|rs| rs.iter().map(|r| r.sub_fields.as_slice()).collect())
+                .unwrap_or_default(),
+            FieldContext::Text(_)
+            | FieldContext::Email(_)
+            | FieldContext::Password(_)
+            | FieldContext::Json(_)
+            | FieldContext::Textarea(_)
+            | FieldContext::Number(_)
+            | FieldContext::Code(_)
+            | FieldContext::Richtext(_)
+            | FieldContext::Date(_)
+            | FieldContext::Checkbox(_)
+            | FieldContext::Select(_)
+            | FieldContext::Radio(_)
+            | FieldContext::Relationship(_)
+            | FieldContext::Upload(_)
+            | FieldContext::Join(_) => Vec::new(),
+        }
+    }
+
+    /// Mutable NON-REPEATING composite children — the sub-field groups that
+    /// share this field's single data scope (Group/Collapsible/Row share
+    /// one; Tabs split by pane, same scope). Array/Blocks ROWS are
+    /// repeating (each row its own per-row data scope) and leaves have
+    /// none — both classify as [`NonRepeatingChildren::None`] here. Used by
+    /// per-form-instance walkers (display conditions) so a nested condition
+    /// evaluates against the same form data. ONE exhaustive match — a new
+    /// composite is a compile error, forcing the descend/skip decision.
+    pub fn non_repeating_children_mut(&mut self) -> NonRepeatingChildren<'_> {
+        match self {
+            FieldContext::Group(f) | FieldContext::Collapsible(f) => {
+                NonRepeatingChildren::Flat(&mut f.sub_fields)
+            }
+            FieldContext::Row(f) => NonRepeatingChildren::Flat(&mut f.sub_fields),
+            FieldContext::Tabs(f) => NonRepeatingChildren::Tabs(&mut f.tabs),
+            // Repeating containers (Array/Blocks rows carry their own per-row
+            // data scope) and scalar leaves have no non-repeating children to
+            // descend into at this level.
+            FieldContext::Array(_)
+            | FieldContext::Blocks(_)
+            | FieldContext::Text(_)
+            | FieldContext::Email(_)
+            | FieldContext::Password(_)
+            | FieldContext::Json(_)
+            | FieldContext::Textarea(_)
+            | FieldContext::Number(_)
+            | FieldContext::Code(_)
+            | FieldContext::Richtext(_)
+            | FieldContext::Date(_)
+            | FieldContext::Checkbox(_)
+            | FieldContext::Select(_)
+            | FieldContext::Radio(_)
+            | FieldContext::Relationship(_)
+            | FieldContext::Upload(_)
+            | FieldContext::Join(_) => NonRepeatingChildren::None,
+        }
+    }
+}
+
+/// The non-repeating composite children of a [`FieldContext`] — see
+/// [`FieldContext::non_repeating_children_mut`].
+pub enum NonRepeatingChildren<'a> {
+    /// A leaf, or a repeating (array/blocks) composite — no non-repeating
+    /// children to walk in this field's data scope.
+    None,
+    /// One flat sub-field list sharing the parent's scope
+    /// (Group/Collapsible/Row); its defs come from `FieldDefinition::fields`.
+    Flat(&'a mut Vec<FieldContext>),
+    /// Per-tab sub-field lists (Tabs); tab defs come from
+    /// `FieldDefinition::tabs`.
+    Tabs(&'a mut Vec<super::composites::TabPanel>),
 }
 
 #[cfg(test)]

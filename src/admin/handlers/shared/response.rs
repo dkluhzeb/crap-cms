@@ -60,7 +60,7 @@ fn render_error_page(state: &AdminState, template: &str, data: Value) -> Result<
 
 /// Run a synchronous section that may block (a Lua VM acquire of up to
 /// 5s, a `crap.http` blocking call, pooled DB work) WITHOUT parking an
-/// async worker thread (ledger class L12). Converts the current
+/// async worker thread. Converts the current
 /// multi-thread-runtime worker via `block_in_place`; outside such a
 /// runtime (unit tests, `current_thread`) it runs the closure inline.
 /// Shared by the auth/error page renders and other admin handlers that
@@ -420,7 +420,7 @@ fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response
         Ok(html) => Html(html).into_response(),
         Err(e) => {
             error!("Template render error: {}", e);
-            // 500, not 200 (ledger class L8): an infrastructure failure
+            // 500, not 200: an infrastructure failure
             // must not read as success to monitors or htmx.
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

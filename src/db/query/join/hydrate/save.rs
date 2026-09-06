@@ -14,7 +14,7 @@ use super::{
 };
 use crate::db::query::poly_ref;
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, flatten_group_fields},
+    core::{DocumentFields, FieldChildren, FieldDefinition, field_children, flatten_group_fields},
     db::{
         DbConnection, LocaleContext,
         query::{helpers::prefixed_name, is_non_default_single_locale},
@@ -116,8 +116,45 @@ fn save_join_data_inner(
         // `!field.localized`, not the inheritance-aware `is_locale_locked_write`).
         let join_locked = !field.localized && is_non_default_single_locale(locale_ctx);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
+        match field_children(field) {
+            FieldChildren::Array(sub) => {
+                if !join_locked && let Some(val) = data.get(&field_key) {
+                    let rows = coerce_array_rows(val);
+                    set_array_rows(conn, slug, &field_key, parent_id, &rows, sub, locale_ref)?;
+                }
+            }
+            FieldChildren::Blocks(_) => {
+                if !join_locked && let Some(val) = data.get(&field_key) {
+                    let rows = match val {
+                        Value::Array(arr) => arr.clone(),
+                        _ => Vec::new(),
+                    };
+                    set_block_rows(conn, slug, &field_key, parent_id, &rows, locale_ref)?;
+                }
+            }
+            FieldChildren::Group(sub) => {
+                save_join_data_inner(conn, slug, sub, parent_id, data, locale_ctx, &field_key)?;
+            }
+            FieldChildren::Wrapper(sub) => {
+                save_join_data_inner(conn, slug, sub, parent_id, data, locale_ctx, prefix)?;
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    save_join_data_inner(
+                        conn,
+                        slug,
+                        &tab.fields,
+                        parent_id,
+                        data,
+                        locale_ctx,
+                        prefix,
+                    )?;
+                }
+            }
+            // Relationship/Upload has-many are leaves that write their own
+            // junction rows; every other leaf has no `relationship` so the
+            // guard falls through to a no-op.
+            FieldChildren::Leaf => {
                 if !join_locked
                     && let Some(ref rc) = field.relationship
                     && rc.has_many
@@ -134,65 +171,6 @@ fn save_join_data_inner(
                     }
                 }
             }
-            FieldType::Array => {
-                if !join_locked && let Some(val) = data.get(&field_key) {
-                    let rows = coerce_array_rows(val);
-                    set_array_rows(
-                        conn,
-                        slug,
-                        &field_key,
-                        parent_id,
-                        &rows,
-                        &field.fields,
-                        locale_ref,
-                    )?;
-                }
-            }
-            FieldType::Blocks => {
-                if !join_locked && let Some(val) = data.get(&field_key) {
-                    let rows = match val {
-                        Value::Array(arr) => arr.clone(),
-                        _ => Vec::new(),
-                    };
-                    set_block_rows(conn, slug, &field_key, parent_id, &rows, locale_ref)?;
-                }
-            }
-            FieldType::Group => {
-                save_join_data_inner(
-                    conn,
-                    slug,
-                    &field.fields,
-                    parent_id,
-                    data,
-                    locale_ctx,
-                    &field_key,
-                )?;
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                save_join_data_inner(
-                    conn,
-                    slug,
-                    &field.fields,
-                    parent_id,
-                    data,
-                    locale_ctx,
-                    prefix,
-                )?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    save_join_data_inner(
-                        conn,
-                        slug,
-                        &tab.fields,
-                        parent_id,
-                        data,
-                        locale_ctx,
-                        prefix,
-                    )?;
-                }
-            }
-            _ => {}
         }
     }
     Ok(())

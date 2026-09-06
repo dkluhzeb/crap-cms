@@ -211,7 +211,7 @@ impl ServiceError {
     }
 
     /// Like [`Self::into_anyhow`], but **scrubs** `Internal`/`Transient`
-    /// for client-facing surfaces (ledger classes F17/P2): their inner
+    /// for client-facing surfaces: their inner
     /// chains carry raw backend/pool text (DB identifiers, driver
     /// vocabulary) that gRPC and the REST upload surface already hide —
     /// MCP must match. The full chain is logged server-side first.

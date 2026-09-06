@@ -5,7 +5,10 @@ use serde_json::{Map as JsonMap, Value};
 use tracing::warn;
 
 use crate::{
-    core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, Registry, validate::FieldError},
+    core::{
+        BLOCK_TYPE_KEY, FieldChildren, FieldDefinition, FieldType, Registry, field_children,
+        validate::FieldError,
+    },
     hooks::lifecycle::validation::{
         checks,
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
@@ -105,8 +108,8 @@ fn validate_children_recursive(
     errors: &mut Vec<FieldError>,
 ) {
     for sf in fields {
-        match sf.field_type {
-            FieldType::Group => {
+        match field_children(sf) {
+            FieldChildren::Group(sub_fields) => {
                 // Navigate into the Group's nested object and validate children.
                 // Form parser stores Group data as nested objects (e.g., {"meta": {"title": "..."}}).
                 let data_key = format!("{}{}", group_prefix, sf.name);
@@ -145,18 +148,18 @@ fn validate_children_recursive(
                 } else {
                     let empty = serde_json::Map::new();
                     let group_obj = group_val.and_then(Value::as_object).unwrap_or(&empty);
-                    validate_sub_fields_inner(&params, &sf.fields, group_obj, errors);
+                    validate_sub_fields_inner(&params, sub_fields, group_obj, errors);
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                validate_children_recursive(ctx, &sf.fields, group_prefix, errors);
+            FieldChildren::Wrapper(sub_fields) => {
+                validate_children_recursive(ctx, sub_fields, group_prefix, errors);
             }
-            FieldType::Tabs => {
-                for tab in &sf.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     validate_children_recursive(ctx, &tab.fields, group_prefix, errors);
                 }
             }
-            FieldType::Array | FieldType::Blocks => {
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
                 let data_key = format!("{}{}", group_prefix, sf.name);
                 let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
                 let call = SubFieldCall {
@@ -170,13 +173,15 @@ fn validate_children_recursive(
                     validate_nested_rows(ctx, &call, nested_rows, errors);
                 }
             }
-            // A Join is a virtual reverse-relationship with no row data; it
-            // carries nothing to validate. Skip it explicitly, mirroring the
-            // top-level dispatch (`recursive/dispatch.rs`) — otherwise the
-            // `_ =>` leaf arm would push a spurious "is required" error for a
-            // `required` Join nested in an array/blocks row.
-            FieldType::Join => {}
-            _ => {
+            FieldChildren::Leaf => {
+                // A Join is a virtual reverse-relationship with no row data; it
+                // carries nothing to validate. Skip it explicitly — otherwise
+                // leaf validation would push a spurious "is required" error for
+                // a `required` Join nested in an array/blocks row.
+                if sf.field_type == FieldType::Join {
+                    continue;
+                }
+
                 let data_key = format!("{}{}", group_prefix, sf.name);
                 let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
                 let call = SubFieldCall {

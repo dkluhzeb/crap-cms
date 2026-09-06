@@ -1,5 +1,5 @@
 //! `WebhookHeaders` — operator-supplied HTTP headers for the webhook
-//! email provider, with value redaction (ledger class F17).
+//! email provider, with value redaction.
 //!
 //! These headers routinely carry credentials (`Authorization: Bearer …`,
 //! `X-Api-Key: …`). The real values are reachable only through

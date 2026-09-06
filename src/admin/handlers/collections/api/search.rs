@@ -7,6 +7,7 @@ use axum::{
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::{
     admin::{
         AdminState,
@@ -89,11 +90,11 @@ pub async fn search_collection(
     // The DB checkout, the FTS/LIKE search, and its `after_read` /
     // field-read-strip Lua post-processing (VM acquire up to 5s) all run
     // synchronously — do them on the blocking pool, not the async worker
-    // (ledger class L12). This endpoint fires on every keystroke in a
+    //. This endpoint fires on every keystroke in a
     // relationship picker, so parking a runtime worker here is the worst
     // case for the whole admin. Runs inline under a current-thread
     // runtime (tests).
-    crate::admin::handlers::shared::response::on_blocking_section(move || {
+    on_blocking_section(move || {
         // Autocomplete endpoint: always answers with a JSON array. A missing
         // collection is silent (client/config issue), but a real DB failure is
         // logged so it isn't invisibly masked as "no results".

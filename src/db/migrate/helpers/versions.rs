@@ -15,7 +15,7 @@ pub(in crate::db::migrate) fn sync_versions_table(
 ) -> Result<()> {
     let table_name = versions_table(slug);
 
-    // FROZEN-CONTRACT NOTE (ledger class D9): this path is create-only —
+    // FROZEN-CONTRACT NOTE: this path is create-only —
     // there is no ALTER limb, unlike the collection and global main
     // tables. The version-table schema (`id, _parent, _version, _status,
     // data, created_at`) is fixed. If a future release ever needs a NEW

@@ -5,7 +5,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::config::LocaleConfig;
-use crate::core::{BlockDefinition, FieldDefinition, FieldType};
+use crate::core::{BlockDefinition, FieldChildren, FieldDefinition, field_children};
 use crate::db::query::helpers::{join_table, locale_column, prefixed_name};
 use crate::db::query::join::{find_array_rows, find_block_rows};
 use crate::db::query::poly_ref;
@@ -40,29 +40,46 @@ fn collect_refs(
     refs: &mut Vec<OutgoingRef>,
 ) -> Result<()> {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        // Structural dispatch via the SHARED classifier (see `compute.rs`
+        // for the rationale) — the DB-read counterpart of the create-time
+        // compute walker. Only the value source differs (real columns /
+        // junction tables here vs the in-memory data map there).
+        match field_children(field) {
+            FieldChildren::Group(sub_fields) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
                 collect_refs(
                     conn,
                     table,
                     id,
-                    &field.fields,
+                    sub_fields,
                     locale_config,
                     &new_prefix,
                     refs,
                 )?;
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_refs(conn, table, id, &field.fields, locale_config, prefix, refs)?;
+            FieldChildren::Wrapper(sub_fields) => {
+                collect_refs(conn, table, id, sub_fields, locale_config, prefix, refs)?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     collect_refs(conn, table, id, &tab.fields, locale_config, prefix, refs)?;
                 }
             }
 
-            FieldType::Relationship | FieldType::Upload => {
+            FieldChildren::Array(sub_fields) => {
+                let field_name = prefixed_name(prefix, &field.name);
+                collect_array_refs(conn, table, &field_name, id, sub_fields, refs);
+            }
+
+            FieldChildren::Blocks(block_defs) => {
+                let field_name = prefixed_name(prefix, &field.name);
+                collect_blocks_refs(conn, table, &field_name, id, block_defs, refs);
+            }
+
+            // A leaf structurally — Relationship/Upload leaves carry a stored
+            // reference (a parent column for has-one, a junction table for
+            // has-many); every other leaf stores none.
+            FieldChildren::Leaf => {
                 let Some(rc) = &field.relationship else {
                     continue;
                 };
@@ -103,35 +120,6 @@ fn collect_refs(
                     refs,
                 )?;
             }
-
-            FieldType::Array => {
-                let field_name = prefixed_name(prefix, &field.name);
-
-                collect_array_refs(conn, table, &field_name, id, &field.fields, refs);
-            }
-
-            FieldType::Blocks => {
-                let field_name = prefixed_name(prefix, &field.name);
-
-                collect_blocks_refs(conn, table, &field_name, id, &field.blocks, refs);
-            }
-
-            // Scalars store no reference; Join is a virtual reverse-lookup with
-            // no stored id. Listed explicitly (not `_`) so a future ref-bearing
-            // or container field type is a compile error here rather than a
-            // silent ref-count miss (a delete-protection integrity bug).
-            FieldType::Text
-            | FieldType::Number
-            | FieldType::Textarea
-            | FieldType::Richtext
-            | FieldType::Select
-            | FieldType::Radio
-            | FieldType::Checkbox
-            | FieldType::Date
-            | FieldType::Email
-            | FieldType::Json
-            | FieldType::Code
-            | FieldType::Join => {}
         }
     }
 

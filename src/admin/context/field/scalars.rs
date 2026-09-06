@@ -284,7 +284,10 @@ pub struct DateField {
     #[serde(flatten)]
     pub base: BaseFieldData,
 
-    /// One of `"dayOnly"`, `"dayAndTime"`. Defaults to `"dayOnly"`.
+    /// One of `"dayOnly"`, `"dayAndTime"`, `"timeOnly"`, `"monthOnly"`.
+    /// Defaults to `"dayOnly"`. (`timeOnly`/`monthOnly` set neither
+    /// `date_only_value` nor `datetime_local_value`; the template falls
+    /// back to the raw `value`.)
     pub picker_appearance: String,
 
     /// Set when `picker_appearance == "dayOnly"` — the `YYYY-MM-DD` slice.

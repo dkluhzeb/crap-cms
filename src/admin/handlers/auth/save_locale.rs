@@ -18,7 +18,7 @@ use crate::{
 /// Read the user's settings JSON, update the `ui_locale` field, and write it back.
 fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), Error> {
     // IMMEDIATE tx: same whole-blob read-modify-write lost-update guard
-    // as `save_column_preferences` (ledger class L5) — a concurrent
+    // as `save_column_preferences` — a concurrent
     // column-preference save must not clobber this locale change.
     let mut conn = pool.get()?;
     let tx = conn.transaction_immediate()?;

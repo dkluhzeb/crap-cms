@@ -5,7 +5,7 @@
 
 use crate::{
     admin::handlers::shared::{
-        ListUrlContext, auto_label_from_name, is_column_eligible, url_decode,
+        ListUrlContext, auto_label_from_name, is_column_eligible, is_sortable_column, url_decode,
     },
     core::{FieldDefinition, FieldType, collection::CollectionDefinition, document::Document},
     db::query::{FilterClause, FilterOp},
@@ -73,7 +73,11 @@ pub(super) fn resolve_columns(
                 "_status" => ("status".to_string(), true),
                 _ => {
                     if let Some(f) = def.fields.iter().find(|f| f.name == *key) {
-                        (field_label(f), true)
+                        // Sortability must match `validate_sort` exactly —
+                        // a has-many relationship is a valid column but not
+                        // sortable (no parent column); a sort header for it
+                        // would 400 on click.
+                        (field_label(f), is_sortable_column(key, def))
                     } else {
                         (auto_label_from_name(key), false)
                     }
@@ -164,6 +168,25 @@ pub(super) fn compute_cells(
                                 };
 
                                 json!({ "value": truncated })
+                            }
+                            FieldType::Relationship | FieldType::Upload => {
+                                // List columns render raw (un-populated) field
+                                // data, so we don't have target labels here
+                                // (resolving them would be an N+1 per cell —
+                                // deliberately out of scope). Render a clean
+                                // value rather than raw JSON: the id for a
+                                // has-one, an "N linked" summary for has-many
+                                // (which stored a JSON array).
+                                let value = match &raw {
+                                    Value::String(s) => s.clone(),
+                                    Value::Array(a) => format!("{} linked", a.len()),
+                                    Value::Null => String::new(),
+                                    other => other
+                                        .as_str()
+                                        .map_or_else(|| other.to_string(), str::to_string),
+                                };
+
+                                json!({ "value": value })
                             }
                             _ => {
                                 let val = match &raw {
@@ -457,6 +480,44 @@ mod tests {
         assert_eq!(cols.len(), 2);
         assert_eq!(cols[0]["key"], "status");
         assert_eq!(cols[1]["key"], "views");
+    }
+
+    /// Regression: a has-many relationship is a
+    /// valid list column but is NOT sortable (no parent column) — its
+    /// `sortable` flag must match `validate_sort`, or the rendered sort
+    /// header 400s on click. A sortable scalar field stays sortable.
+    #[test]
+    fn has_many_relationship_column_is_not_sortable() {
+        use crate::core::field::RelationshipConfig;
+
+        let mut def = test_collection();
+        def.fields.push(
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tag", true)) // has_many
+                .build(),
+        );
+
+        let user_cols = vec!["tags".to_string(), "views".to_string()];
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None));
+
+        let tags = cols
+            .iter()
+            .find(|c| c["key"] == "tags")
+            .expect("tags column");
+        assert_eq!(
+            tags["sortable"],
+            serde_json::json!(false),
+            "a has-many relationship column must not be sortable"
+        );
+        let views = cols
+            .iter()
+            .find(|c| c["key"] == "views")
+            .expect("views column");
+        assert_eq!(
+            views["sortable"],
+            serde_json::json!(true),
+            "a scalar number column stays sortable"
+        );
     }
 
     #[test]

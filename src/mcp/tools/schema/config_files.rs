@@ -198,7 +198,7 @@ pub(in crate::mcp::tools) fn exec_list_config_files(
 
 #[cfg(test)]
 mod tests {
-    /// Ledger classes F17/D1: the TOML redaction list is a second copy
+    /// the TOML redaction list is a second copy
     /// of the secret inventory and drifted once (three keys behind the
     /// newtype set). This pins every URL/credential key + the
     /// webhook-headers section.

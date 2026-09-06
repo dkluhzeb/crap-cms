@@ -323,7 +323,7 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 
 #[test]
 fn lua_hooks_register_and_remove_are_init_phase_only() {
-    // Ledger class M15: runtime registration used to land in ONE pooled
+    // runtime registration used to land in ONE pooled
     // VM and fire intermittently. Both APIs now reject runtime calls;
     // the register/remove mechanics themselves are unit-tested in
     // `hooks::lua_api::hooks` (with the InitPhase marker set).

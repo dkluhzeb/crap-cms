@@ -8,9 +8,10 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::config::LocaleConfig;
-use crate::core::{BlockDefinition, DocumentFields, FieldDefinition, FieldType};
-use crate::db::query::helpers::{locale_column, prefixed_name};
+use crate::core::{
+    BlockDefinition, DocumentFields, FieldChildren, FieldDefinition, field_children,
+};
+use crate::db::query::helpers::prefixed_name;
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 use crate::db::query::poly_ref;
 
@@ -25,49 +26,67 @@ use super::walk::{walk_block_values, walk_nested_refs};
 pub(super) fn compute_refs_from_data(
     fields: &[FieldDefinition],
     data: &DocumentFields,
-    locale_config: &LocaleConfig,
     prefix: &str,
     refs: &mut Vec<OutgoingRef>,
 ) {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        // Structural dispatch through the SHARED classifier
+        // (`core::walk::field_children`), so ref-count can't drift from the
+        // single FieldType → sub-tree mapping every other walker uses. The
+        // ref-count-SPECIFIC work — extracting a relationship/upload ref off
+        // a leaf, and reading array/blocks JSON from the data map — lives in
+        // the arms below, not in the classifier.
+        match field_children(field) {
+            FieldChildren::Group(sub_fields) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
-                compute_refs_from_data(&field.fields, data, locale_config, &new_prefix, refs);
+                compute_refs_from_data(sub_fields, data, &new_prefix, refs);
             }
 
-            FieldType::Row | FieldType::Collapsible => {
-                compute_refs_from_data(&field.fields, data, locale_config, prefix, refs);
+            FieldChildren::Wrapper(sub_fields) => {
+                compute_refs_from_data(sub_fields, data, prefix, refs);
             }
 
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    compute_refs_from_data(&tab.fields, data, locale_config, prefix, refs);
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    compute_refs_from_data(&tab.fields, data, prefix, refs);
                 }
             }
 
-            FieldType::Relationship | FieldType::Upload => {
+            FieldChildren::Array(sub_fields) => {
+                let col = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = data.get(&col) {
+                    compute_array_refs_from_data(rows, sub_fields, refs);
+                }
+            }
+
+            FieldChildren::Blocks(block_defs) => {
+                let col = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = data.get(&col) {
+                    compute_blocks_refs_from_data(rows, block_defs, refs);
+                }
+            }
+
+            // A leaf structurally — but a Relationship/Upload leaf carries a
+            // stored reference to extract. Every other leaf stores no ref.
+            FieldChildren::Leaf => {
                 let Some(rc) = &field.relationship else {
                     continue;
                 };
                 let col = prefixed_name(prefix, &field.name);
 
                 if field.has_parent_column() {
-                    // Has-one: read scalar value from the unified data map.
-                    let columns = if field.localized && locale_config.is_enabled() {
-                        locale_config
-                            .locales
-                            .iter()
-                            .filter_map(|l| locale_column(&col, l).ok())
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![col]
-                    };
-
-                    for col_name in &columns {
-                        if let Some(value) = data.get(col_name).and_then(Value::as_str) {
-                            push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
-                        }
+                    // Has-one: read the scalar value from the unified write
+                    // data map. The value is keyed by the BARE field name
+                    // regardless of localization — a create runs in
+                    // single-locale mode, so the one present value lives
+                    // under `col`, not `col__{locale}` (the `__{locale}`
+                    // suffix is applied to the DB *column*, via
+                    // `locale_write_column`, not to the in-memory data key).
+                    // Reading suffixed keys here missed every localized
+                    // has-one ref on create → target under-counted →
+                    // delete-protection bypass.
+                    if let Some(value) = data.get(&col).and_then(Value::as_str) {
+                        push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
                     }
                 } else {
                     // Has-many: read structured value from the unified data map.
@@ -95,37 +114,6 @@ pub(super) fn compute_refs_from_data(
                     }
                 }
             }
-
-            FieldType::Array => {
-                let col = prefixed_name(prefix, &field.name);
-                if let Some(Value::Array(rows)) = data.get(&col) {
-                    compute_array_refs_from_data(rows, &field.fields, refs);
-                }
-            }
-
-            FieldType::Blocks => {
-                let col = prefixed_name(prefix, &field.name);
-                if let Some(Value::Array(rows)) = data.get(&col) {
-                    compute_blocks_refs_from_data(rows, &field.blocks, refs);
-                }
-            }
-
-            // Scalars store no reference; Join is a virtual reverse-lookup with
-            // no stored id. Listed explicitly (not `_`) so a future ref-bearing
-            // or container field type is a compile error here rather than a
-            // silent ref-count miss (a delete-protection integrity bug).
-            FieldType::Text
-            | FieldType::Number
-            | FieldType::Textarea
-            | FieldType::Richtext
-            | FieldType::Select
-            | FieldType::Radio
-            | FieldType::Checkbox
-            | FieldType::Date
-            | FieldType::Email
-            | FieldType::Json
-            | FieldType::Code
-            | FieldType::Join => {}
         }
     }
 }
@@ -186,7 +174,7 @@ mod tests {
         let data = DocumentFields::from(map);
 
         let mut refs = Vec::new();
-        compute_refs_from_data(fields, &data, &LocaleConfig::default(), "", &mut refs);
+        compute_refs_from_data(fields, &data, "", &mut refs);
 
         let mut pairs: Vec<(String, String)> = refs
             .into_iter()

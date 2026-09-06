@@ -1,5 +1,5 @@
 //! `RedisUrl` — a Redis connection URL whose embedded password never
-//! escapes through a secondary channel (ledger class F17).
+//! escapes through a secondary channel.
 //!
 //! A `redis://user:password@host` URL is a credential. The raw value is
 //! reachable only through [`RedisUrl::as_str`] (the connect path);
@@ -66,8 +66,7 @@ impl Serialize for RedisUrl {
 }
 
 /// A database connection string (Postgres URL or libpq conninfo) whose
-/// password never escapes through Debug/Display/Serialize (ledger class
-/// F17 — the same treatment `RedisUrl` gives the Redis password).
+/// password never escapes through Debug/Display/Serialize.
 #[derive(Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(from = "String")]
 pub struct DbUrl(String);

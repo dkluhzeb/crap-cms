@@ -88,7 +88,7 @@ pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Result<Vec<que
         return Ok(Vec::new());
     };
 
-    // Never-silently-widen (ledger class F2): a present-but-wrong-shaped
+    // Never-silently-widen: a present-but-wrong-shaped
     // `where` must hard-error, not decay to zero filters — on
     // `delete_many`/`update_many` an empty filter means "every
     // document". The classic mistake is sending gRPC's JSON-*string*
@@ -196,7 +196,7 @@ mod tests {
         db::query,
     };
 
-    /// Regression (C5): the shared password extractor preserves the intended
+    /// The shared password extractor preserves the intended
     /// create-vs-update asymmetry. `create`/`create_many` (`empty_as_none=false`)
     /// pass an empty string through so the policy validator rejects it; `update`
     /// (`empty_as_none=true`) treats empty as "no change"; a non-auth collection
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn parse_where_non_object_where() {
-        // Never-silently-widen (ledger class F2): a present-but-non-object
+        // Never-silently-widen: a present-but-non-object
         // `where` MUST hard-error, not decay to zero filters — an empty
         // filter on a bulk op means "every document". The classic mistake
         // is the gRPC JSON-string spelling on the object-native MCP surface.

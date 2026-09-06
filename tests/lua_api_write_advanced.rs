@@ -868,7 +868,7 @@ fn lua_crypto_random_bytes() {
 // unit-tested in `hooks::lua_api::hooks` (with the InitPhase marker
 // set); runtime calls are rejected outright, which
 // `lua_api.rs::lua_hooks_register_and_remove_are_init_phase_only`
-// pins through the real pooled-VM path (ledger class M15).
+// pins through the real pooled-VM path.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // crap.schema.* tests (covers hooks/api/schema.rs)

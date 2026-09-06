@@ -7,12 +7,28 @@ use crate::core::{collection::CollectionDefinition, field::FieldType};
 /// Returns the validated sort string (with `-` prefix if present), or None.
 pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<String> {
     let field_name = sort.strip_prefix('-').unwrap_or(sort);
-    let system_cols = ["id", "created_at", "updated_at", "_status"];
-    let valid = system_cols.contains(&field_name)
-        || def.fields.iter().any(|f| {
-            f.name == field_name && f.has_parent_column() && is_column_eligible(&f.field_type)
-        });
-    if valid { Some(sort.to_string()) } else { None }
+    if is_sortable_column(field_name, def) {
+        Some(sort.to_string())
+    } else {
+        None
+    }
+}
+
+/// Whether `key` may be sorted on — the SINGLE source of truth for
+/// sortability, shared by [`validate_sort`] (which rejects a bad
+/// `?sort=`) and the list-view column builder (which decides whether to
+/// render a clickable sort header). A has-many relationship is
+/// column-eligible but has no parent column, so it is NOT sortable —
+/// rendering a sort header for it produced a 400 on click when the two
+/// predicates disagreed.
+#[must_use]
+pub(crate) fn is_sortable_column(key: &str, def: &CollectionDefinition) -> bool {
+    const SYSTEM_COLS: [&str; 4] = ["id", "created_at", "updated_at", "_status"];
+    SYSTEM_COLS.contains(&key)
+        || def
+            .fields
+            .iter()
+            .any(|f| f.name == key && f.has_parent_column() && is_column_eligible(&f.field_type))
 }
 
 /// Check if a field type is eligible for display as a list column.

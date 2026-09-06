@@ -6,8 +6,8 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 use crate::core::{
-    BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, FieldDefinition, FieldType,
-    field::flatten_array_sub_fields,
+    BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, FieldChildren,
+    FieldDefinition, FieldType, field::flatten_array_sub_fields, field_children,
 };
 use crate::db::query::populate::{PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref};
 
@@ -20,19 +20,19 @@ pub(crate) fn populate_containers_in_doc(
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => populate_group_in_doc(pctx, doc, field, visited)?,
-            FieldType::Blocks => populate_blocks_in_doc(pctx, doc, field, visited)?,
-            FieldType::Array => populate_array_in_doc(pctx, doc, field, visited)?,
-            FieldType::Row | FieldType::Collapsible => {
-                populate_containers_in_doc(pctx, doc, &field.fields, visited)?;
+        match field_children(field) {
+            FieldChildren::Group(_) => populate_group_in_doc(pctx, doc, field, visited)?,
+            FieldChildren::Blocks(_) => populate_blocks_in_doc(pctx, doc, field, visited)?,
+            FieldChildren::Array(_) => populate_array_in_doc(pctx, doc, field, visited)?,
+            FieldChildren::Wrapper(sub) => {
+                populate_containers_in_doc(pctx, doc, sub, visited)?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     populate_containers_in_doc(pctx, doc, &tab.fields, visited)?;
                 }
             }
-            _ => {}
+            FieldChildren::Leaf => {}
         }
     }
 
@@ -128,33 +128,37 @@ fn populate_in_map(
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     for field in fields {
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
-                populate_rel_in_map(pctx, map, field, visited)?;
-            }
-            FieldType::Join => {
-                populate_join_in_map(pctx, map, field, visited)?;
-            }
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(_) => {
                 populate_group_in_map(pctx, map, field, visited)?;
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(_) => {
                 populate_blocks_in_map(pctx, map, field, visited)?;
             }
-            FieldType::Array => {
+            FieldChildren::Array(_) => {
                 populate_array_items_in_map(pctx, map, field, visited)?;
             }
-            FieldType::Row | FieldType::Collapsible => {
-                let flat = flatten_array_sub_fields(&field.fields);
+            FieldChildren::Wrapper(sub) => {
+                let flat = flatten_array_sub_fields(sub);
                 populate_in_map(pctx, map, &flat, visited)?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     let flat = flatten_array_sub_fields(&tab.fields);
                     populate_in_map(pctx, map, &flat, visited)?;
                 }
             }
-            _ => {}
+            // Relationship/Upload/Join are structural leaves but each carries a
+            // distinct populate action; every other leaf is a no-op.
+            FieldChildren::Leaf => match field.field_type {
+                FieldType::Relationship | FieldType::Upload => {
+                    populate_rel_in_map(pctx, map, field, visited)?;
+                }
+                FieldType::Join => {
+                    populate_join_in_map(pctx, map, field, visited)?;
+                }
+                _ => {}
+            },
         }
     }
     Ok(())

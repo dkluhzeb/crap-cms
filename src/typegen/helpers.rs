@@ -6,7 +6,7 @@
 //! and the [`w!`] macro every generator uses to emit lines without
 //! repeating `.expect("write to String")`.
 
-use crate::core::{FieldDefinition, FieldType, Registry, Slug};
+use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, Slug, field_children};
 
 /// `writeln!` to a `String` that infallibly succeeds — wraps the
 /// boilerplate `.expect("write to String")` every per-language
@@ -131,28 +131,39 @@ pub(super) fn collect_sub_type_fields<'a>(
 ) -> Vec<SubTypeField<'a>> {
     let mut result = Vec::new();
     for f in fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
-            result.push(SubTypeField {
-                field: f,
-                kind: SubTypeKind::Array,
-                parent_pascal: parent_pascal.to_string(),
-            });
-            result.extend(collect_sub_type_fields(&f.fields, &inner_pascal));
-        } else if f.field_type == FieldType::Group && !f.fields.is_empty() {
-            let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
-            result.push(SubTypeField {
-                field: f,
-                kind: SubTypeKind::Group,
-                parent_pascal: parent_pascal.to_string(),
-            });
-            result.extend(collect_sub_type_fields(&f.fields, &inner_pascal));
-        } else if matches!(f.field_type, FieldType::Row | FieldType::Collapsible) {
-            result.extend(collect_sub_type_fields(&f.fields, parent_pascal));
-        } else if f.field_type == FieldType::Tabs {
-            for tab in &f.tabs {
-                result.extend(collect_sub_type_fields(&tab.fields, parent_pascal));
+        match field_children(f) {
+            FieldChildren::Array(sub) if !sub.is_empty() => {
+                let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
+                result.push(SubTypeField {
+                    field: f,
+                    kind: SubTypeKind::Array,
+                    parent_pascal: parent_pascal.to_string(),
+                });
+                result.extend(collect_sub_type_fields(sub, &inner_pascal));
             }
+            FieldChildren::Group(sub) if !sub.is_empty() => {
+                let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
+                result.push(SubTypeField {
+                    field: f,
+                    kind: SubTypeKind::Group,
+                    parent_pascal: parent_pascal.to_string(),
+                });
+                result.extend(collect_sub_type_fields(sub, &inner_pascal));
+            }
+            FieldChildren::Wrapper(sub) => {
+                result.extend(collect_sub_type_fields(sub, parent_pascal));
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    result.extend(collect_sub_type_fields(&tab.fields, parent_pascal));
+                }
+            }
+            // Empty Array/Group (guards above fell through), Blocks, and scalar
+            // leaves need no named sub-type definition.
+            FieldChildren::Array(_)
+            | FieldChildren::Group(_)
+            | FieldChildren::Blocks(_)
+            | FieldChildren::Leaf => {}
         }
     }
     result

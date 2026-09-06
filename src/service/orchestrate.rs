@@ -23,6 +23,7 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::{Context as _, anyhow};
 
 use crate::{
+    core::upload::delete_upload_files,
     hooks::LuaCrudInfra,
     service::{
         Def, DeferredQueue, EffectOutcome, RunnerWriteHooks, ServiceContext, ServiceError,
@@ -119,10 +120,7 @@ pub(crate) fn run_pool_write<T>(
         Err(e) => {
             // Roll back AND release the pooled connection BEFORE
             // compensations run — their pool-mode CRUD takes a fresh
-            // write-pool checkout (ledger class L12: holding `conn`
-            // across the flush is the two-connection deadlock shape;
-            // with `write_pool_max_size` writers all in their flush
-            // phase, every nested acquire would starve).
+            // write-pool checkout.
             drop(tx);
             drop(conn);
             flush_deferred_effects(ctx, &dq, EffectOutcome::Rollback);
@@ -152,7 +150,7 @@ pub(crate) fn run_pool_write<T>(
     // dropped — orphaned files are the safe direction.)
     if let Some(storage) = &ctx.storage {
         for fields in fq.borrow_mut().drain(..) {
-            crate::core::upload::delete_upload_files(storage.as_ref(), &fields);
+            delete_upload_files(storage.as_ref(), &fields);
         }
     }
 

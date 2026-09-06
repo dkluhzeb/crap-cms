@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use anyhow::{Result, bail};
 
-use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
+use crate::core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children};
 use crate::db::query::cursor::SortDirection;
 use crate::db::query::filter::resolve_filter_column;
 use crate::db::query::helpers::prefixed_name;
@@ -117,14 +117,13 @@ fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
             return true;
         }
 
-        match f.field_type {
-            FieldType::Group => check_fields(col, &f.fields, &full_name),
-            FieldType::Row | FieldType::Collapsible => check_fields(col, &f.fields, prefix),
-            FieldType::Tabs => f
-                .tabs
+        match field_children(f) {
+            FieldChildren::Group(sub) => check_fields(col, sub, &full_name),
+            FieldChildren::Wrapper(sub) => check_fields(col, sub, prefix),
+            FieldChildren::Tabs(tabs) => tabs
                 .iter()
                 .any(|tab| check_fields(col, &tab.fields, prefix)),
-            _ => false,
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => false,
         }
     })
 }

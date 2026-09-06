@@ -96,7 +96,7 @@ pub enum VisitAction {
 /// needs: `Group` (own key, prefixes columns), `Wrapper` (Row/Collapsible —
 /// transparent), `Tabs` (transparent, per-tab), `Array`/`Blocks` (repeatable
 /// rows — a relational-spine leaf to the column walker, descended by the others).
-enum FieldChildren<'a> {
+pub(crate) enum FieldChildren<'a> {
     /// A scalar field — no sub-tree.
     Leaf,
     /// A `Group`: its sub-fields nest under the group's key (`group__child`).
@@ -114,14 +114,31 @@ enum FieldChildren<'a> {
 
 /// Classify a field's structural children — the single source of the
 /// `FieldType` → sub-tree mapping shared by every walker in this module.
-fn field_children(field: &FieldDefinition) -> FieldChildren<'_> {
+pub(crate) fn field_children(field: &FieldDefinition) -> FieldChildren<'_> {
     match field.field_type {
         FieldType::Group => FieldChildren::Group(&field.fields),
         FieldType::Row | FieldType::Collapsible => FieldChildren::Wrapper(&field.fields),
         FieldType::Tabs => FieldChildren::Tabs(&field.tabs),
         FieldType::Array => FieldChildren::Array(&field.fields),
         FieldType::Blocks => FieldChildren::Blocks(&field.blocks),
-        _ => FieldChildren::Leaf,
+        // Leaves — listed EXHAUSTIVELY (no `_` wildcard) so a NEW
+        // `FieldType` is a compile error at this single classifier,
+        // forcing its structural classification here rather than
+        // silently defaulting to `Leaf` in every consumer.
+        FieldType::Text
+        | FieldType::Number
+        | FieldType::Textarea
+        | FieldType::Richtext
+        | FieldType::Select
+        | FieldType::Radio
+        | FieldType::Checkbox
+        | FieldType::Date
+        | FieldType::Email
+        | FieldType::Json
+        | FieldType::Upload
+        | FieldType::Relationship
+        | FieldType::Code
+        | FieldType::Join => FieldChildren::Leaf,
     }
 }
 

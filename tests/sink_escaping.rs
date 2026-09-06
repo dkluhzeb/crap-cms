@@ -1,4 +1,4 @@
-//! Sink-escaping inventory (ledger class **F14**).
+//! Sink-escaping inventory.
 //!
 //! Every place an untrusted value crosses into an interpreter or
 //! protocol — HTML, JSON-in-markup, SQL, Lua source, email headers,
@@ -123,7 +123,7 @@ fn email_header_validation_rejects_injection() {
     }
 }
 
-/// Positive control (ledger class **D4**): the liveness scan fails on a
+/// Positive control: the liveness scan fails on a
 /// synthetic dead anchor.
 #[test]
 fn sink_scan_fires_on_synthetic_dead_anchor() {

@@ -13,7 +13,10 @@
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
-use crate::core::{DocumentFields, FieldDefinition, FieldType, any_field, flatten_group_fields};
+use crate::core::{
+    DocumentFields, FieldChildren, FieldDefinition, FieldType, any_field, field_children,
+    flatten_group_fields,
+};
 use crate::db::query::helpers::prefixed_name;
 use crate::db::{DbConnection, DbValue};
 
@@ -95,53 +98,44 @@ fn data_touches_refs_inner(
     prefix: &str,
 ) -> bool {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(sub) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
-                if data_touches_refs_inner(&field.fields, data, &new_prefix) {
+                if data_touches_refs_inner(sub, data, &new_prefix) {
                     return true;
                 }
             }
 
-            FieldType::Row | FieldType::Collapsible => {
-                if data_touches_refs_inner(&field.fields, data, prefix) {
+            FieldChildren::Wrapper(sub) => {
+                if data_touches_refs_inner(sub, data, prefix) {
                     return true;
                 }
             }
 
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     if data_touches_refs_inner(&tab.fields, data, prefix) {
                         return true;
                     }
                 }
             }
 
-            FieldType::Relationship | FieldType::Upload => {
-                let col = prefixed_name(prefix, &field.name);
-
-                if data.contains_key(&col) {
-                    return true;
-                }
-            }
-
-            FieldType::Array => {
+            FieldChildren::Array(sub) => {
                 let col = prefixed_name(prefix, &field.name);
 
                 // Recurse the sub-field tree (groups/arrays/blocks at any
                 // depth) so a relationship nested inside a group within the
                 // array still arms ref-count recomputation.
-                if data.contains_key(&col) && fields_contain_relationship(&field.fields) {
+                if data.contains_key(&col) && fields_contain_relationship(sub) {
                     return true;
                 }
             }
 
-            FieldType::Blocks => {
+            FieldChildren::Blocks(blocks) => {
                 let col = prefixed_name(prefix, &field.name);
 
                 if data.contains_key(&col)
-                    && field
-                        .blocks
+                    && blocks
                         .iter()
                         .any(|b| fields_contain_relationship(&b.fields))
                 {
@@ -149,22 +143,21 @@ fn data_touches_refs_inner(
                 }
             }
 
-            // Scalars and the virtual Join never carry a stored reference, so a
-            // write to one can't change ref-counts. Listed explicitly (not `_`)
-            // so a future ref-bearing or container field type is a compile error
-            // here rather than silently failing to arm ref-count recomputation.
-            FieldType::Text
-            | FieldType::Number
-            | FieldType::Textarea
-            | FieldType::Richtext
-            | FieldType::Select
-            | FieldType::Radio
-            | FieldType::Checkbox
-            | FieldType::Date
-            | FieldType::Email
-            | FieldType::Json
-            | FieldType::Code
-            | FieldType::Join => {}
+            // Relationship/Upload leaves carry a stored reference — a write to
+            // one arms ref-count recomputation. Scalars and the virtual Join
+            // never do.
+            FieldChildren::Leaf => {
+                if matches!(
+                    field.field_type,
+                    FieldType::Relationship | FieldType::Upload
+                ) {
+                    let col = prefixed_name(prefix, &field.name);
+
+                    if data.contains_key(&col) {
+                        return true;
+                    }
+                }
+            }
         }
     }
 
@@ -242,14 +235,18 @@ pub fn after_create_from_data(
     conn: &dyn DbConnection,
     fields: &[FieldDefinition],
     data: &DocumentFields,
-    locale_config: &LocaleConfig,
+    // Kept for signature symmetry with the ref-count family (`after_create`,
+    // `after_update`); the in-memory compute path is single-locale (creates
+    // land in the default locale, translations are updates via the DB-read
+    // path), so it reads bare data keys and never consults locale config.
+    _locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut new_refs = Vec::new();
 
     // DB-layer edge: flatten the canonical nested write data (idempotent) so the
     // in-memory ref walk reads the flat `group__sub` columns it expects.
     let data = flatten_group_fields(data, fields);
-    compute_refs_from_data(fields, &data, locale_config, "", &mut new_refs);
+    compute_refs_from_data(fields, &data, "", &mut new_refs);
 
     let deltas = to_delta_map(&[], &new_refs);
 
@@ -559,6 +556,46 @@ mod tests {
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
         assert_eq!(get_ref_count_val(&conn, "media", "m2"), 1);
+    }
+
+    /// Regression: the CREATE hot-path
+    /// (`after_create_from_data` → the in-memory compute walker) must
+    /// count a localized has-one ref. The write data is BARE-keyed
+    /// (`hero`, single-locale mode), not `hero__en`/`hero__de` — the
+    /// compute walker's localized branch read suffixed keys and missed
+    /// the ref entirely, under-counting the target and bypassing delete
+    /// protection. The existing `after_create_localized_has_one` above
+    /// exercises only the READ path (`after_create`), so it never caught
+    /// this.
+    #[test]
+    fn after_create_from_data_localized_has_one_counts_the_ref() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        let fields = vec![
+            FieldDefinition::builder("hero", FieldType::Upload)
+                .localized(true)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+        posts.fields = fields.clone();
+        let locale = locale_en_de();
+
+        let (_tmp, pool, _) = setup_db(&[media, posts], &locale);
+        let conn = pool.get().unwrap();
+        insert_doc(&conn, "media", "m1");
+
+        // Bare-keyed write data, exactly as the write path produces it in
+        // single-locale mode.
+        let mut data = DocumentFields::new();
+        data.insert("hero".to_string(), json!("m1"));
+
+        after_create_from_data(&conn, &fields, &data, &locale).unwrap();
+
+        assert_eq!(
+            get_ref_count_val(&conn, "media", "m1"),
+            1,
+            "localized has-one ref must be counted on the create hot-path"
+        );
     }
 
     // ── Array sub-field refs ─────────────────────────────────────────────

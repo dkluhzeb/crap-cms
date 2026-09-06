@@ -4,7 +4,7 @@
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
-use crate::core::{FieldDefinition, FieldType, Registry};
+use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, field_children};
 use crate::db::query::helpers::{
     global_table, join_table, locale_column, prefixed_name as prefixed,
 };
@@ -74,51 +74,40 @@ fn scan_fields(
     results: &mut Vec<BackReference>,
 ) -> Result<()> {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(sub) => {
                 scan_fields(
                     scan,
-                    &field.fields,
+                    sub,
                     parent_table,
                     &prefixed(prefix, &field.name),
                     results,
                 )?;
             }
-            FieldType::Row | FieldType::Collapsible => {
-                scan_fields(scan, &field.fields, parent_table, prefix, results)?;
+            FieldChildren::Wrapper(sub) => {
+                scan_fields(scan, sub, parent_table, prefix, results)?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     scan_fields(scan, &tab.fields, parent_table, prefix, results)?;
                 }
             }
-            FieldType::Relationship | FieldType::Upload => {
-                scan_relationship(scan, field, parent_table, prefix, results)?;
-            }
-            FieldType::Array => {
+            FieldChildren::Array(_) => {
                 let table = join_table(parent_table, &prefixed(prefix, &field.name));
                 scan_array_sub_fields(scan, field, &table, results);
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(_) => {
                 let table = join_table(parent_table, &prefixed(prefix, &field.name));
                 scan_blocks(scan, field, &table, results);
             }
-            // Scalars and the virtual Join carry no incoming reference to scan.
-            // Listed explicitly (not `_`) so a future ref-bearing or container
-            // field type is a compile error here rather than a silently-missed
-            // back-reference (delete-protection would under-report).
-            FieldType::Text
-            | FieldType::Number
-            | FieldType::Textarea
-            | FieldType::Richtext
-            | FieldType::Select
-            | FieldType::Radio
-            | FieldType::Checkbox
-            | FieldType::Date
-            | FieldType::Email
-            | FieldType::Json
-            | FieldType::Code
-            | FieldType::Join => {}
+            // Relationship/Upload leaves carry an incoming reference to scan;
+            // scalars and the virtual Join carry none.
+            FieldChildren::Leaf => match field.field_type {
+                FieldType::Relationship | FieldType::Upload => {
+                    scan_relationship(scan, field, parent_table, prefix, results)?;
+                }
+                _ => {}
+            },
         }
     }
 

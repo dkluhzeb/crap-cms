@@ -2,6 +2,8 @@
 //! declared via `crap.routes.register`. Execution (`run_route_handler`) is added
 //! alongside once the route context / response envelope types exist.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::{Result, anyhow};
 use mlua::{Lua, LuaSerdeExt as _, Result as LuaResult, Table, Value};
 use tracing::warn;
@@ -14,11 +16,15 @@ use crate::{
     db::DbPool,
     hooks::{
         HookRunner,
-        lifecycle::{RouteHandlerInput, execution::resolve_hook_function, types::TxContextGuard},
+        lifecycle::{
+            LuaCrudInfra, RouteHandlerInput, execution::resolve_hook_function,
+            types::TxContextGuard,
+        },
         lua_api,
         lua_api::parse::deny_unknown_keys,
         lua_api::routes::ROUTES_KEY,
     },
+    service::{EventQueue, ServiceContext, flush_queue},
 };
 
 impl HookRunner {
@@ -66,21 +72,46 @@ impl HookRunner {
         handler: &HookRef,
         input: &RouteHandlerInput,
         pool: &DbPool,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<RouteResponse> {
-        let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set_pool(
-            &lua,
-            pool.clone(),
-            input.user.clone(),
-            input.ui_locale.clone(),
-            None,
-        );
+        // Thread a per-invocation event queue so route CRUD writes publish
+        // live-update events and invalidate the populate cache like every
+        // other pool-mode surface (jobs do this via `job_crud_infra`); the
+        // queue flushes AFTER the handler, once the VM lease is released.
+        let event_queue: Option<EventQueue> =
+            infra.as_ref().map(|_| Rc::new(RefCell::new(Vec::new())));
+        let event_transport = infra.as_ref().and_then(|i| i.event_transport.clone());
+        let infra = infra.map(|mut i| {
+            i.event_queue.clone_from(&event_queue);
+            i
+        });
 
-        let ctx_value = lua.to_value(&input.context())?;
-        let func = resolve_hook_function(&lua, handler.reference())?;
-        let ret: Value = func.call(ctx_value)?;
+        let response = {
+            let lua = self.pool.acquire()?;
+            let _guard = TxContextGuard::set_pool(
+                &lua,
+                pool.clone(),
+                input.user.clone(),
+                input.ui_locale.clone(),
+                infra,
+            );
 
-        decode_route_response(ret)
+            let ctx_value = lua.to_value(&input.context())?;
+            let func = resolve_hook_function(&lua, handler.reference())?;
+            let ret: Value = func.call(ctx_value)?;
+
+            decode_route_response(ret)?
+        };
+
+        if let Some(queue) = event_queue {
+            let flush_ctx = ServiceContext::slug_only("")
+                .runner(self)
+                .event_transport(event_transport)
+                .build();
+            flush_queue(&flush_ctx, &queue);
+        }
+
+        Ok(response)
     }
 
     /// Evaluate a custom route's `access` gate. The gate function receives the

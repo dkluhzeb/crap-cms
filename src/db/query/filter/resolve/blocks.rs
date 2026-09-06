@@ -3,7 +3,9 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldType};
+use crate::core::{
+    BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+};
 use crate::db::DbConnection;
 
 use super::types::BlockWalkResult;
@@ -55,39 +57,37 @@ pub(super) fn walk_block_fields(
             .find(|f| f.name == seg)
             .ok_or_else(|| anyhow!("Unknown field '{seg}' in block filter path"))?;
 
-        match field_def.field_type {
-            FieldType::Blocks | FieldType::Array => {
-                // Nested blocks/array → json_each join
+        match field_children(field_def) {
+            // Nested array → json_each join, descend into its sub-fields.
+            FieldChildren::Array(sub) => {
                 let source =
                     build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
 
-                current_fields = if field_def.field_type == FieldType::Blocks {
-                    field_def
-                        .blocks
-                        .iter()
-                        .flat_map(|bd| bd.fields.iter())
-                        .collect()
-                } else {
-                    field_def.fields.iter().collect()
-                };
+                current_fields = sub.iter().collect();
             }
-            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+            // Nested blocks → json_each join, descend into every block's fields.
+            FieldChildren::Blocks(blocks) => {
+                let source =
+                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
+                let alias = format!("j{}", each_joins.len());
+                each_joins.push((source, alias));
+                json_path_parts.clear();
+
+                current_fields = blocks.iter().flat_map(|bd| bd.fields.iter()).collect();
+            }
+            // Group and transparent layout wrappers extend the JSON path (no join).
+            FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) => {
                 json_path_parts.push(seg.to_string());
-                current_fields = field_def.fields.iter().collect();
+                current_fields = sub.iter().collect();
             }
-            FieldType::Tabs => {
+            FieldChildren::Tabs(tabs) => {
                 json_path_parts.push(seg.to_string());
-                current_fields = field_def
-                    .tabs
-                    .iter()
-                    .flat_map(|t| t.fields.iter())
-                    .collect();
+                current_fields = tabs.iter().flat_map(|t| t.fields.iter()).collect();
             }
-            _ => {
-                // Scalar leaf
+            FieldChildren::Leaf => {
                 if !remaining.is_empty() {
                     bail!("Scalar field '{seg}' cannot have sub-paths");
                 }

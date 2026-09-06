@@ -13,7 +13,7 @@ use crate::{
         SharedInvalidationTransport, SharedStorage,
     },
     db::{DbConnection, DbPool},
-    service::{DeferredQueue, EventQueue, ServiceContext, VerificationQueue},
+    service::{AppInfra, DeferredQueue, EventQueue, ServiceContext, VerificationQueue},
     typegen::lua::LuaAlias,
 };
 
@@ -270,6 +270,25 @@ pub struct LuaCrudInfra {
 pub type FileCleanupQueue = Rc<RefCell<Vec<crate::core::DocumentFields>>>;
 
 impl LuaCrudInfra {
+    /// Pool-mode CRUD infra (cache + event transport, no queues) for the
+    /// standalone surfaces that run Lua CRUD outside a service write
+    /// envelope — job handlers and custom-route handlers. Both need
+    /// writes to invalidate the populate cache and publish live events
+    /// like every other surface; the per-invocation event queue is
+    /// injected by the caller (`run_job_handler` / `run_route_handler`)
+    /// and flushed post-handler.
+    #[must_use]
+    pub fn for_pool_crud(infra: &AppInfra) -> Self {
+        Self {
+            event_transport: infra.event_transport.clone(),
+            cache: Some(infra.cache.clone()),
+            event_queue: None,
+            verification_queue: None,
+            deferred: None,
+            file_cleanup: None,
+        }
+    }
+
     /// Build from a parent `ServiceContext`, attaching the given queues.
     /// Clones the context's event transport and cache (cheap Arc clones).
     #[must_use]

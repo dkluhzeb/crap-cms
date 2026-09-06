@@ -1,4 +1,4 @@
-//! Ledger class **L4**: a hard delete performed in **conn mode** (inside
+//! a hard delete performed in **conn mode** (inside
 //! an enclosing transaction — a hook, a `crap.transaction` block) must
 //! NOT delete the upload's storage files immediately. Files are removed
 //! only after the enclosing transaction commits, so a rollback leaves

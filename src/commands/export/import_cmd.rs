@@ -9,7 +9,10 @@ use crate::{
     cli,
     commands::{export::file::ExportFile, load_config_and_sync},
     config::{CrapConfig, LocaleConfig},
-    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Registry},
+    core::{
+        CollectionDefinition, DocumentFields, FieldChildren, FieldDefinition, FieldType, Registry,
+        field_children,
+    },
     db::{
         DbConnection, DbValue,
         query::{self, helpers::prefixed_name},
@@ -63,19 +66,25 @@ fn collect_field_columns(
     join_data: &mut DocumentFields,
     locale: &LocaleConfig,
 ) -> Result<()> {
-    match field.field_type {
-        FieldType::Group => {
+    match field_children(field) {
+        FieldChildren::Group(_) => {
             collect_group_columns(field, doc_obj, parent_cols, parent_vals, locale)?;
         }
-        FieldType::Row | FieldType::Collapsible => {
-            collect_wrapper_columns(&field.fields, doc_obj, parent_cols, parent_vals, locale)?;
+        FieldChildren::Wrapper(sub) => {
+            collect_wrapper_columns(sub, doc_obj, parent_cols, parent_vals, locale)?;
         }
-        FieldType::Tabs => {
-            for tab in &field.tabs {
+        FieldChildren::Tabs(tabs) => {
+            for tab in tabs {
                 collect_wrapper_columns(&tab.fields, doc_obj, parent_cols, parent_vals, locale)?;
             }
         }
-        _ if field.has_parent_column() => {
+        // A parent-column field (scalar or has-one) writes a flat column;
+        // everything else here (Array/Blocks/has-many) is join-backed. Both
+        // paths are leaves/repeatables under the classifier, so re-split on
+        // `has_parent_column()` exactly as the old guard arms did.
+        FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf
+            if field.has_parent_column() =>
+        {
             if let Some(val) = doc_obj.get(&field.name) {
                 if field.is_locale_scoped(false) {
                     push_localized_columns(
@@ -98,7 +107,7 @@ fn collect_field_columns(
                 }
             }
         }
-        _ => {
+        FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
             if let Some(val) = doc_obj.get(&field.name)
                 && !val.is_null()
             {

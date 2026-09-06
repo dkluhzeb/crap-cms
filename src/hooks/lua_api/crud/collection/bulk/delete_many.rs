@@ -13,7 +13,7 @@ use crate::{
     core::{Registry, upload},
     db::{FilterClause, FindQuery, LocaleContext},
     hooks::{
-        lifecycle::LuaVmInfra,
+        lifecycle::{LuaCrudInfra, LuaVmInfra, TxContext},
         lua_api::crud::{
             filter::convert_where_clause,
             get_tx_conn,
@@ -227,16 +227,14 @@ fn collections_delete_many(
     let svc_result = DeleteMany::run(&ctx, op_args).map_err(lua_err)?;
 
     if !service_def.soft_delete && !svc_result.upload_fields_to_clean.is_empty() {
-        // Files after commit (ledger class L4): in conn mode this runs
+        // Files after commit: in conn mode this runs
         // inside the caller's transaction — queue for its post-commit
         // flush. Pool mode (this op committed already) and legacy
         // scopes without a queue delete immediately as before.
         let queue = lua
-            .app_data_ref::<crate::hooks::lifecycle::LuaCrudInfra>()
+            .app_data_ref::<LuaCrudInfra>()
             .and_then(|i| i.file_cleanup.clone());
-        let in_conn_mode = lua
-            .app_data_ref::<crate::hooks::lifecycle::TxContext>()
-            .is_some();
+        let in_conn_mode = lua.app_data_ref::<TxContext>().is_some();
 
         if let (true, Some(queue)) = (in_conn_mode, queue) {
             queue

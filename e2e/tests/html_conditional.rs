@@ -103,6 +103,48 @@ async fn show_when_visible_false_returns_hidden() {
     );
 }
 
+// ── nested condition inside a group evaluates like a top-level one ───────
+
+#[tokio::test]
+async fn nested_group_condition_is_evaluated() {
+    let app = setup_with_condition_hook();
+    let user_id = create_test_user(&app, "condnest@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "condnest@test.com");
+
+    // The nested field `venue` carries the same condition; evaluate-conditions
+    // resolves its OWN configured ref server-side (collect_condition_refs
+    // recurses into the group), and apply_display_conditions applies it on the
+    // initial render the same way.
+    for (online, expected) in [(true, true), (false, false)] {
+        let body = json!({
+            "form_data": { "online": online },
+            "conditions": { "venue": "hooks.conditions.show_when_online" }
+        })
+        .to_string();
+
+        let resp = app
+            .router
+            .clone()
+            .oneshot(
+                Request::post("/admin/collections/events/evaluate-conditions")
+                    .header("Cookie", auth_and_csrf(&cookie))
+                    .header("X-CSRF-Token", TEST_CSRF)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+        assert_eq!(
+            parsed["venue"],
+            json!(expected),
+            "nested venue condition must evaluate (online={online})"
+        );
+    }
+}
+
 // ── client_sent_ref_ignored_server_uses_configured_ref ───────────────────
 //
 // Security gate: the handler resolves each field's OWN configured
@@ -242,6 +284,20 @@ fn make_events_def() -> CollectionDefinition {
                     .condition("hooks.conditions.show_when_online")
                     .build(),
             )
+            .build(),
+        // A group containing a conditioned sub-field — nested conditions in
+        // non-repeating containers must evaluate like top-level ones.
+        FieldDefinition::builder("details", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("venue", FieldType::Text)
+                    .admin(
+                        FieldAdmin::builder()
+                            .label(LocalizedString::Plain("Venue".to_string()))
+                            .condition("hooks.conditions.show_when_online")
+                            .build(),
+                    )
+                    .build(),
+            ])
             .build(),
     ];
     def

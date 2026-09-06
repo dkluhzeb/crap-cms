@@ -307,7 +307,7 @@ pub(crate) fn html_escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// Ledger class D8: the attr decode must be the exact inverse of
+    /// the attr decode must be the exact inverse of
     /// `html_escape_attr`. Author-typed literal entity text (`&lt;`)
     /// must survive the encode/decode round-trip as literal text, not
     /// get promoted to markup by a premature `&amp;` decode.

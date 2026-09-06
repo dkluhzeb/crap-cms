@@ -222,7 +222,7 @@ fn check_resolvable(lua: &Lua, value: Value, field: &str, label: &str, out: &mut
 
 /// Collect any unresolved refs in a `Hooks` struct.
 fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
-    // Exhaustive destructuring (ledger class M8): a new hook slot on
+    // Exhaustive destructuring: a new hook slot on
     // `Hooks` fails to compile HERE until this validator learns it.
     let Hooks {
         before_validate,
@@ -779,7 +779,7 @@ fn collect_field_tables(
 
 /// Collect any unresolved refs in an `Access` struct.
 fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>) {
-    // Exhaustive destructuring (ledger class M8): a new access key on
+    // Exhaustive destructuring: a new access key on
     // `Access` fails to compile HERE until this validator learns it.
     let Access {
         read,
@@ -836,7 +836,7 @@ fn check_auth_method_refs(lua: &Lua, methods: &[AuthMethod], source: &str, out: 
             } if resolve_hook_function(lua, r.reference()).is_err() => {
                 out.push(format!("{source}: mfa_deliver: '{}'", r.reference()));
             }
-            // Exhaustive on purpose (ledger class M8): a new AuthMethod
+            // Exhaustive on purpose: a new AuthMethod
             // variant fails to compile HERE until this validator decides
             // whether it carries resolvable refs.
             AuthMethod::Strategy { .. }
@@ -899,8 +899,7 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
     walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
         let field_src = field_source_label(source, path, f);
 
-        // field-level hooks — exhaustively destructured (ledger class
-        // M8): a new field-hook slot fails to compile here.
+        // field-level hooks — exhaustively destructured: a new field-hook slot fails to compile here.
         let crate::core::FieldHooks {
             before_validate,
             before_change,

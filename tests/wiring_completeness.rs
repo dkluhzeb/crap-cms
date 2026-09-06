@@ -1,4 +1,4 @@
-//! Wiring-completeness guards (ledger class **M7**).
+//! Wiring-completeness guards.
 //!
 //! A component that is *written but never wired in* fails silently: a
 //! typegen render function that never lands in `BLOCK_RENDERS` simply
@@ -93,7 +93,7 @@ fn every_lua_typegen_render_fn_is_wired() {
     );
 }
 
-/// Positive control (ledger class **D4**): the render scan must flag a
+/// Positive control: the render scan must flag a
 /// synthetic orphan.
 #[test]
 fn render_scan_fires_on_synthetic_orphan() {
@@ -168,7 +168,7 @@ fn every_defined_web_component_is_placed_somewhere() {
     );
 }
 
-/// CI-gate pin (ledger class **D4**): every enforcement gate the project
+/// CI-gate pin: every enforcement gate the project
 /// relies on must actually appear in the CI workflow. The decay mode is
 /// real — 139 browser e2e tests once sat behind a feature flag CI never
 /// enabled and failed silently for a full release cycle. This does not
@@ -209,7 +209,7 @@ fn ci_workflow_still_runs_every_gate() {
     );
 }
 
-/// Init-phase completeness pin (ledger class **M15**): every Lua API
+/// Init-phase completeness pin: every Lua API
 /// that registers into a process-wide registry (`crap.*.define`,
 /// `crap.*.register*`) must carry an init-phase guard — a runtime call
 /// would land in one pooled VM and be intermittent across requests, or

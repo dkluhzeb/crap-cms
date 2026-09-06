@@ -6,7 +6,9 @@ use super::{
     operators::{build_filter_condition, build_op_condition},
     resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
 };
-use crate::core::{BLOCK_TYPE_KEY, CollectionDefinition, FieldDefinition, FieldType};
+use crate::core::{
+    BLOCK_TYPE_KEY, CollectionDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext,
     query::{helpers::locale_column, is_valid_identifier},
@@ -303,20 +305,20 @@ fn check_field_locale<'a>(
     field_name: &str,
     ctx: &'a LocaleContext,
 ) -> Option<&'a str> {
-    match field.field_type {
-        FieldType::Group => check_group_locale(field, field_name, ctx),
-        FieldType::Row | FieldType::Collapsible => {
-            check_flat_sub_fields(&field.fields, field_name, ctx)
-        }
-        FieldType::Tabs => {
-            for tab in &field.tabs {
+    match field_children(field) {
+        // Group carries its own `{name}__` flat-column prefix and localization
+        // inheritance, so it stays bespoke (transparent wrappers do not).
+        FieldChildren::Group(_) => check_group_locale(field, field_name, ctx),
+        FieldChildren::Wrapper(sub) => check_flat_sub_fields(sub, field_name, ctx),
+        FieldChildren::Tabs(tabs) => {
+            for tab in tabs {
                 if let Some(locale) = check_flat_sub_fields(&tab.fields, field_name, ctx) {
                     return Some(locale);
                 }
             }
             None
         }
-        _ => {
+        FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
             if field.name == field_name && field.localized {
                 Some(ctx.access_locale())
             } else {

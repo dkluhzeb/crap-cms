@@ -75,10 +75,7 @@ pub fn restore_version(
     // Adjust ref counts based on before/after diff
     ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
 
-    // Re-sync the FTS index to the restored content (ledger class P5:
-    // every content-changing write path keeps FTS in sync — the sibling
-    // `undelete` does; restore must too, or search keeps matching the
-    // pre-restore text until an unrelated edit rewrites the row).
+    // Re-sync the FTS index to the restored content.
     crate::db::query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
 
     // Update status and create a new version for the restore

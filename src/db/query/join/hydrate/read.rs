@@ -19,7 +19,7 @@ use super::{
     locale,
 };
 use crate::{
-    core::{Document, FieldDefinition, FieldType, field::RelationshipConfig},
+    core::{Document, FieldChildren, FieldDefinition, field::RelationshipConfig, field_children},
     db::{
         DbConnection, LocaleContext,
         query::{
@@ -156,8 +156,72 @@ fn hydrate_group_join_fields(
         let locale = locale::resolve_join_locale(field, locale_ctx);
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
+        match field_children(field) {
+            FieldChildren::Array(sub) => {
+                let val = hydrate_array(
+                    conn,
+                    slug,
+                    &full_name,
+                    &doc.id,
+                    sub,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                group_obj.insert(field.name.clone(), val);
+            }
+            FieldChildren::Blocks(_) => {
+                let val = hydrate_blocks(
+                    conn,
+                    slug,
+                    &full_name,
+                    &doc.id,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                group_obj.insert(field.name.clone(), val);
+            }
+            FieldChildren::Group(sub) => {
+                if let Some(Value::Object(sub_obj)) = group_obj.get_mut(&field.name) {
+                    hydrate_group_join_fields(
+                        conn, slug, sub, doc, &full_name, sub_obj, locale_ctx,
+                    )?;
+                } else {
+                    let mut sub_obj = serde_json::Map::new();
+
+                    hydrate_group_join_fields(
+                        conn,
+                        slug,
+                        sub,
+                        doc,
+                        &full_name,
+                        &mut sub_obj,
+                        locale_ctx,
+                    )?;
+
+                    if !sub_obj.is_empty() {
+                        group_obj.insert(field.name.clone(), Value::Object(sub_obj));
+                    }
+                }
+            }
+            FieldChildren::Wrapper(sub) => {
+                hydrate_group_join_fields(conn, slug, sub, doc, prefix, group_obj, locale_ctx)?;
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    hydrate_group_join_fields(
+                        conn,
+                        slug,
+                        &tab.fields,
+                        doc,
+                        prefix,
+                        group_obj,
+                        locale_ctx,
+                    )?;
+                }
+            }
+            // Relationship/Upload has-many hydrate their own junction rows; a
+            // scalar leaf has no `relationship`, so the guard no-ops.
+            FieldChildren::Leaf => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
@@ -173,83 +237,6 @@ fn hydrate_group_join_fields(
                     group_obj.insert(field.name.clone(), val);
                 }
             }
-            FieldType::Array => {
-                let val = hydrate_array(
-                    conn,
-                    slug,
-                    &full_name,
-                    &doc.id,
-                    &field.fields,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-                group_obj.insert(field.name.clone(), val);
-            }
-            FieldType::Blocks => {
-                let val = hydrate_blocks(
-                    conn,
-                    slug,
-                    &full_name,
-                    &doc.id,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-                group_obj.insert(field.name.clone(), val);
-            }
-            FieldType::Group => {
-                if let Some(Value::Object(sub_obj)) = group_obj.get_mut(&field.name) {
-                    hydrate_group_join_fields(
-                        conn,
-                        slug,
-                        &field.fields,
-                        doc,
-                        &full_name,
-                        sub_obj,
-                        locale_ctx,
-                    )?;
-                } else {
-                    let mut sub_obj = serde_json::Map::new();
-
-                    hydrate_group_join_fields(
-                        conn,
-                        slug,
-                        &field.fields,
-                        doc,
-                        &full_name,
-                        &mut sub_obj,
-                        locale_ctx,
-                    )?;
-
-                    if !sub_obj.is_empty() {
-                        group_obj.insert(field.name.clone(), Value::Object(sub_obj));
-                    }
-                }
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                hydrate_group_join_fields(
-                    conn,
-                    slug,
-                    &field.fields,
-                    doc,
-                    prefix,
-                    group_obj,
-                    locale_ctx,
-                )?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    hydrate_group_join_fields(
-                        conn,
-                        slug,
-                        &tab.fields,
-                        doc,
-                        prefix,
-                        group_obj,
-                        locale_ctx,
-                    )?;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -280,8 +267,78 @@ fn hydrate_group_join_fields_batch(
         let locale = locale::resolve_join_locale(field, locale_ctx);
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
+        match field_children(field) {
+            FieldChildren::Array(sub) => {
+                let mut grouped = fetch_array_rows_grouped(
+                    conn,
+                    slug,
+                    &full_name,
+                    sub,
+                    &parent_refs,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                distribute_into_group_objs(docs, group_objs, &field.name, &mut grouped);
+            }
+            FieldChildren::Blocks(_) => {
+                let mut grouped = fetch_block_rows_grouped(
+                    conn,
+                    slug,
+                    &full_name,
+                    &parent_refs,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                distribute_into_group_objs(docs, group_objs, &field.name, &mut grouped);
+            }
+            FieldChildren::Group(sub) => {
+                // Take (or create) each doc's nested sub-object, recurse the
+                // batched walk into it, and put back the non-empty results.
+                let mut sub_objs: Vec<serde_json::Map<String, Value>> = group_objs
+                    .iter_mut()
+                    .map(|obj| match obj.remove(&field.name) {
+                        Some(Value::Object(m)) => m,
+                        _ => serde_json::Map::new(),
+                    })
+                    .collect();
+
+                hydrate_group_join_fields_batch(
+                    conn,
+                    slug,
+                    sub,
+                    docs,
+                    &full_name,
+                    &mut sub_objs,
+                    locale_ctx,
+                )?;
+
+                for (obj, sub) in group_objs.iter_mut().zip(sub_objs) {
+                    if !sub.is_empty() {
+                        obj.insert(field.name.clone(), Value::Object(sub));
+                    }
+                }
+            }
+            FieldChildren::Wrapper(sub) => {
+                hydrate_group_join_fields_batch(
+                    conn, slug, sub, docs, prefix, group_objs, locale_ctx,
+                )?;
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    hydrate_group_join_fields_batch(
+                        conn,
+                        slug,
+                        &tab.fields,
+                        docs,
+                        prefix,
+                        group_objs,
+                        locale_ctx,
+                    )?;
+                }
+            }
+            // Relationship/Upload has-many distribute their own junction rows;
+            // a scalar leaf has no `relationship`, so the guard no-ops.
+            FieldChildren::Leaf => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
@@ -297,81 +354,6 @@ fn hydrate_group_join_fields_batch(
                     distribute_into_group_objs(docs, group_objs, &field.name, &mut grouped);
                 }
             }
-            FieldType::Array => {
-                let mut grouped = fetch_array_rows_grouped(
-                    conn,
-                    slug,
-                    &full_name,
-                    &field.fields,
-                    &parent_refs,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-                distribute_into_group_objs(docs, group_objs, &field.name, &mut grouped);
-            }
-            FieldType::Blocks => {
-                let mut grouped = fetch_block_rows_grouped(
-                    conn,
-                    slug,
-                    &full_name,
-                    &parent_refs,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-                distribute_into_group_objs(docs, group_objs, &field.name, &mut grouped);
-            }
-            FieldType::Group => {
-                // Take (or create) each doc's nested sub-object, recurse the
-                // batched walk into it, and put back the non-empty results.
-                let mut sub_objs: Vec<serde_json::Map<String, Value>> = group_objs
-                    .iter_mut()
-                    .map(|obj| match obj.remove(&field.name) {
-                        Some(Value::Object(m)) => m,
-                        _ => serde_json::Map::new(),
-                    })
-                    .collect();
-
-                hydrate_group_join_fields_batch(
-                    conn,
-                    slug,
-                    &field.fields,
-                    docs,
-                    &full_name,
-                    &mut sub_objs,
-                    locale_ctx,
-                )?;
-
-                for (obj, sub) in group_objs.iter_mut().zip(sub_objs) {
-                    if !sub.is_empty() {
-                        obj.insert(field.name.clone(), Value::Object(sub));
-                    }
-                }
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                hydrate_group_join_fields_batch(
-                    conn,
-                    slug,
-                    &field.fields,
-                    docs,
-                    prefix,
-                    group_objs,
-                    locale_ctx,
-                )?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    hydrate_group_join_fields_batch(
-                        conn,
-                        slug,
-                        &tab.fields,
-                        docs,
-                        prefix,
-                        group_objs,
-                        locale_ctx,
-                    )?;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -652,8 +634,68 @@ pub fn hydrate_documents(
         let locale = locale::resolve_join_locale(field, locale_ctx);
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => {
+                hydrate_documents(conn, slug, sub, docs, select, locale_ctx)?;
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    hydrate_documents(conn, slug, &tab.fields, docs, select, locale_ctx)?;
+                }
+            }
+            FieldChildren::Array(sub) => {
+                hydrate_array_batch(
+                    conn,
+                    slug,
+                    &field.name,
+                    sub,
+                    docs,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+            }
+            FieldChildren::Blocks(_) => {
+                hydrate_blocks_batch(
+                    conn,
+                    slug,
+                    &field.name,
+                    docs,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+            }
+            FieldChildren::Group(sub) => {
+                // Scalar group reconstruction is in-memory per doc; the
+                // join-shaped sub-fields are batched across all docs by the
+                // recursive group walk below.
+                let mut group_objs: Vec<serde_json::Map<String, Value>> = docs
+                    .iter_mut()
+                    .map(|doc| {
+                        let mut obj = serde_json::Map::new();
+                        reconstruct_group_fields(sub, &field.name, doc, &mut obj);
+                        obj
+                    })
+                    .collect();
+
+                hydrate_group_join_fields_batch(
+                    conn,
+                    slug,
+                    sub,
+                    docs,
+                    &field.name,
+                    &mut group_objs,
+                    locale_ctx,
+                )?;
+
+                for (doc, obj) in docs.iter_mut().zip(group_objs) {
+                    if !obj.is_empty() {
+                        doc.fields.insert(field.name.clone(), Value::Object(obj));
+                    }
+                }
+            }
+            // Relationship/Upload has-many hydrate in batch; a scalar leaf has
+            // no `relationship`, so the guard no-ops.
+            FieldChildren::Leaf => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
@@ -668,65 +710,6 @@ pub fn hydrate_documents(
                     )?;
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                hydrate_documents(conn, slug, &field.fields, docs, select, locale_ctx)?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    hydrate_documents(conn, slug, &tab.fields, docs, select, locale_ctx)?;
-                }
-            }
-            FieldType::Array => {
-                hydrate_array_batch(
-                    conn,
-                    slug,
-                    &field.name,
-                    &field.fields,
-                    docs,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-            }
-            FieldType::Blocks => {
-                hydrate_blocks_batch(
-                    conn,
-                    slug,
-                    &field.name,
-                    docs,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-            }
-            FieldType::Group => {
-                // Scalar group reconstruction is in-memory per doc; the
-                // join-shaped sub-fields are batched across all docs by the
-                // recursive group walk below.
-                let mut group_objs: Vec<serde_json::Map<String, Value>> = docs
-                    .iter_mut()
-                    .map(|doc| {
-                        let mut obj = serde_json::Map::new();
-                        reconstruct_group_fields(&field.fields, &field.name, doc, &mut obj);
-                        obj
-                    })
-                    .collect();
-
-                hydrate_group_join_fields_batch(
-                    conn,
-                    slug,
-                    &field.fields,
-                    docs,
-                    &field.name,
-                    &mut group_objs,
-                    locale_ctx,
-                )?;
-
-                for (doc, obj) in docs.iter_mut().zip(group_objs) {
-                    if !obj.is_empty() {
-                        doc.fields.insert(field.name.clone(), Value::Object(obj));
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -761,8 +744,63 @@ pub fn hydrate_document(
         let locale = locale::resolve_join_locale(field, locale_ctx);
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
 
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
+        match field_children(field) {
+            FieldChildren::Array(sub) => {
+                let val = hydrate_array(
+                    conn,
+                    slug,
+                    &field.name,
+                    &doc.id,
+                    sub,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+
+                doc.fields.insert(field.name.clone(), val);
+            }
+            FieldChildren::Blocks(_) => {
+                let val = hydrate_blocks(
+                    conn,
+                    slug,
+                    &field.name,
+                    &doc.id,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+
+                doc.fields.insert(field.name.clone(), val);
+            }
+            FieldChildren::Group(sub) => {
+                let mut group_obj = serde_json::Map::new();
+
+                reconstruct_group_fields(sub, &field.name, doc, &mut group_obj);
+
+                hydrate_group_join_fields(
+                    conn,
+                    slug,
+                    sub,
+                    doc,
+                    &field.name,
+                    &mut group_obj,
+                    locale_ctx,
+                )?;
+
+                if !group_obj.is_empty() {
+                    doc.fields
+                        .insert(field.name.clone(), Value::Object(group_obj));
+                }
+            }
+            FieldChildren::Wrapper(sub) => {
+                hydrate_document(conn, slug, sub, doc, select, locale_ctx)?;
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    hydrate_document(conn, slug, &tab.fields, doc, select, locale_ctx)?;
+                }
+            }
+            // Relationship/Upload has-many hydrate their own junction rows; a
+            // scalar leaf has no `relationship`, so the guard no-ops.
+            FieldChildren::Leaf => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
@@ -779,60 +817,6 @@ pub fn hydrate_document(
                     doc.fields.insert(field.name.clone(), val);
                 }
             }
-            FieldType::Array => {
-                let val = hydrate_array(
-                    conn,
-                    slug,
-                    &field.name,
-                    &doc.id,
-                    &field.fields,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-
-                doc.fields.insert(field.name.clone(), val);
-            }
-            FieldType::Blocks => {
-                let val = hydrate_blocks(
-                    conn,
-                    slug,
-                    &field.name,
-                    &doc.id,
-                    locale.as_deref(),
-                    fallback_locale.as_deref(),
-                )?;
-
-                doc.fields.insert(field.name.clone(), val);
-            }
-            FieldType::Group => {
-                let mut group_obj = serde_json::Map::new();
-
-                reconstruct_group_fields(&field.fields, &field.name, doc, &mut group_obj);
-
-                hydrate_group_join_fields(
-                    conn,
-                    slug,
-                    &field.fields,
-                    doc,
-                    &field.name,
-                    &mut group_obj,
-                    locale_ctx,
-                )?;
-
-                if !group_obj.is_empty() {
-                    doc.fields
-                        .insert(field.name.clone(), Value::Object(group_obj));
-                }
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                hydrate_document(conn, slug, &field.fields, doc, select, locale_ctx)?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    hydrate_document(conn, slug, &tab.fields, doc, select, locale_ctx)?;
-                }
-            }
-            _ => {}
         }
     }
 

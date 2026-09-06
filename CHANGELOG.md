@@ -663,16 +663,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Security
 
 - **MCP `delete_many`/`update_many` could wipe a whole collection from a
-  wrong-shaped `where`.** (Ledger class F2.) A `where` that wasn't a
+  wrong-shaped `where`.** A `where` that wasn't a
   JSON object — notably the JSON-*string* spelling the gRPC field uses —
   decoded to zero filters instead of erroring, and an empty filter on a
   bulk op means "every document". MCP now hard-errors on a
   present-but-non-object `where`, matching gRPC and Lua, with a message
   naming the expected shape; a cross-surface parity test pins it.
 - **The Postgres password leaked through the "sanitized" config
-  channels.** (Ledger class F17 — found by the convergence audit as a
-  gap in the F17 partition test itself, whose fixture never used a
-  Postgres URL.) `database.url` was a bare `String`, so the full
+  channels.** (found as a gap in the config-redaction partition test itself, whose
+  fixture never used a Postgres URL.) `database.url` was a bare `String`, so the full
   `postgres://user:password@…` credential was readable through the
   default-on MCP `crap://config` resource and Lua's `crap.config.get` —
   the exact channels both Redis URLs were newtyped for. Now wrapped in
@@ -699,14 +698,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   results with their full backend chains (DB identifiers, driver and
   pool vocabulary) while gRPC and the upload surface return generic
   text. MCP tools now use a scrubbing conversion that logs the full
-  chain server-side and returns the same generic messages (class P2 —
-  the responder contract's last bypass site).
+  chain server-side and returns the same generic messages (the responder contract's last bypass site).
 - **`McpApiKey` printed the key through `Display`.** `Debug` redacted
   but `format!("{key}")` did not — and the auth compare itself used the
   `Display` path. `Display` now redacts like `Debug`, the compare goes
   through `AsRef<str>`, and the partition test gained a Display-channel
   check for every URL/key secret.
-- **`io.popen` was reachable from Lua hooks.** (Ledger class F16.) The
+- **`io.popen` was reachable from Lua hooks.** The
   sandbox has always removed `os.execute`, but its sibling `io.popen` —
   the other process-execution entry point — survived, so any hook,
   plugin, or job handler could run arbitrary shell commands with the
@@ -717,7 +715,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Lua/mlua upgrade introducing a new global forces a review instead of
   silently widening the sandbox.
 - **Redis passwords and webhook credentials leaked through `Debug`,
-  logs, and the Lua config exposure.** (Ledger class F17.)
+  logs, and the Lua config exposure.**
   `cache.redis_url` and `auth.rate_limit_redis_url` printed embedded
   `redis://user:password@…` credentials in `Debug` output, in the
   startup `info!` lines of the cache/rate-limit/event factories, and
@@ -1550,9 +1548,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A `timezone` Date field nested inside a Blocks field never inherited
+  the configured default timezone.** The startup pass that stamps the
+  global `default_timezone` onto timezone-enabled Date fields descended
+  into groups, arrays, and tabs but not into blocks, so a Date with
+  `timezone = true` inside a Blocks field was left without the config
+  default. It now descends block sub-fields like every other container.
+
+- **A localized has-one relationship's reference count was never
+  incremented on create.** (data integrity, HIGH.) The
+  create hot-path's in-memory ref-count walker read the value from
+  locale-suffixed data keys (`hero__en`), but write data is keyed by the
+  bare field name in single-locale mode — so it counted zero refs for
+  any localized has-one Relationship/Upload field, leaving the target
+  under-counted and its delete protection bypassable (a referenced
+  document could be hard-deleted, dangling the reference). The walker now
+  reads the bare key like the non-localized branch; only a versioned
+  ref-count backfill repairs already-affected databases.
+- **Custom-route CRUD writes skipped cache invalidation and live
+  events.** A `crap.collections.*` write from a
+  custom route handler ran with no cache/event infrastructure (unlike
+  job handlers), so the populate cache served stale data until the next
+  non-route write and no live-update event fired. Route handlers now
+  thread the same pool-mode CRUD infra jobs use.
+- **A has-many relationship list column rendered a clickable sort header
+  that 400'd.** The column builder marked every
+  field-backed column sortable, but the sort validator rejects a
+  has-many (no sortable parent column); the two predicates are now one
+  (`is_sortable_column`). Relationship/upload columns also no longer
+  render raw JSON.
+- **Display conditions on fields nested in a group, collapsible, row, or
+  tabs were silently ignored on the initial render.**
+  The server-render condition pass only evaluated top-level fields, so a
+  nested `admin.condition` never wired up (the client re-evaluation
+  already handled nesting); the render pass now recurses the same
+  non-repeating containers. Conditions inside array/blocks rows remain a
+  separate per-row feature.
+- **A localized group/composite nested in an array or blocks row
+  rendered read-only in a non-default locale.** The
+  enrich-phase field-context builder never reset the locale scope at a
+  localized boundary the way the top-level builder does, so its
+  sub-fields were wrongly locale-locked.
 - **Blocking auth/Lua work moved off async workers on the remaining
-  request paths.** (Ledger class L12, extending the earlier auth-page
-  fix.) The REST upload create/update/delete handlers ran token
+  request paths.** (extending the earlier auth-page fix.) The REST upload create/update/delete handlers ran token
   validation and the Lua access hook (a VM-pool acquire of up to 5s)
   inline before their `spawn_blocking` tail; the upload-serve route ran
   auth inline; and the SSE and gRPC-Subscribe pumps ran per-event
@@ -1561,49 +1599,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   drained event group into one hop), so a slow hook or DB can't park a
   runtime worker.
 - **The Postgres checkbox-column retype could skip a later-added
-  collection.** (Ledger class D9.) The one-time SMALLINT retype was gated
+  collection.** The one-time SMALLINT retype was gated
   by a single global `_crap_meta` flag stamped after walking the registry
   once, so a collection added after the first run kept an oversized
   BIGINT checkbox column. The gate is now per-slug, matching the
   reference-count backfill.
 - **A rolled-back `crap.transaction(fn)` still published its writes'
-  events.** (Ledger class L3.) The transaction reused the ambient
+  events.** The transaction reused the ambient
   job-level event queue, which flushes unconditionally after the
   handler, so an update made inside a transaction that then rolled back
   was still delivered to subscribers. The transaction now gets fresh
   event/verification queues handed up only on commit and dropped on
   rollback, matching `run_pool_write`.
 - **Conn-mode hard deletes removed upload files before the enclosing
-  transaction committed.** (Ledger class L4.) A hook that deleted an
+  transaction committed.** A hook that deleted an
   upload document deleted its storage bytes immediately; if the outer
   write then rolled back, the DB row was restored pointing at files that
   were already gone. File deletion is now queued and flushed only after
   the transaction commits (a rollback leaves harmless orphaned files).
 - **A completed queued-bulk run became invisible to the caller who
-  queued it.** (Ledger class D9.) Finishing a run strips its payload to
+  queued it.** Finishing a run strips its payload to
   just the identity, but `GetJobRun` required the full `BulkJobData`
   shape to authorize the read — so every completed run failed to decode
   and returned not-found. Authorization now decodes only the identity
   projection; a failed run's request body is also stripped (it's
   terminal too).
-- **Version restore left the search index stale.** (Ledger class P5.)
+- **Version restore left the search index stale.**
   Restoring an older version never re-synced FTS, so search kept
   matching the pre-restore text until an unrelated edit; `restore_version`
   now re-upserts FTS like its `undelete` sibling.
-- **Admin user-settings writes could lose a concurrent update.** (Ledger
-  class L5.) Column-preference saves and locale switches each did a
+- **Admin user-settings writes could lose a concurrent update.** Column-preference saves and locale switches each did a
   whole-blob read-modify-write with no transaction, so two concurrent
   saves clobbered each other. Both now run in an IMMEDIATE transaction.
 - **Postgres job claiming enforced per-slug concurrency caps only
-  advisorily across nodes.** (Ledger class L5/P9.) The `FOR UPDATE SKIP
+  advisorily across nodes.** The `FOR UPDATE SKIP
   LOCKED` claim ran on a bare autocommit connection, releasing its row
   locks per statement, so two nodes could each claim past a
   `concurrency = 1` cap in one tick. Both backends now claim inside one
   transaction (no job ever ran twice — the CAS held — the cap itself was
   the loss).
 - **Nested admin components captured each other's events and elements.**
-  (Ledger class M13, five instances found by applying the client-side
-  lens the class was mined from.) Nested tabs: a click on an inner tab
+  (five instances, found via a client-side audit lens.) Nested tabs: a click on an inner tab
   group bubbled to the outer one and blanked the whole field; nested
   collapsible groups could never collapse (the outer instance re-toggled
   them right back); a nested array's `max_rows` cap froze the parent's
@@ -1650,15 +1686,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   survive URL round-trips, but missed percent (the serve route
   percent-decodes, so the recomputed path never matches). Now rejected
   with the same re-upload guidance.
-- **`crap.hooks.register`/`remove` silently half-applied at runtime.**
-  (Ledger class M15.) Called from a running hook instead of init.lua,
+- **`crap.hooks.register`/`remove` silently half-applied at runtime.** Called from a running hook instead of init.lua,
   the registration landed in a single VM of the pool — the hook fired
   on some requests and not others, with no error. Both now reject
   runtime calls with the same init-phase error every other registration
   API raises, and a new completeness pin verifies every registering
   Lua API carries the guard.
 - **CLI `user create`/`user delete` skipped write invariants the service
-  path maintains.** (Ledger class P5.) `user create` never ran
+  path maintains.** `user create` never ran
   `ref_count::after_create` or the FTS upsert — a user created with a
   relationship field left the target's `_ref_count` too low, punching a
   hole in delete protection, and the user was missing from admin search
@@ -3884,6 +3919,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Field-tree composite dispatch unified through one classifier.** The
+  `FieldType` → sub-tree mapping (Group nests, Row/Collapsible/Tabs are
+  transparent, Array/Blocks are repeatable rows) is now sourced solely
+  from `core::walk::field_children`, which is exhaustive over `FieldType`.
+  Roughly nineteen walkers that hand-rolled this classification — across
+  join hydration, reads, populate, filters, ref-counting, validation,
+  admin condition refs, typegen, MCP schema, versioning, and CLI import —
+  were routed through it, removing the `_ => {}` wildcards that would
+  silently mis-handle a new composite field type. A source-scan test
+  (`field_tree_dispatch`) pins every remaining `match …field_type` as
+  either the classifier, a leaf dispatch under it, or a reviewed
+  per-field value mapping, so a new hand-rolled dispatch fails CI.
+
 - **MCP joined the behavioral-parity harness.**
   `surface_behavior_parity` Phase 2 drives MCP in-process through the
   same JSON-RPC dispatch the stdio/HTTP transports use, and pins
@@ -3891,7 +3939,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   unique-constraint enforcement identical across gRPC, Lua, and MCP —
   the layer that catches adapter drift the source-scan guards can't
   see.
-- **Structural guards for seven more ledger classes.** New
+- **Structural guards for seven more recurring bug patterns.** New
   `tests/sink_escaping.rs` (the reviewed sink→escaper inventory with
   liveness pins), a numeric-config completeness pin (every numeric knob
   validated or carrying a reviewed exemption), a positive
@@ -3902,27 +3950,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the startup ref validator (a new hook slot/access key/auth variant
   now fails to compile until validated), and the init-phase
   completeness pin over registering Lua APIs.
-- **Structural guards for three ledger classes.** New
+- **Structural guards for three more recurring bug patterns.** New
   `tests/wiring_completeness.rs`: every Lua-typegen render function must
-  be wired (the class that silently dropped the `crap.jobs` run API from
+  be wired (the bug that silently dropped the `crap.jobs` run API from
   the generated types), every defined web component must be placed
-  somewhere (the class that shipped a non-functional inline-create
+  somewhere (the bug that shipped a non-functional inline-create
   panel), and the CI workflow must still carry every enforcement gate
-  (the class that silently skipped 139 browser tests for a release
+  (the bug that silently skipped 139 browser tests for a release
   cycle). `surface_parity.rs` gained a CLI write-primitive scan with a
-  reviewed allowlist (class P5), positive synthetic-violation controls
+  reviewed allowlist, positive synthetic-violation controls
   for its structural matchers, and a vocabulary-liveness check on the
   invalidation-transport scan — the exact decay mode that once made
-  that guard vacuous (class D4).
-- **Bug-Class Ledger founded (`docs/dev/bug-classes.md`).** Every
-  recurring bug class from the audit programs (66 classes mined from
-  ~2,300 CHANGELOG entries plus the sweep records) is now registered
-  with its structural guard — the test, generation gate, chokepoint, or
-  partition pin that makes recurrence loud — or an explicit
-  PARTIAL/UNGUARDED status. New findings are triaged against the ledger
-  (a guarded-class instance means the guard failed and gets fixed
-  first); the unguarded count and the rate of genuinely new classes are
-  the convergence metrics for the pre-tag audit rounds.
+  that guard vacuous.
 - **Development documents moved out of the user-facing book.** The mdbook's
   *Internals* section carried five internal engineering artefacts — the
   Operation Core migration plan, the performance-architecture and

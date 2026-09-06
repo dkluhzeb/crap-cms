@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     use crate::hooks::lifecycle::InitPhase;
 
-    /// Ledger class **M15**: a runtime `crap.hooks.register`/`remove`
+    /// a runtime `crap.hooks.register`/`remove`
     /// (no `InitPhase` marker) must be rejected — it would land in one
     /// pooled VM and fire intermittently across requests.
     #[test]

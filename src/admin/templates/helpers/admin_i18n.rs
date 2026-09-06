@@ -156,7 +156,7 @@ impl HelperDef for AdminI18nHelper {
 mod tests {
     /// Mirrors `json_escapes_single_quotes_for_html_attributes` on
     /// `JsonHelper` — the two raw-JSON-into-markup producers must share
-    /// one escaping policy (ledger classes P2/F14): a translation value
+    /// one escaping policy: a translation value
     /// containing `'` or `</script>` stays inert in both a script
     /// element and a single-quoted attribute.
     #[test]

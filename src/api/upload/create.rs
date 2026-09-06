@@ -79,8 +79,8 @@ pub(super) async fn create_upload(
 ) -> Response {
     // Auth (a read-pool checkout + queries) and the Lua access hook (a
     // VM-pool acquire of up to 5s) are synchronous and must not park an
-    // async worker (ledger class L12) — run the whole gate prologue on
-    // the blocking pool. The multipart body parse below stays async.
+    // async worker — run the whole gate prologue on the blocking pool.
+    // The multipart body parse below stays async.
     let (auth_user, def) = match on_blocking_section(|| {
         let auth_user = extract_bearer_user(&state, &headers)?;
 

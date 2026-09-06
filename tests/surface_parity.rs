@@ -257,7 +257,7 @@ fn misses_invalidation_transport(contents: &str) -> bool {
     builds_ctx && does_write && !attaches_transport
 }
 
-/// Positive control (ledger class **D4**): the invalidation matcher must
+/// Positive control: the invalidation matcher must
 /// fire on a synthetic violating handler. This exact guard was once
 /// vacuous — after the op-core migration it matched only retired service
 /// fn names and flagged nothing.
@@ -282,7 +282,7 @@ fn invalidation_scan_fires_on_synthetic_violation() {
     );
 }
 
-/// Liveness check for the matcher's vocabulary (ledger class **D4**):
+/// Liveness check for the matcher's vocabulary:
 /// every `INVALIDATION_WRITE_OPS` name must still occur in the codebase
 /// (service layer, op bodies, or the surfaces themselves). This is the
 /// exact decay mode that made the guard vacuous once — the op-core
@@ -411,7 +411,7 @@ const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
 
 /// CLI write primitives are confined to reviewed offline-admin paths.
 ///
-/// Ledger class **P5**: a CLI (or any non-surface) path that mutates
+/// a CLI (or any non-surface) path that mutates
 /// documents with raw `query::*` writes silently bypasses the service
 /// layer's invariants — validation, hooks, ref counting, FTS sync,
 /// delete protection. The reviewed paths below hand-replicate exactly
@@ -462,7 +462,7 @@ fn cli_commands_write_only_through_reviewed_paths() {
     );
 }
 
-/// Positive control for the scan above (ledger class **D4**): the
+/// Positive control for the scan above: the
 /// matcher must actually fire on a synthetic violation, so the guard
 /// can never go silently vacuous the way the invalidation-transport
 /// matcher once did.
@@ -506,8 +506,7 @@ fn is_write_primitive(call: &str) -> bool {
 /// Document + credential write primitives the CLI scan looks for.
 /// Auth-credential writes (`update_password`, `reset_totp`) joined
 /// after the TOTP CLI shipped a raw credential write the original
-/// document-only list couldn't see (ledger class D4 — a guard whose
-/// vocabulary didn't grow with the feature).
+/// document-only list couldn't see.
 const WRITE_PRIMITIVES: &[&str] = &[
     "query::create(",
     "query::update(",
@@ -521,7 +520,7 @@ const WRITE_PRIMITIVES: &[&str] = &[
     "query::reset_totp(",
 ];
 
-/// Vocabulary-liveness pin (ledger class **D4**): every write-primitive
+/// Vocabulary-liveness pin: every write-primitive
 /// name must still exist in the query layer — a renamed primitive would
 /// otherwise leave this scan matching nothing for that operation, the
 /// exact decay that made the invalidation matcher vacuous once.

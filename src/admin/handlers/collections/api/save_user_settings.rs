@@ -55,9 +55,7 @@ fn save_column_preferences(
 ) -> Result<(), Error> {
     // IMMEDIATE tx so the read-modify-write of the whole-blob settings
     // JSON can't lose a concurrent update from a sibling handler
-    // (ledger class L5: two tabs / auto-save + locale switch each read
-    // the blob, merge their own key, and the second write clobbered the
-    // first). The IMMEDIATE lock serializes the read against other
+    //. The IMMEDIATE lock serializes the read against other
     // writers.
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn

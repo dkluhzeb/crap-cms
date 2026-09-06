@@ -16,6 +16,7 @@ use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
+use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::{
     api::{
         content,
@@ -177,8 +178,8 @@ async fn handle_event(
 
     // Per-event field-strip + `after_read` Lua (a VM acquire up to 5s)
     // runs for the whole batch in ONE blocking hop, off the async pump
-    // worker (ledger class L12); forwarding stays async.
-    let outs = crate::admin::handlers::shared::response::on_blocking_section(|| {
+    // worker; forwarding stays async.
+    let outs = on_blocking_section(|| {
         outcome
             .events
             .iter()

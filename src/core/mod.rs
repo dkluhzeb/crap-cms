@@ -98,10 +98,13 @@ pub use req_context::ReqContext;
 pub use richtext::RichtextNodeDef;
 pub use slug::Slug;
 pub use validate::{FieldError, ValidationError};
+pub(crate) use walk::{
+    FieldChildren, SchemaStep, field_children, find_field, prefixed_name, walk_all_fields,
+    walk_leaf_fields,
+};
 pub use walk::{
     NestStep, VisitAction, any_field, flatten_array_sub_fields, walk_nested, walk_nested_mut,
 };
-pub(crate) use walk::{SchemaStep, find_field, prefixed_name, walk_all_fields, walk_leaf_fields};
 
 // Namespace-module exception: `Shared*` handle types (Arc-wrapped
 // trait objects) and self-documenting runtime values are flat. Their

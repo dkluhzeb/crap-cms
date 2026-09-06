@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::core::{
-    Document, DocumentFields, FieldDefinition, FieldType, flatten_group_fields, prefixed_name,
-    walk_leaf_fields,
+    Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, field_children,
+    flatten_group_fields, prefixed_name, walk_leaf_fields,
 };
 use crate::db::{
     DbConnection,
@@ -112,16 +112,24 @@ pub(super) fn collect_join_data_from_snapshot(
     join_data: &mut DocumentFields,
 ) {
     for field in fields {
-        match field.field_type {
-            FieldType::Row | FieldType::Collapsible => {
-                collect_join_data_from_snapshot(&field.fields, obj, join_data);
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => {
+                collect_join_data_from_snapshot(sub, obj, join_data);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     collect_join_data_from_snapshot(&tab.fields, obj, join_data);
                 }
             }
-            _ => {
+            // Group is deliberately NOT descended: its join-bearing sub-fields
+            // are captured under their prefixed keys elsewhere, and at this
+            // level the group value is captured by name like any non-parent-
+            // column field — the same path Array/Blocks/Relationship and
+            // scalars take.
+            FieldChildren::Group(_)
+            | FieldChildren::Array(_)
+            | FieldChildren::Blocks(_)
+            | FieldChildren::Leaf => {
                 if !field.has_parent_column()
                     && let Some(v) = obj.get(&field.name)
                 {

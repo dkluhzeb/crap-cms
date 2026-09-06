@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::{
-        BlockDefinition, FieldDefinition, FieldType, NestStep, Registry, RelationshipConfig,
-        field::to_title_case,
+        BlockDefinition, FieldChildren, FieldDefinition, NestStep, Registry, RelationshipConfig,
+        field::to_title_case, field_children,
     },
     db::{
         DbConnection, DbValue,
@@ -75,39 +75,37 @@ fn collect_missing_fields(
     results: &mut Vec<MissingRelation>,
 ) {
     for field in fields {
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(sub) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
                 // Group snapshot can be flat (seo__title) or nested (seo: { title })
                 if let Some(nested) = obj.get(&field.name).and_then(|v| v.as_object()) {
-                    collect_missing_fields(
-                        conn,
-                        registry,
-                        nested,
-                        &field.fields,
-                        &new_prefix,
-                        results,
-                    );
+                    collect_missing_fields(conn, registry, nested, sub, &new_prefix, results);
                 } else {
-                    collect_missing_fields(
-                        conn,
-                        registry,
-                        obj,
-                        &field.fields,
-                        &new_prefix,
-                        results,
-                    );
+                    collect_missing_fields(conn, registry, obj, sub, &new_prefix, results);
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_missing_fields(conn, registry, obj, &field.fields, prefix, results);
+            FieldChildren::Wrapper(sub) => {
+                collect_missing_fields(conn, registry, obj, sub, prefix, results);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     collect_missing_fields(conn, registry, obj, &tab.fields, prefix, results);
                 }
             }
-            FieldType::Relationship | FieldType::Upload => {
+            FieldChildren::Array(sub) => {
+                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
+                    collect_missing_in_array(conn, registry, arr, sub, &field.name, results);
+                }
+            }
+            FieldChildren::Blocks(blocks) => {
+                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
+                    collect_missing_in_blocks(conn, registry, arr, blocks, &field.name, results);
+                }
+            }
+            // Relationship/Upload leaves carry a stored ref to resolve; every
+            // other leaf has none (so it falls through the `else continue`).
+            FieldChildren::Leaf => {
                 let Some(rc) = &field.relationship else {
                     continue;
                 };
@@ -119,31 +117,6 @@ fn collect_missing_fields(
 
                 push_if_missing(conn, registry, &ids, rc, field.name.clone(), label, results);
             }
-            FieldType::Array => {
-                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_array(
-                        conn,
-                        registry,
-                        arr,
-                        &field.fields,
-                        &field.name,
-                        results,
-                    );
-                }
-            }
-            FieldType::Blocks => {
-                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_blocks(
-                        conn,
-                        registry,
-                        arr,
-                        &field.blocks,
-                        &field.name,
-                        results,
-                    );
-                }
-            }
-            _ => {}
         }
     }
 }

@@ -1042,7 +1042,7 @@ Either `date_only_value` (when `picker_appearance == "dayOnly"`) or
 - **`condition_visible`** (Option&lt;boolean&gt;) _(optional)_ — Initial visibility resolved by the Lua condition function.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
-- **`picker_appearance`** (string) _(optional)_ — One of `"dayOnly"`, `"dayAndTime"`. Defaults to `"dayOnly"`.
+- **`picker_appearance`** (string) _(optional)_ — One of `"dayOnly"`, `"dayAndTime"`, `"timeOnly"`, `"monthOnly"`. Defaults to `"dayOnly"`. (`timeOnly`/`monthOnly` set neither `date_only_value` nor `datetime_local_value`; the template falls back to the raw `value`.)
 - **`date_only_value`** (Option&lt;string&gt;) _(optional)_ — Set when `picker_appearance == "dayOnly"` — the `YYYY-MM-DD` slice.
 - **`datetime_local_value`** (Option&lt;string&gt;) _(optional)_ — Set when `picker_appearance == "dayAndTime"` — the `YYYY-MM-DDTHH:MM` slice for the `<input type="datetime-local">`.
 - **`min_date`** (Option&lt;string&gt;) _(optional)_

@@ -36,7 +36,7 @@ use crate::{
     },
     core::Document,
     core::collection::Surface,
-    hooks::lifecycle::RouteHandlerInput,
+    hooks::lifecycle::{LuaCrudInfra, RouteHandlerInput},
     service::auth::{AuthRequest, EvaluateDeps, Resolution, evaluate},
 };
 
@@ -272,11 +272,17 @@ fn run_dispatch_blocking(job: DispatchJob) -> Result<DispatchOutcome> {
         return Ok(DispatchOutcome::Forbidden);
     }
 
-    let resp =
-        state
-            .infra
-            .hook_runner
-            .run_route_handler(&def.handler, &input, &state.infra.pool)?;
+    // Route CRUD writes must invalidate the populate cache and publish
+    // live events like every other pool-mode surface
+    // — thread the event transport + cache from AppInfra, mirroring the
+    // scheduler's `job_crud_infra`.
+    let route_infra = LuaCrudInfra::for_pool_crud(&state.infra);
+    let resp = state.infra.hook_runner.run_route_handler(
+        &def.handler,
+        &input,
+        &state.infra.pool,
+        Some(route_infra),
+    )?;
     Ok(DispatchOutcome::Response(resp))
 }
 

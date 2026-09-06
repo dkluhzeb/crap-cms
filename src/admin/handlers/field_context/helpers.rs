@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use crate::{
-    admin::context::field::FieldContext,
+    admin::context::field::{FieldContext, NonRepeatingChildren},
     core::{FieldDefinition, FieldType, HookRef},
     db::query::helpers::{lang_column, tz_column},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
@@ -48,32 +48,15 @@ pub fn count_errors_in_field_contexts(fields: &[FieldContext]) -> usize {
     fields
         .iter()
         .map(|fc| {
-            let mut count = usize::from(fc.base().error.is_some());
-
-            count += match fc {
-                FieldContext::Group(gf) | FieldContext::Collapsible(gf) => {
-                    count_errors_in_field_contexts(&gf.sub_fields)
-                }
-                FieldContext::Row(rf) => count_errors_in_field_contexts(&rf.sub_fields),
-                FieldContext::Tabs(tf) => tf
-                    .tabs
+            // Own error + all descendant errors, walking children through the
+            // SHARED FieldContext classifier (`child_field_slices`) rather
+            // than a hand-rolled `match` — one compile-forced dispatch, so a
+            // new composite can't be silently skipped here.
+            usize::from(fc.base().error.is_some())
+                + fc.child_field_slices()
                     .iter()
-                    .map(|tp| count_errors_in_field_contexts(&tp.sub_fields))
-                    .sum(),
-                FieldContext::Array(af) => af.rows.as_ref().map_or(0, |rs| {
-                    rs.iter()
-                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                        .sum()
-                }),
-                FieldContext::Blocks(bf) => bf.rows.as_ref().map_or(0, |rs| {
-                    rs.iter()
-                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                        .sum()
-                }),
-                _ => 0,
-            };
-
-            count
+                    .map(|slice| count_errors_in_field_contexts(slice))
+                    .sum::<usize>()
         })
         .sum()
 }
@@ -220,6 +203,40 @@ pub fn apply_display_conditions(
     for ((fc, field_def), result) in fields.iter_mut().zip(defs.iter()).zip(by_def) {
         if let Some(result) = result {
             apply_single_condition(fc, field_def, &result);
+        }
+
+        // Recurse into non-repeating containers via the SHARED FieldContext
+        // classifier (`non_repeating_children_mut`), so conditions on fields
+        // nested in a group/collapsible/row/tabs evaluate against the same
+        // form data. The classifier is the single, compile-forced source
+        // for "which children share this scope" —
+        // array/blocks ROWS (per-row scope) classify as `None` and are a
+        // separate feature. Pairing the child FieldContexts with their
+        // FieldDefinitions is the one place the def side is selected.
+        match fc.non_repeating_children_mut() {
+            NonRepeatingChildren::Flat(sub_fields) => {
+                apply_display_conditions(
+                    sub_fields,
+                    &field_def.fields,
+                    form_data,
+                    hook_runner,
+                    filter_hidden,
+                    cond_ctx,
+                );
+            }
+            NonRepeatingChildren::Tabs(panes) => {
+                for (pane, tab_def) in panes.iter_mut().zip(field_def.tabs.iter()) {
+                    apply_display_conditions(
+                        &mut pane.sub_fields,
+                        &tab_def.fields,
+                        form_data,
+                        hook_runner,
+                        filter_hidden,
+                        cond_ctx,
+                    );
+                }
+            }
+            NonRepeatingChildren::None => {}
         }
     }
 }

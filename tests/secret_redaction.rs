@@ -1,4 +1,4 @@
-//! Secret-redaction partition guard (ledger class **F17**).
+//! Secret-redaction partition guard.
 //!
 //! Every secret-bearing value in `CrapConfig` must be unreadable
 //! through the two secondary channels an operator or Lua hook can
@@ -118,7 +118,7 @@ fn serialized_output_redacts_every_secret() {
     );
 }
 
-/// Positive control (ledger class **D4**): the sentinel really is in
+/// Positive control: the sentinel really is in
 /// the loaded config (redaction is doing work, not the loader dropping
 /// the value) — prove it by round-tripping one secret through its
 /// accessor.

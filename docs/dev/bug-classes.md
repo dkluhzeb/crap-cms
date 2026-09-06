@@ -127,7 +127,7 @@ most).
 
 | ID | Class | Guard | Status |
 |----|-------|-------|--------|
-| M1 | Tree walker doesn't descend a nested composite / layout wrapper | `core::walk::field_children` classifier, **exhaustive match in every walker** — new composite = compile error | GUARDED |
+| M1 | Tree walker doesn't descend a nested composite / layout wrapper | `core::walk::field_children` classifier (exhaustive over `FieldType`) is the sole composite-dispatch source — every field-tree walker routes through it, so a new composite is a compile error; **source-scan pin `tests/field_tree_dispatch.rs`** inventories every production `match …field_type` and fails on a new hand-rolled dispatch outside the reviewed allowlist | GUARDED |
 | M2 | Nested instance gets degraded handling vs top level (validation, normalization, hydration) | shared helpers per case (`check_date_field`, `canonical_json_array`); no meta-guard | PARTIAL |
 | M3 | Status/lifecycle view filter missing on one read path (draft/trash/published, soft-deleted populate targets leaking raw IDs) | `resolve_draft` family, `published_only` + `JoinAccessCheck` in populate, frozen access-model contract | PARTIAL |
 | M4 | Locale/variant companion column missed (`_tz`, `_lang`, `__locale`) — also blinds checkers into false orphan warnings | suffix consts, locale scope resolved like migration DDL, `ServiceContext` `locale_config` attachment; per-site fixes | PARTIAL |
@@ -381,3 +381,60 @@ memories; the load-bearing ones:
   funneling, no process sinks, TOTP/signed-URL/MCP-session/queued-bulk
   verdicts CLEAN, no live secret-log sites. **Convergence: 1 of 2
   consecutive all-guarded rounds achieved.**
+- 2026-09-05 (9) — **CONVERGENCE ROUND 2** (fresh lens set). 18
+  findings — again all instances of existing classes, 0 new. This
+  prompted a **criterion correction**: "two consecutive rounds whose
+  findings all map to an existing class" is NOT a valid convergence
+  bar. With 84 rows almost any real finding matches *some* class, so
+  that test can be satisfied while the code is still materially buggy.
+  **Real convergence = a round that comes back genuinely quiet** (few
+  or no substantive findings, none HIGH). Rounds 1–2 were NOT
+  convergence — they were high-yield audit rounds. The "1 of 2
+  achieved" line above is retracted.
+- 2026-09-05 (10) — **CONVERGENCE ROUND 3** (6 substantive findings,
+  down from 21 / 18). The access-control lens came back CLEAN (every
+  read/draft/trash/versions gate held). Findings: 1 pool/route infra
+  (P2/F10 — non-RAII / duplicated pool-CRUD infra construction), 1
+  ref-count HIGH (M4 — localized has-one: the compute walker read
+  `col__en`/`col__de` but single-locale write data is bare-keyed, so
+  zero refs were counted → delete-protection bypass; the existing test
+  only drove the read path, a guard gap), and 4 render findings (2
+  HIGH: nested display-conditions inert; list column sortable-drift
+  400). All fixed with regression tests. Still 3 HIGH this round →
+  **NOT converged; round 4 required.**
+- 2026-09-06 (11) — **classifier convergences** (structural, not
+  audit rounds): three walker families that each carried a `_ => {}` /
+  `_ => Leaf` wildcard were routed through the shared
+  `core::walk::field_children` classifier (or its `FieldContext`
+  analogue), which was made **exhaustive over `FieldType`** and
+  `pub(crate)` — a new `FieldType`/`FieldContext` variant is now a
+  compile error at the one classifier instead of silently
+  leaf-classified everywhere. Converged: (a) ref-count compute + read
+  walkers (`db/query/ref_count`), which fixed the round-3 M4 localized
+  has-one miss in the compute path; (b) the `FieldContext`
+  display-condition + error-count walkers via new
+  `child_field_slices()` / `non_repeating_children_mut()`; (c) the
+  field-access denial-collect + data-aware strip walkers
+  (`hooks/lifecycle/access/field/walk.rs`). M1 stays GUARDED, now with
+  three more walker families provably behind the single classifier.
+- 2026-09-06 (12) — **M1 guard upgrade + full walker convergence.**
+  Audited every `match …field_type` composite dispatch in the tree (5
+  read-only lens agents + hand verification). Routed ~19 hand-rolled
+  composite-descent walkers through the shared `field_children`
+  classifier (killing their `_ => {}` wildcards; behaviour-preserving),
+  spanning join/hydrate (read×4, save, group), read (missing_relations,
+  sort, back_references scan), populate (×2), filter (where_clause,
+  resolve/blocks, resolve/lookup, validation prefix-roots),
+  ref_count/api, validation sub_fields, admin condition-refs, typegen
+  sub-types, mcp object-schema, versions (save_draft, restore),
+  snapshot, and CLI import. Building the inventory surfaced THREE
+  descent sites no lens agent had been pointed at (versions
+  save_draft/restore, CLI import) — direct evidence the periodic-audit
+  approach leaks. Added the source-scan pin `tests/field_tree_dispatch.rs`
+  (every production `match …field_type` is the sanctioned classifier, a
+  leaf re-dispatch under it, or a reviewed value-mapper) so a new
+  hand-rolled dispatch fails CI. Also fixed a real bug found en route:
+  `apply_default_timezone` never descended `blocks`, so a `timezone`
+  Date inside a Blocks field never inherited the config default
+  (regression test added). M1 PARTIAL→GUARDED. Not a convergence audit
+  round — round 4 still pending.

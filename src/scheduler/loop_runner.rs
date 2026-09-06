@@ -190,14 +190,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 /// cache like every other surface. The event queue is injected per
 /// invocation by `run_job_handler` (which flushes it post-handler).
 fn job_crud_infra(infra: &AppInfra) -> LuaCrudInfra {
-    LuaCrudInfra {
-        event_transport: infra.event_transport.clone(),
-        cache: Some(infra.cache.clone()),
-        event_queue: None,
-        verification_queue: None,
-        deferred: None,
-        file_cleanup: None,
-    }
+    LuaCrudInfra::for_pool_crud(infra)
 }
 
 /// Recover stale jobs on startup. (Image queue recovery is now handled
@@ -585,7 +578,7 @@ fn claim_pending_jobs(
     queue_concurrency: &HashMap<String, u32>,
     decay_secs: u64,
 ) -> Result<Vec<JobRun>> {
-    // One transaction path for BOTH backends (ledger classes L5/P9): the
+    // One transaction path for BOTH backends: the
     // `FOR UPDATE SKIP LOCKED` row locks (Postgres) and the IMMEDIATE
     // write lock (SQLite) must be held across the whole select-count-claim
     // sequence, or the per-slug/per-queue concurrency caps are only

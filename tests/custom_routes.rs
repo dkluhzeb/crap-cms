@@ -106,6 +106,7 @@ fn handler_echoes_context_into_response() {
             &HookRef::new("routes.echo"),
             &input("POST", Some(json!({ "title": "hello" }))),
             &db_pool,
+            None,
         )
         .expect("handler ran");
 
@@ -143,6 +144,7 @@ fn handler_can_do_pool_mode_crud() {
             &HookRef::new("routes.make"),
             &input("POST", Some(json!({ "title": "made-in-route" }))),
             &db_pool,
+            None,
         )
         .expect("handler ran");
 
@@ -199,7 +201,12 @@ fn nil_return_is_404() {
     ]);
 
     let resp: RouteResponse = runner
-        .run_route_handler(&HookRef::new("routes.n"), &input("GET", None), &db_pool)
+        .run_route_handler(
+            &HookRef::new("routes.n"),
+            &input("GET", None),
+            &db_pool,
+            None,
+        )
         .expect("handler ran");
     assert_eq!(resp.status, 404);
 }

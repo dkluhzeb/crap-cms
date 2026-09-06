@@ -199,6 +199,13 @@ fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
         for tab in &mut field.tabs {
             apply_default_timezone(&mut tab.fields, default_tz);
         }
+
+        // Blocks sub-fields live under `blocks[].fields`, not `fields` — a Date
+        // with `timezone` nested inside a Blocks field must inherit the config
+        // default like one nested in a group/array/tab.
+        for block in &mut field.blocks {
+            apply_default_timezone(&mut block.fields, default_tz);
+        }
     }
 }
 
@@ -207,7 +214,7 @@ fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
 /// Lua prefixes `error()` text with `chunkname:line:`, and hook errors
 /// travel verbatim to API clients (gRPC `INVALID_ARGUMENT`, admin toasts,
 /// MCP tool results) — an absolute name would disclose the server's
-/// filesystem layout on every hook error (ledger class F17).
+/// filesystem layout on every hook error.
 pub(crate) fn chunk_name(path: &Path) -> String {
     let mut parts: Vec<&str> = path
         .iter()
@@ -345,7 +352,7 @@ mod tests {
         lua
     }
 
-    /// Ledger class **F16**: the sandbox is a denylist, and denylists
+    /// the sandbox is a denylist, and denylists
     /// rot ("removed `loadfile`/`dofile` but not `load`"; "removed
     /// `os.execute` but not `io.popen`" — both really happened). This
     /// pins the COMPLETE reviewed capability surface: a new global
@@ -435,7 +442,7 @@ mod tests {
         assert!(err.is_err(), "calling io.popen must fail");
     }
 
-    /// F17: chunk names are config-dir-relative, so the `chunkname:line:`
+    /// Chunk names are config-dir-relative, so the `chunkname:line:`
     /// prefix Lua puts on `error()` text (which travels verbatim to API
     /// clients) names `hooks/x.lua`, never `/srv/app/hooks/x.lua`.
     #[test]
@@ -554,6 +561,33 @@ mod tests {
         assert!(
             result.is_err(),
             "load() must not be usable to bypass sandbox"
+        );
+    }
+
+    #[test]
+    fn default_timezone_applies_to_date_inside_blocks() {
+        use crate::core::BlockDefinition;
+
+        let mut fields = vec![
+            FieldDefinition::builder("body", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "event",
+                    vec![
+                        FieldDefinition::builder("starts_at", FieldType::Date)
+                            .timezone(true)
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+
+        apply_default_timezone(&mut fields, "America/New_York");
+
+        let date = &fields[0].blocks[0].fields[0];
+        assert_eq!(
+            date.default_timezone.as_deref(),
+            Some("America/New_York"),
+            "a timezone Date nested in a Blocks field must inherit the config default"
         );
     }
 }

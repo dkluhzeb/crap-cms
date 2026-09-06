@@ -1,4 +1,4 @@
-//! Executable-documentation guards (ledger class **D2**).
+//! Executable-documentation guards.
 //!
 //! Docs that assert mechanisms nothing executes rot silently — this
 //! cycle alone found a scenario instructing users to edit a Rust source
@@ -223,7 +223,7 @@ fn every_documented_cli_invocation_names_a_real_subcommand() {
     );
 }
 
-/// Positive control (ledger class **D4**): the chain extractor and tree
+/// Positive control: the chain extractor and tree
 /// lookup must flag a synthetic bogus command.
 #[test]
 fn doc_command_scan_fires_on_synthetic_violation() {
@@ -287,7 +287,7 @@ fn documented_template_workflow_executes_as_written() {
     );
 }
 
-/// Multi-node inventory pin (ledger class **P11**): the deployment doc
+/// Multi-node inventory pin: the deployment doc
 /// must keep covering every subsystem that holds node-local state or a
 /// cluster-wide safety mechanism. The class instance was "per-node rate
 /// limits silently multiply an attacker's budget by node count" — the

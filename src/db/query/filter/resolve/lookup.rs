@@ -1,6 +1,6 @@
 //! Field-tree lookups shared by normalize and `resolve_filter` paths.
 
-use crate::core::{FieldDefinition, FieldType, find_field};
+use crate::core::{FieldChildren, FieldDefinition, FieldType, field_children, find_field};
 
 /// Look up the [`FieldType`] for a DB column name on the parent table.
 ///
@@ -66,9 +66,11 @@ fn walk_group_path(parts: &[&str], fields: &[FieldDefinition]) -> Option<FieldTy
             break;
         }
 
-        match found.field_type {
-            FieldType::Group => {
-                current = &found.fields;
+        // Only a Group extends a `__`-joined flat-column path; any other
+        // container/leaf terminates the walk.
+        match field_children(found) {
+            FieldChildren::Group(sub) => {
+                current = sub;
             }
             _ => return None,
         }

@@ -22,7 +22,8 @@ use crate::{
                 SubFieldOpts, children::build_enriched_children_from_data,
                 nested::build_enriched_sub_field_context,
             },
-            inject_lang_values_from_row, inject_timezone_values_from_row, safe_template_id,
+            inject_lang_values_from_row, inject_timezone_values_from_row, locale_locked_display,
+            safe_template_id,
         },
     },
     core::{
@@ -471,9 +472,21 @@ fn build_group_child(
     group_obj: Option<&Value>,
     opts: &SubFieldOpts,
 ) -> FieldContext {
+    // Fold the locale scope exactly like the build phase
+    // (`builder::single`): a localized composite is a locale boundary, so
+    // its children are edited in the field's own locale — reset
+    // `non_default_locale` to false. The enrich phase
+    // previously inherited the parent scope unchanged, so a localized
+    // group nested in an array/blocks row rendered read-only in a
+    // non-default locale.
+    let child_non_default_locale = if nested_sf.localized {
+        false
+    } else {
+        opts.non_default_locale
+    };
     let nested_opts = SubFieldOpts::builder(opts.errors)
-        .locale_locked(opts.locale_locked)
-        .non_default_locale(opts.non_default_locale)
+        .locale_locked(locale_locked_display(opts.non_default_locale, nested_sf))
+        .non_default_locale(child_non_default_locale)
         .depth(opts.depth + 1)
         .build();
 
@@ -587,9 +600,10 @@ fn build_group_child_base(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: nested_sf.admin.readonly || opts.locale_locked,
+        readonly: nested_sf.admin.readonly
+            || locale_locked_display(opts.non_default_locale, nested_sf),
         localized: nested_sf.localized,
-        locale_locked: opts.locale_locked,
+        locale_locked: locale_locked_display(opts.non_default_locale, nested_sf),
         position: nested_sf.admin.position.clone(),
         template: nested_sf.admin.template.clone(),
         extra: nested_sf.admin.extra.clone(),

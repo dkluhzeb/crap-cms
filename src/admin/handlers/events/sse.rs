@@ -27,6 +27,7 @@ use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 use tracing::warn;
 
+use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::{
     admin::{
         AdminState,
@@ -148,10 +149,10 @@ async fn handle_broadcast_recv(
     let outcome = drain_and_coalesce(event, event_rx, MAX_DRAIN);
 
     // Build the SSE payloads for the whole drained batch in ONE blocking
-    // hop (ledger class L12): `event_to_sse` runs the per-event field-read
+    // hop: `event_to_sse` runs the per-event field-read
     // strip and `after_read` hooks, which acquire a Lua VM (up to 5s) —
     // that must not run on the async pump worker. Forwarding stays async.
-    let sse_events = crate::admin::handlers::shared::response::on_blocking_section(|| {
+    let sse_events = on_blocking_section(|| {
         outcome
             .events
             .iter()

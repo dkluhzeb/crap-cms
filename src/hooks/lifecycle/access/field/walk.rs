@@ -6,8 +6,8 @@
 use serde_json::{Map, Value};
 
 use crate::core::{
-    BLOCK_TYPE_KEY, DenialSeg, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef,
-    any_field,
+    BLOCK_TYPE_KEY, DenialSeg, DocumentFields, FieldChildren, FieldDefinition, FieldDenial,
+    HookRef, any_field, field_children,
 };
 use crate::db::query::helpers::prefixed_name;
 
@@ -50,21 +50,19 @@ pub(crate) fn collect_denials_flat<F: Fn(&FieldDefinition) -> bool>(
             continue; // Parent denied → its sub-fields go with it.
         }
 
-        match field.field_type {
-            FieldType::Group => collect_denials_flat(&field.fields, is_denied, &full_name, out),
-            FieldType::Row | FieldType::Collapsible => {
-                collect_denials_flat(&field.fields, is_denied, prefix, out);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+        match field_children(field) {
+            FieldChildren::Group(sub) => collect_denials_flat(sub, is_denied, &full_name, out),
+            FieldChildren::Wrapper(sub) => collect_denials_flat(sub, is_denied, prefix, out),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     collect_denials_flat(&tab.fields, is_denied, prefix, out);
                 }
             }
-            FieldType::Array => {
-                collect_denials_nested(&field.fields, is_denied, &full_name, None, &[], out);
+            FieldChildren::Array(sub) => {
+                collect_denials_nested(sub, is_denied, &full_name, None, &[], out);
             }
-            FieldType::Blocks => {
-                for block in &field.blocks {
+            FieldChildren::Blocks(blocks) => {
+                for block in blocks {
                     collect_denials_nested(
                         &block.fields,
                         is_denied,
@@ -75,7 +73,7 @@ pub(crate) fn collect_denials_flat<F: Fn(&FieldDefinition) -> bool>(
                     );
                 }
             }
-            _ => {}
+            FieldChildren::Leaf => {}
         }
     }
 }
@@ -103,31 +101,17 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
             continue;
         }
 
-        match field.field_type {
-            FieldType::Group => {
+        match field_children(field) {
+            FieldChildren::Group(sub) => {
                 let mut path = row_path.to_vec();
                 path.push(DenialSeg::Group(field.name.clone()));
-                collect_denials_nested(
-                    &field.fields,
-                    is_denied,
-                    array_key,
-                    array_block_type,
-                    &path,
-                    out,
-                );
+                collect_denials_nested(sub, is_denied, array_key, array_block_type, &path, out);
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_denials_nested(
-                    &field.fields,
-                    is_denied,
-                    array_key,
-                    array_block_type,
-                    row_path,
-                    out,
-                );
+            FieldChildren::Wrapper(sub) => {
+                collect_denials_nested(sub, is_denied, array_key, array_block_type, row_path, out);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     collect_denials_nested(
                         &tab.fields,
                         is_denied,
@@ -138,26 +122,19 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
                     );
                 }
             }
-            FieldType::Array => {
+            FieldChildren::Array(sub) => {
                 let mut path = row_path.to_vec();
                 path.push(DenialSeg::Rows {
                     key: field.name.clone(),
                     block_type: None,
                 });
-                collect_denials_nested(
-                    &field.fields,
-                    is_denied,
-                    array_key,
-                    array_block_type,
-                    &path,
-                    out,
-                );
+                collect_denials_nested(sub, is_denied, array_key, array_block_type, &path, out);
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(blocks) => {
                 // One `Rows` step per block type so the strip only touches rows
                 // of that type — a denial in one block must not strip a
                 // same-named field from a sibling block type.
-                for block in &field.blocks {
+                for block in blocks {
                     let mut path = row_path.to_vec();
                     path.push(DenialSeg::Rows {
                         key: field.name.clone(),
@@ -173,7 +150,7 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
                     );
                 }
             }
-            _ => {}
+            FieldChildren::Leaf => {}
         }
     }
 }
@@ -263,30 +240,30 @@ fn strip_level_with_snapshot<E, F>(
             continue; // Parent denied → its sub-fields go with it.
         }
 
-        match field.field_type {
-            FieldType::Group => {
-                if let Some(Value::Object(sub)) = level.get_mut(&field.name) {
-                    strip_access_data_aware(&field.fields, sub, extract, is_denied);
+        match field_children(field) {
+            FieldChildren::Group(sub) => {
+                if let Some(Value::Object(obj)) = level.get_mut(&field.name) {
+                    strip_access_data_aware(sub, obj, extract, is_denied);
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                strip_level_with_snapshot(&field.fields, level, snapshot, extract, is_denied);
+            FieldChildren::Wrapper(sub) => {
+                strip_level_with_snapshot(sub, level, snapshot, extract, is_denied);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     strip_level_with_snapshot(&tab.fields, level, snapshot, extract, is_denied);
                 }
             }
-            FieldType::Array => {
+            FieldChildren::Array(sub) => {
                 if let Some(Value::Array(rows)) = level.get_mut(&field.name) {
                     for row in rows.iter_mut() {
                         if let Value::Object(r) = row {
-                            strip_access_data_aware(&field.fields, r, extract, is_denied);
+                            strip_access_data_aware(sub, r, extract, is_denied);
                         }
                     }
                 }
             }
-            FieldType::Blocks => {
+            FieldChildren::Blocks(blocks) => {
                 if let Some(Value::Array(rows)) = level.get_mut(&field.name) {
                     for row in rows.iter_mut() {
                         let Value::Object(r) = row else { continue };
@@ -295,9 +272,7 @@ fn strip_level_with_snapshot<E, F>(
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string();
-                        if let Some(block) =
-                            field.blocks.iter().find(|b| b.block_type == block_type)
-                        {
+                        if let Some(block) = blocks.iter().find(|b| b.block_type == block_type) {
                             strip_access_data_aware(&block.fields, r, extract, is_denied);
                             continue;
                         }
@@ -314,7 +289,7 @@ fn strip_level_with_snapshot<E, F>(
                     }
                 }
             }
-            _ => {}
+            FieldChildren::Leaf => {}
         }
     }
 }

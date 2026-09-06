@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use anyhow::{Result, bail};
 
 use crate::{
-    core::{CollectionDefinition, FieldDefinition, FieldType},
+    core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children},
     db::{FilterClause, FindQuery, LocaleContext},
 };
 
@@ -228,26 +228,32 @@ pub fn get_valid_filter_paths(
 /// descending into transparent layout wrappers (Row, Collapsible, Tabs).
 fn collect_prefix_roots(fields: &[FieldDefinition], prefixes: &mut HashSet<String>) {
     for field in fields {
-        match field.field_type {
-            FieldType::Array | FieldType::Blocks => {
+        match field_children(field) {
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
                 prefixes.insert(field.name.clone());
             }
-            FieldType::Relationship => {
+            FieldChildren::Wrapper(sub) => {
+                collect_prefix_roots(sub, prefixes);
+            }
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    collect_prefix_roots(&tab.fields, prefixes);
+                }
+            }
+            // A container nested in a Group uses `{group}__{field}` naming that
+            // `resolve_filter` does not accept as a filter root, so registering
+            // a group's inner arrays/blocks here would validate paths the
+            // resolver then rejects. Groups are deliberately not descended.
+            FieldChildren::Group(_) => {}
+            FieldChildren::Leaf => {
+                // A has-many relationship is the one leaf that accepts dot-path
+                // sub-filters (`rel.field`).
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
                     prefixes.insert(field.name.clone());
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_prefix_roots(&field.fields, prefixes);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_prefix_roots(&tab.fields, prefixes);
-                }
-            }
-            _ => {}
         }
     }
 }

@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, FieldChildren, FieldDefinition, field_children},
     db::query::helpers::prefixed_name,
 };
 
@@ -16,27 +16,30 @@ pub(super) fn reconstruct_group_fields(
     group_obj: &mut Map<String, Value>,
 ) {
     for sub in fields {
-        match sub.field_type {
-            FieldType::Group => {
+        match field_children(sub) {
+            FieldChildren::Group(subs) => {
                 // Nested group: collect sub-group's fields into a nested object
                 let new_prefix = prefixed_name(prefix, &sub.name);
                 let mut sub_obj = Map::new();
-                reconstruct_group_fields(&sub.fields, &new_prefix, doc, &mut sub_obj);
+                reconstruct_group_fields(subs, &new_prefix, doc, &mut sub_obj);
 
                 if !sub_obj.is_empty() {
                     group_obj.insert(sub.name.clone(), Value::Object(sub_obj));
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
+            FieldChildren::Wrapper(subs) => {
                 // Layout fields are transparent — promote sub-fields to same level
-                reconstruct_group_fields(&sub.fields, prefix, doc, group_obj);
+                reconstruct_group_fields(subs, prefix, doc, group_obj);
             }
-            FieldType::Tabs => {
-                for tab in &sub.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     reconstruct_group_fields(&tab.fields, prefix, doc, group_obj);
                 }
             }
-            _ => {
+            // Array/Blocks sub-fields hydrate from their own join tables, not a
+            // flat column, so the removal is a no-op for them — same as a leaf
+            // whose column simply isn't present.
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
                 let col_name = prefixed_name(prefix, &sub.name);
 
                 if let Some(val) = doc.fields.remove(&col_name) {

@@ -307,7 +307,7 @@ fn init_template_mentions_every_config_key() {
     );
 }
 
-/// Numeric-knob name patterns for the S11 completeness pin.
+/// Numeric-knob name patterns for the completeness pin.
 const PATTERNS: &[&str] = &[
     "_secs",
     "_seconds",
@@ -477,7 +477,7 @@ const NOT_NUMERIC: &[&str] = &[
     "rate_limit_prefix",
 ];
 
-/// Numeric-knob validation completeness (ledger class **S11**).
+/// Numeric-knob validation completeness.
 ///
 /// The class: a degenerate numeric config value loads fine and
 /// detonates at runtime (`channel_capacity = 0` panicked tokio, zero

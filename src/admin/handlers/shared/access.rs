@@ -10,7 +10,10 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef},
+    core::{
+        AuthUser, Document, DocumentFields, FieldChildren, FieldDefinition, FieldDenial, HookRef,
+        field_children,
+    },
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
@@ -132,16 +135,19 @@ pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashMap<&str, &Hook
             refs.insert(field.name.as_str(), cond);
         }
 
-        match field.field_type {
-            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
-                refs.extend(collect_condition_refs(&field.fields));
+        match field_children(field) {
+            FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) => {
+                refs.extend(collect_condition_refs(sub));
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     refs.extend(collect_condition_refs(&tab.fields));
                 }
             }
-            _ => {}
+            // Array/Blocks rows are their own per-row condition scope (each row
+            // re-evaluated client-side), so top-level ref collection does not
+            // descend into them — matching `apply_display_conditions`.
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {}
         }
     }
 

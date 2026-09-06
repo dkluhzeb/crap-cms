@@ -7,7 +7,10 @@ use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
+    core::{
+        Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, event::EventOperation,
+        field_children,
+    },
     db::{
         AccessResult, query,
         query::helpers::{global_table, prefixed_name, tz_column},
@@ -43,25 +46,27 @@ fn snapshot_to_validation_data(snapshot: &Value) -> DocumentFields {
 /// - system columns (`created_at`, `updated_at`).
 fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSet<String>) {
     for f in fields {
-        match f.field_type {
-            FieldType::Group => {
+        match field_children(f) {
+            FieldChildren::Group(sub) => {
                 let new_prefix = prefixed_name(prefix, &f.name);
                 // Nested form is also valid in snapshots.
                 out.insert(f.name.clone());
-                collect_known_keys(&f.fields, &new_prefix, out);
+                collect_known_keys(sub, &new_prefix, out);
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_known_keys(&f.fields, prefix, out);
+            FieldChildren::Wrapper(sub) => {
+                collect_known_keys(sub, prefix, out);
             }
-            FieldType::Tabs => {
-                for t in &f.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for t in tabs {
                     collect_known_keys(&t.fields, prefix, out);
                 }
             }
-            _ => {
+            // Array/Blocks (join-backed) and scalar leaves all register their
+            // own key: the snapshot extractor accepts both the prefixed and the
+            // bare name, plus `_tz` companions for a timezone Date.
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
                 let key = prefixed_name(prefix, &f.name);
                 out.insert(key.clone());
-                // Bare name also accepted by the snapshot extractor.
                 out.insert(f.name.clone());
 
                 if f.field_type == FieldType::Date && f.timezone {

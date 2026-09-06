@@ -50,7 +50,7 @@ pub use composites::{
     ArrayField, ArrayRow, BlockDefinition, BlockRow, BlocksField, GroupField, RowField, TabPanel,
     TabsField,
 };
-pub use context::FieldContext;
+pub use context::{FieldContext, NonRepeatingChildren};
 pub use refs::{JoinField, JoinItem, RelationshipField, RelationshipSelectedItem, UploadField};
 pub use scalars::{
     CheckboxField, ChoiceField, CodeField, DateField, NumberField, RichtextField,

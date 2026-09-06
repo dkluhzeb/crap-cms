@@ -863,7 +863,7 @@ fn bulk_conn_paths_clear_cache() {
     );
 }
 
-/// Truncation/skip signal pin (ledger class **L17**): an operation that
+/// Truncation/skip signal pin: an operation that
 /// silently does less than asked is the bug; the guard is that every
 /// clamped or skipping bulk op REPORTS it. Here: `delete_many` over a
 /// set containing a referenced document must count it in `skipped`

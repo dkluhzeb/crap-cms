@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition};
+use crate::core::{
+    CollectionDefinition, FieldChildren, FieldDefinition, FieldType, GlobalDefinition,
+    field_children,
+};
 use crate::service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
@@ -190,21 +193,31 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
     let mut required = Vec::new();
 
     for field in fields {
-        match field.field_type {
-            FieldType::Row | FieldType::Collapsible => {
-                for sf in &field.fields {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => {
+                for sf in sub {
                     insert_prop(&mut props, &mut required, sf);
                 }
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     for sf in &tab.fields {
                         insert_prop(&mut props, &mut required, sf);
                     }
                 }
             }
-            FieldType::Join => {}
-            _ => insert_prop(&mut props, &mut required, field),
+            // Join stores no value → no property. Every other field (scalar,
+            // Group, Array, Blocks, Relationship…) is one property whose own
+            // sub-schema `field_to_json_schema` builds — not flattened here.
+            FieldChildren::Group(_)
+            | FieldChildren::Array(_)
+            | FieldChildren::Blocks(_)
+            | FieldChildren::Leaf => {
+                if field.field_type == FieldType::Join {
+                    continue;
+                }
+                insert_prop(&mut props, &mut required, field);
+            }
         }
     }
 

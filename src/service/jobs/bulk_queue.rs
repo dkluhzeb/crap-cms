@@ -177,9 +177,9 @@ pub fn check_queue_access(
     // test enforces exactly this).
     let user = match &data.queued_by {
         QueuedBy::User { id, collection, .. } => match registry.get_collection(collection) {
-            // A DB error resolving the principal must PROPAGATE (ledger
-            // class L9/F4): swallowing it into `None` would run the
-            // queue-time access gate with an anonymous principal on a
+            // A DB error resolving the principal must PROPAGATE:
+            // swallowing it into `None` would run the queue-time access
+            // gate with an anonymous principal on a
             // transient failure. (Execution re-gates fail-closed either
             // way; this keeps the early answer honest too.)
             Some(user_def) => query::find_by_id(conn, collection, user_def, id, None)

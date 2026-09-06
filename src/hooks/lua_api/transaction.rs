@@ -34,8 +34,9 @@ use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 use tracing::warn;
 
 use crate::{
+    core::upload::delete_upload_files,
     hooks::{
-        lifecycle::{LuaCrudInfra, PoolContext, TxContext, run_effects_on_vm},
+        lifecycle::{LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm},
         lua_api::crud::{TxSlot, ensure_writable},
     },
     service::{DeferredEffect, DeferredQueue, EffectOutcome, EventQueue, VerificationQueue},
@@ -166,11 +167,11 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
             if let Some(outer) = &outer_files {
                 outer.borrow_mut().extend(tx_files.borrow_mut().drain(..));
             } else if let Some(storage) = lua
-                .app_data_ref::<crate::hooks::lifecycle::LuaVmInfra>()
+                .app_data_ref::<LuaVmInfra>()
                 .and_then(|i| i.storage.clone())
             {
                 for fields in tx_files.borrow_mut().drain(..) {
-                    crate::core::upload::delete_upload_files(&*storage, &fields);
+                    delete_upload_files(&*storage, &fields);
                 }
             }
 

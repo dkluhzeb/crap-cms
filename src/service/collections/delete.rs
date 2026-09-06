@@ -66,7 +66,7 @@ fn delete_document_pool(
     if !def.soft_delete
         && let Some(fields) = result.upload_doc_fields
     {
-        // Files after commit (ledger class L4): in conn mode this runs
+        // Files after commit: in conn mode this runs
         // INSIDE the caller's transaction — deleting bytes now and then
         // rolling back would restore the DB row pointing at nothing. With
         // an enclosing scope, queue for its post-commit flush; without
@@ -103,7 +103,7 @@ fn delete_document_conn(
     if !def.soft_delete
         && let Some(fields) = result.upload_doc_fields
     {
-        // Files after commit (ledger class L4): in conn mode this runs
+        // Files after commit: in conn mode this runs
         // INSIDE the caller's transaction — deleting bytes now and then
         // rolling back would restore the DB row pointing at nothing. With
         // an enclosing scope, queue for its post-commit flush; without

@@ -399,7 +399,7 @@ async fn unique_constraint_is_enforced_across_grpc_lua_and_mcp() {
     );
 }
 
-/// Ledger class F2 (never-silently-widen): a present-but-wrong-shaped
+/// Never-silently-widen: a present-but-wrong-shaped
 /// `where` must hard-error on MCP exactly like its siblings — before
 /// this fix, sending gRPC's JSON-*string* spelling to MCP decoded to
 /// ZERO filters, so `delete_many` would have wiped the collection.

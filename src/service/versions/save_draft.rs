@@ -5,8 +5,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, DocumentFields, FieldDefinition, FieldType, collection::VersionsConfig,
-        flatten_group_fields,
+        Document, DocumentFields, FieldChildren, FieldDefinition, FieldType,
+        collection::VersionsConfig, field_children, flatten_group_fields,
     },
     db::{
         DbConnection, LocaleContext, query,
@@ -112,40 +112,50 @@ fn merge_join_data_prefixed(
     prefix: &str,
 ) {
     for field in fields {
-        match field.field_type {
-            FieldType::Array | FieldType::Blocks | FieldType::Relationship => {
+        match field_children(field) {
+            FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
                 let key = prefixed_name(prefix, &field.name);
 
                 if let Some(v) = data.get(&key) {
                     obj.insert(field.name.clone(), v.clone());
                 }
             }
-            FieldType::Group => {
+            FieldChildren::Group(sub) => {
                 let group_prefix = prefixed_name(prefix, &field.name);
 
                 // The snapshot stores the group as a nested object; merge the
                 // group's join children into it (or build it if absent, but only
                 // when the edit actually carries group-nested join data).
                 if let Some(Value::Object(group_obj)) = obj.get_mut(&field.name) {
-                    merge_join_data_prefixed(group_obj, &field.fields, data, &group_prefix);
+                    merge_join_data_prefixed(group_obj, sub, data, &group_prefix);
                 } else {
                     let mut group_obj = Map::new();
-                    merge_join_data_prefixed(&mut group_obj, &field.fields, data, &group_prefix);
+                    merge_join_data_prefixed(&mut group_obj, sub, data, &group_prefix);
 
                     if !group_obj.is_empty() {
                         obj.insert(field.name.clone(), Value::Object(group_obj));
                     }
                 }
             }
-            FieldType::Row | FieldType::Collapsible => {
-                merge_join_data_prefixed(obj, &field.fields, data, prefix);
+            FieldChildren::Wrapper(sub) => {
+                merge_join_data_prefixed(obj, sub, data, prefix);
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
                     merge_join_data_prefixed(obj, &tab.fields, data, prefix);
                 }
             }
-            _ => {}
+            // A has-many Relationship stores its join rows in the snapshot the
+            // same way Array/Blocks do; other leaves carry no join data here.
+            FieldChildren::Leaf => {
+                if field.field_type == FieldType::Relationship {
+                    let key = prefixed_name(prefix, &field.name);
+
+                    if let Some(v) = data.get(&key) {
+                        obj.insert(field.name.clone(), v.clone());
+                    }
+                }
+            }
         }
     }
 }

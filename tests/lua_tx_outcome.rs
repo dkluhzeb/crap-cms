@@ -270,9 +270,9 @@ fn registration_outside_transaction_errors() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Frozen contract: a rolled-back write never emits an event — including
-// writes made INSIDE `crap.transaction(fn)` from a job handler (ledger
-// class L3; the transaction previously routed inner-CRUD events straight
-// into the job-level queue, which flushes unconditionally post-handler).
+// writes made INSIDE `crap.transaction(fn)` from a job handler. The
+// transaction previously routed inner-CRUD events straight into the
+// job-level queue, which flushes unconditionally post-handler.
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
