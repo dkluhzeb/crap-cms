@@ -9,6 +9,15 @@ pub(in crate::db::query::read) fn field_display_label(field: &FieldDefinition) -
     field.resolved_label()
 }
 
+/// Per-query cap on collected back-reference ids. This list is a
+/// display/diagnostic aid (the delete page shows the authoritative O(1)
+/// `_ref_count`, and deletion is blocked by that count, not by this list), so a
+/// document referenced by an enormous number of rows must not make one admin
+/// request materialize an unbounded row set. Bounding at the shared query
+/// chokepoint keeps the DB return and the accumulated `Vec` bounded across every
+/// scanner (has-one / has-many / array / blocks / poly).
+const MAX_BACK_REF_IDS_PER_QUERY: usize = 1000;
+
 /// Execute a query and collect `id` column values, filtering out self-references.
 pub(super) fn query_ids(
     conn: &dyn DbConnection,
@@ -19,6 +28,11 @@ pub(super) fn query_ids(
     target_collection: &str,
     is_global: bool,
 ) -> Vec<String> {
+    // Append the cap at the single query chokepoint: these are simple
+    // `SELECT id FROM … WHERE …` statements with no trailing clause, so a
+    // `LIMIT` suffix is safe on both backends.
+    let sql = &format!("{sql} LIMIT {MAX_BACK_REF_IDS_PER_QUERY}");
+
     match conn.query_all(sql, params) {
         Ok(rows) => rows
             .into_iter()

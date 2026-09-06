@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::ServiceError;
-use crate::core::nest_group_fields;
+use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
     collect_api_hidden_field_names, enforce_access_constraints, validate_password_policy,
 };
@@ -131,11 +131,7 @@ pub(crate) fn update_document_in_conn(
 
     // Canonicalize incoming data to nested groups up front (idempotent); the
     // whole pipeline sees one shape, the DB edge flattens to columns.
-    input.data = nest_group_fields(&input.data, &def.fields);
-
-    // Drop server-derived upload columns from untrusted input (all surfaces
-    // but the multipart upload handlers) so `url`/`*_url` can't be forged.
-    super::validate::strip_untrusted_upload_metadata(&mut input, def);
+    canonicalize_write_input(&mut input, def);
 
     reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
 

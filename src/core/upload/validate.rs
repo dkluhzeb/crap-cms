@@ -125,36 +125,42 @@ fn validate_filename_extension_matches(filename: &str, effective_mime: &str) -> 
 ///    a 1 MB file can declare up to 500 MP (also caught by guard 1). Real
 ///    photographs sit in the single-digit range, so normal uploads pass.
 pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
+    const MAX_PIXELS: u64 = 100_000_000;
+    const MAX_PIXELS_PER_BYTE: u64 = 500;
+
     let reader = ImageReader::new(Cursor::new(data))
         .with_guessed_format()
         .context("Failed to detect image format")?;
 
-    if let Ok((w, h)) = reader.into_dimensions() {
-        const MAX_PIXELS: u64 = 100_000_000;
-        const MAX_PIXELS_PER_BYTE: u64 = 500;
+    // Fail closed if the header dimensions can't be read: skipping the checks
+    // and proceeding to a full `image::load_from_memory` decode is exactly what
+    // the bomb guard exists to prevent. A genuinely malformed image will be
+    // rejected here rather than during an unbounded decode.
+    let (w, h) = reader
+        .into_dimensions()
+        .context("Failed to read image dimensions for the decompression-bomb check")?;
 
-        let pixels = u64::from(w) * u64::from(h);
+    let pixels = u64::from(w) * u64::from(h);
 
-        if pixels > MAX_PIXELS {
-            bail!("Image too large: {w}x{h} exceeds pixel limit");
-        }
+    if pixels > MAX_PIXELS {
+        bail!("Image too large: {w}x{h} exceeds pixel limit");
+    }
 
-        // `data.len() + 1` prevents a pathological zero-byte file (rare
-        // but possible via header-only streams) from producing division
-        // by zero; zero-byte inputs would have already failed to decode.
-        let ratio = pixels / (data.len() as u64 + 1);
+    // `data.len() + 1` prevents a pathological zero-byte file (rare but possible
+    // via header-only streams) from producing division by zero; zero-byte inputs
+    // would have already failed to decode.
+    let ratio = pixels / (data.len() as u64 + 1);
 
-        if ratio > MAX_PIXELS_PER_BYTE {
-            bail!(
-                "Image compression ratio too high: {}x{} pixels in {} bytes \
-                 (ratio {} > {}). Likely a decompression bomb.",
-                w,
-                h,
-                data.len(),
-                ratio,
-                MAX_PIXELS_PER_BYTE,
-            );
-        }
+    if ratio > MAX_PIXELS_PER_BYTE {
+        bail!(
+            "Image compression ratio too high: {}x{} pixels in {} bytes \
+             (ratio {} > {}). Likely a decompression bomb.",
+            w,
+            h,
+            data.len(),
+            ratio,
+            MAX_PIXELS_PER_BYTE,
+        );
     }
 
     Ok(())
@@ -312,6 +318,18 @@ pub fn format_filesize(bytes: u64) -> String {
 )]
 mod tests {
     use super::*;
+
+    /// Regression: dimensions that can't be read must FAIL the bomb check, not
+    /// fall through to a full decode. A valid PNG signature with no IHDR is
+    /// format-detectable but dimensionless.
+    #[test]
+    fn image_dimensions_fail_closed_when_unreadable() {
+        let png_sig = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert!(
+            check_image_dimensions(&png_sig).is_err(),
+            "unreadable dimensions must be rejected, not passed through to decode"
+        );
+    }
 
     #[test]
     fn mime_matches_wildcard() {

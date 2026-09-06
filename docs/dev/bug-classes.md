@@ -526,6 +526,41 @@ memories; the load-bearing ones:
   round — a quiet-ish round. Round 7 pending; the biggest lever remains
   broadening PG behavioral coverage on the new harness + landing the
   drafted CI Postgres service job.
+- 2026-09-06 (17) — **CONVERGENCE ROUND 8** (5 fresh lenses: user-writable
+  server-managed state, bulk operations, auth tokens/cookies/CSRF/reset,
+  resource-exhaustion/DoS, migration/schema-evolution). **8 findings — 1 HIGH,
+  3 MED, 4 LOW — NOT quiet, BUT no new class** (the HIGH is R7's upload class
+  with an incomplete guard, not novel). Auth-token lens came back fully CLEAN
+  (JWT alg-pinning, token_use discriminator, per-request revocation, cookie
+  flags, double-submit CSRF, single-use reset tokens, TOTP replay guard — all
+  wired + tested); bulk ops verified CLEAN except the HIGH (atomicity, per-item
+  access, whole-collection-filter reject, counts, queued re-auth all hold); DoS
+  lens verified the guarded paths (populate visited-set is graph-bounded not
+  N^depth, pagination/depth clamps, image-bomb-before-decode, connection caps,
+  gRPC msg size) all hold. Fixed: **(1) HIGH — `update_many` skipped the
+  upload-column strip** (A + B found it independently): the bulk per-doc body was
+  a THIRD write path the R7 two-site fix missed, so a forged `url` bypassed the
+  serve gate across a whole match-set. Fixed STRUCTURALLY — nest+strip fused into
+  one `canonicalize_write_input` that all persisting paths call, + a
+  `write_paths_canonicalize_before_persist` guard test that fails the build if a
+  `persist_*` caller skips it (converts the R7→R8 recurrence into a red test).
+  **(2) MED, D — soft-delete rebuild missed a unique field nested in a wrapper**
+  (`seo__slug`): stale inline UNIQUE survived the upgrade, blocking re-insert
+  after soft-delete; the trigger now walks flattened specs. Same rebuild dropped
+  orphan-column data → now re-adds orphan columns before copy. **(3) LOW, F —
+  ref-count backfill swallowed a SELECT error** while still stamping the gate →
+  now propagates (re-runs next boot). **(4) LOW, F — image bomb check fell
+  through to decode when header dims unreadable** → fail-closed. **(5) LOW —
+  back-ref list unbounded** → per-query cap (delete block uses O(1) _ref_count).
+  **DEFERRED: MED — pre-auth admin routes inherit the upload-sized body limit**
+  (raising `upload.max_file_size` inflates the login/reset body cap): a genuine
+  coupling, but axum's outermost `DefaultBodyLimit` wins over per-route limits
+  and the codebase's only working override (merge outside the global layer)
+  strips the nonce-CSP/CSRF auth pages need — too risky for a MED; recorded for a
+  focused follow-up (separately-layered auth sub-router with CSP/CSRF preserved).
+  D-3 (bulk no-cap default) is by-design (frozen opt-in valve). Round 9 pending;
+  the R8 HIGH resets the quiet-round streak, but "no new class" is a convergence
+  signal — the class ledger is stabilizing.
 - 2026-09-06 (16) — **CONVERGENCE ROUND 7** (5 fresh lenses:
   output-escaping, serialization round-trip, soft-delete/versions/restore,
   live-updates/SSE, storage/uploads/signed-URLs). **8 findings — 1 HIGH,

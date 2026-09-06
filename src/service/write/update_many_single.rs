@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::ServiceError;
-use crate::core::nest_group_fields;
+use super::validate::canonicalize_write_input;
 use crate::service::helpers::collect_api_hidden_field_names;
 use crate::service::write::check_update_access;
 
@@ -35,8 +35,9 @@ pub(crate) fn update_many_single_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Canonicalize incoming data to nested groups up front (idempotent).
-    input.data = nest_group_fields(&input.data, &def.fields);
+    // Canonicalize + strip server-derived upload columns (the same chokepoint
+    // single create/update use) — bulk update must not be a forgery hole.
+    canonicalize_write_input(&mut input, def);
 
     crate::service::write::update::reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
 

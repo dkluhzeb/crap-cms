@@ -46,6 +46,22 @@ pub(super) fn strip_untrusted_upload_metadata(
     }
 }
 
+/// The single input-canonicalization step every persisting write path runs up
+/// front: nest group fields to the in-memory shape (idempotent — already-nested
+/// input passes through, the DB edge flattens back to columns), then strip
+/// server-derived upload columns from untrusted input.
+///
+/// Both halves MUST happen together on every write. When the strip was bolted
+/// on beside `nest_group_fields` at each call site instead, the bulk-update path
+/// was missed and a forged `url` bypassed the serve gate — so the two are fused
+/// here and the `write_paths_canonicalize_before_persist` guard test pins that
+/// any `persist_*` caller in this module also calls this, closing the class to
+/// a future write path.
+pub(super) fn canonicalize_write_input(input: &mut WriteInput<'_>, def: &CollectionDefinition) {
+    input.data = nest_group_fields(&input.data, &def.fields);
+    strip_untrusted_upload_metadata(input, def);
+}
+
 /// Split a [`validate_document`] result into the surface-agnostic
 /// `(valid, per_field_errors)` pair shared by every validate handler
 /// (gRPC / MCP, collection / global). `Ok(())` is valid; a `Validation` error

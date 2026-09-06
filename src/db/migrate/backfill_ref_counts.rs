@@ -1,7 +1,7 @@
 //! One-time backfill of `_ref_count` columns from existing relationship data.
 
-use anyhow::Result;
-use tracing::{info, warn};
+use anyhow::{Context as _, Result};
+use tracing::info;
 
 use crate::{
     config::LocaleConfig,
@@ -136,14 +136,13 @@ fn recompute_table(
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let rows = match conn.query_all(&format!("SELECT id FROM \"{table}\""), &[]) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Backfill skipping {table}: {e}");
-
-            return Ok(());
-        }
-    };
+    // Propagate a read failure rather than skipping the table: Phase 1 already
+    // reset every `_ref_count` to 0, so a silently-skipped table would keep the
+    // wrong (zeroed) counts while the caller still stamps the backfill gate.
+    // Aborting leaves the gate unset, so the backfill re-runs on the next start.
+    let rows = conn
+        .query_all(&format!("SELECT id FROM \"{table}\""), &[])
+        .with_context(|| format!("Backfill: failed to read ids from {table}"))?;
 
     for row in &rows {
         let Some(id) = row.text_at(0) else {

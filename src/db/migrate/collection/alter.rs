@@ -272,8 +272,14 @@ pub(super) fn alter_collection_table(
     let existing: HashSet<String> = column_types.keys().cloned().collect();
 
     // Detect transition: soft_delete just enabled on a table with unique fields.
-    let needs_rebuild =
-        def.soft_delete && !existing.contains("_deleted_at") && def.fields.iter().any(|f| f.unique);
+    // Walk the flattened column specs (like the create + partial-index paths) so
+    // a unique field nested in a group/row/tabs wrapper is detected — otherwise
+    // its stale inline UNIQUE survives the rebuild and blocks re-inserting a
+    // value after its row is soft-deleted.
+    let has_unique_column = collect_column_specs(&def.fields, locale_config)
+        .iter()
+        .any(|spec| spec.field.unique && !spec.companion_text);
+    let needs_rebuild = def.soft_delete && !existing.contains("_deleted_at") && has_unique_column;
 
     let ctx = AlterCtx {
         conn,
@@ -332,6 +338,19 @@ fn rebuild_without_inline_unique(
     conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" RENAME TO \"{temp}\""))?;
 
     create_collection_table(conn, slug, def, locale_config)?;
+
+    // Re-add orphan columns (data from previously-removed fields) to the new
+    // table before copying: the normal alter path preserves them (warns, never
+    // drops), so the rebuild must not silently destroy their data either. Their
+    // original type is unused (no field references them), so TEXT is fine.
+    let fresh_cols = get_table_columns(conn, slug)?;
+    let system: HashSet<&str> = SYSTEM_COLUMNS.iter().copied().collect();
+    for col in old_cols.difference(&fresh_cols) {
+        if system.contains(col.as_str()) {
+            continue;
+        }
+        conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" ADD COLUMN \"{col}\" TEXT"))?;
+    }
 
     let new_cols = get_table_columns(conn, slug)?;
 
@@ -736,6 +755,112 @@ mod tests {
         assert!(
             result.is_ok(),
             "Inline UNIQUE should be removed — duplicate slug allowed when one row is soft-deleted"
+        );
+    }
+
+    /// Regression: a unique field NESTED in a group (column `seo__slug`) also
+    /// gets an inline UNIQUE at create time, but the soft-delete rebuild trigger
+    /// only inspected top-level `def.fields` — the group wrapper is not itself
+    /// `unique`, so the rebuild was skipped and the stale inline UNIQUE survived,
+    /// blocking re-insert after soft-delete. The trigger now walks the flattened
+    /// column specs.
+    #[test]
+    fn alter_rebuilds_for_unique_field_nested_in_group_on_soft_delete_transition() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let group = || {
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("slug", FieldType::Text)
+                        .unique(true)
+                        .build(),
+                ])
+                .build()
+        };
+
+        let def1 = simple_collection("posts", vec![group(), text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        conn.execute(
+            "INSERT INTO posts (id, seo__slug, title) VALUES ('a', 'hello', 'Hello')",
+            &[],
+        )
+        .unwrap();
+
+        let mut def2 = simple_collection("posts", vec![group(), text_field("title")]);
+        def2.soft_delete = true;
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        // Soft-delete the row, then re-insert the same nested-unique value.
+        conn.execute(
+            "UPDATE posts SET _deleted_at = '2025-01-01' WHERE id = 'a'",
+            &[],
+        )
+        .unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO posts (id, seo__slug, title) VALUES ('b', 'hello', 'Again')",
+            &[],
+        );
+        assert!(
+            result.is_ok(),
+            "inline UNIQUE on the nested `seo__slug` must be removed on the soft-delete transition"
+        );
+    }
+
+    /// Regression: the soft-delete rebuild copied only the intersection of old
+    /// and new columns, silently dropping orphan-column data (from a
+    /// previously-removed field) — while the normal alter path preserves orphan
+    /// columns (warns, never drops). The rebuild now re-adds orphan columns
+    /// before copying so their data survives.
+    #[test]
+    fn rebuild_preserves_orphan_column_data() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Table with a unique field (so the rebuild fires) plus a field that
+        // will be removed from the definition (becoming an orphan column).
+        let def1 = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+                text_field("legacy_note"),
+            ],
+        );
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, slug, legacy_note) VALUES ('a', 's', 'keep me')",
+            &[],
+        )
+        .unwrap();
+
+        // Remove `legacy_note` from the def AND enable soft_delete → rebuild.
+        let mut def2 = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def2.soft_delete = true;
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        // The orphan column and its data must survive the rebuild.
+        let row = conn
+            .query_one(
+                "SELECT legacy_note FROM posts WHERE id = ?1",
+                &[DbValue::Text("a".into())],
+            )
+            .unwrap()
+            .expect("row survives rebuild");
+        assert_eq!(
+            row.get_opt_string("legacy_note").unwrap().as_deref(),
+            Some("keep me"),
+            "orphan-column data must not be dropped by the soft-delete rebuild"
         );
     }
 

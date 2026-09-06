@@ -63,6 +63,18 @@ freeze is unconditional.
   on an older Postgres database back to `TEXT`); the write edge canonicalizes each element to the
   field's type (`coerce_has_many_scalar`) and the read path parses it back
   (`parse_has_many_scalar`), so the list round-trips identically across surfaces.
+- **The soft-delete rebuild preserves data and drops only inline UNIQUE.**
+  Enabling `soft_delete` on a table with unique fields rebuilds it to replace
+  inline `UNIQUE` (which would block re-inserting a value whose row is trashed)
+  with a partial `WHERE _deleted_at IS NULL` index. The rebuild trigger walks the
+  flattened column specs (so a unique field nested in a group/row/tabs is
+  covered), and re-adds orphan columns before copying so no row data is lost —
+  the same preserve-orphans, drop-nothing contract the rest of the alter path
+  follows.
+- **The image decompression-bomb check fails closed.** If an upload's header
+  dimensions can't be read, it is rejected rather than passed through to a full
+  decode — the pixel-count and pixel-per-byte caps run before any decode, never
+  after.
 - **System tables** (`_crap_meta`, `_crap_migrations`, `_crap_cron_fired`,
   `_crap_user_settings`, `_crap_jobs`) and the `_crap_meta` one-time-migration
   gate keys (`ref_count_backfilled`, …) — renaming a gate key re-runs the
@@ -357,6 +369,11 @@ changing a representation is a breaking change to every consumer.
   access gate and `delete_upload_files` trust these columns as truthful
   back-pointers, so a user-forged value would read or delete another document's
   file. `focal_x`/`focal_y` stay user-editable (a setting, not file-derived).
+  The nest-and-strip is one `canonicalize_write_input` step that EVERY persisting
+  write path — single create, single update, and bulk (`update_many`) — runs up
+  front; the `write_paths_canonicalize_before_persist` guard test fails the build
+  if a `persist_*` caller skips it, so a new write path can't reintroduce the
+  forgery gap.
 - **Version restore validates at the write path's strictness.** Restore builds
   its `ValidationCtx` draft-aware, locale-scoped, and `required_locales`-aware
   exactly like create/update, and refuses a soft-deleted (trashed) target with

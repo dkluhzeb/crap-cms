@@ -1242,6 +1242,7 @@ fn make_media_upload_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("url", FieldType::Text).build(),
+        FieldDefinition::builder("alt", FieldType::Text).build(),
     ];
     def.upload = Some(CollectionUpload::new());
     def
@@ -1305,4 +1306,71 @@ async fn delete_many_cleans_up_upload_files() {
     // Verify files are cleaned up
     assert!(!file1.exists(), "file1 should be deleted after DeleteMany");
     assert!(!file2.exists(), "file2 should be deleted after DeleteMany");
+}
+
+/// Security regression: `update_many` must strip server-derived upload columns
+/// exactly as the single update does. Otherwise a caller could forge `url` on a
+/// whole match-set at once and point their own readable docs at another
+/// document's file (serve-gate bypass) or delete it. A legitimate field edit in
+/// the same request still applies.
+#[tokio::test]
+async fn update_many_cannot_forge_upload_url() {
+    let ts = setup_service(vec![make_media_upload_def()], vec![]);
+
+    // Seed a media row via the DB (the trusted upload pipeline's job), since a
+    // user-facing create can't set the server-managed columns.
+    let def = make_media_upload_def();
+    let id = {
+        let mut conn = ts.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut data = DocumentFields::new();
+        data.insert("filename".into(), json!("real.png"));
+        data.insert("url".into(), json!("/uploads/media/real.png"));
+        data.insert("alt".into(), json!("before"));
+        let doc = query::create(&tx, "media", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    // Forge `url` on the whole collection via update_many, plus a legit `alt` edit.
+    ts.service
+        .update_many(Request::new(content::UpdateManyRequest {
+            collection: "media".to_string(),
+            r#where: None,
+            data: Some(make_struct(&[
+                ("url", "/uploads/media/victim.png"),
+                ("alt", "after"),
+            ])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    let doc = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "media".to_string(),
+            id: id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: None,
+            trash: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    assert_eq!(
+        get_proto_field(&doc, "url").as_deref(),
+        Some("/uploads/media/real.png"),
+        "update_many must strip the forged url — the stored server-derived value stays put"
+    );
+    assert_eq!(
+        get_proto_field(&doc, "alt").as_deref(),
+        Some("after"),
+        "a legitimate field edit in the same update_many still applies"
+    );
 }

@@ -662,6 +662,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **`update_many` did not strip server-derived upload columns, so a forged
+  `url`/`*_url`/`filename` could be written across a whole match-set at once.**
+  The single create/update paths strip these (a forged `url` otherwise bypasses
+  the per-document serve access gate to read — or `delete_upload_files` to
+  delete — another document's file), but the bulk-update per-document body was a
+  third write path that skipped the strip on every surface (Lua / gRPC / MCP /
+  queued). The nest-and-strip step is now a single `canonicalize_write_input`
+  that all three persisting write paths call, and a guard test fails the build
+  if any `persist_*` caller skips it, so a new write path can't reintroduce the
+  gap.
+
 - **An upload document's file URL could be forged to read another document's
   file, bypassing the per-document access gate.** The injected upload columns
   (`url`, every `{size}[_fmt]_url`, `filename`, and the dimensions) were plain
@@ -1610,6 +1621,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Enabling soft-delete on a collection with a unique field nested in a group
+  (or other layout wrapper) left a stale inline `UNIQUE` on the upgraded table.**
+  The rebuild that swaps inline `UNIQUE` for the partial `WHERE _deleted_at IS
+  NULL` index only inspected top-level fields, so a unique `seo.slug`
+  (column `seo__slug`) was missed — a freshly-created table behaved correctly
+  but an upgraded one kept blocking re-inserts of a value whose row had been
+  soft-deleted. The trigger now walks the flattened column specs like the create
+  and index paths. The same rebuild also silently dropped orphan-column data
+  (from previously-removed fields); it now re-adds orphan columns before copying,
+  matching the rest of the alter path (which preserves, never drops, them).
+
+- **A failed row read during the ref-count backfill silently left that
+  collection's counts wrong while still marking the backfill done.** The
+  per-table recompute swallowed a `SELECT` error and returned success, but the
+  counts had already been reset to 0 and the backfill gate was then stamped — so
+  the zeroed counts stuck. The read error now propagates, leaving the gate unset
+  so the backfill re-runs on the next start (matching the sibling `is_backfilled`
+  hardening).
+
+- **The decompression-bomb check passed images whose header dimensions couldn't
+  be read** straight through to a full decode — the exact unbounded allocation
+  the check exists to prevent. Unreadable dimensions are now rejected.
+
+- **The back-reference list (delete-confirmation "what references this")
+  materialized every referencing row.** A document referenced by an enormous
+  number of rows could make one admin request build an unbounded list. The
+  per-query id collection is now capped (the delete block itself relies on the
+  O(1) `_ref_count`, not this display list).
 
 - **Restoring a version validated the snapshot inconsistently with the write
   path.** Restore built its validation context without the locale context,
