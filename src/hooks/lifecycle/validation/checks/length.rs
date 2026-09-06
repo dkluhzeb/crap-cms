@@ -16,6 +16,18 @@ pub(crate) fn check_length_bounds(
     }
 
     let Some(Value::String(s)) = value else {
+        // A present non-string value on a length-constrained field would be
+        // coerced to its stringified form, bypassing min/max_length. Reject it,
+        // matching how a present non-numeric value is rejected for Number.
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be text", field.name),
+                "validation.invalid_text",
+            )
+            .with_param("field", field.name.clone()),
+        );
+
         return;
     };
 
@@ -56,6 +68,42 @@ mod tests {
     use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a present non-string value on a length-constrained field was
+    /// silently coerced to its stringified form, bypassing `min/max_length`. It
+    /// must be rejected, symmetric with Number's present-but-wrong-typed rule.
+    #[test]
+    fn non_string_value_on_length_constrained_field_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .min_length(5)
+                .build(),
+        ];
+        // `12` would stringify to "12" (2 chars) and sneak past min_length=5.
+        let mut data = DocumentFields::new();
+        data.insert("name".to_string(), json!(12));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "a non-string value must be rejected, not coerced past min_length"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.invalid_text"))
+        );
+    }
 
     #[test]
     fn test_validate_min_length_fails() {

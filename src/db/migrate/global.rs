@@ -1,7 +1,7 @@
 //! Global table sync: create and alter global tables from Lua definitions.
 
 use anyhow::{Context as _, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
 use crate::{
@@ -16,8 +16,8 @@ use crate::{
 use crate::db::migrate::{
     collection::append_default_value_for,
     helpers::{
-        add_column_if_missing, collect_column_specs, get_table_columns, sync_join_tables,
-        sync_versions_table, table_exists,
+        ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
+        reconcile_scalar_list_column, sync_join_tables, sync_versions_table, table_exists,
     },
 };
 
@@ -134,9 +134,17 @@ fn alter_global_table(
     def: &GlobalDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let existing = get_table_columns(conn, table_name)?;
+    let column_types = get_table_column_types(conn, table_name)?;
+    let existing: HashSet<String> = column_types.keys().cloned().collect();
 
-    add_field_columns(conn, table_name, def, locale_config, &existing)?;
+    add_field_columns(
+        conn,
+        table_name,
+        def,
+        locale_config,
+        &existing,
+        &column_types,
+    )?;
     add_system_column(
         conn,
         table_name,
@@ -164,13 +172,9 @@ fn add_field_columns(
     def: &GlobalDefinition,
     locale_config: &LocaleConfig,
     existing: &HashSet<String>,
+    column_types: &HashMap<String, String>,
 ) -> Result<()> {
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        // Route through the shared `ddl_type` so a scalar `has_many` field (stored
-        // as a JSON array in TEXT) isn't given a numeric column — the same rule
-        // collection tables use. Skipping it here mistyped globals on Postgres.
-        let col_type = spec.ddl_type(conn);
-
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = locale_column(&spec.col_name, locale)?;
@@ -178,10 +182,9 @@ fn add_field_columns(
                     conn,
                     table_name,
                     &col_name,
-                    col_type,
-                    spec.companion_text,
-                    spec.field,
+                    spec,
                     existing,
+                    column_types,
                 )?;
             }
         } else {
@@ -189,10 +192,9 @@ fn add_field_columns(
                 conn,
                 table_name,
                 &spec.col_name,
-                col_type,
-                spec.companion_text,
-                spec.field,
+                spec,
                 existing,
+                column_types,
             )?;
         }
     }
@@ -201,16 +203,37 @@ fn add_field_columns(
 }
 
 /// Build a field column definition and add it if it doesn't already exist.
+///
+/// Routes the type through the shared `ColumnSpec::ddl_type` so a scalar
+/// `has_many` field (a JSON array stored in TEXT) isn't given a numeric column
+/// — the same rule collection tables use. Skipping it here mistyped globals on
+/// Postgres.
 fn add_field_column_if_missing(
     conn: &dyn DbConnection,
     table_name: &str,
     col_name: &str,
-    col_type: &str,
-    companion_text: bool,
-    field: &crate::core::FieldDefinition,
+    spec: &ColumnSpec,
     existing: &HashSet<String>,
+    column_types: &HashMap<String, String>,
 ) -> Result<()> {
-    let col_def = build_col_def(col_name, col_type, companion_text, field, conn.kind());
+    if existing.contains(col_name) {
+        // Mirror the collection alter path: an existing scalar has-many column
+        // mistyped as numeric on an older Postgres database is reconciled to
+        // TEXT (else its JSON-array writes error after upgrade). No-op otherwise.
+        if spec.field.is_has_many_scalar() {
+            reconcile_scalar_list_column(conn, table_name, col_name, column_types)?;
+        }
+
+        return Ok(());
+    }
+
+    let col_def = build_col_def(
+        col_name,
+        spec.ddl_type(conn),
+        spec.companion_text,
+        spec.field,
+        conn.kind(),
+    );
     add_column_if_missing(conn, table_name, col_name, &col_def, existing)
 }
 
@@ -237,6 +260,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
+    use crate::db::migrate::helpers::get_table_columns;
 
     fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
         let mut def = GlobalDefinition::new(slug);
@@ -773,5 +797,68 @@ mod tests {
             Some("dark".to_string()),
             "ALTER-added column should have DEFAULT applied"
         );
+    }
+
+    /// Regression: an existing scalar `has_many` column on a GLOBAL table that
+    /// drifted to a numeric physical type on an older Postgres database is
+    /// reconciled back to TEXT on the next migration — else its JSON-array
+    /// writes error after upgrade. Mirrors the collection alter path; globals
+    /// previously lacked the reconcile limb. Skips when `TEST_DATABASE_URL` is
+    /// unset. Postgres-only (`SQLite` never drifts the affinity).
+    #[cfg(feature = "postgres")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_global_has_many_scalar_column_reconciled_to_text() {
+        let Some(pool) = crate::db::pg_test::pg_test_pool() else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        let conn = pool.get().expect("get PG connection");
+        let slug = crate::db::pg_test::unique_slug("gcfg");
+        let table = global_table(&slug);
+
+        let def = simple_global(
+            &slug,
+            vec![
+                FieldDefinition::builder("scores", FieldType::Number)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
+
+        // First migration creates the table with the correct TEXT column.
+        sync_global_table(&conn, &slug, &def, &no_locale()).unwrap();
+
+        // Simulate an OLD database whose column drifted to numeric.
+        conn.execute_ddl(
+            &format!(
+                "ALTER TABLE {} ALTER COLUMN scores TYPE DOUBLE PRECISION USING NULL",
+                quote_ident(&table)
+            ),
+            &[],
+        )
+        .unwrap();
+        let scores_type = |table: &str| -> String {
+            conn.get_table_column_types(table)
+                .unwrap()
+                .get("scores")
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert!(
+            !scores_type(&table).eq_ignore_ascii_case("text"),
+            "precondition: column must be numeric after the simulated drift"
+        );
+
+        // Re-running the migration must reconcile it back to TEXT.
+        sync_global_table(&conn, &slug, &def, &no_locale()).unwrap();
+        assert!(
+            scores_type(&table).eq_ignore_ascii_case("text"),
+            "global reconcile must flip the drifted has-many-scalar column back to TEXT, got {:?}",
+            scores_type(&table)
+        );
+
+        conn.execute_ddl(&format!("DROP TABLE {}", quote_ident(&table)), &[])
+            .unwrap();
     }
 }

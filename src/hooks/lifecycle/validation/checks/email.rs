@@ -14,9 +14,14 @@ pub(crate) fn check_email_format(
         return;
     }
 
-    if let Some(Value::String(s)) = value
-        && !is_valid_email_format(s)
-    {
+    // A present non-string value can't be a valid email; coercing it would
+    // store an unvalidated non-email. Treat wrong-typed and badly-formatted the
+    // same — both are rejected (matching Number's present-but-wrong-typed rule).
+    let is_valid = value
+        .and_then(Value::as_str)
+        .is_some_and(is_valid_email_format);
+
+    if !is_valid {
         errors.push(
             FieldError::with_key(
                 data_key.to_owned(),
@@ -60,6 +65,33 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a present non-string value on an Email field skipped format
+    /// validation and was coerced+stored as an unvalidated non-email. Reject it.
+    #[test]
+    fn non_string_value_on_email_field_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!(12345));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "a non-string email value must be rejected");
+        assert!(
+            result
+                .unwrap_err()
+                .errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.email"))
+        );
+    }
 
     #[test]
     fn test_validate_email_format_valid() {

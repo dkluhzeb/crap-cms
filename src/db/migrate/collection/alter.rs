@@ -11,7 +11,7 @@ use crate::{
         DbConnection,
         migrate::helpers::{
             ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-            get_table_columns,
+            get_table_columns, reconcile_scalar_list_column,
         },
         query::helpers::{locale_column, quote_ident},
     },
@@ -49,42 +49,6 @@ fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
     }
 }
 
-/// Reconcile an existing **scalar has-many** column to `TEXT`.
-///
-/// Older schemas typed a `Number` has-many list by its base type
-/// (`REAL` / `DOUBLE PRECISION`), which can't hold the JSON array — it silently
-/// worked on `SQLite` (advisory affinity) but rejected writes on Postgres. This
-/// fixes such a column in place rather than emitting the generic
-/// "manual migration required" warning. Idempotent: once the column is `TEXT`
-/// (which `Text` / `Select` / `Radio` lists always were) it is a no-op, so no
-/// version gate is needed. `SQLite` cannot `ALTER … TYPE` and does not need to —
-/// the JSON array is already stored and read back as text under `REAL` affinity.
-fn reconcile_scalar_list_column(ctx: &AlterCtx, col_name: &str) -> Result<()> {
-    let already_text = ctx
-        .column_types
-        .get(col_name)
-        .is_none_or(|t| t.eq_ignore_ascii_case("TEXT"));
-
-    if already_text || !ctx.conn.is_postgres() {
-        return Ok(());
-    }
-
-    let sql = format!(
-        "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" TYPE TEXT USING \"{}\"::text",
-        ctx.slug, col_name, col_name
-    );
-    info!(
-        "Reconciling scalar has-many column {}.{} to TEXT",
-        ctx.slug, col_name
-    );
-
-    ctx.conn
-        .execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to reconcile {} to TEXT on {}", col_name, ctx.slug))?;
-
-    Ok(())
-}
-
 /// Add a single field column if it doesn't exist, with optional default value.
 fn add_field_column(
     ctx: &AlterCtx,
@@ -94,7 +58,7 @@ fn add_field_column(
 ) -> Result<()> {
     if ctx.existing.contains(col_name) {
         if spec.field.is_has_many_scalar() {
-            reconcile_scalar_list_column(ctx, col_name)?;
+            reconcile_scalar_list_column(ctx.conn, ctx.slug, col_name, ctx.column_types)?;
         } else {
             warn_type_mismatch(ctx, col_name, expected_type);
         }

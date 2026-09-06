@@ -6,7 +6,7 @@ mod introspection;
 mod join_tables;
 mod versions;
 
-pub(in crate::db::migrate) use alter::add_column_if_missing;
+pub(in crate::db::migrate) use alter::{add_column_if_missing, reconcile_scalar_list_column};
 pub(super) use column_specs::{ColumnSpec, collect_column_specs};
 pub use introspection::sanitize_locale;
 pub(crate) use introspection::{get_table_column_types, get_table_columns, table_exists};

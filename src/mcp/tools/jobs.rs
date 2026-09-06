@@ -152,7 +152,7 @@ pub(in crate::mcp::tools) fn queue_bulk_tool(
     };
 
     let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data)
-        .map_err(crate::service::ServiceError::into_anyhow)?;
+        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
 
     info!(
         "MCP queued bulk {:?} {}: job {} [client={}]",
@@ -302,7 +302,7 @@ fn exec_get_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let svc = job_ctx(&conn, ctx, "");
 
     let run = service::jobs::get_job_run(&svc, ctx.infra.registry.as_ref(), id)
-        .map_err(crate::service::ServiceError::into_anyhow)?
+        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?
         .with_context(|| format!("Job run '{id}' not found"))?;
 
     Ok(to_string_pretty(&JobRunView::from(&run))?)
@@ -335,7 +335,7 @@ fn exec_list_job_runs(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             offset,
         },
     )
-    .map_err(crate::service::ServiceError::into_anyhow)?;
+    .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
 
     let runs: Vec<JobRunView> = page.docs.iter().map(JobRunView::from).collect();
 
@@ -355,7 +355,7 @@ fn exec_cancel_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let svc = job_ctx(&conn, ctx, "");
 
     let cancelled = service::jobs::cancel_job_run(&svc, ctx.infra.registry.as_ref(), id)
-        .map_err(crate::service::ServiceError::into_anyhow)?;
+        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
 
     info!(
         "MCP cancel_job_run: {} -> {} [client={}]",
@@ -434,7 +434,7 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             unique_key: unique_key.as_deref(),
         },
     )
-    .map_err(crate::service::ServiceError::into_anyhow)?;
+    .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
 
     info!(
         "MCP trigger_job: {} -> {} [client={}]",

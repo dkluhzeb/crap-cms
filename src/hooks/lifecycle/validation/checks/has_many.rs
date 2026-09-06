@@ -30,6 +30,21 @@ pub(crate) fn check_has_many_elements(
     }
 
     let Some(values) = decode_element_list(value) else {
+        // Select/Radio report a malformed list via `check_has_many_options`;
+        // for Text/Number this is the only validator, so reject here (mirroring
+        // it) instead of silently coercing the value to an empty list — which
+        // would drop the submitted value and bypass any `min_rows`/`min_length`.
+        if matches!(field.field_type, FieldType::Text | FieldType::Number) {
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} must be a list", field.name),
+                    "validation.invalid_has_many_json",
+                )
+                .with_param("field", field.name.clone()),
+            );
+        }
+
         return;
     };
 
@@ -228,6 +243,43 @@ mod tests {
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a malformed (scalar / bare-string) value on a has-many
+    /// Text/Number field was silently coerced to an empty list — dropping the
+    /// submitted value and bypassing `min_rows`. Reject it, mirroring how
+    /// has-many Select/Radio reject the same shape.
+    #[test]
+    fn malformed_has_many_scalar_value_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build(),
+        ];
+        // A bare scalar, not a list or a JSON-array string.
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!(5));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "a malformed has-many scalar must be rejected, not coerced to []"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.invalid_has_many_json"))
+        );
+    }
 
     /// Regression: elements submitted as a typed array (Lua/gRPC) were
     /// silently skipped — the check only understood the JSON-string

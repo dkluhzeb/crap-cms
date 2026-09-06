@@ -238,6 +238,35 @@ mod tests {
     use super::*;
     use crate::core::{FieldError, ValidationError};
 
+    /// `into_anyhow_scrubbed` must hide the raw Internal/Transient chain
+    /// (backend/pool text — DB identifiers, driver vocabulary) from
+    /// client-facing surfaces, while validation errors stay verbatim (they
+    /// are user-facing by design). This is the invariant the MCP job tools
+    /// and gRPC surfaces rely on.
+    #[test]
+    fn into_anyhow_scrubbed_hides_internal_and_transient_text() {
+        let internal = ServiceError::Internal(anyhow!("relation \"posts\" secret column x"));
+        assert_eq!(
+            internal.into_anyhow_scrubbed().to_string(),
+            "Internal error",
+            "raw backend text must never reach the client"
+        );
+
+        let transient = ServiceError::Transient(anyhow!("pool timed out at 10.0.0.5:5432"));
+        let msg = transient.into_anyhow_scrubbed().to_string();
+        assert!(
+            !msg.contains("10.0.0.5"),
+            "transient text must be scrubbed, got: {msg}"
+        );
+
+        // A validation error is user-facing and must survive scrubbing.
+        let ve = ServiceError::Validation(ValidationError::new(vec![FieldError::new(
+            "title",
+            "is required",
+        )]));
+        assert!(ve.into_anyhow_scrubbed().to_string().contains("required"));
+    }
+
     // ── classify ────────────────────────────────────────────────────
 
     /// Regression: a transient cause hidden behind an anyhow context layer

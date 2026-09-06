@@ -662,6 +662,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **A hook that called `error()` leaked the server's absolute filesystem
+  path to the API client.** Hook files resolved at runtime via `require`
+  were loaded by Lua's stock searcher, which names a chunk by the exact
+  `package.path` entry it matched — an absolute path — so a runtime error
+  inside a hook surfaced `/abs/config/hooks/posts.lua:12: …` in the
+  client-facing message, disclosing the deployment layout. A replacement
+  searcher now resolves modules identically but stamps the config-relative
+  chunk name (`hooks/posts.lua`), matching the `collections/`, `globals/`,
+  `jobs/`, and init.lua load paths that already named their chunks
+  relatively.
+
+- **MCP job tools leaked raw backend/driver text on internal errors.** The
+  job MCP tools mapped a `ServiceError` with the unscrubbed `into_anyhow`,
+  so an `Internal`/`Transient` failure reached the client verbatim (DB
+  identifiers, pool vocabulary) — the disclosure the gRPC and REST surfaces
+  already hide. They now use `into_anyhow_scrubbed`, and the gRPC
+  `cancel_run` handler maps through `Status::from` like its siblings; a
+  source-scan guard pins the whole `src/mcp/tools` tree so a new tool can't
+  reintroduce the leak.
+
 - **gRPC and admin MFA completion now re-check the account fail-closed
   through one shared path.** The admin `verify_mfa_action` minted a
   session straight from the pending challenge, while its gRPC twin
@@ -1565,6 +1585,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **A Global's scalar `has_many` column that drifted to a numeric type on an
+  older Postgres database was never reconciled on upgrade.** The collection
+  alter path already flipped such a column back to TEXT (a JSON-array write
+  errors against a numeric column), but the Global alter path lacked the
+  limb, so an upgraded Global with a `has_many` Number/Text field left the
+  row unsavable. Both paths now share one `reconcile_scalar_list_column`
+  chokepoint; SQLite was unaffected (its REAL affinity reads the JSON text
+  back fine).
+
+- **A present-but-wrong-typed value on an Email, length-constrained, or
+  scalar `has_many` field was silently coerced instead of rejected.** A
+  non-string value on an `email` field skipped format validation and was
+  stored as an unvalidated non-email; a non-string on a `min_length`/
+  `max_length` field stringified and slipped past the bounds; a malformed
+  scalar `has_many` value decoded to nothing and passed. Each now rejects
+  the wrong-typed value with a specific error, matching how a present
+  non-numeric value was already rejected for Number.
 
 - **Concurrent updates to the same document could corrupt its reference
   count on Postgres.** The update path snapshotted outgoing refs with an

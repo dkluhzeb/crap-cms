@@ -500,3 +500,29 @@ memories; the load-bearing ones:
   security-critical fresh lens (auth) came back clean, like round 3's
   access model. Round 6 pending; the biggest lever now is broadening PG
   behavioral coverage + adding a CI Postgres service.
+- 2026-09-06 (15) — **CONVERGENCE ROUND 6** (4 fresh lenses:
+  error-disclosure, input-strictness, migration-drift, hook-loading).
+  **6 findings, 0 HIGH** — the severity ceiling fell again (R4 3 HIGH →
+  R5 2 HIGH → R6 0 HIGH), all instances of already-founded classes, no
+  new class. Fixed test-first: **(1) Sec/F** — a hook `error()` leaked the
+  server's ABSOLUTE filesystem path: hook files resolved via `require`
+  were named by Lua's stock searcher (the absolute `package.path` entry),
+  and that chunk name travels verbatim to the client as a `HookError`. A
+  Rust `require` searcher now stamps the config-relative `chunk_name`,
+  harmonizing `hooks/` with the `collections/`/`globals/`/`jobs/`/init.lua
+  paths that were already relative (installed in both VM builders).
+  **(2) Sec/P** — MCP job tools and gRPC `cancel_run` returned unscrubbed
+  `Internal`/`Transient` text (raw backend/driver vocabulary); switched to
+  `into_anyhow_scrubbed`/`Status::from`, with a source-scan guard pinning
+  the whole `src/mcp/tools` tree. **(3) D+M** — the GLOBAL alter path
+  lacked the scalar has-many numeric→TEXT reconcile the COLLECTION path
+  had, so an upgraded Global with a `has_many` Number/Text field was
+  unsavable on Postgres; extracted ONE shared `reconcile_scalar_list_column`
+  and wired both paths, proven red-green with a real-PG test. **(4) S** —
+  present-but-wrong-typed values on Email / length-constrained / scalar
+  has-many fields were coerced not rejected; each now rejects to match
+  Number's existing rule. **Round 6 did NOT meet the stop criterion**
+  (that needs TWO consecutive quiet rounds) but it is the first 0-HIGH
+  round — a quiet-ish round. Round 7 pending; the biggest lever remains
+  broadening PG behavioral coverage on the new harness + landing the
+  drafted CI Postgres service job.

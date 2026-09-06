@@ -38,6 +38,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     let registry = Registry::shared();
 
     setup_package_paths(&lua, config_dir)?;
+    install_relative_chunk_searcher(&lua)?;
     lua_api::register_api(&lua, &registry, config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
@@ -233,6 +234,60 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let new_path = format!("{config_str}/?.lua;{config_str}/?/init.lua;{current_path}");
 
     pkg.set("path", new_path)?;
+
+    Ok(())
+}
+
+/// Replace Lua's stock file searcher (`package.searchers[2]`) with one that
+/// loads config-dir modules under a RELATIVE chunk name (`hooks/posts.lua`,
+/// never the absolute `{config_dir}/hooks/posts.lua`).
+///
+/// The stock searcher names a loaded chunk by the exact `package.path` entry
+/// it matched — an absolute path here — so a runtime `error()` inside a hook
+/// file resolved via `require` surfaces that absolute server path in the
+/// client-facing `HookError` message, disclosing the filesystem layout. This
+/// searcher resolves modules identically (it walks the same `package.path`)
+/// but stamps the shortened `chunk_name`, matching the `load_lua_dir` and
+/// init.lua load paths. The preload searcher (index 1) still runs first, so
+/// `load_lua_dir`-cached modules are untouched.
+///
+/// # Errors
+///
+/// Returns an error if `package.searchers` can't be read or the replacement
+/// searcher can't be installed.
+pub(crate) fn install_relative_chunk_searcher(lua: &Lua) -> Result<()> {
+    let searcher = lua.create_function(|lua, module: String| {
+        let package: Table = lua.globals().get("package")?;
+        let path: String = package.get("path")?;
+        let rel = module.replace('.', "/");
+
+        for template in path.split(';') {
+            if template.is_empty() {
+                continue;
+            }
+
+            let candidate = template.replace('?', &rel);
+            let file = Path::new(&candidate);
+
+            let Ok(code) = fs::read_to_string(file) else {
+                continue;
+            };
+
+            let loader = lua.load(&code).set_name(chunk_name(file)).into_function()?;
+
+            return Ok(Value::Function(loader));
+        }
+
+        // No file matched — a string message tells `require` to keep trying
+        // its remaining searchers (and feeds the aggregated not-found error).
+        Ok(Value::String(lua.create_string(format!(
+            "\n\tno file '{module}' under the configured package.path"
+        ))?))
+    })?;
+
+    let package: Table = lua.globals().get("package")?;
+    let searchers: Table = package.get("searchers")?;
+    searchers.set(2, searcher)?;
 
     Ok(())
 }
@@ -481,6 +536,41 @@ mod tests {
         assert!(
             !err.contains(&tmp.path().to_string_lossy().to_string()),
             "absolute path must not leak: {err}"
+        );
+    }
+
+    /// Regression: hook files resolved at runtime via `require` (the
+    /// file-per-hook and module patterns in `resolve_hook_function`) were
+    /// loaded by Lua's stock searcher, which names the chunk by the ABSOLUTE
+    /// `package.path` entry it matched — leaking the server's filesystem
+    /// layout into the client-facing `HookError` text. `install_relative_chunk_searcher`
+    /// stamps the relative `chunk_name` instead. Loading `collections/`,
+    /// `globals/`, `jobs/`, and init.lua already named their chunks relatively;
+    /// this closes the `hooks/` `require` gap so every load path agrees.
+    #[test]
+    fn required_module_error_carries_relative_chunk_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks_dir = tmp.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(hooks_dir.join("boom.lua"), "error('kaboom')").unwrap();
+
+        let lua = sandboxed_lua();
+        setup_package_paths(&lua, tmp.path()).unwrap();
+        install_relative_chunk_searcher(&lua).unwrap();
+
+        let err = lua
+            .load("require('hooks.boom')")
+            .exec()
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("hooks/boom.lua"),
+            "relative chunk name expected in require error: {err}"
+        );
+        assert!(
+            !err.contains(&*tmp.path().to_string_lossy()),
+            "absolute path must not leak through require: {err}"
         );
     }
 

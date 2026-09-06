@@ -58,7 +58,9 @@ freeze is unconditional.
   i.e. `FieldDefinition::is_has_many_scalar`) is stored as a JSON array in a
   `TEXT` column regardless of the base type (a numeric column can't hold the
   array and Postgres rejects it). One `ColumnSpec::ddl_type` decides this for the
-  CREATE and reconcile paths; the write edge canonicalizes each element to the
+  CREATE and reconcile paths (the collection and global alter paths share one
+  `reconcile_scalar_list_column`, which flips a column that drifted to numeric
+  on an older Postgres database back to `TEXT`); the write edge canonicalizes each element to the
   field's type (`coerce_has_many_scalar`) and the read path parses it back
   (`parse_has_many_scalar`), so the list round-trips identically across surfaces.
 - **System tables** (`_crap_meta`, `_crap_migrations`, `_crap_cron_fired`,
@@ -254,6 +256,15 @@ changing a representation is a breaking change to every consumer.
   by `sandbox_globals_match_reviewed_allowlist`; extending it is a
   reviewed decision, re-adding a removed capability is a breaking
   security change.
+- **Lua chunk names are config-relative on every load path.** Files loaded
+  for `collections/`, `globals/`, `jobs/`, init.lua, and — via the installed
+  `require` searcher — `hooks/` are named `<dir>/<file>.lua`, never the
+  absolute `{config_dir}/…` path. Lua stamps the chunk name into `error()`
+  text, which travels verbatim to API clients as a `HookError`, so an
+  absolute name would disclose the deployment's filesystem layout. Pinned by
+  `chunk_names_are_relative_not_absolute`,
+  `lua_error_text_carries_relative_chunk_name`, and
+  `required_module_error_carries_relative_chunk_name`.
 - **The 9 `HookEvent`s** and their per-operation firing order:
   field `before_validate` → richtext-attr `before_validate` → collection
   `before_validate` → validate → field `before_change` → collection

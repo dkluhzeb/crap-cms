@@ -174,6 +174,7 @@ fn create_lua_vm(
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
 
     setup_package_paths(&lua, config_dir)?;
+    hooks::install_relative_chunk_searcher(&lua)?;
 
     register_apis(&lua, registry, config)?;
 
