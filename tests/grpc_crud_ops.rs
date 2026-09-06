@@ -26,12 +26,13 @@ use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::upload::CollectionUpload;
-use crap_cms::db::{migrate, pool};
+use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
 
@@ -1259,34 +1260,26 @@ async fn delete_many_cleans_up_upload_files() {
     std::fs::write(&file1, b"fake image 1").unwrap();
     std::fs::write(&file2, b"fake image 2").unwrap();
 
-    // Create two documents with url fields pointing to the files
-    ts.service
-        .create(Request::new(content::CreateRequest {
-            events: None,
-            collection: "media".to_string(),
-            data: Some(make_struct(&[
-                ("filename", "file1.png"),
-                ("url", "/uploads/media/file1.png"),
-            ])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap();
-
-    ts.service
-        .create(Request::new(content::CreateRequest {
-            events: None,
-            collection: "media".to_string(),
-            data: Some(make_struct(&[
-                ("filename", "file2.png"),
-                ("url", "/uploads/media/file2.png"),
-            ])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap();
+    // The server-managed upload columns (`filename`, `url`) can't be set through
+    // a user-facing create — the write chokepoint strips them — so an upload
+    // document only ever exists via the trusted upload pipeline. Seed the rows
+    // directly (as that pipeline would) so DeleteMany has real file references
+    // to clean up.
+    let def = make_media_upload_def();
+    {
+        let mut conn = ts.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for (fname, url) in [
+            ("file1.png", "/uploads/media/file1.png"),
+            ("file2.png", "/uploads/media/file2.png"),
+        ] {
+            let mut data = DocumentFields::new();
+            data.insert("filename".into(), json!(fname));
+            data.insert("url".into(), json!(url));
+            query::create(&tx, "media", &def, &data, None).unwrap();
+        }
+        tx.commit().unwrap();
+    }
 
     // Verify files exist before delete
     assert!(file1.exists(), "file1 should exist before DeleteMany");

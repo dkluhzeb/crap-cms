@@ -2446,13 +2446,23 @@ fn restore_collection_version_rejects_snapshot_violating_required_field() {
     let tx = conn.transaction().unwrap();
     let doc = query::create(&tx, "versioned_articles", &def, &data, None).unwrap();
 
-    // Hand-craft a version snapshot with empty title — violates `required`.
+    // Hand-craft a PUBLISHED version snapshot with empty title — violates
+    // `required`. A published restore must be valid, so restoring it is
+    // rejected (a schema tightening left the snapshot invalid). A *draft*
+    // snapshot, by contrast, may legitimately be incomplete and restores fine —
+    // see `restoring_a_draft_version_does_not_enforce_required` in versions.rs.
     let bad_snapshot = json!({
         "title": "",
         "author_id": "user_b",
     });
-    let version =
-        query::create_version(&tx, "versioned_articles", &doc.id, "draft", &bad_snapshot).unwrap();
+    let version = query::create_version(
+        &tx,
+        "versioned_articles",
+        &doc.id,
+        "published",
+        &bad_snapshot,
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     let user_b = make_user_doc("user_b", "editor");

@@ -287,7 +287,7 @@ mod tests {
             field::{FieldDefinition, FieldType},
             upload::{CollectionUpload, storage::LocalStorage},
         },
-        db::{migrate, pool},
+        db::{DbConnection, migrate, pool},
         hooks::HookRunner,
     };
 
@@ -582,26 +582,22 @@ mod tests {
         let file = media_dir.join("test.png");
         std::fs::write(&file, b"fake image").unwrap();
 
-        // Create the document referencing the file.
-        let req = make_request(
-            "tools/call",
-            Some(json!(50)),
-            Some(json!({
-                "name": "create_media",
-                "arguments": { "filename": "test.png", "url": "/uploads/media/test.png" }
-            })),
-        );
-        let resp = server.handle_message(req);
-        assert!(resp.error.is_none());
-        let text = resp.result.unwrap()["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let created: Value = serde_json::from_str(&text).expect("create output is JSON");
-        let id = created["id"]
-            .as_str()
-            .expect("created doc has an id")
-            .to_string();
+        // The server-managed upload columns (`filename`, `url`, …) can't be set
+        // by a user-facing MCP create — the write chokepoint strips them, and
+        // `filename` is required — so an upload document only ever exists via the
+        // trusted upload pipeline. Simulate that by inserting the row directly,
+        // giving the delete path a real file reference to clean up.
+        let id = "mediadoc1".to_string();
+        {
+            let conn = server.infra.pool.get().unwrap();
+            conn.execute(
+                &format!(
+                    "INSERT INTO media (id, filename, url) VALUES                      ('{id}', 'test.png', '/uploads/media/test.png')"
+                ),
+                &[],
+            )
+            .unwrap();
+        }
 
         assert!(file.exists(), "upload file should exist before delete");
 

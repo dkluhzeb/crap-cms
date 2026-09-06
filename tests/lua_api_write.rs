@@ -508,23 +508,24 @@ crap.collections.define("media", {
 
     let conn = pool.get().expect("conn");
 
-    // Create a media doc with required upload fields and manually insert size columns
-    let doc_id = runner
-        .eval_lua_with_conn(
-            r#"
-        local doc = crap.collections.create("media", {
-            filename = "test.jpg",
-            mime_type = "image/jpeg",
-            filesize = 12345,
-            url = "/uploads/test.jpg",
-            alt = "Test image",
-        }, { hooks = false })
-        return doc.id
-    "#,
-            &conn,
-            None,
-        )
-        .expect("create");
+    // The server-managed upload columns (`filename`, `url`, `mime_type`,
+    // `filesize`, per-size columns) are set only by the trusted upload pipeline
+    // — a user-facing `crap.collections.create` can't set them (the write
+    // chokepoint strips them, and `filename` is required). Seed the row directly
+    // as that pipeline would, then read it back through the Lua find.
+    let doc_id = "media_sizes_doc".to_string();
+    conn.execute(
+        "INSERT INTO media (id, filename, mime_type, filesize, url, alt)          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        &[
+            DbValue::Text(doc_id.clone()),
+            DbValue::Text("test.jpg".to_string()),
+            DbValue::Text("image/jpeg".to_string()),
+            DbValue::Integer(12345),
+            DbValue::Text("/uploads/test.jpg".to_string()),
+            DbValue::Text("Test image".to_string()),
+        ],
+    )
+    .expect("insert media doc");
 
     // Manually set per-size columns in the DB (simulating what the upload handler does)
     conn.execute(
