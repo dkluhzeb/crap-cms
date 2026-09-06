@@ -555,12 +555,22 @@ impl tokio_postgres::types::ToSql for AdaptiveInt {
         match *ty {
             Type::INT2 => i16::try_from(self.0)?.to_sql(ty, out),
             Type::INT4 => i32::try_from(self.0)?.to_sql(ty, out),
+            // A Number field is DOUBLE PRECISION; a whole value read from it
+            // normalizes to a JSON integer (`real_to_json_number`), so a keyset
+            // cursor comparand for a numeric sort column arrives here as an i64
+            // that must bind against a FLOAT8 target. The value originated from
+            // an f64 column, so it is exactly representable.
+            Type::FLOAT8 => {
+                #[allow(clippy::cast_precision_loss)]
+                let as_float = self.0 as f64;
+                as_float.to_sql(ty, out)
+            }
             _ => self.0.to_sql(ty, out),
         }
     }
 
     fn accepts(ty: &Type) -> bool {
-        matches!(*ty, Type::INT2 | Type::INT4 | Type::INT8)
+        matches!(*ty, Type::INT2 | Type::INT4 | Type::INT8 | Type::FLOAT8)
     }
 
     tokio_postgres::types::to_sql_checked!();
@@ -782,6 +792,19 @@ mod tests {
         assert!(<AdaptiveInt as ToSql>::accepts(&Type::INT4));
         assert!(<AdaptiveInt as ToSql>::accepts(&Type::INT8));
         assert!(!<AdaptiveInt as ToSql>::accepts(&Type::TEXT));
+
+        // Regression: a keyset cursor comparand for a Number (DOUBLE PRECISION)
+        // sort column arrives as an i64 and must bind against FLOAT8 — without
+        // this, numeric-sort pagination errored on Postgres at whole-number
+        // boundaries (`cannot convert … int … float8`).
+        assert!(<AdaptiveInt as ToSql>::accepts(&Type::FLOAT8));
+
+        // FLOAT8 encoding matches a native f64 (8 bytes)
+        let mut ours = bytes::BytesMut::new();
+        AdaptiveInt(42).to_sql(&Type::FLOAT8, &mut ours).unwrap();
+        let mut native = bytes::BytesMut::new();
+        42f64.to_sql(&Type::FLOAT8, &mut native).unwrap();
+        assert_eq!(ours, native);
 
         // INT2 encoding matches a native i16 (2 bytes)
         let mut ours = bytes::BytesMut::new();

@@ -48,7 +48,9 @@ impl ContentService {
         let is_auth = def.is_auth_collection();
         let mut items: Vec<CreateManyItem> = Vec::with_capacity(req.documents.len());
         for s in &req.documents {
-            let mut data: DocumentFields = data_map_to_json_map(s).into();
+            let mut data: DocumentFields = data_map_to_json_map(s)
+                .map_err(Status::invalid_argument)?
+                .into();
 
             // Shared with single Create: a non-string password coerces to ""
             // and fails the policy (InvalidArgument) instead of being silently

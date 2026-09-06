@@ -131,6 +131,15 @@ pub struct UpdateUploadInput<'a> {
     pub image_max_attempts: u32,
 }
 
+/// Whether an upload update replaces the published document's file(s) — and so
+/// must clean them up after commit. Only a **non-draft** write carrying a **new
+/// file** does: a draft save leaves the published row (and its file references)
+/// untouched, and a write with no new file changes no files. Deleting the old
+/// file on a draft save would orphan the still-live published document.
+fn replaces_published_files(has_new_file: bool, draft: bool) -> bool {
+    has_new_file && !draft
+}
+
 /// Process a file (optional) and update an upload document.
 ///
 /// Full lifecycle: load old doc -> process file -> inject metadata -> update document ->
@@ -155,12 +164,23 @@ pub fn update_upload(
     let def = ctx.collection_def()?;
     let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
-    // Load old document for file cleanup (before processing new file)
-    let old_doc_fields = if file.is_some() {
-        ctx.pool
-            .and_then(|p| p.get().ok())
-            .and_then(|conn| query::find_by_id(&conn, ctx.slug, def, id, locale_ctx.as_ref()).ok())
-            .flatten()
+    // A draft save leaves the published row untouched — it still references the
+    // current file — so on a draft the old files must NOT be cleaned up here.
+    // Only a published update actually replaces them.
+    let draft = form_data.remove("_action").unwrap_or_default() == "save_draft";
+
+    // Load the published document's files for post-commit cleanup, but only when
+    // this update replaces them (a new file on a non-draft write). A transient
+    // read error must propagate: silently skipping cleanup leaks the previous
+    // file and all its variants (the delete path is hardened the same way — the
+    // old `.ok().flatten()` here was the swallow).
+    let old_doc_fields = if replaces_published_files(file.is_some(), draft) {
+        let pool = ctx.pool.ok_or_else(|| {
+            ServiceError::Internal(anyhow!("a pool is required to replace an upload file"))
+        })?;
+        let conn = pool.get()?;
+
+        query::find_by_id(&conn, ctx.slug, def, id, locale_ctx.as_ref())?
             .map(|doc| doc.fields.clone())
     } else {
         None
@@ -192,8 +212,6 @@ pub fn update_upload(
     } else {
         None
     };
-    let action = form_data.remove("_action").unwrap_or_default();
-    let draft = action == "save_draft";
 
     let (doc, req_context) = update_document(
         ctx,
@@ -228,4 +246,25 @@ pub fn update_upload(
     }
 
     Ok(UploadUpdateResult { doc, req_context })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: a draft save with a new file must NOT clean up the published
+    /// file. The draft write leaves the published row pointing at the current
+    /// file, so deleting it here orphaned the live document (broken image).
+    #[test]
+    fn draft_save_with_new_file_keeps_published_files() {
+        // published update replacing the file → clean up the old file
+        assert!(replaces_published_files(true, false));
+
+        // draft save with a new file → the published file stays referenced
+        assert!(!replaces_published_files(true, true));
+
+        // no new file → nothing to replace, on either path
+        assert!(!replaces_published_files(false, false));
+        assert!(!replaces_published_files(false, true));
+    }
 }

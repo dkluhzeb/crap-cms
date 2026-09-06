@@ -12,4 +12,4 @@ mod upload;
 
 pub(super) use collection::collection_config_to_lua;
 pub(super) use global::global_config_to_lua;
-pub(crate) use helpers::{json_to_lua, lua_to_json, set_max_nesting_depth};
+pub(crate) use helpers::{json_to_lua, lua_to_json, max_nesting_depth, set_max_nesting_depth};

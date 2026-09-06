@@ -8,6 +8,7 @@ use tracing::warn;
 use crate::{
     api::content::{self, DataMap, FieldList, FieldValue, field_value::Kind},
     core::Document,
+    hooks::lua_api::max_nesting_depth,
 };
 
 /// Convert a core `Document` to a protobuf `Document`, mapping all fields to a
@@ -72,16 +73,35 @@ pub(in crate::api::handlers) fn json_to_field_value(v: &JsonValue) -> FieldValue
 
 /// Convert a protobuf `DataMap` to a JSON `Value` map, preserving arrays and
 /// nested objects. Used for extracting join-table data (has-many, arrays).
-pub(in crate::api::handlers) fn data_map_to_json_map(dm: &DataMap) -> HashMap<String, JsonValue> {
+///
+/// Rejects data nested beyond `depth.max_nesting_depth` — the SAME guard the
+/// Lua↔JSON converter applies, keeping gRPC ingestion consistent with the Lua
+/// path. prost already refuses decode nesting past its fixed `RECURSION_LIMIT`
+/// (100) with a clean error, so this is not the last line of defense against a
+/// stack overflow; it enforces the configured (tighter) limit on the
+/// attacker-controlled request data every write RPC converts first.
+pub(in crate::api::handlers) fn data_map_to_json_map(
+    dm: &DataMap,
+) -> Result<HashMap<String, JsonValue>, String> {
+    let max = max_nesting_depth();
+
     dm.fields
         .iter()
-        .map(|(k, v)| (k.clone(), field_value_to_json(v)))
+        .map(|(k, v)| Ok((k.clone(), field_value_to_json(v, 1, max)?)))
         .collect()
 }
 
-/// Convert a protobuf `FieldValue` back to a `serde_json::Value`.
-pub(in crate::api::handlers) fn field_value_to_json(v: &FieldValue) -> JsonValue {
-    match &v.kind {
+/// Convert a protobuf `FieldValue` back to a `serde_json::Value`, tracking
+/// nesting `depth` against `max` so an over-deep payload is rejected instead of
+/// overflowing the stack.
+fn field_value_to_json(v: &FieldValue, depth: usize, max: usize) -> Result<JsonValue, String> {
+    if depth > max {
+        return Err(format!(
+            "data nesting exceeds the maximum depth of {max} (depth.max_nesting_depth)"
+        ));
+    }
+
+    let json = match &v.kind {
         Some(Kind::BoolValue(b)) => JsonValue::Bool(*b),
         Some(Kind::IntValue(i)) => JsonValue::Number(Number::from(*i)),
         Some(Kind::DoubleValue(n)) => Number::from_f64(*n).map_or_else(
@@ -93,18 +113,25 @@ pub(in crate::api::handlers) fn field_value_to_json(v: &FieldValue) -> JsonValue
         ),
         Some(Kind::StringValue(s)) => JsonValue::String(s.clone()),
         Some(Kind::ListValue(list)) => {
-            JsonValue::Array(list.values.iter().map(field_value_to_json).collect())
+            let values: Result<Vec<JsonValue>, String> = list
+                .values
+                .iter()
+                .map(|v| field_value_to_json(v, depth + 1, max))
+                .collect();
+            JsonValue::Array(values?)
         }
         Some(Kind::StructValue(dm)) => {
-            let obj: Map<String, JsonValue> = dm
+            let obj: Result<Map<String, JsonValue>, String> = dm
                 .fields
                 .iter()
-                .map(|(k, v)| (k.clone(), field_value_to_json(v)))
+                .map(|(k, v)| Ok((k.clone(), field_value_to_json(v, depth + 1, max)?)))
                 .collect();
-            JsonValue::Object(obj)
+            JsonValue::Object(obj?)
         }
         Some(Kind::NullValue(_)) | None => JsonValue::Null,
-    }
+    };
+
+    Ok(json)
 }
 
 #[cfg(test)]
@@ -116,7 +143,7 @@ mod tests {
     // ── json_to_field_value + field_value_to_json roundtrip ────────────────
 
     fn roundtrip(v: &JsonValue) -> JsonValue {
-        field_value_to_json(&json_to_field_value(v))
+        field_value_to_json(&json_to_field_value(v), 1, 1024).unwrap()
     }
 
     #[test]
@@ -153,7 +180,7 @@ mod tests {
         let v = json!(big);
         let fv = json_to_field_value(&v);
         assert!(matches!(fv.kind, Some(Kind::IntValue(i)) if i == big));
-        assert_eq!(field_value_to_json(&fv), json!(big));
+        assert_eq!(field_value_to_json(&fv, 1, 1024).unwrap(), json!(big));
     }
 
     #[test]
@@ -176,7 +203,7 @@ mod tests {
     #[test]
     fn field_value_none_kind_is_null() {
         let fv = FieldValue { kind: None };
-        assert_eq!(field_value_to_json(&fv), json!(null));
+        assert_eq!(field_value_to_json(&fv, 1, 1024).unwrap(), json!(null));
     }
 
     // ── data_map_to_json_map ───────────────────────────────────────────────
@@ -195,9 +222,48 @@ mod tests {
         }
         let dm = DataMap { fields };
 
-        let back = data_map_to_json_map(&dm);
+        let back = data_map_to_json_map(&dm).unwrap();
         assert_eq!(back.get("tags").unwrap(), &json!(["a", "b"]));
         assert_eq!(back.get("nested").unwrap(), &json!({"x": 10}));
+    }
+
+    /// Build a `FieldValue` nested `depth` levels deep (each level a
+    /// single-key `StructValue`).
+    fn nested_struct(depth: usize) -> FieldValue {
+        let mut fv = FieldValue {
+            kind: Some(Kind::IntValue(1)),
+        };
+
+        for _ in 0..depth {
+            let mut fields = HashMap::new();
+            fields.insert("n".to_string(), fv);
+            fv = FieldValue {
+                kind: Some(Kind::StructValue(DataMap { fields })),
+            };
+        }
+
+        fv
+    }
+
+    /// Regression: attacker-controlled gRPC data nested past `max_nesting_depth`
+    /// must be rejected — an unbounded convert here is a pre-auth stack-overflow
+    /// `DoS` (the Lua↔JSON converter has always had this guard). 200 levels is
+    /// safely above any valid `max_nesting_depth` (config-capped near serde's
+    /// 128 recursion limit), so the guard fires long before the stack does.
+    #[test]
+    fn data_map_rejects_overdeep_nesting() {
+        let deep = DataMap {
+            fields: HashMap::from([("root".to_string(), nested_struct(200))]),
+        };
+        assert!(
+            data_map_to_json_map(&deep).is_err(),
+            "over-deep gRPC data must be rejected, not converted"
+        );
+
+        let shallow = DataMap {
+            fields: HashMap::from([("root".to_string(), nested_struct(3))]),
+        };
+        assert!(data_map_to_json_map(&shallow).is_ok());
     }
 
     // ── document_to_proto ──────────────────────────────────────────────────

@@ -662,6 +662,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **A deeply-nested gRPC write payload could crash the server (pre-auth
+  denial of service).** The protobuf→JSON converter that runs first on
+  every write RPC's `data` recursed with no depth limit, so a request
+  nesting a struct/list inside itself thousands of levels deep overflowed
+  the stack and aborted the process. It now enforces `depth.max_nesting_depth`
+  — the same guard the Lua data converter already applied — and rejects an
+  over-deep payload with `INVALID_ARGUMENT`.
+
 - **MCP `delete_many`/`update_many` could wipe a whole collection from a
   wrong-shaped `where`.** A `where` that wasn't a
   JSON object — notably the JSON-*string* spelling the gRPC field uses —
@@ -1547,6 +1555,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Editing a has-many Upload field and saving a draft deleted the
+  live published file.** A draft save leaves the published document
+  untouched — it still references the current file — but `update_upload`
+  cleaned up the old file unconditionally, so a draft-with-new-file
+  orphaned the published document (broken image). Old-file cleanup now
+  runs only on a published replacement, never on a draft.
+
+- **A transient read error during an upload replace leaked the old
+  file(s).** `update_upload` loaded the previous document via
+  `.ok().flatten()`, so a transient DB error silently skipped cleanup and
+  left the old file and every size/format variant orphaned in storage.
+  The error now propagates, matching the hardened delete path.
+
+- **Numeric-sort keyset pagination errored on Postgres at whole-number
+  boundaries.** A cursor comparand for a `Number` (DOUBLE PRECISION) sort
+  column binds as an integer, which the adaptive parameter binder rejected
+  against a FLOAT8 target — so paging past a whole-number boundary value
+  (e.g. `price = 42`) failed with a type error. The binder now accepts
+  FLOAT8. SQLite was unaffected (type affinity).
+
+- **Restoring a version left a localized timezone Date's timezone wrong.**
+  A localized `timezone` Date stores per-locale `_tz` companion columns;
+  version restore rewrote the date columns but not the companions, so an
+  old version's timezone(s) stayed at the current post-edit value. Restore
+  now writes the companion columns per locale too.
+
+- **A whole-valued Number inside an array serialized as `5.0` instead of
+  `5`.** The array read path emitted the raw float, diverging from
+  top-level and group Number fields (which render a whole value as an
+  integer) and splitting the gRPC wire shape for the same value. It now
+  applies the shared `real_to_json_number` normalization like every other
+  read surface.
 
 - **Editing a has-many Upload field and saving a draft silently kept the
   pre-edit selection.** A draft snapshot rebuilds join data from the DB

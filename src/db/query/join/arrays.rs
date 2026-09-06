@@ -11,6 +11,7 @@ use crate::db::{
         coerce_json_value,
         helpers::{coerce_date_value_json, join_table, tz_column},
     },
+    types::real_to_json_number,
 };
 
 use super::helpers::{delete_junction_rows, select_junction_rows, select_junction_rows_batch};
@@ -278,7 +279,11 @@ pub(crate) fn reconstruct_array_row(
 
         let json_val = match val {
             DbValue::Integer(n) => json!(n),
-            DbValue::Real(f) => json!(f),
+            // A whole-valued Number must read back as an integer (`5`, not
+            // `5.0`) — the same normalization every other read surface applies
+            // via `real_to_json_number`. Number columns are floating-point, so
+            // `5` round-trips through the DB as `5.0`.
+            DbValue::Real(f) => real_to_json_number(f),
             DbValue::Text(s) if sub_field_stores_json(sf) => {
                 // Composite sub-fields (and has-many relationship/upload, which
                 // store a JSON id array) keep JSON in a TEXT column — parse it
@@ -416,6 +421,35 @@ mod tests {
         assert_eq!(found[1]["value"], "Value B");
         assert!(found[0]["id"].as_str().is_some(), "Row should have an id");
         assert!(found[1]["id"].as_str().is_some(), "Row should have an id");
+    }
+
+    /// Regression: a whole-valued Number sub-field in an array must read back
+    /// as an integer (`5`), the same as a top-level Number field — not `5.0`.
+    /// Number columns are floating-point, so the array read path must apply
+    /// `real_to_json_number` like every other surface.
+    #[test]
+    fn whole_number_array_sub_field_reads_back_as_integer() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_items (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 qty REAL
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+        let sub = vec![FieldDefinition::builder("qty", FieldType::Number).build()];
+
+        let rows = vec![HashMap::from([("qty".to_string(), json!(5))])];
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
+
+        let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
+        assert_eq!(found.len(), 1);
+        // `json!(5)` (integer) and `json!(5.0)` (float) are distinct serde_json
+        // Numbers, so this pins the integer shape.
+        assert_eq!(found[0]["qty"], json!(5));
+        assert_ne!(found[0]["qty"], json!(5.0));
     }
 
     #[test]

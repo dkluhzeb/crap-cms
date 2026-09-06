@@ -34,6 +34,8 @@ impl ContentService {
         let data: DocumentFields = req
             .data
             .map(|s| data_map_to_json_map(&s))
+            .transpose()
+            .map_err(Status::invalid_argument)?
             .unwrap_or_default()
             .into();
 

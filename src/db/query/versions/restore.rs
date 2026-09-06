@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition,
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType,
         collection::GlobalDefinition,
     },
     db::{
@@ -14,7 +14,10 @@ use crate::{
         query::{
             LocaleContext, LocaleMode,
             global::update_global,
-            helpers::{global_table, locale_column, prefixed_name, quote_ident, walk_leaf_fields},
+            helpers::{
+                global_table, locale_column, prefixed_name, quote_ident, tz_column,
+                walk_leaf_fields,
+            },
             join::save_join_table_data,
             ref_count,
             write::update,
@@ -259,7 +262,48 @@ fn collect_locale_restore_fields(
                 params,
                 idx,
                 &value_for,
-            )
+            )?;
+
+            // A timezone-enabled Date carries a `{base}_tz` companion, localized
+            // the same way and present in the snapshot (the locale SELECT emits
+            // it). Restore its per-locale values too — otherwise restoring an
+            // old version leaves the timezone(s) at the current post-edit value.
+            if field.field_type == FieldType::Date && field.timezone {
+                let tz_base = tz_column(&base);
+                let tz_field = tz_column(&field.name);
+
+                let tz_val = if prefix.is_empty() {
+                    obj.get(&tz_field)
+                } else {
+                    resolve_snapshot_value(obj, &tz_base, prefix, &tz_field)
+                };
+
+                let tz_value_for = |locale: &str| {
+                    if *locale == locale_config.default_locale {
+                        return tz_val;
+                    }
+
+                    let decorated_base = format!("{tz_base}__{locale}");
+                    if prefix.is_empty() {
+                        obj.get(&decorated_base)
+                    } else {
+                        let decorated_field = format!("{tz_field}__{locale}");
+                        resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
+                    }
+                };
+
+                restore_locale_columns(
+                    conn,
+                    &tz_base,
+                    locale_config,
+                    set_clauses,
+                    params,
+                    idx,
+                    &tz_value_for,
+                )?;
+            }
+
+            Ok(())
         },
     )
 }
@@ -505,6 +549,98 @@ mod tests {
             row.get_string("start_date_tz").unwrap(),
             "America/New_York",
             "Restored timezone should match the snapshot"
+        );
+    }
+
+    #[test]
+    fn restore_version_preserves_localized_timezone_companion() {
+        // Regression: a LOCALIZED timezone Date's `_tz` companion columns are
+        // per-locale (`start_date_tz__en`, `start_date_tz__de`) and go through
+        // the locale-restore path, not `update()`. Restoring a version used to
+        // rewrite only the date columns and leave the tz companions at their
+        // current post-edit values — silently corrupting the restored timezone.
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date__en TEXT,
+                start_date__de TEXT,
+                start_date_tz__en TEXT,
+                start_date_tz__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_events (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            -- current (post-edit) state: both locales' timezone changed
+            INSERT INTO events
+                (id, start_date__en, start_date__de, start_date_tz__en, start_date_tz__de, _status)
+                VALUES ('e1', '2024-06-15T14:00:00.000Z', '2024-06-15T14:00:00.000Z',
+                        'Europe/London', 'Europe/London', 'published');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // Earlier version: en tz = New York, de tz = Berlin (default under the
+        // bare key, non-default under `__de`, as the snapshot carries them).
+        let snapshot_v1 = json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date__de": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "America/New_York",
+            "start_date_tz__de": "Europe/Berlin",
+        });
+        create_version(&conn, "events", "e1", "published", &snapshot_v1).unwrap();
+
+        restore_version(
+            &conn,
+            "events",
+            &def,
+            "e1",
+            &snapshot_v1,
+            "published",
+            &locale,
+        )
+        .unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT start_date_tz__en, start_date_tz__de FROM events WHERE id = 'e1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("start_date_tz__en").unwrap(),
+            "America/New_York",
+            "the default-locale _tz companion must be restored"
+        );
+        assert_eq!(
+            row.get_string("start_date_tz__de").unwrap(),
+            "Europe/Berlin",
+            "the non-default-locale _tz companion must be restored"
         );
     }
 }

@@ -66,7 +66,10 @@ pub fn set_max_nesting_depth(limit: usize) {
     let _ = MAX_NESTING_DEPTH.set(limit);
 }
 
-fn max_nesting_depth() -> usize {
+/// The process-wide JSON data-nesting limit (`depth.max_nesting_depth`). Shared
+/// by every data-ingestion converter so the Lua↔JSON path and the gRPC↔JSON
+/// path reject over-deep data identically, guarding against stack overflow.
+pub fn max_nesting_depth() -> usize {
     MAX_NESTING_DEPTH
         .get()
         .copied()

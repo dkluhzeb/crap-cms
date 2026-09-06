@@ -438,3 +438,33 @@ memories; the load-bearing ones:
   Date inside a Blocks field never inherited the config default
   (regression test added). M1 PARTIAL→GUARDED. Not a convergence audit
   round — round 4 still pending.
+- 2026-09-06 (13) — **CONVERGENCE ROUND 4** (5 fresh lenses:
+  tx-failure consistency, locale/i18n, unbounded recursion/limits,
+  upload/storage lifecycle, numeric/serialization). 6 actionable
+  findings, all personally verified by full-path trace and fixed
+  test-first: **3 HIGH** — (1) gRPC ingestion converter recursed
+  unbounded on attacker data, a pre-auth stack-overflow DoS (the
+  `max_nesting_depth` guard existed on the Lua path but not gRPC —
+  S/P guard-parity gap); (2) `update_upload` deleted the live
+  published file on a draft-save-with-new-file (L — file-vs-committed
+  state); (3) numeric-sort keyset pagination errored on Postgres at
+  whole-number boundaries (`AdaptiveInt` missing FLOAT8 — D
+  SQLite/PG drift, mirror of the checkbox INT2 fix). **2 MED** —
+  restore dropped a localized date's `_tz` companion (M coverage
+  gap); a whole Number in an array serialized as `5.0` not `5` (M/D
+  read-path divergence). **1 LOW-MED** — `update_upload`
+  `.ok().flatten()` swallowed a DB error and leaked old files (F1
+  fail-open, delete path was hardened but not update). The systemic
+  machinery audited CLEAN: tx commit-ordering, ref-count deltas
+  under failure, access control, upload CleanupGuard + backend
+  parity, populate depth/cycle detection, signed URLs, the whole
+  numeric coerce/has-many-scalar path. **Round 4 did NOT converge**
+  (3 HIGH) — the finding rate is falling (R1 21 / R2 18 / R3 6 / R4
+  6, but severity concentrated) and every finding was an existing
+  class, 0 new classes. Round 5 required. Also noted (not fixed):
+  bulk default 0, conn-mode invalidation asymmetry, doubly-nested
+  group filter locale, localized-array required sub-fields
+  (already-known). Deferred residual: prost/tonic decode of the
+  self-referential message is a separate recursion the converter
+  guard doesn't cover — message size is bounded (grpc_max_msg) but
+  not depth; flagged for a decode-level mitigation decision.
