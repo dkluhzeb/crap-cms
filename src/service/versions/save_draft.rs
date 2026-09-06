@@ -145,10 +145,14 @@ fn merge_join_data_prefixed(
                     merge_join_data_prefixed(obj, &tab.fields, data, prefix);
                 }
             }
-            // A has-many Relationship stores its join rows in the snapshot the
-            // same way Array/Blocks do; other leaves carry no join data here.
+            // A has-many Relationship or Upload stores its join rows in the
+            // snapshot the same way Array/Blocks do; other leaves carry no join
+            // data here.
             FieldChildren::Leaf => {
-                if field.field_type == FieldType::Relationship {
+                if matches!(
+                    field.field_type,
+                    FieldType::Relationship | FieldType::Upload
+                ) {
                     let key = prefixed_name(prefix, &field.name);
 
                     if let Some(v) = data.get(&key) {
@@ -216,6 +220,35 @@ mod tests {
         let mut obj = serde_json::Map::new();
         merge_join_data_into_snapshot(&mut obj, &fields, &DocumentFields::new());
         assert!(obj.is_empty());
+    }
+
+    /// Regression: a has-many Upload is join-table-backed exactly like a
+    /// has-many Relationship, so an edit to it must be overlaid onto the
+    /// snapshot. `build_snapshot` rebuilds the pre-edit join data from the DB,
+    /// so skipping Upload here silently kept the stale selection — the draft
+    /// dropped the user's edit.
+    #[test]
+    fn overlays_edited_has_many_upload_join_value() {
+        let fields = vec![
+            FieldDefinition::builder("gallery", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", true))
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("gallery".into(), json!(["m1", "m2"]));
+
+        // Snapshot as `build_snapshot` produced it: the stale pre-edit selection.
+        let mut obj = serde_json::Map::new();
+        obj.insert("gallery".into(), json!(["m0"]));
+
+        merge_join_data_into_snapshot(&mut obj, &fields, &data);
+
+        assert_eq!(
+            obj.get("gallery"),
+            Some(&json!(["m1", "m2"])),
+            "an edited has-many Upload must overlay the snapshot like a Relationship"
+        );
     }
 
     /// Regression: a join field (array/blocks/has-many) nested inside a Group is

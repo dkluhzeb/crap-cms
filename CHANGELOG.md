@@ -1548,6 +1548,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Editing a has-many Upload field and saving a draft silently kept the
+  pre-edit selection.** A draft snapshot rebuilds join data from the DB
+  (pre-edit) and then re-overlays the edited join values, but the overlay
+  handled has-many Relationship and not has-many Upload — so a change to a
+  has-many Upload field never reached the draft, and restoring it brought
+  back the old files. Upload now overlays exactly like Relationship, which
+  every sibling join walker already does.
+
 - **A `timezone` Date field nested inside a Blocks field never inherited
   the configured default timezone.** The startup pass that stamps the
   global `default_timezone` onto timezone-enabled Date fields descended
