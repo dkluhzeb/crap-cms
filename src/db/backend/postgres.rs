@@ -26,6 +26,49 @@ use crate::{
     },
 };
 
+/// Widen `INTEGER` column types to `BIGINT` for Postgres DDL, but ONLY outside
+/// single-quoted string literals — a blind `sql.replace(" INTEGER", " BIGINT")`
+/// would also rewrite a literal such as `DEFAULT 'AN INTEGER'`, persisting a
+/// corrupted default. `INTEGER` as a type token always sits outside quotes in
+/// our generated DDL, so we replace only in the even (unquoted) segments when
+/// splitting on `'`.
+fn pg_widen_integer(sql: &str) -> String {
+    sql.split('\'')
+        .enumerate()
+        .map(|(i, seg)| {
+            if i % 2 == 0 {
+                seg.replace(" INTEGER", " BIGINT")
+            } else {
+                seg.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("'")
+}
+
+#[cfg(test)]
+mod widen_tests {
+    use super::pg_widen_integer;
+
+    #[test]
+    fn widens_type_token_but_not_string_literal() {
+        assert_eq!(pg_widen_integer("x INTEGER NOT NULL"), "x BIGINT NOT NULL");
+        assert_eq!(
+            pg_widen_integer("a INTEGER, b INTEGER)"),
+            "a BIGINT, b BIGINT)"
+        );
+        // A string literal containing " INTEGER" must survive verbatim.
+        assert_eq!(
+            pg_widen_integer("v TEXT DEFAULT 'AN INTEGER'"),
+            "v TEXT DEFAULT 'AN INTEGER'"
+        );
+        assert_eq!(
+            pg_widen_integer("a INTEGER, b TEXT DEFAULT 'an INTEGER value'"),
+            "a BIGINT, b TEXT DEFAULT 'an INTEGER value'"
+        );
+    }
+}
+
 // ── Shared trait methods (non-query) ─────────────────────────────────────
 
 /// Methods that don't depend on the client type — implemented identically
@@ -508,13 +551,11 @@ macro_rules! pg_query_methods {
         }
 
         fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-            let adjusted = sql.replace(" INTEGER", " BIGINT");
-            self.execute(&adjusted, params)
+            self.execute(&pg_widen_integer(sql), params)
         }
 
         fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
-            let adjusted = sql.replace(" INTEGER", " BIGINT");
-            self.execute_batch(&adjusted)
+            self.execute_batch(&pg_widen_integer(sql))
         }
 
         fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {

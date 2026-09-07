@@ -71,10 +71,18 @@ fn delete_document_pool(
         // rolling back would restore the DB row pointing at nothing. With
         // an enclosing scope, queue for its post-commit flush; without
         // one (legacy direct conn callers), keep the immediate behavior.
+        // Resolve the server-derived file keys now, while this collection's
+        // upload config is in scope: the cross-collection cleanup queue stores
+        // keys, and the direct-delete fallback deletes them immediately.
+        let keys = def
+            .upload
+            .as_ref()
+            .map(|u| upload::upload_file_keys(&fields, u))
+            .unwrap_or_default();
         if let Some(queue) = &ctx.file_cleanup {
-            queue.borrow_mut().push(fields);
+            queue.borrow_mut().extend(keys);
         } else if let Some(s) = storage {
-            upload::delete_upload_files(s, &fields);
+            upload::delete_storage_keys(s, &keys);
         }
     }
 
@@ -108,10 +116,18 @@ fn delete_document_conn(
         // rolling back would restore the DB row pointing at nothing. With
         // an enclosing scope, queue for its post-commit flush; without
         // one (legacy direct conn callers), keep the immediate behavior.
+        // Resolve the server-derived file keys now, while this collection's
+        // upload config is in scope: the cross-collection cleanup queue stores
+        // keys, and the direct-delete fallback deletes them immediately.
+        let keys = def
+            .upload
+            .as_ref()
+            .map(|u| upload::upload_file_keys(&fields, u))
+            .unwrap_or_default();
         if let Some(queue) = &ctx.file_cleanup {
-            queue.borrow_mut().push(fields);
+            queue.borrow_mut().extend(keys);
         } else if let Some(s) = storage {
-            upload::delete_upload_files(s, &fields);
+            upload::delete_storage_keys(s, &keys);
         }
     }
 

@@ -255,20 +255,50 @@ fn purge_old_jobs() {
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     job_query::complete_job(&conn, &run.id, 1, None).unwrap();
 
-    // Backdate created_at so the purge threshold catches it
+    // Backdate the terminal time (completed_at) so the purge threshold — which
+    // measures retention from completion — catches it. created_at is backdated
+    // too for realism.
     conn.execute(
-        "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds') WHERE id = ?1",
+        "UPDATE _crap_jobs
+         SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds'),
+             completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds')
+         WHERE id = ?1",
         &[DbValue::Text(run.id.clone())],
     )
     .unwrap();
 
-    // Purge with 60 seconds threshold should purge the backdated completed job
+    // Purge with 60 seconds threshold should purge the long-finished job.
     let purged = job_query::purge_old_jobs(&conn, 60).unwrap();
     assert_eq!(purged, 1);
 
     // Verify it's gone
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap();
     assert!(fetched.is_none(), "Purged job should not be found");
+
+    // Regression: retention is measured from COMPLETION, not creation. A job
+    // queued long ago (old created_at) but only just finished (recent
+    // completed_at) must NOT be purged before its result can be read.
+    let recent =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::claim_pending_jobs(&conn, 5, &HashMap::new(), &HashMap::new(), 0).unwrap();
+    job_query::complete_job(&conn, &recent.id, 1, None).unwrap();
+    conn.execute(
+        "UPDATE _crap_jobs
+         SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds')
+         WHERE id = ?1",
+        &[DbValue::Text(recent.id.clone())],
+    )
+    .unwrap();
+
+    assert_eq!(
+        job_query::purge_old_jobs(&conn, 60).unwrap(),
+        0,
+        "a just-completed run (old created_at, recent completed_at) is not purged"
+    );
+    assert!(
+        job_query::get_job_run(&conn, &recent.id).unwrap().is_some(),
+        "the just-completed run survives the purge"
+    );
 }
 
 // ── Job Execution (HookRunner) ──────────────────────────────────────────

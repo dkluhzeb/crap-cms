@@ -275,10 +275,10 @@ fn purge_documents(
             continue;
         }
 
-        if def.is_upload_collection()
+        if let Some(upload) = def.upload.as_ref()
             && let Ok(Some(doc)) = query::find_by_id_unfiltered(tx, slug, def, id, None)
         {
-            upload::delete_upload_files(storage, &doc.fields);
+            upload::delete_upload_files(storage, &doc.fields, upload);
         }
 
         query::ref_count::before_hard_delete(tx, slug, id, &def.fields, locale)?;

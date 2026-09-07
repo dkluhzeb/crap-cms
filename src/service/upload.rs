@@ -246,8 +246,10 @@ pub fn update_upload(
         g.commit();
     }
 
-    if let Some(old_fields) = old_doc_fields {
-        delete_upload_files(&**storage, &old_fields);
+    if let Some(old_fields) = old_doc_fields
+        && let Some(upload) = def.upload.as_ref()
+    {
+        delete_upload_files(&**storage, &old_fields, upload);
     }
 
     if !queued_conversions.is_empty()

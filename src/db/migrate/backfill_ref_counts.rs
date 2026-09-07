@@ -13,9 +13,6 @@ use crate::{
     },
 };
 
-/// Legacy "everything is backfilled" meta key.
-const META_KEY: &str = "ref_count_backfilled";
-
 /// Current backfill computation version. Stored as the meta *value* (not
 /// baked into the key, which stays stable). Bump this whenever the ref-count
 /// computation changes so existing databases recompute once on the next
@@ -47,12 +44,17 @@ pub(crate) fn backfill_if_needed(
     registry: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    // Legacy "all backfilled" flag — only honored when it carries the current
-    // version. An older value (or absence) means everything must recompute.
-    let has_legacy_flag = meta::get(conn, META_KEY)?.as_deref() == Some(BACKFILL_VERSION);
-
-    // Collect which collections/globals need backfilling. A DB error from
-    // `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
+    // Detect which collections/globals still need backfilling, ALWAYS by the
+    // per-slug flag — a collection added after the initial backfill must be
+    // covered even if the database was already fully backfilled once. (The old
+    // global `ref_count_backfilled` flag short-circuited this whole loop once
+    // set, so a later-added collection was silently never backfilled — an
+    // under-count that defeats O(1) delete protection.) Version-gating still
+    // works: `is_backfilled` compares the per-slug value to `BACKFILL_VERSION`,
+    // so bumping the version re-walks everything. The per-slug reads are cheap,
+    // and a fully up-to-date database still early-returns below.
+    //
+    // A DB error from `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
     // `.unwrap_or(true)` mapped a transient error to "already backfilled" and
     // silently dropped that collection from the backfill set, leaving its
     // `_ref_count` columns permanently wrong. Failing loud at startup migration
@@ -60,17 +62,15 @@ pub(crate) fn backfill_if_needed(
     let mut needs_backfill_collections = Vec::new();
     let mut needs_backfill_globals = Vec::new();
 
-    if !has_legacy_flag {
-        for (slug, def) in &registry.collections {
-            if !is_backfilled(conn, slug)? {
-                needs_backfill_collections.push((slug, def));
-            }
+    for (slug, def) in &registry.collections {
+        if !is_backfilled(conn, slug)? {
+            needs_backfill_collections.push((slug, def));
         }
+    }
 
-        for (slug, def) in &registry.globals {
-            if !is_backfilled(conn, slug)? {
-                needs_backfill_globals.push((slug, def));
-            }
+    for (slug, def) in &registry.globals {
+        if !is_backfilled(conn, slug)? {
+            needs_backfill_globals.push((slug, def));
         }
     }
 
@@ -112,12 +112,6 @@ pub(crate) fn backfill_if_needed(
 
     for (slug, _) in &needs_backfill_globals {
         mark_backfilled(conn, slug)?;
-    }
-
-    // Stamp the legacy flag at the current version so a fully up-to-date
-    // database short-circuits on the next startup.
-    if !has_legacy_flag {
-        meta::upsert(conn, META_KEY, BACKFILL_VERSION)?;
     }
 
     info!("Ref count backfill complete");
@@ -499,13 +493,13 @@ mod tests {
         conn.execute("INSERT INTO pages (id, hero) VALUES ('pg2', 'm2')", &[])
             .unwrap();
 
-        // Simulate "pages was just added": clear the legacy flag and the pages
-        // per-collection flag, but leave the posts per-collection flag intact.
-        conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
-            &[],
-        )
-        .unwrap();
+        // Simulate a database upgraded from the era that wrote a global
+        // `ref_count_backfilled` flag, with `pages` added AFTER that initial
+        // backfill: set the (now-ignored) legacy flag and drop only the pages
+        // per-collection flag, leaving posts' intact. The backfill must still
+        // detect and cover pages — a stale legacy flag must not short-circuit
+        // per-collection detection (the bug this guards against).
+        meta::upsert(&conn, "ref_count_backfilled", BACKFILL_VERSION).unwrap();
         conn.execute(
             "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled:pages'",
             &[],

@@ -379,7 +379,11 @@ changing a representation is a breaking change to every consumer.
   user-invalidation broadcast reports `Lagged` or `Closed` — an overflow may have
   dropped this session's own revocation, so the stream cannot be proven still
   valid and is torn down to force a re-authenticating reconnect. Staying
-  connected on a lost signal is forbidden.
+  connected on a lost signal is forbidden. The Redis invalidation transport
+  upholds this at the pump too: if a subscriber's local queue is full and even
+  the `Lagged` sentinel cannot be enqueued, the pump terminates so the receiver
+  observes `Closed` (fail-closed) rather than silently dropping the message; the
+  event transport, whose loss is non-contractual, stays best-effort.
 - **Server-derived upload columns are never user-writable.** `url`, every
   `{size}[_fmt]_url`, `filename`, `mime_type`, `filesize`, `width`, and `height`
   (`CollectionUpload::derived_field_names`) are computed by the upload pipeline

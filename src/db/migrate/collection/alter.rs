@@ -196,6 +196,12 @@ fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
         return Ok(());
     }
 
+    // No server DEFAULT here, unlike CREATE: SQLite forbids
+    // `ALTER TABLE ... ADD COLUMN` with a NON-CONSTANT default (the timestamp
+    // default is `strftime(...)`/`NOW()`), so the add-timestamps path must use
+    // the plain column type. This is safe — every write binds
+    // `created_at`/`updated_at` explicitly (`utc_now()`), so the absent server
+    // default never surfaces.
     let ts_type = ctx.conn.timestamp_column_type();
 
     for col_name in ["created_at", "updated_at"] {

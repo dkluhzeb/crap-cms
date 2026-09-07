@@ -23,7 +23,7 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::{Context as _, anyhow};
 
 use crate::{
-    core::upload::delete_upload_files,
+    core::upload::delete_storage_keys,
     hooks::LuaCrudInfra,
     service::{
         Def, DeferredQueue, EffectOutcome, RunnerWriteHooks, ServiceContext, ServiceError,
@@ -149,9 +149,8 @@ pub(crate) fn run_pool_write<T>(
     // that the rows are durably gone. (On rollback the queue is simply
     // dropped — orphaned files are the safe direction.)
     if let Some(storage) = &ctx.storage {
-        for fields in fq.borrow_mut().drain(..) {
-            delete_upload_files(storage.as_ref(), &fields);
-        }
+        let keys: Vec<String> = fq.borrow_mut().drain(..).collect();
+        delete_storage_keys(storage.as_ref(), &keys);
     }
 
     post_commit(ctx, &result);

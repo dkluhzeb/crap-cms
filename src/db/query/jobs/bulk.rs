@@ -64,9 +64,14 @@ pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i
     let (offset_sql, offset_param) = conn.date_offset_expr(older, 1);
     let deleted = i64::try_from(conn.execute(
         &format!(
+            // Retention is measured from when the run FINISHED, not when it was
+            // queued: a run held pending by a long `delay` (or accumulated
+            // backoff) past the retention window would otherwise be purged the
+            // instant it completes, before the queuer can poll its result.
+            // `stale` rows without a `completed_at` fall back to `created_at`.
             "DELETE FROM _crap_jobs
              WHERE status IN ('completed', 'failed', 'stale')
-               AND created_at < {offset_sql}"
+               AND COALESCE(completed_at, created_at) < {offset_sql}"
         ),
         &[offset_param],
     )?)

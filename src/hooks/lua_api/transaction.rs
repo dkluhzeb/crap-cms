@@ -37,7 +37,7 @@ use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 use tracing::warn;
 
 use crate::{
-    core::{SharedCache, upload::delete_upload_files},
+    core::{SharedCache, upload::delete_storage_keys},
     hooks::{
         lifecycle::{LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm},
         lua_api::crud::{TxSlot, ensure_writable},
@@ -201,9 +201,8 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
                 .app_data_ref::<LuaVmInfra>()
                 .and_then(|i| i.storage.clone())
             {
-                for fields in tx_files.borrow_mut().drain(..) {
-                    delete_upload_files(&*storage, &fields);
-                }
+                let keys: Vec<String> = tx_files.borrow_mut().drain(..).collect();
+                delete_storage_keys(&*storage, &keys);
             }
 
             // Populate-cache invalidation from writes inside this transaction:

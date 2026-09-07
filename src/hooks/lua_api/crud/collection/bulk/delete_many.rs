@@ -226,7 +226,7 @@ fn collections_delete_many(
 
     let svc_result = DeleteMany::run(&ctx, op_args).map_err(lua_err)?;
 
-    if !service_def.soft_delete && !svc_result.upload_fields_to_clean.is_empty() {
+    if !service_def.soft_delete && !svc_result.upload_keys_to_clean.is_empty() {
         // Files after commit: in conn mode this runs
         // inside the caller's transaction — queue for its post-commit
         // flush. Pool mode (this op committed already) and legacy
@@ -239,14 +239,12 @@ fn collections_delete_many(
         if let (true, Some(queue)) = (in_conn_mode, queue) {
             queue
                 .borrow_mut()
-                .extend(svc_result.upload_fields_to_clean.iter().cloned());
+                .extend(svc_result.upload_keys_to_clean.iter().cloned());
         } else if let Some(storage) = lua
             .app_data_ref::<LuaVmInfra>()
             .and_then(|i| i.storage.clone())
         {
-            for fields in &svc_result.upload_fields_to_clean {
-                upload::delete_upload_files(&*storage, fields);
-            }
+            upload::delete_storage_keys(&*storage, &svc_result.upload_keys_to_clean);
         }
     }
 

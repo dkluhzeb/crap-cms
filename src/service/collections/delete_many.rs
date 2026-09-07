@@ -4,7 +4,7 @@ use anyhow::Context as _;
 
 use crate::{
     config::LocaleConfig,
-    core::DocumentFields,
+    core::upload::upload_file_keys,
     db::{FilterClause, FindQuery, query},
     service::{
         ServiceContext, ServiceError, delete_document_in_conn, invalidate_user_streams_if_auth,
@@ -25,7 +25,10 @@ pub struct DeleteManyResult {
     pub soft_deleted: i64,
     pub skipped: i64,
     pub deleted_ids: Vec<String>,
-    pub upload_fields_to_clean: Vec<DocumentFields>,
+    /// Storage keys of the deleted documents' server-derived upload files,
+    /// resolved here (where the collection's upload config is in scope) so the
+    /// caller can delete or queue them without the schema.
+    pub upload_keys_to_clean: Vec<String>,
 }
 
 /// Options controlling bulk delete behavior.
@@ -125,7 +128,7 @@ fn delete_many_pool(
             let mut hard_count = 0i64;
             let mut soft_count = 0i64;
             let mut skipped_count = 0i64;
-            let mut upload_fields_to_clean = Vec::new();
+            let mut upload_keys_to_clean: Vec<String> = Vec::new();
             let mut deleted_ids = Vec::new();
             // Pre-deletion `_status` per deleted id, in lockstep with
             // `deleted_ids`, to gate each hard-delete event by the status view
@@ -142,8 +145,10 @@ fn delete_many_pool(
                             soft_count += 1;
                         } else {
                             hard_count += 1;
-                            if let Some(fields) = result.upload_doc_fields {
-                                upload_fields_to_clean.push(fields);
+                            if let Some(fields) = result.upload_doc_fields
+                                && let Some(u) = def.upload.as_ref()
+                            {
+                                upload_keys_to_clean.extend(upload_file_keys(&fields, u));
                             }
                         }
                         deleted_ids.push(id.clone());
@@ -169,7 +174,7 @@ fn delete_many_pool(
                     soft_deleted: soft_count,
                     skipped: skipped_count,
                     deleted_ids,
-                    upload_fields_to_clean,
+                    upload_keys_to_clean,
                 },
                 pre_statuses,
             ))
@@ -232,7 +237,7 @@ fn delete_many_conn(
     let mut hard_count = 0i64;
     let mut soft_count = 0i64;
     let mut skipped_count = 0i64;
-    let mut upload_fields_to_clean = Vec::new();
+    let mut upload_keys_to_clean: Vec<String> = Vec::new();
     let mut deleted_ids = Vec::new();
 
     for id in &doc_ids {
@@ -244,8 +249,10 @@ fn delete_many_conn(
                     soft_count += 1;
                 } else {
                     hard_count += 1;
-                    if let Some(fields) = result.upload_doc_fields {
-                        upload_fields_to_clean.push(fields);
+                    if let Some(fields) = result.upload_doc_fields
+                        && let Some(u) = def.upload.as_ref()
+                    {
+                        upload_keys_to_clean.extend(upload_file_keys(&fields, u));
                     }
                 }
 
@@ -282,7 +289,7 @@ fn delete_many_conn(
         soft_deleted: soft_count,
         skipped: skipped_count,
         deleted_ids,
-        upload_fields_to_clean,
+        upload_keys_to_clean,
     })
 }
 

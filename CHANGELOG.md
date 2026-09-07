@@ -1632,6 +1632,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Publishing a translation (a non-default-locale edit) is no longer rejected
+  because of shared fields.** The admin edit form submits non-localized (shared)
+  fields read-only under a non-default locale — and now, with a shared array's
+  hidden row-id input, an array whose inputs are otherwise all disabled submits a
+  key too. The service rejects a non-default-locale write that carries a shared
+  field (guarding gRPC/Lua/MCP from silently overwriting the canonical
+  default-locale value), so **Publish** failed where **Save draft** (which strips
+  those fields) succeeded. The admin publish path now strips shared fields the
+  same way the draft path does; the service-level guard still protects the
+  programmatic surfaces.
+- **`delete` no longer removes a file that a user `*_url` field merely points
+  at.** Upload file cleanup matched any field ending in `_url` (with a
+  hand-maintained `image_url` exception) instead of the collection's authoritative
+  server-derived columns. A user-defined field such as `source_url` was therefore
+  treated as a managed file: a value pointing at another document's file (forged
+  from its public URL) let a delete remove that file, and an unchanged such field
+  could delete a still-referenced file on an update. Cleanup now deletes only the
+  columns the upload pipeline generates (`url`, `{size}_url`, `{size}_{fmt}_url`),
+  the same set the serve gate and write-strip already trust; external/user
+  `*_url` values are left untouched.
+- **A collection added after the initial ref-count backfill is now backfilled.**
+  A one-time global "everything is backfilled" flag short-circuited the
+  per-collection backfill detection once set, so a collection added later (without
+  bumping the backfill version) never had its `_ref_count` computed — an
+  under-count that lets a still-referenced document be hard-deleted (a dangling
+  reference) when its rows were loaded outside the service layer (a raw SQL
+  migration, an import, a restore). Detection now always runs off the per-slug
+  flag; a fully up-to-date database still short-circuits.
+- **A very long collection slug is rejected instead of silently dropping a
+  version uniqueness index on Postgres.** Identifier validation checked table and
+  column names against Postgres's 63-byte limit but not the derived version index
+  names. A ~33+ char slug (still under the table limit) truncated
+  `idx__ver_{slug}_parent_version_unique` to collide with the non-unique index, so
+  `CREATE UNIQUE INDEX IF NOT EXISTS` silently skipped — losing the
+  `(_parent, _version)` uniqueness guard and allowing duplicate version rows.
+  Overlong version index names now fail at load.
+- **A saturated Redis invalidation stream now fails closed instead of dropping a
+  revocation.** When a subscriber's local queue filled, the pump tried to signal
+  `Lagged` on the same full queue and silently dropped it, so the subscriber never
+  observed the overflow — on the session-revocation channel a lost message is a
+  lost revocation, and the revoked session kept streaming (fail-open). The
+  invalidation pump now terminates on an undeliverable overflow so the receiver
+  sees the channel close and tears the subscriber down; the event stream stays
+  best-effort. (Redis transport only; the in-process bus was always correct.)
+- **Postgres DDL no longer rewrites `INTEGER` inside a string literal.** The
+  `INTEGER`→`BIGINT` widening applied to the whole DDL string, so a text field
+  whose default contained `" INTEGER"` (e.g. `DEFAULT 'AN INTEGER'`) persisted a
+  corrupted default on Postgres. The widening now skips single-quoted literals.
+- **Job auto-purge measures retention from completion, not creation.** A run held
+  pending past the retention window by a long `delay` (or accumulated backoff)
+  could be purged the instant it finished — before its result could be read.
+  Retention is now measured from `completed_at` (falling back to `created_at`).
+
 - **Updating an array or blocks field no longer destroys a sub-field the write
   omits.** These fields were rebuilt on every update — delete every junction row
   for the parent, then re-insert the incoming rows with fresh ids — so a

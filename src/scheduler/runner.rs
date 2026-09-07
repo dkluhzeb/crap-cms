@@ -536,9 +536,9 @@ pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
     registry: &Registry,
     locale_config: &LocaleConfig,
-) -> Result<(u64, Vec<DocumentFields>)> {
+) -> Result<(u64, Vec<String>)> {
     let mut total = 0u64;
-    let mut files_to_clean = Vec::new();
+    let mut keys_to_clean: Vec<String> = Vec::new();
 
     for (slug, def) in &registry.collections {
         if !def.soft_delete {
@@ -557,7 +557,7 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let (purged, mut files) = purge_collection(&PurgeCollectionInput {
+        let (purged, files) = purge_collection(&PurgeCollectionInput {
             conn,
             slug,
             def,
@@ -565,10 +565,17 @@ pub fn purge_soft_deleted(
             locale_config,
         })?;
         total += purged;
-        files_to_clean.append(&mut files);
+
+        // Resolve the server-derived file keys here, where this collection's
+        // upload config is in scope, so the drained queue carries plain keys.
+        if let Some(upload) = def.upload.as_ref() {
+            for fields in &files {
+                keys_to_clean.extend(upload::upload_file_keys(fields, upload));
+            }
+        }
     }
 
-    Ok((total, files_to_clean))
+    Ok((total, keys_to_clean))
 }
 
 /// Purge expired soft-deleted documents from a single collection.

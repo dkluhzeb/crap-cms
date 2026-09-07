@@ -274,9 +274,11 @@ pub struct LuaCrudInfra {
     pub cache_dirty: Option<Rc<Cell<bool>>>,
 }
 
-/// Queue of deleted upload documents' field maps, drained post-commit
-/// to remove their storage files.
-pub type FileCleanupQueue = Rc<RefCell<Vec<crate::core::DocumentFields>>>;
+/// Queue of storage keys for deleted upload documents' server-derived files,
+/// drained post-commit to remove them. Keys are resolved at push time (where the
+/// collection's upload config is in scope, via `upload_file_keys`) so the drain
+/// is schema-free and a cross-collection queue needs no per-entry config.
+pub type FileCleanupQueue = Rc<RefCell<Vec<String>>>;
 
 impl LuaCrudInfra {
     /// Pool-mode CRUD infra (cache + event transport, no queues) for the

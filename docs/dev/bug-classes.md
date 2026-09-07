@@ -253,6 +253,10 @@ memories; the load-bearing ones:
 - `from_locale_string(None, …)` cannot `Err` — the admin
   `unwrap_or(None)` sites are dead-handling, not bare-column bugs.
   (Unknown *Some(bad)* locales were a separate, fixed issue.)
+- `ALTER TABLE ADD COLUMN` for `created_at`/`updated_at` intentionally omits
+  the `DEFAULT now` that `CREATE` uses — SQLite forbids a non-constant default
+  on an added column. Every write binds the timestamps explicitly, so the
+  absent server default never surfaces. Not a create-vs-alter bug.
 - Sort/filter never silently falls back to a default on invalid input.
   The admin list handler 400s an unknown/unsortable `sort`, an unknown
   `_status` value, and a drafts-only status filter on a no-drafts

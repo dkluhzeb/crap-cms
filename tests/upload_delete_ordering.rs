@@ -109,10 +109,10 @@ fn conn_mode_delete_queues_file_cleanup_instead_of_deleting_immediately() {
         "after rollback the file must survive (orphaned file, not a dangling row)"
     );
 
-    // Commit direction: draining the queue removes the file.
-    for fields in cleanup.borrow_mut().drain(..) {
-        crap_cms::core::upload::delete_upload_files(&storage, &fields);
-    }
+    // Commit direction: draining the queue (now pre-resolved storage keys)
+    // removes the file.
+    let keys: Vec<String> = cleanup.borrow_mut().drain(..).collect();
+    crap_cms::core::upload::delete_storage_keys(&storage, &keys);
     assert!(
         !storage.exists("media/pic.png").unwrap(),
         "post-commit flush must delete the file"

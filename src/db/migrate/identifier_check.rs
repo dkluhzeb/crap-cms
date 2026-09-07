@@ -70,6 +70,21 @@ pub(super) fn check_identifiers(
         Ok(())
     })?;
 
+    // Version-table index names (created when versions are enabled). The longest
+    // is `idx__ver_{slug}_parent_version_unique`; a slug long enough to truncate
+    // it on Postgres (>63 bytes) would collide it with the non-unique
+    // `idx__ver_{slug}_parent_version`, so `CREATE UNIQUE INDEX IF NOT EXISTS`
+    // silently skips — losing the `(_parent, _version)` uniqueness guard and
+    // allowing duplicate version rows. A slug that itself fits the 63-byte table
+    // limit can still overflow this derived name, so validate it explicitly.
+    // Checked last so a more specific table/column/join-table overflow reports
+    // first.
+    check_ident(
+        "version index name",
+        &format!("idx__ver_{table_base}_parent_version_unique"),
+        "collection name (shorten it)",
+    )?;
+
     Ok(())
 }
 
@@ -91,6 +106,28 @@ mod tests {
                 .build(),
         ];
         assert!(check_identifiers("posts", &fields, &cfg()).is_ok());
+    }
+
+    #[test]
+    fn long_slug_rejected_for_version_index_name() {
+        // A 40-char slug fits the 63-byte TABLE limit, but the derived
+        // `idx__ver_{slug}_parent_version_unique` (40 + 31 = 71 bytes) overflows
+        // on Postgres and would silently collide the unique index with the
+        // non-unique one. This must be rejected at load, not deferred to a
+        // silent duplicate-version bug on a PG deploy.
+        let slug = "s".repeat(40);
+        assert!(
+            check_identifiers(&slug, &[], &cfg()).is_err(),
+            "a 40-char slug must be rejected for its version index name"
+        );
+        let err = check_identifiers(&slug, &[], &cfg())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("version index name"), "got: {err}");
+        assert!(err.contains("over the 63-byte"), "got: {err}");
+
+        // A 30-char slug is fine (idx name = 61 bytes).
+        assert!(check_identifiers(&"s".repeat(30), &[], &cfg()).is_ok());
     }
 
     #[test]

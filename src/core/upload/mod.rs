@@ -21,7 +21,8 @@ pub use format::{FormatOptions, FormatQuality, FormatResult};
 pub use image_fit::ImageFit;
 pub use image_size::{ImageSize, ImageSizeBuilder};
 pub use metadata::{
-    assemble_sizes_object, delete_upload_files, enqueue_conversions, inject_upload_metadata,
+    assemble_sizes_object, delete_storage_keys, delete_upload_files, enqueue_conversions,
+    inject_upload_metadata, upload_file_keys,
 };
 pub use process::{CleanupGuard, process_upload};
 pub use processed_upload::ProcessedUpload;

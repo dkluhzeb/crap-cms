@@ -144,22 +144,52 @@ pub fn inject_upload_metadata(
     }
 }
 
-/// Delete all files associated with an upload document.
-/// Reads the url and per-size url fields to determine which files to remove.
-/// Extracts storage keys from `/uploads/{key}` URLs and deletes via the storage backend.
-pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFields) {
-    for (key, value) in doc_fields.as_map() {
-        if (key == "url" || key.ends_with("_url"))
-            && key != "image_url"
-            && let Value::String(url) = value
-            && let Some(storage_key) = key_from_served_url(url)
-        {
-            tracing::debug!("Deleting upload file: {}", storage_key);
-            if let Err(e) = storage.delete(storage_key) {
-                tracing::warn!("Failed to delete upload key '{}': {}", storage_key, e);
-            }
+/// Storage keys of the SERVER-DERIVED url columns (`url`, `{size}_url`,
+/// `{size}_{fmt}_url`) present in `doc_fields`, restricted to the authoritative
+/// [`CollectionUpload::system_field_names`] set. A USER field that merely ends
+/// in `_url` — an external `image_url`, a `source_url`, and so on — is never in
+/// that set, so it is never treated as a managed file: a forged value there
+/// cannot delete another document's file, and an unrelated external URL is not
+/// removed. (This replaces an `ends_with("_url")` string heuristic with a
+/// hand-maintained `image_url` exception that missed every other user field.)
+#[must_use]
+pub fn upload_file_keys(doc_fields: &DocumentFields, upload: &CollectionUpload) -> Vec<String> {
+    let system = upload.system_field_names();
+
+    doc_fields
+        .as_map()
+        .iter()
+        .filter(|(key, _)| {
+            (key.as_str() == "url" || key.ends_with("_url")) && system.contains(key.as_str())
+        })
+        .filter_map(|(_, value)| value.as_str())
+        .filter_map(|url| key_from_served_url(url).map(str::to_string))
+        .collect()
+}
+
+/// Delete the given storage keys, logging (not failing) on a per-key error.
+/// Callers resolve the keys with [`upload_file_keys`] where the collection's
+/// upload config is in scope, so deletion itself needs no schema — which lets
+/// the deferred post-commit cleanup queue carry plain keys across collections.
+pub fn delete_storage_keys(storage: &dyn StorageBackend, keys: &[String]) {
+    for key in keys {
+        tracing::debug!("Deleting upload file: {}", key);
+        if let Err(e) = storage.delete(key) {
+            tracing::warn!("Failed to delete upload key '{}': {}", key, e);
         }
     }
+}
+
+/// Delete every server-derived upload file of one document. Convenience for a
+/// single-collection caller that has the [`CollectionUpload`] in scope; the
+/// cross-collection deferred-cleanup queue instead stores pre-resolved keys
+/// (see [`upload_file_keys`]) and drains via [`delete_storage_keys`].
+pub fn delete_upload_files(
+    storage: &dyn StorageBackend,
+    doc_fields: &DocumentFields,
+    upload: &CollectionUpload,
+) {
+    delete_storage_keys(storage, &upload_file_keys(doc_fields, upload));
 }
 
 /// Insert queued format conversions as `_system_image_convert` jobs.
@@ -507,6 +537,22 @@ mod tests {
         LocalStorage::new(tmp.path().join("uploads"))
     }
 
+    fn bare_upload() -> CollectionUpload {
+        CollectionUpload::new()
+    }
+
+    fn upload_with_thumb_webp() -> CollectionUpload {
+        let mut u = CollectionUpload::new();
+        u.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(100)
+                .height(100)
+                .build(),
+        ];
+        u.format_options.webp = Some(FormatQuality::new(80, false));
+        u
+    }
+
     #[test]
     fn delete_upload_files_removes_existing() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -518,7 +564,7 @@ mod tests {
         let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/test.png"));
 
-        delete_upload_files(&storage, &doc_fields);
+        delete_upload_files(&storage, &doc_fields, &bare_upload());
         assert!(
             !storage.exists("media/test.png").unwrap(),
             "File should be deleted"
@@ -532,8 +578,8 @@ mod tests {
         let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/nonexistent.png"));
 
-        // Should not panic even if file doesn't exist
-        delete_upload_files(&storage, &doc_fields);
+        // Should not panic even if file doesn't exist.
+        delete_upload_files(&storage, &doc_fields, &bare_upload());
     }
 
     #[test]
@@ -544,8 +590,8 @@ mod tests {
         doc_fields.insert("url".into(), json!("https://external.com/image.png"));
         doc_fields.insert("website_url".into(), json!("https://example.com"));
 
-        // Should not panic and not try to delete external URLs
-        delete_upload_files(&storage, &doc_fields);
+        // External URLs resolve to no storage key — nothing to delete, no panic.
+        delete_upload_files(&storage, &doc_fields, &bare_upload());
     }
 
     #[test]
@@ -569,65 +615,71 @@ mod tests {
             json!("/uploads/media/orig_thumb.webp"),
         );
 
-        delete_upload_files(&storage, &doc_fields);
+        delete_upload_files(&storage, &doc_fields, &upload_with_thumb_webp());
         assert!(!storage.exists("media/orig.png").unwrap());
         assert!(!storage.exists("media/orig_thumb.png").unwrap());
         assert!(!storage.exists("media/orig_thumb.webp").unwrap());
     }
 
+    /// A USER field that ends in `_url` but is NOT a server-derived upload column
+    /// (an external `image_url`, a `source_url`, a `hero_image_url` with no
+    /// matching size) is never treated as a managed file — its target is NOT
+    /// deleted. This is the authoritative-set fix: the old `ends_with("_url")`
+    /// heuristic would delete whatever file such a (possibly forged) value
+    /// pointed at, enabling cross-document file deletion.
     #[test]
-    fn delete_upload_files_skips_image_url_fields() {
+    fn delete_upload_files_leaves_user_url_fields_untouched() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
+        storage.put("media/del.png", b"x", "image/png").unwrap();
         storage
-            .put("media/keep.png", b"keep me", "image/png")
+            .put("media/external.png", b"x", "image/png")
             .unwrap();
+        storage.put("media/victim.png", b"x", "image/png").unwrap();
+        storage.put("media/hero.png", b"x", "image/png").unwrap();
 
         let mut doc_fields = DocumentFields::new();
-        doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
+        // Server-derived — deleted.
+        doc_fields.insert("url".into(), json!("/uploads/media/del.png"));
+        // User fields ending in `_url` — not in `system_field_names` → preserved.
+        doc_fields.insert("image_url".into(), json!("/uploads/media/external.png"));
+        doc_fields.insert("source_url".into(), json!("/uploads/media/victim.png"));
+        doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));
 
-        delete_upload_files(&storage, &doc_fields);
+        delete_upload_files(&storage, &doc_fields, &bare_upload());
+
         assert!(
-            storage.exists("media/keep.png").unwrap(),
-            "image_url fields should be skipped"
+            !storage.exists("media/del.png").unwrap(),
+            "the server-derived `url` is deleted"
+        );
+        assert!(
+            storage.exists("media/external.png").unwrap(),
+            "a user `image_url` is preserved"
+        );
+        assert!(
+            storage.exists("media/victim.png").unwrap(),
+            "a forged user `source_url` cannot delete another document's file"
+        );
+        assert!(
+            storage.exists("media/hero.png").unwrap(),
+            "a user `hero_image_url` with no matching size is preserved"
         );
     }
 
     #[test]
-    fn delete_upload_files_does_not_skip_prefixed_image_url() {
-        // Regression: the old check used key.contains("image") which incorrectly
-        // skipped fields like "hero_image_url". Only exact "image_url" should be skipped.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-
-        storage.put("media/hero.png", b"hero", "image/png").unwrap();
-        storage
-            .put("media/banner.png", b"banner", "image/png")
-            .unwrap();
-        storage.put("media/keep.png", b"keep", "image/png").unwrap();
-
+    fn upload_file_keys_returns_only_server_derived_columns() {
         let mut doc_fields = DocumentFields::new();
-        doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));
-        doc_fields.insert(
-            "banner_image_url".into(),
-            json!("/uploads/media/banner.png"),
-        );
-        // Exact "image_url" should still be skipped
-        doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
+        doc_fields.insert("url".into(), json!("/uploads/media/a.png"));
+        doc_fields.insert("thumb_url".into(), json!("/uploads/media/a_thumb.png"));
+        doc_fields.insert("source_url".into(), json!("/uploads/media/other.png"));
+        // A system column that is not url-bearing is excluded.
+        doc_fields.insert("width".into(), json!(100));
 
-        delete_upload_files(&storage, &doc_fields);
-
-        assert!(
-            !storage.exists("media/hero.png").unwrap(),
-            "hero_image_url should NOT be skipped — only exact 'image_url' is skipped"
-        );
-        assert!(
-            !storage.exists("media/banner.png").unwrap(),
-            "banner_image_url should NOT be skipped"
-        );
-        assert!(
-            storage.exists("media/keep.png").unwrap(),
-            "Exact 'image_url' should still be skipped"
+        let mut keys = upload_file_keys(&doc_fields, &upload_with_thumb_webp());
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["media/a.png".to_string(), "media/a_thumb.png".to_string()]
         );
     }
 
@@ -639,15 +691,14 @@ mod tests {
         doc_fields.insert("url".into(), json!(42));
         doc_fields.insert("thumb_url".into(), json!(null));
 
-        // Should not panic on non-string values
-        delete_upload_files(&storage, &doc_fields);
+        // Should not panic on non-string values.
+        delete_upload_files(&storage, &doc_fields, &upload_with_thumb_webp());
     }
 
     #[test]
     fn delete_upload_files_path_traversal_is_harmless() {
-        // With key-based storage, path traversal in URLs is handled by the storage backend.
-        // The key `../secret.txt` would be passed to storage.delete() which for LocalStorage
-        // resolves relative to its base_dir. This test verifies the function handles it safely.
+        // `key_from_served_url` + the storage backend reject traversal; this just
+        // verifies the function handles such a value without panicking.
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
 
@@ -655,6 +706,6 @@ mod tests {
         doc_fields.insert("url".into(), json!("/uploads/../secret.txt"));
 
         // Should not panic — storage.delete handles non-existent keys gracefully
-        delete_upload_files(&storage, &doc_fields);
+        delete_upload_files(&storage, &doc_fields, &bare_upload());
     }
 }

@@ -92,7 +92,7 @@ impl EventTransport for RedisEventTransport {
 
     fn subscribe(&self) -> EventReceiver {
         let (tx, rx) = mpsc::channel::<RemoteMessage<MutationEvent>>(self.mpsc_capacity);
-        spawn_subscribe_loop(self.client.clone(), EVENT_CHANNEL, tx);
+        spawn_subscribe_loop(self.client.clone(), EVENT_CHANNEL, tx, false);
 
         EventReceiver::from_mpsc(rx)
     }
@@ -136,7 +136,7 @@ impl InvalidationTransport for RedisInvalidationTransport {
 
     fn subscribe(&self) -> InvalidationReceiver {
         let (tx, rx) = mpsc::channel::<RemoteMessage<String>>(self.mpsc_capacity);
-        spawn_subscribe_loop(self.client.clone(), INVALIDATION_CHANNEL, tx);
+        spawn_subscribe_loop(self.client.clone(), INVALIDATION_CHANNEL, tx, true);
 
         InvalidationReceiver::from_mpsc(rx)
     }
@@ -167,12 +167,27 @@ fn publish_blocking<T: Serialize>(client: &Client, channel: &str, payload: &T) -
 }
 
 /// Spawn a background task that reads `channel` over Redis pub/sub and
-/// forwards decoded `T` values into `tx`. On overflow sends `Lagged`.
-/// Reconnects with exponential backoff on failure.
+/// Why a [`pump_messages`] run ended.
+enum PumpOutcome {
+    /// The connection broke mid-stream — reconnect after backoff.
+    Disconnected,
+    /// Stop the pump for good (the receiver was dropped, or — on an
+    /// `evict_on_overflow` channel — an overflow couldn't even be signalled, so
+    /// the subscriber is evicted fail-closed by dropping `tx` → receiver sees
+    /// `Closed`).
+    Stop,
+}
+
+/// forwards decoded `T` values into `tx`. On overflow sends `Lagged`;
+/// `evict_on_overflow` makes an undeliverable overflow terminate the pump
+/// (fail-closed) instead of best-effort dropping — used for the invalidation
+/// channel, where a lost message is a lost revocation. Reconnects with
+/// exponential backoff on connection failure.
 fn spawn_subscribe_loop<T>(
     client: Client,
     channel: &'static str,
     tx: mpsc::Sender<RemoteMessage<T>>,
+    evict_on_overflow: bool,
 ) -> JoinHandle<()>
 where
     T: DeserializeOwned + Clone + Send + 'static,
@@ -196,12 +211,11 @@ where
                     first_connect = false;
                     backoff = INITIAL_BACKOFF;
 
-                    if pump_messages(pubsub, &tx).await.is_err() {
+                    match pump_messages(pubsub, &tx, evict_on_overflow).await {
+                        // `tx` drops when this task returns → receiver sees `Closed`.
+                        PumpOutcome::Stop => return,
                         // Connection broke mid-stream; reconnect after backoff.
-                    }
-
-                    if tx.is_closed() {
-                        return;
+                        PumpOutcome::Disconnected => {}
                     }
                 }
                 Err(e) => {
@@ -233,9 +247,13 @@ async fn connect_pubsub(client: &Client, channel: &str) -> Result<PubSub> {
     Ok(pubsub)
 }
 
-/// Read messages from `pubsub` and forward them to `tx`. Returns `Err` on
-/// connection break so the caller can reconnect.
-async fn pump_messages<T>(pubsub: PubSub, tx: &mpsc::Sender<RemoteMessage<T>>) -> Result<(), ()>
+/// Read messages from `pubsub` and forward them to `tx`, returning why the run
+/// ended (see [`PumpOutcome`]).
+async fn pump_messages<T>(
+    pubsub: PubSub,
+    tx: &mpsc::Sender<RemoteMessage<T>>,
+    evict_on_overflow: bool,
+) -> PumpOutcome
 where
     T: DeserializeOwned + Clone + Send + 'static,
 {
@@ -259,22 +277,41 @@ where
         };
 
         if let Err(dropped_n) = try_forward(tx, decoded).await {
-            // Local queue full — signal Lagged. Use `try_send` so we don't
-            // block the pump waiting for a slow reader; if that also fails
-            // the subscriber is already falling behind beyond recovery.
-            let _ = tx.try_send(RemoteMessage::Lagged(dropped_n));
-            warn!(
-                "Redis pub/sub subscriber queue full — dropped 1 message and \
-                 signalled Lagged to subscriber"
-            );
+            // Local queue full — signal Lagged via `try_send` so we don't block
+            // the pump on a slow reader. If the sentinel ALSO can't be enqueued
+            // (the queue is still full), the subscriber never observes the
+            // overflow: on a best-effort channel that just loses data, but on an
+            // `evict_on_overflow` (invalidation) channel a silently-dropped
+            // message is a silently-dropped REVOCATION — fail-open. So there we
+            // terminate the pump (dropping `tx` → receiver sees `Closed`) to tear
+            // the subscriber down fail-closed, rather than keep streaming to a
+            // session whose revocation we just lost.
+            if tx.try_send(RemoteMessage::Lagged(dropped_n)).is_err() {
+                if evict_on_overflow {
+                    warn!(
+                        "Redis invalidation queue full and Lagged undeliverable — \
+                         evicting subscriber (fail-closed)"
+                    );
+                    return PumpOutcome::Stop;
+                }
+                warn!(
+                    "Redis pub/sub subscriber queue full — dropped a message \
+                     (Lagged sentinel also undeliverable)"
+                );
+            } else {
+                warn!(
+                    "Redis pub/sub subscriber queue full — dropped 1 message and \
+                     signalled Lagged to subscriber"
+                );
+            }
         }
 
         if tx.is_closed() {
-            return Ok(());
+            return PumpOutcome::Stop;
         }
     }
 
-    Err(())
+    PumpOutcome::Disconnected
 }
 
 /// Try to forward a decoded event to the subscriber with a short timeout so

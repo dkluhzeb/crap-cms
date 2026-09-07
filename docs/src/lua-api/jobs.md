@@ -347,17 +347,18 @@ the same running totals and apply the same caps.
   cause a different server to win a particular tick's race, but the
   *set* of claimed jobs is the same.
 
-**Cap precision under concurrent ticks.** Per-slug caps are enforced
-inside the claim transaction (the running count is part of the
-locked SQL subquery), so they're exact. Global `max_concurrent` and
-per-queue caps are checked *before* the claim transaction starts, so
-two servers ticking within the same millisecond can each claim a
-small batch and briefly push the cluster total over the cap. The
-overshoot is bounded by the number of concurrent ticks × the batch
-size and converges back as soon as one tick completes — Sidekiq, Oban,
-and similar systems behave the same way. Treat these caps as soft.
-If you need precise enforcement (e.g. licensing limits), use a
-per-slug cap.
+**Cap precision under concurrent ticks.** Per-slug **and per-queue** caps
+are enforced inside the claim transaction — the running count is part of
+the locked subquery, and the transaction takes a cross-node advisory lock
+whenever any per-slug or per-queue cap is configured — so both are exact
+across the cluster. Only the global `max_concurrent` cap is checked
+*before* the claim transaction starts, so two servers ticking within the
+same millisecond can each claim a small batch and briefly push the cluster
+total over that global limit. The overshoot is bounded by the number of
+concurrent ticks × the batch size and converges back as soon as one tick
+completes — Sidekiq, Oban, and similar systems behave the same way. If you
+need precise enforcement (e.g. licensing limits), use a per-slug or
+per-queue cap; treat only the global `max_concurrent` as soft.
 
 The shared coordination point is the database — `FOR UPDATE SKIP
 LOCKED` (Postgres) or `BEGIN IMMEDIATE` (SQLite) ensures no two

@@ -22,10 +22,10 @@ use crate::{
         DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig, LocaleConfig,
     },
     core::{
-        DocumentFields, JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
+        JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
         email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
         job::{SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
-        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_upload_files},
+        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_storage_keys},
     },
     db::{BoxedConnection, DbPool, query::jobs as job_query},
     hooks::{HookRunner, LuaCrudInfra},
@@ -343,10 +343,8 @@ fn run_periodic_purges(p: &PurgeTickInput<'_>) {
     }
 
     // Delete upload files only AFTER the purge transaction has committed.
-    let files_to_clean = run_soft_delete_purge(&mut conn, p.registry, p.locale_config);
-    for fields in &files_to_clean {
-        delete_upload_files(&**p.storage, fields);
-    }
+    let keys_to_clean = run_soft_delete_purge(&mut conn, p.registry, p.locale_config);
+    delete_storage_keys(&**p.storage, &keys_to_clean);
 }
 
 /// Run the soft-delete retention purge in one IMMEDIATE transaction so the
@@ -359,7 +357,7 @@ fn run_soft_delete_purge(
     conn: &mut BoxedConnection,
     registry: &Registry,
     locale_config: &LocaleConfig,
-) -> Vec<DocumentFields> {
+) -> Vec<String> {
     let tx = match conn.transaction_immediate() {
         Ok(tx) => tx,
         Err(e) => {

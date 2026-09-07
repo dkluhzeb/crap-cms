@@ -115,9 +115,7 @@ impl Operation for DeleteMany {
         if ctx.pool.is_some()
             && let Some(storage) = &ctx.storage
         {
-            for fields in &result.upload_fields_to_clean {
-                upload::delete_upload_files(storage.as_ref(), fields);
-            }
+            upload::delete_storage_keys(storage.as_ref(), &result.upload_keys_to_clean);
         }
 
         Ok(result)
