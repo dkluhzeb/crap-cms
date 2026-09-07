@@ -2,13 +2,15 @@
 
 use anyhow::Result;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::BLOCK_TYPE_KEY;
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::{delete_junction_rows, select_junction_rows, select_junction_rows_batch};
+use super::helpers::{
+    JunctionTarget, delete_junction_rows_except, select_junction_rows, select_junction_rows_batch,
+};
 
 /// Split a block row into `(_block_type, data_json)` for INSERT.
 ///
@@ -31,13 +33,141 @@ fn split_block_row(row: &Value, order: usize) -> Result<(String, String)> {
     Ok((block_type, data_json))
 }
 
-/// Set block rows for a blocks field join table.
-/// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
-/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+/// Build a matched block row's `(_block_type, data_json)`, merging the stored
+/// row's top-level fields under the incoming ones. A field absent from the
+/// incoming row — removed by the write-access strip, or not sent — keeps its
+/// stored value; a present field (including an explicit null) overwrites. When
+/// the block *type* changes on the same id there are no shared fields to
+/// preserve, so the incoming row replaces the data wholesale.
+///
+/// Preservation is top-level only: everything inside a block is JSON, so a
+/// write-denied leaf nested inside a block group/array follows the same
+/// nested-JSON boundary as an array-in-array (replaced with its container).
+fn merged_block_data(
+    row: &Value,
+    stored: Option<&Value>,
+    order: usize,
+) -> Result<(String, String)> {
+    let block_type = row
+        .get(BLOCK_TYPE_KEY)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
+        .to_string();
+
+    let same_type = stored
+        .and_then(|s| s.get(BLOCK_TYPE_KEY))
+        .and_then(|v| v.as_str())
+        == Some(block_type.as_str());
+
+    let mut data_map = if same_type {
+        let mut m = stored
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        m.remove("id");
+        m.remove(BLOCK_TYPE_KEY);
+        m
+    } else {
+        Map::new()
+    };
+
+    if let Some(incoming) = row.as_object() {
+        for (k, v) in incoming {
+            if k == "id" || k == BLOCK_TYPE_KEY {
+                continue;
+            }
+            data_map.insert(k.clone(), v.clone());
+        }
+    }
+
+    Ok((block_type, Value::Object(data_map).to_string()))
+}
+
+/// INSERT a brand-new block row.
+fn insert_block_row(
+    conn: &dyn DbConnection,
+    target: &JunctionTarget,
+    id: &str,
+    order: i64,
+    block_type: &str,
+    data_json: &str,
+) -> Result<()> {
+    let mut cols: Vec<&str> = vec!["id", "parent_id", "_order", "_block_type", "data"];
+    let mut params: Vec<DbValue> = vec![
+        DbValue::Text(id.to_string()),
+        DbValue::Text(target.parent_id.to_string()),
+        DbValue::Integer(order),
+        DbValue::Text(block_type.to_string()),
+        DbValue::Text(data_json.to_string()),
+    ];
+
+    if let Some(loc) = target.locale {
+        cols.push("_locale");
+        params.push(DbValue::Text(loc.to_string()));
+    }
+
+    let placeholders = (1..=params.len())
+        .map(|i| conn.placeholder(i))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "INSERT INTO \"{}\" ({}) VALUES ({placeholders})",
+        target.table_name,
+        cols.join(", ")
+    );
+
+    conn.execute(&sql, &params)?;
+    Ok(())
+}
+
+/// UPDATE a matched block row in place — `_order`, `_block_type`, and the
+/// already-merged `data` (see [`merged_block_data`]).
+fn update_block_row(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    id: &str,
+    order: i64,
+    block_type: &str,
+    data_json: &str,
+) -> Result<()> {
+    let (p1, p2, p3, p4) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
+        conn.placeholder(4),
+    );
+    let sql = format!(
+        "UPDATE \"{table_name}\" SET _order = {p1}, _block_type = {p2}, data = {p3} WHERE id = {p4}"
+    );
+
+    conn.execute(
+        &sql,
+        &[
+            DbValue::Integer(order),
+            DbValue::Text(block_type.to_string()),
+            DbValue::Text(data_json.to_string()),
+            DbValue::Text(id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Set block rows for a blocks field join table via a diff-based, per-row
+/// write with top-level field preservation.
+///
+/// An incoming row that carries an `id` matching an existing row of this parent
+/// (and locale) UPDATEs that row, keeping its stored top-level fields that the
+/// incoming row does not supply (see [`merged_block_data`]) — so a write-denied
+/// block field survives, as the scalar/array paths preserve an untouched
+/// column. A row with no id, or an id that is not an existing row, INSERTs a
+/// new row with a server-minted id. Rows the incoming set drops are deleted.
+/// `_order` follows the incoming position. When `locale` is Some the whole diff
+/// is scoped to that locale.
 ///
 /// # Errors
 ///
-/// Returns a backend error if the DELETE or any per-row INSERT fails.
+/// Returns a backend error if any DELETE, UPDATE, or INSERT fails, or if a
+/// block row is missing its `_block_type`.
 pub fn set_block_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -48,67 +178,47 @@ pub fn set_block_rows(
 ) -> Result<()> {
     let table_name = join_table(collection, field_name);
 
-    delete_junction_rows(conn, &table_name, parent_id, locale)?;
+    // Stored rows keyed by id, so a matched row can merge its preserved fields.
+    let stored: HashMap<String, Value> =
+        find_block_rows(conn, collection, field_name, parent_id, locale)?
+            .into_iter()
+            .filter_map(|v| {
+                let id = v.get("id")?.as_str()?.to_string();
+                Some((id, v))
+            })
+            .collect();
 
-    if rows.is_empty() {
-        return Ok(());
+    let mut keep: HashSet<String> = HashSet::with_capacity(rows.len());
+    let mut planned: Vec<(String, bool, usize)> = Vec::with_capacity(rows.len());
+    for (order, row) in rows.iter().enumerate() {
+        let (id, is_update) = match row.get("id").and_then(Value::as_str) {
+            Some(cid) if stored.contains_key(cid) && !keep.contains(cid) => (cid.to_string(), true),
+            _ => (nanoid::nanoid!(), false),
+        };
+        keep.insert(id.clone());
+        planned.push((id, is_update, order));
     }
 
-    if let Some(loc) = locale {
-        let (p1, p2, p3, p4, p5, p6) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-            conn.placeholder(4),
-            conn.placeholder(5),
-            conn.placeholder(6),
-        );
-        let sql = format!(
-            "INSERT INTO \"{table_name}\" (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})"
-        );
-        for (order, row) in rows.iter().enumerate() {
-            let (block_type, data_json) = split_block_row(row, order)?;
-            let id = nanoid::nanoid!();
+    delete_junction_rows_except(conn, &table_name, parent_id, locale, &keep)?;
 
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(id),
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Integer(i64::try_from(order).unwrap_or(i64::MAX)),
-                    DbValue::Text(block_type),
-                    DbValue::Text(data_json),
-                    DbValue::Text(loc.to_string()),
-                ],
-            )?;
-        }
-    } else {
-        let (p1, p2, p3, p4, p5) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-            conn.placeholder(4),
-            conn.placeholder(5),
-        );
-        let sql = format!(
-            "INSERT INTO \"{table_name}\" (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})"
-        );
-        for (order, row) in rows.iter().enumerate() {
-            let (block_type, data_json) = split_block_row(row, order)?;
-            let id = nanoid::nanoid!();
+    let target = JunctionTarget {
+        table_name: &table_name,
+        parent_id,
+        locale,
+    };
 
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(id),
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Integer(i64::try_from(order).unwrap_or(i64::MAX)),
-                    DbValue::Text(block_type),
-                    DbValue::Text(data_json),
-                ],
-            )?;
+    for ((id, is_update, order), row) in planned.into_iter().zip(rows.iter()) {
+        let order_i64 = i64::try_from(order).unwrap_or(i64::MAX);
+
+        if is_update {
+            let (block_type, data_json) = merged_block_data(row, stored.get(&id), order)?;
+            update_block_row(conn, &table_name, &id, order_i64, &block_type, &data_json)?;
+        } else {
+            let (block_type, data_json) = split_block_row(row, order)?;
+            insert_block_row(conn, &target, &id, order_i64, &block_type, &data_json)?;
         }
     }
+
     Ok(())
 }
 
@@ -278,6 +388,54 @@ mod tests {
         assert_eq!(found.len(), 1, "Old blocks should be replaced");
         assert_eq!(found[0]["_block_type"], "heading");
         assert_eq!(found[0]["text"], "New heading");
+    }
+
+    /// The founding fix for blocks: an UPDATE matching a row by `id`, of the
+    /// same block type, keeps the stored top-level fields the incoming row omits
+    /// (as the write-access strip would drop a denied field) while overwriting
+    /// the ones it supplies.
+    #[test]
+    fn set_block_rows_diff_preserves_omitted_field_on_matched_id() {
+        let (_dir, conn) = setup_blocks_db();
+        let seed = vec![json!({"_block_type": "hero", "title": "T", "subtitle": "S"})];
+        set_block_rows(&conn, "posts", "content", "p1", &seed, None).unwrap();
+        let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        let id0 = found[0]["id"].as_str().unwrap().to_string();
+
+        // Same block type, change `title`, omit `subtitle`.
+        let update = vec![json!({"id": id0, "_block_type": "hero", "title": "T2"})];
+        set_block_rows(&conn, "posts", "content", "p1", &update, None).unwrap();
+
+        let after = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0]["id"].as_str().unwrap(), id0, "row keeps its id");
+        assert_eq!(after[0]["title"], "T2", "supplied field updated");
+        assert_eq!(after[0]["subtitle"], "S", "omitted field PRESERVED");
+    }
+
+    /// A changed `_block_type` on the same id has no shared fields, so the
+    /// incoming row replaces the data wholesale — no stale field bleeds across
+    /// block shapes.
+    #[test]
+    fn set_block_rows_diff_block_type_change_replaces_data() {
+        let (_dir, conn) = setup_blocks_db();
+        let seed = vec![json!({"_block_type": "hero", "title": "T"})];
+        set_block_rows(&conn, "posts", "content", "p1", &seed, None).unwrap();
+        let id0 = find_block_rows(&conn, "posts", "content", "p1", None).unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let update = vec![json!({"id": id0, "_block_type": "quote", "text": "Q"})];
+        set_block_rows(&conn, "posts", "content", "p1", &update, None).unwrap();
+
+        let after = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        assert_eq!(after[0]["_block_type"], "quote");
+        assert_eq!(after[0]["text"], "Q");
+        assert!(
+            after[0].get("title").is_none(),
+            "no field bleeds from the previous block type"
+        );
     }
 
     #[test]

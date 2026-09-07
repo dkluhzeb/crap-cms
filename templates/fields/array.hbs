@@ -45,6 +45,13 @@
           class="form__array-row{{#if ../init_collapsed}}{{#unless this.has_errors}} form__array-row--collapsed{{/unless}}{{/if}}{{#if this.has_errors}} form__array-row--has-errors{{/if}}"
           data-row-index="{{this.index}}"
         >
+          {{#if this.row_id}}
+            <input
+              type="hidden"
+              name="{{this.id_input_name}}"
+              value="{{this.row_id}}"
+            />
+          {{/if}}
           {{#> partials/array-row-header
             expanded=(or (not ../init_collapsed) this.has_errors)
             has_errors=this.has_errors}}

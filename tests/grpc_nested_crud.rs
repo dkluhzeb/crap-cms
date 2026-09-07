@@ -689,6 +689,72 @@ async fn grpc_update_replaces_array_rows() {
     );
 }
 
+/// gRPC wire: the row-identity fix round-trips over proto. Updating an array by
+/// sending each row's `id` back preserves a sub-field the update omits — here
+/// the nested `dimensions` group — instead of the old full rebuild that cleared
+/// it. Also asserts the read exposes the row `id` over the wire.
+#[tokio::test]
+async fn grpc_update_by_row_id_preserves_omitted_subfield() {
+    let ts = setup_service(vec![make_products_def()], vec![]);
+
+    let data = make_product_data(
+        "Widget",
+        "SEO",
+        vec![make_variant("red", "10", "20")],
+        vec![make_text_block("body")],
+    );
+    let doc = create_product(&ts, data).await;
+
+    // The read must expose the array row's id over the wire for the round-trip.
+    let found = find_product_by_id(&ts, &doc.id).await;
+    let variants = get_list_items(&found, "variants");
+    let variant_id =
+        get_struct_field_str(&variants[0], "id").expect("gRPC must expose the array row id");
+
+    // Update the variant by id, changing `color`, OMITTING `dimensions`.
+    let mut update_fields = HashMap::new();
+    update_fields.insert(
+        "variants".to_string(),
+        list_val(vec![struct_val(&[
+            ("id", str_val(&variant_id)),
+            ("color", str_val("blue")),
+        ])]),
+    );
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "products".to_string(),
+            id: doc.id.clone(),
+            data: Some(content::DataMap {
+                fields: update_fields,
+            }),
+            locale: None,
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .unwrap();
+
+    let found = find_product_by_id(&ts, &doc.id).await;
+    let variants = get_list_items(&found, "variants");
+    assert_eq!(
+        variants.len(),
+        1,
+        "the matched row is updated, not replaced"
+    );
+    assert_eq!(
+        get_struct_field_str(&variants[0], "color").as_deref(),
+        Some("blue"),
+        "the supplied field is updated"
+    );
+    let dims = get_struct_field_value(&variants[0], "dimensions");
+    assert_eq!(
+        get_struct_field_str(dims.as_ref().unwrap(), "width").as_deref(),
+        Some("10"),
+        "the omitted nested group is preserved via the row-id match"
+    );
+}
+
 #[tokio::test]
 async fn grpc_update_replaces_blocks() {
     let ts = setup_service(vec![make_products_def()], vec![]);

@@ -350,8 +350,12 @@ fn import_single_document(
     // FTS input carries the same flat `group__sub` physical-column shape
     // `persist_create`/`persist_update` feed — building a `Document` from the
     // exported JSON instead would risk a shape mismatch that silently mis-indexes.
+    // Read under a default-locale context so a localized collection's per-locale
+    // columns (`title__en`) are selected; locales-disabled yields `None` (bare
+    // columns), the correct shape there.
+    let fts_locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
     if tx.supports_fts()
-        && let Some(doc) = query::find_by_id_raw(tx, slug, def, id, None, false)?
+        && let Some(doc) = query::find_by_id_raw(tx, slug, def, id, fts_locale_ctx.as_ref(), false)?
     {
         query::fts::fts_upsert(tx, slug, &doc, Some(def))
             .with_context(|| format!("Failed to index {id} in '{slug}' for search"))?;
@@ -642,9 +646,8 @@ mod tests {
 
     /// Regression: an imported document must be indexed for full-text search.
     /// The raw upsert wrote the row but skipped `fts_upsert`, so imported docs
-    /// were invisible to search (the P5 class — a CLI path bypassing a service
-    /// invariant). Import now re-reads the row and indexes it like the service
-    /// write path.
+    /// were invisible to search. Import now re-reads the row and indexes it like
+    /// the service write path.
     #[test]
     fn import_indexes_document_for_search() {
         let media = CollectionDefinition::new("media");

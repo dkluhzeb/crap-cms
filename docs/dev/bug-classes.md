@@ -187,16 +187,20 @@ most).
 
 ## Priority queue (what Phase 2/3 should guard next)
 
-**Planned structural fix (M2 / D8):** array & blocks writes are a
-destructive delete-and-reinsert with no stable per-row identity, so a
-write-denied or absent sub-field on an existing row is lost — the scalar
-path preserves it (column-preserving `UPDATE`), the composite path does
-not. Design + phased plan in
-[`array-row-identity.md`](array-row-identity.md): round-trip the existing
-junction-row `id` end-to-end and replace the rebuild with a diff-based,
-column-preserving upsert. Not yet implemented. The guard is the
-regression suite in that doc plus the shared write contract line it adds
-to `frozen-contracts.md`.
+**Array/blocks write-preservation — DONE 2026-09-07** (nested-instance
+degraded handling + write round-trip dropping unmodeled data). Array &
+blocks writes were a destructive delete-and-reinsert with no stable
+per-row identity, so a write-denied or absent sub-field on an existing
+row was lost — the scalar path preserves it (column-preserving `UPDATE`),
+the composite path did not. Fixed: the junction-row `id` round-trips
+end-to-end and the rebuild is replaced with a diff-based,
+column-preserving writer (arrays: UPDATE only present columns; blocks:
+shallow-merge stored `data`). Details in
+[`array-row-identity.md`](array-row-identity.md). The guard is the
+regression suite (9 DB-layer + a founding end-to-end Lua test + an admin
+enrichment test) plus the shared write-preservation contract now in
+`frozen-contracts.md`. Follow-ups (refinements, not data-loss): version-
+snapshot id on restore, gRPC/MCP wire tests, admin e2e.
 
 Remaining UNGUARDED: **D7** only — no structural fix exists for stale
 comments; folded into the review lens list below. Everything else from

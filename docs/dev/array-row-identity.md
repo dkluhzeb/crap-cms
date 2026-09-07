@@ -1,6 +1,45 @@
 # Array / Blocks row identity and diff-based writes
 
-Status: **PLANNED** (design only — not yet implemented)
+Status: **IMPLEMENTED** for the live create/update path on every surface
+(2026-09-07). The diff-based, column-preserving writer and the row-id
+round-trip are in place and tested end-to-end. Remaining follow-ups are noted
+at the end.
+
+## What shipped
+
+- **Diff-based writers** (`set_array_rows` / `set_block_rows`,
+  `src/db/query/join/{arrays,blocks}.rs`): an incoming row with an `id` matching
+  an existing row of this parent(+locale) UPDATEs only the columns it supplies
+  (arrays) or shallow-merges its top-level fields over the stored `data`
+  (blocks); a row with no/unknown id INSERTs with a server-minted id; dropped
+  rows are deleted. Shared helpers `existing_junction_ids` /
+  `delete_junction_rows_except` (`join/helpers.rs`).
+- **Id round-trips end-to-end.** The read path already emits each row's `id`;
+  it survives the write pipeline (validation, `canonicalize_write_input`, the
+  field-access strip — which removes denied fields but leaves `id`, and
+  `coerce_array_rows`, which copies every key) to the diff writer. The admin
+  edit form renders a hidden `<field>[<index>][id]` input per existing row
+  (`ArrayRow`/`BlockRow` carry `row_id` + `id_input_name`, populated in
+  enrichment) and its composite parser captures it as a row leaf.
+- **Programmatic surfaces work unchanged.** Lua/gRPC/MCP pass the row `id` as an
+  ordinary data key through the shared op pipeline — proven by
+  `lua_array_update_by_row_id_preserves_omitted_subfield` (a Lua create → read
+  row id → update omitting a nested group → the group is preserved).
+- **Degrades safely.** A row without an `id` is treated as new, so any surface
+  that does not round-trip the id yet behaves exactly as before (full replace).
+- **Both backends.** The diff is plain standard SQL (placeholders via
+  `conn.placeholder`, same unquoted columns as the prior writer); preservation is
+  pinned on SQLite (unit tests) and on Postgres (`pg_array_diff_preserves_omitted_column`,
+  run against a live PG from `TEST_DATABASE_URL`). Ref-count correctness under a
+  preserved relationship is pinned too
+  (`array_update_omitting_preserved_relationship_keeps_ref_count`), as is the
+  write-strip keeping the row id (`strip_write_access_preserves_row_id`).
+
+Original design follows.
+
+---
+
+Status (original plan): **PLANNED** (design only — not yet implemented)
 
 ## Problem
 
@@ -105,8 +144,16 @@ the existing nested strip walking the value before it is written. If per-element
 identity inside nested JSON is ever needed, it layers on top of this design; it
 is explicitly out of scope here.
 
-Blocks: identity is the row `id`; a changed `_block_type` on the same id is
-treated as a **replace** (delete + insert), because the column set differs.
+Blocks: identity is the row `id`. Because a block stores every field in one
+`data` JSON column, per-column preservation doesn't map; instead a matched row
+of the **same** `_block_type` **shallow-merges** — the stored `data`'s top-level
+fields are kept and the incoming row's present fields overlaid, so a write-denied
+top-level block field survives while a present field (including explicit null)
+overwrites. A **changed** `_block_type` on the same id has no shared fields, so
+the incoming row replaces `data` wholesale. Preservation is top-level only: a
+write-denied leaf nested inside a block group/array follows the same
+nested-JSON boundary as array-in-array (it is replaced together with its
+container).
 
 ## Back-compatibility
 
@@ -169,3 +216,24 @@ identical after a diff-based update and after an equivalent full rebuild.
   column is preserved.* Add this line to `docs/src/internals/frozen-contracts.md`
   once implemented.
 - No surface regresses to *worse-than-today* behavior at any phase.
+
+## Remaining follow-ups (not blocking the core fix)
+
+- **Version restore — DONE 2026-09-07.** The version snapshot already carries
+  each array/block row's `id` (`build_snapshot` hydrates via the id-bearing
+  read path), the restore-time write strip keeps the `id` while dropping a
+  denied field, and restore writes through the same diff — so a restore by a
+  user write-denied on an array sub-field now leaves that field at its live
+  value (matching the restore code's stated intent) instead of NULLing it via a
+  full rebuild. Pinned by `restore_version_preserves_array_subfield_omitted_by_strip`.
+- **Explicit gRPC/MCP wire tests — DONE 2026-09-07.** Pinned at the wire level on
+  each surface: `grpc_update_by_row_id_preserves_omitted_subfield` (proto) and
+  `mcp_update_by_row_id_preserves_omitted_subfield` (real JSON-RPC dispatch), each
+  reading the row id back over the wire and preserving an omitted nested group on
+  update. Joins the Lua end-to-end test — all three programmatic surfaces covered.
+- **Admin browser e2e — DONE 2026-09-07.** `array_edit_updates_row_in_place_keeping_its_id`
+  creates a row in the real browser, edits it through the form, and asserts the
+  junction-row `id` is unchanged (update-in-place, not delete+reinsert) and the
+  hidden id input round-trips — the browser-observable proof of the fix.
+
+All planned follow-ups are now complete; nothing outstanding.

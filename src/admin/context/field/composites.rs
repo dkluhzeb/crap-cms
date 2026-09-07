@@ -175,6 +175,18 @@ pub struct ArrayRow {
     pub index: usize,
     pub sub_fields: Vec<FieldContext>,
 
+    /// The stored junction-row id, so the edit form round-trips it (as a hidden
+    /// input) and the diff-based writer matches this row on save — preserving a
+    /// write-denied sub-field instead of clearing it. Absent for template/new
+    /// rows, which get a server-minted id on save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_id: Option<String>,
+
+    /// `name` for the hidden id input — `<field>[<index>][id]`. Present exactly
+    /// when `row_id` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_input_name: Option<String>,
+
     /// `Some(true)` when at least one sub-field has a validation error;
     /// absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,6 +304,16 @@ pub struct BlockRow {
     pub block_label: String,
 
     pub sub_fields: Vec<FieldContext>,
+
+    /// The stored junction-row id (see [`ArrayRow::row_id`]). Absent for
+    /// template/new rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_id: Option<String>,
+
+    /// `name` for the hidden id input — `<field>[<index>][id]`. Present exactly
+    /// when `row_id` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_input_name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_errors: Option<bool>,
@@ -436,6 +458,8 @@ mod tests {
         let row = ArrayRow {
             index: 0,
             sub_fields: vec![],
+            row_id: None,
+            id_input_name: None,
             has_errors: None,
             custom_label: Some("First row".to_string()),
         };
@@ -500,6 +524,8 @@ mod tests {
             block_type: "hero".to_string(),
             block_label: "Hero".to_string(),
             sub_fields: vec![],
+            row_id: None,
+            id_input_name: None,
             has_errors: Some(true),
             custom_label: None,
         };

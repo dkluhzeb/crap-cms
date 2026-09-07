@@ -1359,3 +1359,81 @@ fn lua_locale_custom_config() {
         .expect("eval");
     assert_eq!(result, "ok");
 }
+
+/// Founding fix (array/blocks row identity): updating an array by round-tripping
+/// each row's `id` preserves a sub-field the update omits — here the nested
+/// `dimensions` group — instead of destroying it via delete-and-reinsert. Proves
+/// the row id survives the full Lua write pipeline (validation → canonicalize →
+/// save) to the diff-based join writer.
+#[test]
+fn lua_array_update_by_row_id_preserves_omitted_subfield() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+
+    let product_id = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local p = crap.collections.create("products", {
+            name = "Widget",
+            variants = {
+                { color = "red", dimensions = { width = "10", height = "20" } },
+            },
+        })
+        return p.id
+    "#,
+    );
+    assert!(
+        !product_id.is_empty() && product_id != "nil",
+        "create returned id"
+    );
+
+    // The array row id must be exposed to Lua for the round-trip to be possible.
+    let variant_id = eval_lua_db(
+        &runner,
+        &pool,
+        &format!(
+            r#"
+        local p = crap.collections.find_by_id("products", "{product_id}")
+        return tostring(p.variants[1].id)
+    "#
+        ),
+    );
+    assert!(
+        !variant_id.is_empty() && variant_id != "nil",
+        "the array row id must be exposed to Lua, got {variant_id:?}"
+    );
+
+    // Update the variant by id, changing `color` and OMITTING `dimensions`.
+    eval_lua_db(
+        &runner,
+        &pool,
+        &format!(
+            r#"
+        crap.collections.update("products", "{product_id}", {{
+            variants = {{
+                {{ id = "{variant_id}", color = "blue" }},
+            }},
+        }})
+        return "ok"
+    "#
+        ),
+    );
+
+    // `color` updated; the omitted nested group is PRESERVED, not NULLed.
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        &format!(
+            r#"
+        local p = crap.collections.find_by_id("products", "{product_id}")
+        local v = p.variants[1]
+        local w = (v.dimensions and v.dimensions.width) or "GONE"
+        return tostring(v.color) .. "|" .. tostring(w)
+    "#
+        ),
+    );
+    assert_eq!(
+        result, "blue|10",
+        "color updated and the omitted nested group preserved (row identity round-tripped)"
+    );
+}

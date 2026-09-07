@@ -62,6 +62,13 @@
               name="{{../name}}[{{this.index}}][_block_type]"
               value="{{this._block_type}}"
             />
+            {{#if this.row_id}}
+              <input
+                type="hidden"
+                name="{{this.id_input_name}}"
+                value="{{this.row_id}}"
+              />
+            {{/if}}
             <div class="form__array-row-fields">
               {{#each this.sub_fields}}
                 <div

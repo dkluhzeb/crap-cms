@@ -16,8 +16,8 @@ use crate::{
             field_context::{
                 enrich::{
                     EnrichCtx, SubFieldOpts, build_enriched_sub_field_context,
-                    enrich_nested_fields, enrich_polymorphic_selected, gated_find,
-                    gated_find_by_id,
+                    enrich_nested_fields, enrich_polymorphic_selected, field_types::row_identity,
+                    gated_find, gated_find_by_id,
                 },
                 inject_lang_values_from_row, inject_timezone_values_from_row,
                 locale_locked_display,
@@ -244,9 +244,13 @@ fn build_array_row(
         &enrich.state.infra.hook_runner,
     );
 
+    let (row_id, id_input_name) = row_identity(row.as_object(), &field_def.name, idx);
+
     ArrayRow {
         index: idx,
         sub_fields,
+        row_id,
+        id_input_name,
         has_errors: if row_has_errors { Some(true) } else { None },
         custom_label,
     }
@@ -508,11 +512,15 @@ fn build_blocks_row(
         &enrich.state.infra.hook_runner,
     );
 
+    let (row_id, id_input_name) = row_identity(row_obj, &field_def.name, idx);
+
     BlockRow {
         index: idx,
         block_type: block_type.to_string(),
         block_label,
         sub_fields,
+        row_id,
+        id_input_name,
         has_errors: if row_has_errors { Some(true) } else { None },
         custom_label,
     }

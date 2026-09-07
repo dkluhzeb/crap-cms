@@ -172,6 +172,25 @@ fn extract_nested_value<'a>(
     }
 }
 
+/// Extract a hydrated row's stored junction-row id and pair it with the hidden
+/// `name` the edit form round-trips it under (`<field>[<index>][id]`). Returns
+/// `(None, None)` for a row with no id — new/template rows get a server-minted
+/// id on save.
+pub(super) fn row_identity(
+    row_obj: Option<&serde_json::Map<String, Value>>,
+    indexed_name: &str,
+    index: usize,
+) -> (Option<String>, Option<String>) {
+    let Some(id) = row_obj.and_then(|m| m.get("id")).and_then(Value::as_str) else {
+        return (None, None);
+    };
+
+    (
+        Some(id.to_string()),
+        Some(format!("{indexed_name}[{index}][id]")),
+    )
+}
+
 /// Build a single typed [`ArrayRow`] with sub-fields and error flag.
 fn build_nested_array_row(
     sf: &FieldDefinition,
@@ -202,9 +221,13 @@ fn build_nested_array_row(
 
     let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
 
+    let (row_id, id_input_name) = row_identity(nested_row_obj, indexed_name, nested_idx);
+
     ArrayRow {
         index: nested_idx,
         sub_fields,
+        row_id,
+        id_input_name,
         has_errors: if row_has_errors { Some(true) } else { None },
         custom_label: None,
     }
@@ -338,11 +361,15 @@ fn build_nested_blocks_row(
 
     let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
 
+    let (row_id, id_input_name) = row_identity(nested_row_obj, indexed_name, nested_idx);
+
     BlockRow {
         index: nested_idx,
         block_type: block_type.to_string(),
         block_label,
         sub_fields,
+        row_id,
+        id_input_name,
         has_errors: if row_has_errors { Some(true) } else { None },
         custom_label: None,
     }

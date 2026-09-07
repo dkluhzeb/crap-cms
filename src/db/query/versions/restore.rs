@@ -347,11 +347,14 @@ fn restore_locale_columns<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::{CollectionDefinition, FieldDefinition, FieldTab, FieldType, VersionsConfig};
+    use crate::db::query::join::{find_array_rows, set_array_rows};
     use crate::db::{BoxedConnection, pool, query::versions::crud::count_versions};
     use tempfile::TempDir;
 
@@ -549,6 +552,110 @@ mod tests {
             row.get_string("start_date_tz").unwrap(),
             "America/New_York",
             "Restored timezone should match the snapshot"
+        );
+    }
+
+    /// Restoring a version is a column-preserving write for array rows too: a
+    /// field the restoring user cannot write is dropped from the snapshot by the
+    /// service-layer strip, and — because the snapshot carries each array row's
+    /// `id` (hydration includes it) — the diff-based join writer matches the
+    /// live row by that id and leaves the stripped field at its live value,
+    /// rather than resurrecting the snapshot value or clearing it. This pins the
+    /// restore end of the row-identity contract.
+    #[test]
+    fn restore_version_preserves_array_subfield_omitted_by_strip() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE posts_slides (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                caption TEXT,
+                secret TEXT
+            );
+            INSERT INTO posts (id) VALUES ('p1');",
+        )
+        .unwrap();
+
+        let no_locale = LocaleConfig::default();
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("caption", FieldType::Text).build(),
+                    FieldDefinition::builder("secret", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // Live state: one slide with a secret only the privileged writer set.
+        let sub = &def.fields[0].fields;
+        set_array_rows(
+            &conn,
+            "posts",
+            "slides",
+            "p1",
+            &[HashMap::from([
+                ("caption".to_string(), json!("c1")),
+                ("secret".to_string(), json!("live-secret")),
+            ])],
+            sub,
+            None,
+        )
+        .unwrap();
+        let row_id = find_array_rows(&conn, "posts", "slides", "p1", sub, None).unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // The snapshot as it reaches persistence AFTER the restore-time write
+        // strip has removed the write-denied `secret`: the row keeps its `id`
+        // (the strip never touches it) and changes `caption`.
+        let stripped_snapshot = json!({ "slides": [ { "id": row_id, "caption": "c2" } ] });
+
+        restore_version(
+            &conn,
+            "posts",
+            &def,
+            "p1",
+            &stripped_snapshot,
+            "published",
+            &no_locale,
+        )
+        .unwrap();
+
+        let after = find_array_rows(&conn, "posts", "slides", "p1", sub, None).unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "the matched row is updated in place, not replaced"
+        );
+        assert_eq!(
+            after[0]["id"].as_str().unwrap(),
+            row_id,
+            "row identity preserved"
+        );
+        assert_eq!(after[0]["caption"], "c2", "the restored field is written");
+        assert_eq!(
+            after[0]["secret"], "live-secret",
+            "the write-denied field (omitted from the stripped snapshot) keeps its live value"
         );
     }
 

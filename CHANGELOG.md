@@ -1632,6 +1632,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Updating an array or blocks field no longer destroys a sub-field the write
+  omits.** These fields were rebuilt on every update — delete every junction row
+  for the parent, then re-insert the incoming rows with fresh ids — so a
+  sub-field absent from an incoming row (removed by the field-access write strip
+  because the caller lacks write access to it, or simply not sent) was written as
+  NULL, destroying its stored value. The scalar path never had this bug (an
+  update sets only the columns it supplies). Array/blocks writes are now
+  diff-based and column-preserving: a row carrying an `id` that matches an
+  existing row updates only the columns it supplies (arrays) or merges its
+  top-level fields over the stored ones (blocks), a new or unknown-id row is
+  inserted with a server-minted id, and dropped rows are deleted. The row id
+  round-trips end-to-end — exposed on read, rendered as a hidden input in the
+  admin edit form, and accepted as an ordinary data key on Lua/gRPC/MCP — so a
+  write-denied sub-field on an existing row now survives an update, and
+  reordering rows no longer bleeds values between them. A row sent without an id
+  is treated as new (full replace), so nothing regresses.
+
 - **Keyset (cursor) pagination silently dropped rows with a NULL sort value.**
   On a DESC-forward or ASC-backward page over a nullable sort column, the keyset
   predicate's three-valued logic (`col < ?` and `col = ?` are both false for

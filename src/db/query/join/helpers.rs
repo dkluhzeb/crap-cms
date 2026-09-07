@@ -1,5 +1,7 @@
 //! Shared helpers for join table operations.
 
+use std::collections::HashSet;
+
 use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
@@ -109,6 +111,84 @@ pub(super) fn delete_junction_rows(
         )
         .with_context(|| format!("Failed to clear join table {table_name}"))?;
     }
+
+    Ok(())
+}
+
+/// The invariant destination of a diff-based junction write — identical across
+/// every row of one `set_*_rows` call. Bundled so the per-row INSERT helpers
+/// stay within the argument limit.
+pub(super) struct JunctionTarget<'a> {
+    pub table_name: &'a str,
+    pub parent_id: &'a str,
+    pub locale: Option<&'a str>,
+}
+
+/// The set of existing junction-row ids for one parent[+locale]. The
+/// diff-based array/blocks writers use it to tell an incoming row that *updates*
+/// an existing row (its `id` is in this set) from one that *inserts* a new row.
+pub(super) fn existing_junction_ids(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    parent_id: &str,
+    locale: Option<&str>,
+) -> Result<HashSet<String>> {
+    let (sql, params) = select_junction_rows(conn, table_name, "id", parent_id, locale);
+
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to read junction ids from {table_name}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| match r.get_value(0) {
+            Some(DbValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Delete the junction rows for a parent[+locale] whose id is NOT in `keep` —
+/// the diff-based twin of [`delete_junction_rows`]. It removes only the rows the
+/// incoming set dropped, leaving matched rows in place for a column-preserving
+/// UPDATE. An empty `keep` deletes every row (identical to
+/// [`delete_junction_rows`]).
+pub(super) fn delete_junction_rows_except(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    parent_id: &str,
+    locale: Option<&str>,
+    keep: &HashSet<String>,
+) -> Result<()> {
+    if keep.is_empty() {
+        return delete_junction_rows(conn, table_name, parent_id, locale);
+    }
+
+    let p_parent = conn.placeholder(1);
+    let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
+
+    let (locale_clause, in_start) = if let Some(loc) = locale {
+        let p_loc = conn.placeholder(2);
+        params.push(DbValue::Text(loc.to_string()));
+        (format!(" AND _locale = {p_loc}"), 3)
+    } else {
+        (String::new(), 2)
+    };
+
+    let mut in_phs = Vec::with_capacity(keep.len());
+    for (i, id) in keep.iter().enumerate() {
+        in_phs.push(conn.placeholder(in_start + i));
+        params.push(DbValue::Text(id.clone()));
+    }
+    let in_list = in_phs.join(", ");
+
+    let sql = format!(
+        "DELETE FROM \"{table_name}\" \
+         WHERE parent_id = {p_parent}{locale_clause} AND id NOT IN ({in_list})"
+    );
+
+    conn.execute(&sql, &params)
+        .with_context(|| format!("Failed to prune junction table {table_name}"))?;
 
     Ok(())
 }

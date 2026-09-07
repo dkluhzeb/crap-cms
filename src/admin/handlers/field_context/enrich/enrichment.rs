@@ -619,4 +619,42 @@ mod tests {
             "relationship enrichment must expose the target's singular label"
         );
     }
+
+    /// The array edit form round-trips each row's stored junction id: enrichment
+    /// exposes `row_id` (the value) and `id_input_name` (the hidden input's
+    /// `name`), so the diff-based writer can match the row and preserve a
+    /// write-denied sub-field on save.
+    #[test]
+    fn enrich_array_row_carries_stored_id_for_round_trip() {
+        let array_field = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![make_field("label", FieldType::Text)])
+            .build();
+        let field_defs = vec![array_field];
+
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let mut contexts = build_value_contexts(&field_defs, &values, &errors, false, false);
+
+        let mut doc_fields = DocumentFields::new();
+        doc_fields.insert(
+            "items".to_string(),
+            json!([{ "id": "row-abc", "label": "A" }]),
+        );
+
+        let state = make_test_state();
+        enrich_field_contexts_values(
+            &mut contexts,
+            &field_defs,
+            &doc_fields,
+            &state,
+            &EnrichOptions::builder(&errors).build(),
+        );
+
+        let rows = contexts[0]["rows"].as_array().expect("array has rows");
+        assert_eq!(rows[0]["row_id"], "row-abc", "stored id is exposed");
+        assert_eq!(
+            rows[0]["id_input_name"], "items[0][id]",
+            "hidden id input is named for the form round-trip"
+        );
+    }
 }

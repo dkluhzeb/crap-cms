@@ -38,7 +38,13 @@ pub(crate) fn unique_slug(prefix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
     use super::*;
+    use crate::core::{FieldDefinition, FieldType};
+    use crate::db::query::join::{find_array_rows, set_array_rows};
     use crate::db::{DbConnection, DbValue};
 
     /// Smoke test: prove the harness can connect to Postgres and round-trip a
@@ -77,6 +83,73 @@ mod tests {
             .unwrap()
             .expect("row exists");
         assert_eq!(row.get_i64("n").unwrap(), 42);
+
+        conn.execute(&format!("DROP TABLE \"{table}\""), &[])
+            .unwrap();
+    }
+
+    /// Postgres: the diff-based array writer preserves a sub-field an update
+    /// omits (the row-identity fix), matching the `SQLite` unit coverage — proof
+    /// the standard-SQL diff behaves the same on both backends.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_array_diff_preserves_omitted_column() {
+        let Some(pool) = pg_test_pool() else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        let conn = pool.get().expect("get PG connection");
+        let slug = unique_slug("arrdiff");
+        let table = format!("{slug}_items");
+
+        conn.execute(
+            &format!(
+                "CREATE TABLE \"{table}\" \
+                 (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT, value TEXT)"
+            ),
+            &[],
+        )
+        .unwrap();
+
+        let sub = vec![
+            FieldDefinition::builder("label", FieldType::Text).build(),
+            FieldDefinition::builder("value", FieldType::Text).build(),
+        ];
+
+        let rows = vec![
+            HashMap::from([
+                ("label".to_string(), json!("A")),
+                ("value".to_string(), json!("va")),
+            ]),
+            HashMap::from([
+                ("label".to_string(), json!("B")),
+                ("value".to_string(), json!("vb")),
+            ]),
+        ];
+        set_array_rows(&conn, &slug, "items", "p1", &rows, &sub, None).unwrap();
+
+        let found = find_array_rows(&conn, &slug, "items", "p1", &sub, None).unwrap();
+        let id0 = found[0]["id"].as_str().unwrap().to_string();
+
+        // Update row 0 by id, changing `label`, omitting `value`; drop row 1.
+        let update = vec![HashMap::from([
+            ("id".to_string(), json!(id0)),
+            ("label".to_string(), json!("A2")),
+        ])];
+        set_array_rows(&conn, &slug, "items", "p1", &update, &sub, None).unwrap();
+
+        let after = find_array_rows(&conn, &slug, "items", "p1", &sub, None).unwrap();
+        assert_eq!(after.len(), 1, "row absent from the update is deleted");
+        assert_eq!(
+            after[0]["id"].as_str().unwrap(),
+            id0,
+            "matched row keeps its id"
+        );
+        assert_eq!(after[0]["label"], "A2", "supplied column updated");
+        assert_eq!(
+            after[0]["value"], "va",
+            "omitted column PRESERVED on Postgres"
+        );
 
         conn.execute(&format!("DROP TABLE \"{table}\""), &[])
             .unwrap();

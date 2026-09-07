@@ -438,3 +438,64 @@ async fn mcp_rejects_a_non_object_where_instead_of_matching_everything() {
         "one draft deleted: {ok}"
     );
 }
+
+/// MCP wire: the array row-identity fix round-trips through the real JSON-RPC
+/// dispatch. Creating a product, reading back the variant row's `id`, then
+/// updating by that id while OMITTING the nested `dimensions` group preserves
+/// the group — matching the gRPC and Lua surfaces (all share the op pipeline).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_update_by_row_id_preserves_omitted_subfield() {
+    let h = harness();
+
+    let created = h
+        .mcp_call(
+            "create_products",
+            &json!({
+                "name": "Widget",
+                "variants": [
+                    { "color": "red", "dimensions": { "width": "10", "height": "20" } }
+                ],
+            }),
+        )
+        .expect("mcp create");
+    let doc_id = created["id"].as_str().expect("created id").to_string();
+
+    // The read must expose the array row id over MCP.
+    let found = h
+        .mcp_call("find_by_id_products", &json!({ "id": doc_id }))
+        .expect("mcp find_by_id");
+    let variant_id = found["variants"][0]["id"]
+        .as_str()
+        .expect("MCP must expose the array row id")
+        .to_string();
+
+    // Update the variant by id, changing `color`, OMITTING `dimensions`.
+    h.mcp_call(
+        "update_products",
+        &json!({
+            "id": doc_id,
+            "variants": [ { "id": variant_id, "color": "blue" } ],
+        }),
+    )
+    .expect("mcp update");
+
+    let after = h
+        .mcp_call("find_by_id_products", &json!({ "id": doc_id }))
+        .expect("mcp find_by_id");
+    let variants = after["variants"].as_array().expect("variants array");
+    assert_eq!(
+        variants.len(),
+        1,
+        "the matched row is updated, not replaced"
+    );
+    assert_eq!(
+        variants[0]["color"].as_str(),
+        Some("blue"),
+        "the supplied field is updated"
+    );
+    assert_eq!(
+        variants[0]["dimensions"]["width"].as_str(),
+        Some("10"),
+        "the omitted nested group is preserved via the row-id match"
+    );
+}

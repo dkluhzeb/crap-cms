@@ -1149,6 +1149,7 @@ field is `None` after the build phase and `Some` after enrichment.
 - **`condition_ref`** (Option&lt;string&gt;) _(optional)_ — Server-side function reference (set when the condition function returns a bool). The client re-asks the server when the form changes.
 - **`condition_json`** ([ConditionExpr](#conditionexpr) \| null) _(optional)_ — Client-evaluable condition expression (set when the condition function returns a Lua table). The client evaluates this directly without a round-trip. Serializes to the same JSON shape the JS evaluator at `static/components/conditions.js` expects.
 - **`relationship_collection`** (Option&lt;string&gt;) _(optional)_
+- **`collection_singular_name`** (Option&lt;string&gt;) _(optional)_ — Singular display label of the target collection, for the inline-create action label (`Create new <singular>`). Non-polymorphic only.
 - **`has_many`** (Option&lt;boolean&gt;) _(optional)_
 - **`polymorphic`** (Option&lt;boolean&gt;) _(optional)_ — Set to `Some(true)` for polymorphic relationships (multiple possible target collections). Templates branch on this to render a collection picker.
 - **`collections`** (Option&lt;Vec&lt;string&gt;&gt;) _(optional)_ — Allowed target collections when `polymorphic` is true.
@@ -1391,6 +1392,8 @@ One concrete row in an `ArrayField::rows` list.
 
 - **`index`** (integer) _(optional)_
 - **`sub_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;) _(optional)_
+- **`row_id`** (Option&lt;string&gt;) _(optional)_ — The stored junction-row id, so the edit form round-trips it (as a hidden input) and the diff-based writer matches this row on save — preserving a write-denied sub-field instead of clearing it. Absent for template/new rows, which get a server-minted id on save.
+- **`id_input_name`** (Option&lt;string&gt;) _(optional)_ — `name` for the hidden id input — `<field>[<index>][id]`. Present exactly when `row_id` is.
 - **`has_errors`** (Option&lt;boolean&gt;) _(optional)_ — `Some(true)` when at least one sub-field has a validation error; absent otherwise.
 - **`custom_label`** (Option&lt;string&gt;) _(optional)_ — Pre-computed row label (from the configured `label_field` or the `row_label` Lua hook).
 
@@ -1459,6 +1462,8 @@ underscore-prefixed for legacy on-the-wire compatibility).
 - **`_block_type`** (string) _(optional)_ — JSON key is `_block_type` to match the existing template contract.
 - **`block_label`** (string) _(optional)_ — Display label for the block — defaults to the `block_type` when not configured. Populated by enrichment.
 - **`sub_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;) _(optional)_
+- **`row_id`** (Option&lt;string&gt;) _(optional)_ — The stored junction-row id (see `ArrayRow::row_id`). Absent for template/new rows.
+- **`id_input_name`** (Option&lt;string&gt;) _(optional)_ — `name` for the hidden id input — `<field>[<index>][id]`. Present exactly when `row_id` is.
 - **`has_errors`** (Option&lt;boolean&gt;) _(optional)_
 - **`custom_label`** (Option&lt;string&gt;) _(optional)_
 

@@ -344,3 +344,140 @@ async fn array_rows_persist_after_save() {
 
     server_handle.abort();
 }
+
+// ── array row identity is stable across an edit ───────────────────────────
+
+/// End-to-end through the real browser: editing an existing array row updates
+/// it IN PLACE (keeps its junction-row `id`) rather than the old
+/// delete-and-reinsert that minted a fresh id. Proves the hidden row-id input
+/// renders, survives the JS, round-trips through the form submit, and drives the
+/// diff-based writer — the admin-surface end of the row-identity fix.
+#[tokio::test(flavor = "multi_thread")]
+async fn array_edit_updates_row_in_place_keeping_its_id() {
+    let BrowserTestCtx {
+        app,
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "barrid@test.com",
+        "pass123",
+    )
+    .await;
+
+    // --- Create a team with one member via the browser ---
+    page.goto(format!("{base_url}/admin/collections/teams/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    browser::find_element_after_nav(&page, "input[name=\"name\"]")
+        .await
+        .click()
+        .await
+        .unwrap()
+        .type_str("Squad")
+        .await
+        .unwrap();
+
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+    browser::find_element_after_nav(&page, "button[data-action=\"add-array-row\"]")
+        .await
+        .click()
+        .await
+        .unwrap();
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
+
+    page.evaluate(
+        "() => { const el = document.querySelector('input[name=\"members[0][member_name]\"]'); \
+         if (el) { el.focus(); el.value = 'Alice'; } }",
+    )
+    .await
+    .unwrap();
+    page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
+        .await
+        .unwrap();
+
+    // Capture the created member row's id and the parent document id.
+    let conn = app.pool.get().unwrap();
+    let mut member_id = String::new();
+    let mut doc_id = String::new();
+    for _ in 0..60 {
+        let rows = conn.query_all("SELECT id FROM teams_members", &[]).unwrap();
+        if rows.len() == 1 {
+            member_id = rows[0].get_string("id").unwrap();
+            doc_id = conn
+                .query_one("SELECT id FROM teams", &[])
+                .unwrap()
+                .unwrap()
+                .get_string("id")
+                .unwrap();
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!member_id.is_empty(), "member row should have been created");
+
+    // --- Open the edit form; the hidden row-id input must carry the stored id ---
+    page.goto(format!("{base_url}/admin/collections/teams/{doc_id}"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
+    // Wait for the existing row's field to render before reading the hidden id.
+    browser::find_element_after_nav(&page, "input[name=\"members[0][member_name]\"]").await;
+
+    let hidden_id: String = page
+        .evaluate("() => document.querySelector('input[name=\"members[0][id]\"]')?.value ?? ''")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        hidden_id, member_id,
+        "the edit form must round-trip the stored row id as a hidden input"
+    );
+
+    // --- Edit the member name and save ---
+    page.evaluate(
+        "() => { const el = document.querySelector('input[name=\"members[0][member_name]\"]'); \
+         if (el) { el.focus(); el.value = 'Alice Updated'; } }",
+    )
+    .await
+    .unwrap();
+    page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
+        .await
+        .unwrap();
+
+    // The row must be UPDATED IN PLACE: same id, new name.
+    let mut verified = false;
+    for _ in 0..60 {
+        let rows = conn
+            .query_all("SELECT id, member_name FROM teams_members", &[])
+            .unwrap();
+        if rows.len() == 1
+            && rows[0].get_string("member_name").ok().as_deref() == Some("Alice Updated")
+        {
+            assert_eq!(
+                rows[0].get_string("id").unwrap(),
+                member_id,
+                "the edited row keeps its id — updated in place, not delete+reinserted"
+            );
+            verified = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(verified, "edit must persist and preserve the row id");
+
+    server_handle.abort();
+}

@@ -399,6 +399,19 @@ changing a representation is a breaking change to every consumer.
   exactly like create/update, and refuses a soft-deleted (trashed) target with
   `NotFound`. A published restore must satisfy the localized-completeness gate; a
   draft restore is exempt; a trashed row is never silently rewritten.
+- **An update preserves every stored column the caller did not supply.** This
+  holds for scalars (the `UPDATE` names only present columns) and now for
+  array/blocks rows too: the writer diffs incoming rows against the stored set by
+  round-tripped junction-row `id`, and a matched row's UPDATE touches only the
+  sub-fields the row supplies (arrays) or merges its top-level fields over the
+  stored `data` (blocks). A sub-field the write-access strip removed, or the
+  caller simply omitted, keeps its stored value; a present field (including an
+  explicit null) overwrites. A row with no `id`, or an id that is not an existing
+  row of that parent(+locale), is a new row with a server-minted id — a client
+  cannot choose a primary key or address another parent's/locale's row. Rows
+  absent from the incoming set are deleted; `_order` follows the incoming
+  position. A surface that does not round-trip the id degrades to a full replace,
+  never worse.
 
 ## Server-config posture (frozen defaults)
 

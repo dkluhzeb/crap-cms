@@ -312,6 +312,8 @@ pub fn snapshot_outgoing_refs(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;
@@ -319,6 +321,7 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::core::Slug;
     use crate::core::field::*;
+    use crate::db::query::join::{find_array_rows, set_array_rows};
     use crate::db::query::ref_count::test_helpers::*;
 
     fn upload_field() -> Vec<FieldDefinition> {
@@ -556,6 +559,66 @@ mod tests {
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
         assert_eq!(get_ref_count_val(&conn, "media", "m2"), 1);
+    }
+
+    /// A diff-based array update that OMITS a relationship sub-field preserves
+    /// that relationship in the DB, so `after_update` (which re-reads the
+    /// persisted state) must leave the target's ref count untouched — never
+    /// decrement a reference the write only appeared to drop. Guards the
+    /// row-identity writer against silently under-counting (→ delete-protection
+    /// bypass / dangling reference).
+    #[test]
+    fn array_update_omitting_preserved_relationship_keeps_ref_count() {
+        let media = CollectionDefinition::new("media");
+        let image = FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build();
+        let slides = FieldDefinition::builder("slides", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("caption", FieldType::Text).build(),
+                image,
+            ])
+            .build();
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![slides];
+        let fields = posts.fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[media, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+        insert_doc(&conn, "posts", "p1");
+
+        // Create one slide referencing m1, then count refs → m1 = 1.
+        let sub = &fields[0].fields;
+        let rows = vec![HashMap::from([
+            ("caption".to_string(), json!("hero")),
+            ("image".to_string(), json!("m1")),
+        ])];
+        set_array_rows(&conn, "posts", "slides", "p1", &rows, sub, None).unwrap();
+        after_create(&conn, "posts", "p1", &fields, &no_locale()).unwrap();
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
+
+        let slide_id = find_array_rows(&conn, "posts", "slides", "p1", sub, None).unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Update the slide by id, changing `caption` and OMITTING `image`
+        // (as the write-access strip would for a denied relationship).
+        let old_refs = snapshot_outgoing_refs(&conn, "posts", "p1", &fields, &no_locale()).unwrap();
+        let update = vec![HashMap::from([
+            ("id".to_string(), json!(slide_id)),
+            ("caption".to_string(), json!("hero 2")),
+        ])];
+        set_array_rows(&conn, "posts", "slides", "p1", &update, sub, None).unwrap();
+        after_update(&conn, "posts", "p1", &fields, &no_locale(), &old_refs).unwrap();
+
+        assert_eq!(
+            get_ref_count_val(&conn, "media", "m1"),
+            1,
+            "a preserved relationship must NOT be decremented by an update that omits it"
+        );
     }
 
     /// Regression: the CREATE hot-path

@@ -461,6 +461,64 @@ mod tests {
         );
     }
 
+    /// The write strip removes a denied sub-field from a row but leaves the
+    /// row's `id` intact — the key the diff-based array writer needs to match
+    /// the row and preserve the stripped field on save (rather than NULL it).
+    #[test]
+    fn strip_write_access_preserves_row_id() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("kind", FieldType::Text).build(),
+                    make_field(
+                        "premium",
+                        FieldAccess {
+                            update: Some("test_access.allow_if_kind_public".into()),
+                            ..Default::default()
+                        },
+                    ),
+                ])
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "items": [
+                { "id": "row1", "kind": "public", "premium": "a" },
+                { "id": "row2", "kind": "private", "premium": "b" }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_write_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &WriteStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+                operation: "update",
+            },
+        );
+
+        let rows = doc.get("items").unwrap().as_array().unwrap();
+        assert_eq!(rows[0]["id"], "row1", "id kept on the allowed row");
+        assert_eq!(rows[0]["premium"], "a");
+        assert_eq!(
+            rows[1]["id"], "row2",
+            "id kept even when the row's denied sub-field is stripped"
+        );
+        assert!(
+            !rows[1].as_object().unwrap().contains_key("premium"),
+            "the denied sub-field is stripped"
+        );
+    }
+
     /// An operation other than create/update strips nothing (no extractor).
     #[test]
     fn strip_write_access_with_lua_unknown_operation_is_noop() {
