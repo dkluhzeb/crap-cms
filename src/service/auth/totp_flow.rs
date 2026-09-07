@@ -47,7 +47,10 @@ pub fn totp_challenge(
     slug: &str,
     user: &Document,
 ) -> Result<Option<TotpProvisioning>, ServiceError> {
-    let conn = infra.pool.get().map_err(ServiceError::Internal)?;
+    let conn = infra
+        .pool
+        .get()
+        .map_err(|e| ServiceError::classify(e, infra.pool.kind()))?;
     let user_id = user.id.to_string();
 
     let state = query::get_totp_state(&conn, slug, &user_id)?
@@ -151,13 +154,19 @@ pub fn verify_second_factor(
         .map_or(MfaMode::Off, Auth::mfa);
 
     if mode != MfaMode::Totp {
-        let conn = infra.pool.get().map_err(ServiceError::Internal)?;
+        let conn = infra
+            .pool
+            .get()
+            .map_err(|e| ServiceError::classify(e, infra.pool.kind()))?;
         let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
         return super::verify_mfa_code(&ctx, user_id, code);
     }
 
-    let conn = infra.pool.get().map_err(ServiceError::Internal)?;
+    let conn = infra
+        .pool
+        .get()
+        .map_err(|e| ServiceError::classify(e, infra.pool.kind()))?;
 
     let Some(state) = query::get_totp_state(&conn, slug, user_id)? else {
         return Ok(false);

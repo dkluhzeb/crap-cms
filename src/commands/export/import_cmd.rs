@@ -51,10 +51,14 @@ fn push_field_value(
     val: &Value,
     field_type: &FieldType,
 ) {
-    if let Some(db_val) = json_to_db_value(val, field_type) {
-        cols.push(col_name);
-        vals.push(db_val);
-    }
+    // A field PRESENT in the export — including an explicit `null` — is written.
+    // `null` clears the column so the upsert restores the exported state exactly
+    // (nulls included); an ABSENT field is never routed here (callers gate on
+    // `doc_obj.get`), so it stays unchanged under `ON CONFLICT … DO UPDATE`
+    // rather than being reset. (Under the old `INSERT OR REPLACE` a skipped null
+    // was cleared as a side effect of the row rewrite; now it must be explicit.)
+    cols.push(col_name);
+    vals.push(json_to_db_value(val, field_type).unwrap_or(DbValue::Null));
 }
 
 /// Collect columns and join data for a single field, handling different field types.
@@ -270,6 +274,17 @@ fn collect_import_columns(
         }
     }
 
+    // Carry the publication status so an exported draft imports as a draft. The
+    // export includes `_status` for drafts-enabled collections; without this the
+    // new row would take the column default ('published'), silently publishing
+    // unpublished content on a backup→import round-trip.
+    if def.has_drafts()
+        && let Some(v) = doc_obj.get("_status").and_then(|v| v.as_str())
+    {
+        parent_cols.push("_status".to_string());
+        parent_vals.push(DbValue::Text(v.to_string()));
+    }
+
     for field in &def.fields {
         collect_field_columns(
             field,
@@ -328,6 +343,18 @@ fn import_single_document(
 
     if !row.join_data.is_empty() {
         query::save_join_table_data(tx, slug, &def.fields, id, &row.join_data, None)?;
+    }
+
+    // Index the imported document for full-text search, exactly as the service
+    // write path does. Re-read the just-written row via `find_by_id_raw` so the
+    // FTS input carries the same flat `group__sub` physical-column shape
+    // `persist_create`/`persist_update` feed — building a `Document` from the
+    // exported JSON instead would risk a shape mismatch that silently mis-indexes.
+    if tx.supports_fts()
+        && let Some(doc) = query::find_by_id_raw(tx, slug, def, id, None, false)?
+    {
+        query::fts::fts_upsert(tx, slug, &doc, Some(def))
+            .with_context(|| format!("Failed to index {id} in '{slug}' for search"))?;
     }
 
     query::ref_count::after_update(tx, slug, id, &def.fields, locale, &old_refs)
@@ -562,6 +589,109 @@ mod tests {
             query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
             Some(0)
         );
+    }
+
+    /// Regression (`SQLite` import upsert): re-importing a REFERENCED document must
+    /// preserve its `_ref_count`. `INSERT OR REPLACE` deleted+reinserted the row,
+    /// reverting `_ref_count` to its DDL default (0) and silently defeating
+    /// delete protection (and diverging from Postgres). The `ON CONFLICT … DO
+    /// UPDATE` upsert preserves columns not in the import set.
+    #[test]
+    fn reimporting_a_referenced_document_preserves_ref_count() {
+        let (_tmp, db_pool, posts_def) = setup_media_posts();
+        let media_def = CollectionDefinition::new("media");
+        let lc = LocaleConfig::default();
+
+        let mut conn = db_pool.get().unwrap();
+
+        // Seed m1, then a post referencing it → m1._ref_count = 1.
+        {
+            let tx = conn.transaction().unwrap();
+            import_single_document(&json!({ "id": "m1" }), "media", &media_def, &tx, &lc).unwrap();
+            import_single_document(
+                &json!({ "id": "p1", "image": "m1" }),
+                "posts",
+                &posts_def,
+                &tx,
+                &lc,
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+
+        let conn2 = db_pool.get().unwrap();
+        assert_eq!(
+            query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
+            Some(1),
+            "precondition: m1 is referenced once"
+        );
+        drop(conn2);
+
+        // Re-import m1 (the referenced doc). Its _ref_count must survive.
+        let tx = conn.transaction().unwrap();
+        import_single_document(&json!({ "id": "m1" }), "media", &media_def, &tx, &lc).unwrap();
+        tx.commit().unwrap();
+
+        let conn2 = db_pool.get().unwrap();
+        assert_eq!(
+            query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
+            Some(1),
+            "re-importing the referenced doc must NOT reset its _ref_count"
+        );
+    }
+
+    /// Regression: an imported document must be indexed for full-text search.
+    /// The raw upsert wrote the row but skipped `fts_upsert`, so imported docs
+    /// were invisible to search (the P5 class — a CLI path bypassing a service
+    /// invariant). Import now re-reads the row and indexes it like the service
+    /// write path.
+    #[test]
+    fn import_indexes_document_for_search() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        let posts_def = posts.clone();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+
+        let registry_shared = Registry::shared();
+        {
+            let mut reg = registry_shared.write().unwrap();
+            reg.register_collection(media);
+            reg.register_collection(posts);
+        }
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
+
+        let mut conn = db_pool.get().unwrap();
+        let doc = json!({ "id": "p1", "title": "searchable haystack" });
+        let tx = conn.transaction().unwrap();
+        import_single_document(&doc, "posts", &posts_def, &tx, &LocaleConfig::default()).unwrap();
+        tx.commit().unwrap();
+
+        let conn2 = db_pool.get().unwrap();
+        let hits = conn2
+            .query_all(
+                "SELECT id FROM _fts_posts WHERE _fts_posts MATCH 'haystack'",
+                &[],
+            )
+            .expect("FTS query");
+        let ids: Vec<String> = hits
+            .iter()
+            .filter_map(|r| match r.get_value(0) {
+                Some(DbValue::Text(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["p1"], "imported document must be searchable");
     }
 
     #[test]

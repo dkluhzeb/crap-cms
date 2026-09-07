@@ -10,7 +10,9 @@ use super::walk::{
     extract_read_access, has_any_field_access, strip_access_data_aware,
     strip_read_access_data_aware,
 };
-use crate::core::{Document, DocumentFields, FieldDefinition, HookRef};
+use crate::core::{
+    Document, DocumentFields, FieldChildren, FieldDefinition, HookRef, field_children,
+};
 use crate::db::AccessResult;
 use crate::hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua};
 
@@ -47,7 +49,9 @@ pub(crate) fn strip_read_access_with_lua(
         return;
     }
 
-    let is_denied = |hook: &HookRef, data: &DocumentFields| -> bool {
+    // Evaluate a field's `access.read` at a specific locale (`None` = the input's
+    // access locale). `data` is the `ctx.data` sibling view.
+    let denied_at = |hook: &HookRef, data: &DocumentFields, locale: Option<&str>| -> bool {
         match check_access_with_lua(
             lua,
             &AccessCheckInput::builder("read", input.collection)
@@ -55,7 +59,7 @@ pub(crate) fn strip_read_access_with_lua(
                 .user(input.user)
                 .data(Some(data))
                 .document(Some(input.document))
-                .locale(input.locale)
+                .locale(locale)
                 .build(),
         ) {
             Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
@@ -72,7 +76,56 @@ pub(crate) fn strip_read_access_with_lua(
         }
     };
 
-    strip_read_access_data_aware(fields, level, &is_denied);
+    // All-locale read handling: a localized leaf field's value is a
+    // `{ locale: value }` map (only in `all` mode — it is a scalar otherwise, so
+    // this is self-identifying and needs no mode flag). The whole-field decision
+    // below evaluates the rule once at the default access locale, which would
+    // leak locales a `ctx.locale`-scoped rule meant to hide (or over-strip ones
+    // it meant to keep). Evaluate the rule PER-LOCALE and retain only the allowed
+    // locales' entries; drop the field if none survive. These fields are then
+    // excluded from the whole-field pass so it can't overrule the per-locale
+    // decision. (Localized fields nested inside a composite keep the default-
+    // locale decision — a documented limitation.)
+    let snapshot: DocumentFields = level.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+    let mut handled: Vec<String> = Vec::new();
+    for field in fields {
+        let Some(hook) = extract_read_access(field) else {
+            continue;
+        };
+        if !field.localized || !matches!(field_children(field), FieldChildren::Leaf) {
+            continue;
+        }
+        let Some(Value::Object(locale_map)) = level.get_mut(&field.name) else {
+            continue;
+        };
+
+        locale_map.retain(|loc, _| !denied_at(hook, &snapshot, Some(loc.as_str())));
+
+        if locale_map.is_empty() {
+            level.remove(&field.name);
+        }
+
+        handled.push(field.name.clone());
+    }
+
+    let is_denied =
+        |hook: &HookRef, data: &DocumentFields| -> bool { denied_at(hook, data, input.locale) };
+
+    if handled.is_empty() {
+        strip_read_access_data_aware(fields, level, &is_denied);
+    } else {
+        // Whole-field pass over everything EXCEPT the per-locale-handled leaves,
+        // evaluated against the full-level snapshot (ctx.data) so sibling rules
+        // still see the complete document.
+        let remaining: Vec<FieldDefinition> = fields
+            .iter()
+            .filter(|f| !handled.contains(&f.name))
+            .cloned()
+            .collect();
+
+        strip_read_access_data_aware(&remaining, level, &is_denied);
+    }
 }
 
 /// Context for a data-aware field-**write** strip: the full incoming document
@@ -208,6 +261,55 @@ mod tests {
         assert!(
             !rows[1].as_object().unwrap().contains_key("premium"),
             "private row strips premium"
+        );
+    }
+
+    /// Regression (D-1): an `all`-locale read strips a localized leaf field
+    /// PER-LOCALE. `secret`'s `access.read` allows only `ctx.locale == "en"`; in
+    /// `all` mode its value is `{ en, de }`. The `en` value is kept and the `de`
+    /// value — which the rule was written to hide — is stripped. Previously the
+    /// whole-field decision at the default locale ("en" → allowed) kept the
+    /// entire map and leaked `de`.
+    #[test]
+    fn strip_read_access_all_locale_map_is_per_locale() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("secret", FieldType::Text)
+                .localized(true)
+                .access(FieldAccess {
+                    read: Some("test_access.check_locale".into()),
+                    ..Default::default()
+                })
+                .build(),
+        ];
+
+        let mut doc = json!({ "secret": { "en": "visible", "de": "hidden" } })
+            .as_object()
+            .unwrap()
+            .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
+
+        let secret = doc.get("secret").unwrap().as_object().unwrap();
+        assert_eq!(
+            secret.get("en"),
+            Some(&json!("visible")),
+            "the allowed locale's value is kept"
+        );
+        assert!(
+            !secret.contains_key("de"),
+            "the denied locale's value is stripped"
         );
     }
 

@@ -1068,6 +1068,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   subscriber the access rule denied. The strip now runs first, the API-hidden
   strip second, and `after_read` sees only the already-stripped data.
 
+- **A read-`all`-locales fetch strips a field-read access rule per locale.** With
+  a localized leaf field whose `access.read` decides on `context.locale`, an
+  all-locales read shapes the value as a `{ locale: value }` map — but the strip
+  evaluated the rule once at the default locale and kept or dropped the whole map.
+  A rule written to expose a field in one locale and hide it in another (e.g. a
+  translator visible only their own language) leaked every other locale's value.
+  The all-locales strip now evaluates the rule once per locale key and removes
+  only the denied locales' entries, dropping the field entirely when none remain;
+  single-locale reads are unchanged.
+
 - **`crap.collections.ref_count` now gates on read access.** It was the only
   read-shaped Lua op with no access check — it returned an incoming-reference
   count for any document id. It now performs a read-visibility check (respecting
@@ -1914,6 +1924,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   all (the inline dropdown was already fully accessible). They are now
   focusable buttons with Enter/Space activation and selection state
   exposed via `aria-pressed`.
+- **The relationship inline-create action showed a blank target name.** Its
+  `Create new <singular>` label read a `collection_singular_name` template
+  variable that no builder ever supplied, so the button rendered `Create new `
+  with an empty tail. Relationship enrichment now resolves the target
+  collection's singular label (falling back to its slug), so the label reads
+  `Create new Tag` (polymorphic relationships, which label each collection
+  individually, are unaffected).
+- **An admin `NotFound` service error now renders a 404, not a 500.** The shared
+  `ServiceError → admin HTML` mapper handled only `AccessDenied` (403) specially
+  and folded everything else — `NotFound` included — into a logged 500. A read
+  that failed with `NotFound` (e.g. a locale-filtered lookup) on an admin edit or
+  list page therefore surfaced as a server error. It now renders the canonical
+  404 page carrying the error's message.
 - **A Rust panic could leak the transaction-scoped Lua infra into the
   VM pool.** `crap.transaction`'s `LuaCrudInfra` swap was restored by a
   plain statement after the closure call (its `TxContext` sibling was
@@ -2428,6 +2451,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   upload surface shares one `ServiceError → HTTP` mapper (delete previously used a
   second mapper that returned `403` where create/update returned `401` for a
   locked account).
+
+- **The gRPC job and auth handlers report transient DB failures as `unavailable`,
+  not `internal`.** `trigger` / `get_run` / `list_runs` / `cancel_run` / `list`
+  (jobs) and `login` / `verify_email` / `reset_password` (auth) mapped a
+  `ServiceError` straight through `Status::from` without the backend-aware
+  `reclassify` step every other write surface runs, so a pool-timeout or lock
+  contention surfaced as `Internal` (13) instead of the retryable `Unavailable`
+  (14) — a retryable error reported to clients as permanent. All eight now
+  reclassify against the pool's backend before mapping, matching `account` and
+  the content service.
+
+- **TOTP setup and verification report pool exhaustion as `unavailable`, not
+  `internal`.** The TOTP flow checked out its DB connection with
+  `pool.get().map_err(ServiceError::Internal)`, so a pool timeout or lock
+  contention became a permanent `Internal` (500-class) error instead of the
+  retryable `Transient` (503-class) every service op already produces via the
+  shared `classify`. All three sites now classify the pool error against the
+  backend.
 
 - **Scalar `has_many` lists store and canonicalize correctly — and work on
   Postgres.** A `Number` has-many list was given a numeric column
@@ -3046,6 +3087,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   diffs each document's outgoing refs exactly like the service layer
   (create, idempotent re-import, and reference-clearing all covered).
 
+- **Re-importing a referenced document on SQLite keeps its `_ref_count`.** The
+  SQLite upsert used `INSERT OR REPLACE`, which deletes the existing row and
+  reinserts it — zeroing every column the import did not list, including the
+  system `_ref_count` that other documents' references had incremented. A single
+  re-import of a target silently dropped its incoming-reference count to 0 and
+  disarmed delete protection. It now uses `ON CONFLICT(<pk>) DO UPDATE SET` over
+  only the supplied columns, preserving unlisted system columns exactly as the
+  Postgres path (which already used `ON CONFLICT`) always did. Import also writes
+  a present-but-null field explicitly (clearing it) versus an absent field
+  (preserved), and carries `_status` for draft-enabled collections, so a re-import
+  round-trips a document's data and publication state without loss.
+
+- **`import` indexes documents for full-text search.** The raw import upsert
+  wrote the row and its join data but never called `fts_upsert`, so imported
+  documents were absent from the search index and invisible to `search` — the
+  startup FTS sync does not backfill existing rows. Import now re-reads each
+  written row (matching the service write path's flat FTS input shape) and
+  indexes it, so imported content is searchable immediately.
+
 - **`db restore` is crash-safe and WAL-safe.** Restore copied the backup
   directly over the live database file (an interrupt destroyed it with no
   recovery), then opened the restored file while the previous database's
@@ -3056,6 +3116,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `*.pre-restore`, and atomically rename the staged copy into place. Also
   warns when the backup was taken by a different crap-cms version and
   refuses non-SQLite backends explicitly.
+
+- **`db restore --include-uploads` no longer reports success when the uploads
+  restore fails.** A failed `tar` extraction (non-zero exit, or `tar` missing)
+  only printed a warning; the command then printed `Restore complete.` and
+  exited `0`, so a caller (or CI) could not tell that the uploads never came
+  back. It now fails the whole command when uploads were requested but did not
+  restore — the error notes the database itself was already restored — while a
+  backup that simply contains no uploads archive stays a successful skip.
 
 - **`db backup` writes the uploads archive atomically.** An interrupted
   `tar` left a truncated `uploads.tar.gz` indistinguishable from a valid

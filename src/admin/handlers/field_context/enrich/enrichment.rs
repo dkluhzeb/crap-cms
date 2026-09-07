@@ -246,8 +246,12 @@ mod tests {
     use crate::{
         admin::handlers::field_context::enrich::test_helpers::{
             build_value_contexts, enrich_field_contexts_values, make_field, make_test_state,
+            make_test_state_with_registry,
         },
-        core::{BlockDefinition, DocumentFields, FieldTab, FieldType, LocalizedString},
+        core::{
+            BlockDefinition, CollectionDefinition, DocumentFields, FieldTab, FieldType,
+            LocalizedString, Registry, RelationshipConfig,
+        },
     };
 
     /// Regression: blocks inside Tabs were not populated from `doc_fields`
@@ -578,5 +582,41 @@ mod tests {
         let pro_fields = tabs[1]["sub_fields"].as_array().unwrap();
         assert_eq!(pro_fields[0]["name"], "team_members[0][job_title]");
         assert_eq!(pro_fields[0]["value"], "Dev");
+    }
+
+    /// Regression: a non-polymorphic relationship field now carries the target
+    /// collection's singular label, so the inline-create action can render
+    /// `Create new <singular>` instead of a bare `Create new `.
+    #[test]
+    fn enrich_relationship_sets_target_collection_singular_name() {
+        let mut tags = CollectionDefinition::new("tags");
+        tags.labels.singular = Some(LocalizedString::Plain("Tag".to_string()));
+
+        let mut registry = Registry::default();
+        registry.register_collection(tags);
+
+        let mut rel = FieldDefinition::builder("primary_tag", FieldType::Relationship).build();
+        rel.relationship = Some(RelationshipConfig::new("tags", false));
+        let field_defs = vec![rel];
+
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let mut contexts = build_value_contexts(&field_defs, &values, &errors, false, false);
+
+        let doc_fields = DocumentFields::new();
+        let state = make_test_state_with_registry(registry);
+
+        enrich_field_contexts_values(
+            &mut contexts,
+            &field_defs,
+            &doc_fields,
+            &state,
+            &EnrichOptions::builder(&errors).build(),
+        );
+
+        assert_eq!(
+            contexts[0]["collection_singular_name"], "Tag",
+            "relationship enrichment must expose the target's singular label"
+        );
     }
 }

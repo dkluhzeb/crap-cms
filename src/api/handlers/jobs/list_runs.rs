@@ -74,7 +74,7 @@ fn list_job_runs_blocking(
             offset: input.offset,
         },
     )
-    .map_err(Status::from)
+    .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))
 }
 
 #[cfg(not(tarpaulin_include))]

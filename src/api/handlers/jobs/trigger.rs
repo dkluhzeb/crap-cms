@@ -89,7 +89,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
             unique_key: input.unique_key.as_deref(),
         },
     )
-    .map_err(Status::from)?;
+    .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?;
 
     Ok(job_run.id)
 }

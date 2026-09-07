@@ -63,6 +63,8 @@ pub mod server;
 pub(crate) mod server_builder;
 mod state;
 pub mod templates;
+#[cfg(all(test, feature = "sqlite"))]
+pub(crate) mod test_state;
 #[doc(hidden)]
 pub mod test_support;
 pub mod translations;

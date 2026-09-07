@@ -447,6 +447,7 @@ fn construct_relationship(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCont
     FieldContext::Relationship(RelationshipField {
         base,
         relationship_collection,
+        collection_singular_name: None,
         has_many,
         polymorphic,
         collections,

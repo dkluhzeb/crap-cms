@@ -49,7 +49,8 @@ fn cancel_job_run_blocking(input: &CancelJobRunBlockingInput) -> Result<bool, St
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
-    service::jobs::cancel_job_run(&ctx, infra.registry.as_ref(), &input.id).map_err(Status::from)
+    service::jobs::cancel_job_run(&ctx, infra.registry.as_ref(), &input.id)
+        .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))
 }
 
 #[cfg(not(tarpaulin_include))]

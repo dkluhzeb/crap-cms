@@ -146,6 +146,7 @@ pub(super) fn enrich_relationship(
     let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
+    rf.collection_singular_name = Some(related_def.singular_name().to_string());
 
     let title_field = related_def
         .title_field()

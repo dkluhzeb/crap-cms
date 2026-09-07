@@ -592,6 +592,7 @@ pub fn service_error_to_admin_response(
 ) -> Response {
     match err {
         ServiceError::AccessDenied(_) => forbidden(state, denied_msg),
+        ServiceError::NotFound(msg) => not_found(state, &msg),
         e => {
             error!("Service error: {}", e);
             server_error(state, "An internal error occurred.")
@@ -645,5 +646,31 @@ mod tests {
     fn redirect_response_returns_303() {
         let resp = redirect_response("/admin/collections");
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    }
+
+    /// A `NotFound` service error rendering an admin page is a 404, not a 500.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn service_error_not_found_maps_to_404() {
+        let state = crate::admin::test_state::test_admin_state();
+        let resp = service_error_to_admin_response(
+            &state,
+            ServiceError::NotFound("Document 'x' not found".into()),
+            "denied",
+        );
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// An access denial still maps to 403.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn service_error_access_denied_maps_to_403() {
+        let state = crate::admin::test_state::test_admin_state();
+        let resp = service_error_to_admin_response(
+            &state,
+            ServiceError::AccessDenied("nope".into()),
+            "denied",
+        );
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

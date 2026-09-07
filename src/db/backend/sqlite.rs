@@ -160,14 +160,39 @@ fn sqlite_build_insert_ignore(table: &str, columns: &str, values: &str) -> Strin
     format!("INSERT OR IGNORE INTO \"{table}\" ({columns}) VALUES ({values})")
 }
 
-fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, _key_col: &str) -> String {
+fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
     let cols = columns
         .iter()
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
 
-    format!("INSERT OR REPLACE INTO \"{table}\" ({cols}) VALUES ({values})")
+    // `INSERT … ON CONFLICT(key) DO UPDATE SET col = excluded.col` for every
+    // provided non-key column — NOT `INSERT OR REPLACE`, which deletes the
+    // existing row and reinserts, reverting any column NOT in this statement
+    // (`_ref_count`, `_status`, `_deleted_at`, …) to its DDL default. That would
+    // silently defeat delete protection and unpublish/untrash rows on a
+    // re-import. This matches the Postgres `pg_build_upsert` semantics so both
+    // backends preserve unlisted columns.
+    let updates = columns
+        .iter()
+        .filter(|c| **c != key_col)
+        .map(|c| format!("\"{c}\" = excluded.\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    if updates.is_empty() {
+        // Only the key column was provided — nothing to update on conflict.
+        return format!(
+            "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
+             ON CONFLICT(\"{key_col}\") DO NOTHING"
+        );
+    }
+
+    format!(
+        "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
+         ON CONFLICT(\"{key_col}\") DO UPDATE SET {updates}"
+    )
 }
 
 // ── Macros to deduplicate shared dialect + query methods ───────────────
@@ -855,13 +880,16 @@ mod tests {
     }
 
     #[test]
-    fn upsert_uses_insert_or_replace_with_all_columns() {
-        // SQLite's REPLACE rewrites the whole row, so every column is listed
-        // and the key column is not special-cased (unlike Postgres' upsert).
+    fn upsert_preserves_unlisted_columns_via_on_conflict() {
+        // Regression: must NOT be `INSERT OR REPLACE` (which deletes+reinserts,
+        // reverting columns like `_ref_count`/`_status` to their DDL default on
+        // a re-import). `ON CONFLICT … DO UPDATE SET` for the non-key columns
+        // preserves unlisted columns, matching Postgres.
         let (_dir, conn) = temp_conn();
         assert_eq!(
             conn.build_upsert("t", &["id", "name"], "?1, ?2", "id"),
-            "INSERT OR REPLACE INTO \"t\" (\"id\", \"name\") VALUES (?1, ?2)"
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (?1, ?2) \
+             ON CONFLICT(\"id\") DO UPDATE SET \"name\" = excluded.\"name\""
         );
     }
 

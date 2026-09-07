@@ -187,6 +187,17 @@ most).
 
 ## Priority queue (what Phase 2/3 should guard next)
 
+**Planned structural fix (M2 / D8):** array & blocks writes are a
+destructive delete-and-reinsert with no stable per-row identity, so a
+write-denied or absent sub-field on an existing row is lost — the scalar
+path preserves it (column-preserving `UPDATE`), the composite path does
+not. Design + phased plan in
+[`array-row-identity.md`](array-row-identity.md): round-trip the existing
+junction-row `id` end-to-end and replace the rebuild with a diff-based,
+column-preserving upsert. Not yet implemented. The guard is the
+regression suite in that doc plus the shared write contract line it adds
+to `frozen-contracts.md`.
+
 Remaining UNGUARDED: **D7** only — no structural fix exists for stale
 comments; folded into the review lens list below. Everything else from
 the founding queues is guarded (M7, P5, D2) or hardened (D4).
@@ -238,6 +249,14 @@ memories; the load-bearing ones:
 - `from_locale_string(None, …)` cannot `Err` — the admin
   `unwrap_or(None)` sites are dead-handling, not bare-column bugs.
   (Unknown *Some(bad)* locales were a separate, fixed issue.)
+- Sort/filter never silently falls back to a default on invalid input.
+  The admin list handler 400s an unknown/unsortable `sort`, an unknown
+  `_status` value, and a drafts-only status filter on a no-drafts
+  collection; the service `resolve_sort` `bail!`s on a sort column that
+  is not a real column (`_rank` excepted, itself gated by
+  `validate_query_fields`). The trash view prefers an explicit user sort
+  over the trash default. No surface masks a bad sort/filter as a
+  default-sorted or unfiltered result.
 - `load_authenticated_user`'s `.ok()?` sites are fail-**closed**.
 - Global version-table "double-wrapping" — consistent on read+write,
   verified by migration test.

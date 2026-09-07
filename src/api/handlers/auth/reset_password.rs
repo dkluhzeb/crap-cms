@@ -50,7 +50,8 @@ fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Sta
         .conn(&tx)
         .build();
 
-    let user_id = consume_reset_token(&ctx, &input.token, &input.password).map_err(Status::from)?;
+    let user_id = consume_reset_token(&ctx, &input.token, &input.password)
+        .map_err(|e| Status::from(e.reclassify(input.infra.pool.kind())))?;
 
     tx.commit()
         .inspect_err(|e| error!("Reset password commit error: {}", e))

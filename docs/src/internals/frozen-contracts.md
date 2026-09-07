@@ -361,6 +361,13 @@ changing a representation is a breaking change to every consumer.
   request error. Swallowing it into a `None` context is forbidden: a `None`
   context on a localized collection reads/writes the bare columns (`title`
   instead of `title__en`) — the classic wrong-column footgun.
+- **An all-locales read strips a localized field's read access per locale.**
+  When `locale = "all"` returns a localized leaf as a `{ locale: value }` map,
+  the field-read strip evaluates that field's `access.read` once per locale key
+  (with `context.locale` set to the key) and removes only the denied locales'
+  entries, dropping the field only when none survive. A single default-locale
+  decision must never keep or discard the whole map — a rule that exposes a
+  field in one locale and hides it in another is honored per value.
 - **Live-mutation streams resolve access through one shared path.** The gRPC
   `Subscribe` and admin SSE streams build their per-subscriber view/mode maps via
   `EventAccessMap::resolve` and enforce them per event via `EventGate::evaluate`
@@ -568,6 +575,18 @@ changing a representation is a breaking change to every consumer.
 - **Backup/export formats** are gated by a numeric `format_version` — the layout
   (`manifest.json` + `crap.db` + `uploads.tar.gz`; the export envelope) is frozen
   for a given version.
+- **`import` round-trips a document without loss.** A re-import preserves the
+  target's incoming-reference count (the upsert is column-preserving via
+  `ON CONFLICT … DO UPDATE` on both backends — never a delete-and-reinsert that
+  would zero unlisted system columns), carries `_status` for draft-enabled
+  collections, writes a present-but-null field as an explicit clear versus an
+  absent field left untouched, and indexes the written row for full-text search
+  exactly as the service write path does. A field the export omits is preserved;
+  a field it includes as `null` is cleared.
+- **`restore --include-uploads` fails the command when uploads do not restore.**
+  A backup with no uploads archive is a successful skip; a `tar` extraction that
+  fails (non-zero exit, or `tar` missing) fails the whole `restore` rather than
+  printing success — the error notes the database was already restored.
 
 ## Template formatter (`crap-cms fmt`)
 

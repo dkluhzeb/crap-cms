@@ -22,6 +22,11 @@ pub struct RelationshipField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relationship_collection: Option<String>,
 
+    /// Singular display label of the target collection, for the inline-create
+    /// action label (`Create new <singular>`). Non-polymorphic only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_singular_name: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_many: Option<bool>,
 
@@ -54,6 +59,7 @@ impl RelationshipField {
         Self {
             base,
             relationship_collection: None,
+            collection_singular_name: None,
             has_many: None,
             polymorphic: None,
             collections: None,
@@ -207,6 +213,7 @@ mod tests {
         let f = RelationshipField {
             base: make_base("author"),
             relationship_collection: Some("users".to_string()),
+            collection_singular_name: None,
             has_many: Some(false),
             polymorphic: Some(true),
             collections: Some(vec!["users".to_string(), "guests".to_string()]),
@@ -224,6 +231,7 @@ mod tests {
         let f = RelationshipField {
             base: make_base("author"),
             relationship_collection: Some("users".to_string()),
+            collection_singular_name: None,
             has_many: Some(true),
             polymorphic: None,
             collections: None,
@@ -249,6 +257,7 @@ mod tests {
         let f = RelationshipField {
             base: make_base("ref"),
             relationship_collection: Some("users".to_string()),
+            collection_singular_name: None,
             has_many: Some(false),
             polymorphic: Some(true),
             collections: Some(vec!["users".to_string()]),

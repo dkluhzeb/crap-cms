@@ -5,32 +5,18 @@
 //! templates) keep working. [`make_test_state`] builds a minimal in-memory
 //! [`AdminState`] for tests that need DB access.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicUsize},
-};
+use std::collections::HashMap;
 
-use r2d2_sqlite::SqliteConnectionManager;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     admin::{
-        AdminState, Translations,
+        AdminState,
         context::field::{FieldContext, RichtextField},
-        custom_pages::CustomPageRegistry,
         handlers::field_context::{builder::build_field_contexts, enrich},
     },
-    config::{CrapConfig, EmailConfig, UploadConfig},
-    core::{
-        DocumentFields, FieldDefinition, FieldType, Registry,
-        auth::{Argon2PasswordProvider, JwtTokenProvider},
-        email::create_email_provider,
-        rate_limit::LoginRateLimiter,
-        upload::create_storage,
-    },
-    db::{DbConnection, DbPool, query::LocaleContext},
-    hooks::HookRunner,
+    core::{DocumentFields, FieldDefinition, FieldType, Registry},
+    db::{DbConnection, query::LocaleContext},
 };
 
 use super::{EnrichOptions, SubFieldOpts, types};
@@ -130,65 +116,7 @@ pub(super) fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
 /// tests that exercise DB-touching enrichment paths. `default_deny = false`: a
 /// collection with no access rule stays readable, so enrichment label-presence
 /// tests (no access configured) behave as before.
-pub(super) fn make_test_state() -> AdminState {
-    make_test_state_with_deny(false)
-}
-
-/// Like [`make_test_state`] but with a configurable `access.default_deny`, so a
-/// test can exercise the access-gated label reads (deny → labels filtered out).
-pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
-    let tmp = tempfile::tempdir().unwrap();
-    let manager = SqliteConnectionManager::memory();
-    let pool = DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
-    let registry: Arc<Registry> = Arc::new(Registry::default());
-    let mut config = CrapConfig::test_default();
-    config.access.default_deny = default_deny;
-    let hook_runner = HookRunner::builder()
-        .config_dir(tmp.path())
-        .registry(Arc::clone(&registry))
-        .config(&config)
-        .build()
-        .unwrap();
-    let hbs = Arc::new(handlebars::Handlebars::new());
-    let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
-    let ip_login_limiter = Arc::new(LoginRateLimiter::new(20, 300));
-    let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
-    let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
-    let translations = Arc::new(Translations::load(tmp.path()));
-    let storage = create_storage(tmp.path(), &UploadConfig::default()).unwrap();
-    let token_provider: crate::core::SharedTokenProvider =
-        Arc::new(JwtTokenProvider::new("test-secret"));
-    let infra = crate::admin::test_support::test_infra(
-        pool,
-        Arc::clone(&registry),
-        hook_runner,
-        storage,
-        token_provider,
-        &config,
-        tmp.path(),
-    );
-
-    AdminState {
-        mcp_sessions: Arc::default(),
-        infra,
-        config,
-        config_dir: tmp.path().to_path_buf(),
-        handlebars: hbs,
-        jwt_secret: "test".into(),
-        email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
-        login_limiter,
-        ip_login_limiter,
-        forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
-        ip_forgot_password_limiter: Arc::new(LoginRateLimiter::new(20, 900)),
-        mfa_limiter,
-        ip_mfa_limiter,
-        has_auth: false,
-        translations,
-        sse_connections: Arc::new(AtomicUsize::new(0)),
-        max_sse_connections: 0,
-        shutdown: CancellationToken::new(),
-        password_provider: Arc::new(Argon2PasswordProvider),
-        subscriber_send_timeout_ms: 1000,
-        custom_pages: CustomPageRegistry::default(),
-    }
-}
+pub(super) use crate::admin::test_state::{
+    test_admin_state as make_test_state, test_admin_state_with_deny as make_test_state_with_deny,
+    test_admin_state_with_registry as make_test_state_with_registry,
+};

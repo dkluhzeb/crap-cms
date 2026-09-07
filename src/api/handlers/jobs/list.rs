@@ -47,8 +47,8 @@ fn readable_job_slugs_blocking(
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
-    let allowed =
-        service::jobs::readable_job_slugs(&ctx, &conn, &infra.registry).map_err(Status::from)?;
+    let allowed = service::jobs::readable_job_slugs(&ctx, &conn, &infra.registry)
+        .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?;
 
     Ok(allowed.into_iter().collect())
 }

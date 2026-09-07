@@ -44,7 +44,8 @@ fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Statu
         .conn(&tx)
         .build();
 
-    let verified = consume_verification_token(&ctx, &input.token).map_err(Status::from)?;
+    let verified = consume_verification_token(&ctx, &input.token)
+        .map_err(|e| Status::from(e.reclassify(input.infra.pool.kind())))?;
     tx.commit()
         .inspect_err(|e| error!("Verify email commit error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;

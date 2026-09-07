@@ -47,7 +47,7 @@ pub fn restore(
     restore_database(&config_dir, &cfg, &backup_dir, &db_path)?;
 
     if include_uploads {
-        restore_uploads(&config_dir, &backup_dir);
+        restore_uploads(&config_dir, &backup_dir)?;
     }
 
     cli::success("Restore complete.");
@@ -212,14 +212,29 @@ fn checkpoint_and_list_sidecars(
         .collect())
 }
 
-/// Extract the uploads.tar.gz archive from the backup directory.
+/// Classify a `tar` invocation result. `Ok(())` = the archive extracted; `Err`
+/// names why it did not (non-zero exit, or `tar` missing/unspawnable). A missing
+/// backup archive is handled by the caller before this point, never here.
+fn classify_tar_status(status: std::io::Result<process::ExitStatus>) -> Result<()> {
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => bail!("tar exited with status {s}"),
+        Err(e) => bail!("tar not found or failed: {e}"),
+    }
+}
+
+/// Extract the uploads.tar.gz archive from the backup directory. A backup with
+/// no uploads archive is not an error (uploads were never backed up); a `tar`
+/// failure is — the caller requested uploads and they did not restore, so the
+/// whole `restore` must not report success. The database has already been
+/// restored at this point, which the error message makes clear.
 #[cfg(not(tarpaulin_include))]
-fn restore_uploads(config_dir: &Path, backup_dir: &Path) {
+fn restore_uploads(config_dir: &Path, backup_dir: &Path) -> Result<()> {
     let archive_path = backup_dir.join("uploads.tar.gz");
 
     if !archive_path.exists() {
         cli::info("No uploads.tar.gz in backup — skipping uploads restore.");
-        return;
+        return Ok(());
     }
 
     let spin = Spinner::new("Extracting uploads...");
@@ -233,9 +248,34 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) {
         ])
         .status();
 
-    match status {
-        Ok(s) if s.success() => spin.finish_success("Uploads restored"),
-        Ok(s) => spin.finish_warning(&format!("tar exited with status {s}")),
-        Err(e) => spin.finish_warning(&format!("tar not found or failed: {e}. Skipping.")),
+    match classify_tar_status(status) {
+        Ok(()) => {
+            spin.finish_success("Uploads restored");
+            Ok(())
+        }
+        Err(e) => {
+            spin.finish_warning(&e.to_string());
+            Err(e).context("Uploads restore failed — the database was already restored")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_status_success_is_ok_failure_is_err() {
+        use std::os::unix::process::ExitStatusExt;
+
+        assert!(classify_tar_status(Ok(process::ExitStatus::from_raw(0))).is_ok());
+
+        // Exit code 1 → wait-status 256 on unix.
+        let failed = classify_tar_status(Ok(process::ExitStatus::from_raw(256)));
+        assert!(failed.is_err());
+
+        let spawn_err = classify_tar_status(Err(std::io::Error::from(ErrorKind::NotFound)));
+        assert!(spawn_err.is_err());
     }
 }

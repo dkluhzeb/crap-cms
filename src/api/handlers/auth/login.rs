@@ -55,7 +55,7 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<LoginOutcome, Status> {
             password_provider: &*input.password_provider,
         },
     )
-    .map_err(Status::from)
+    .map_err(|e| Status::from(e.reclassify(input.infra.pool.kind())))
 }
 
 #[cfg(not(tarpaulin_include))]

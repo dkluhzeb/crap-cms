@@ -58,7 +58,7 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
 
     // A denied or unknown run resolves to `None` → `not_found`, hiding existence.
     service::jobs::get_job_run(&ctx, infra.registry.as_ref(), &input.id)
-        .map_err(Status::from)?
+        .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?
         .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", input.id)))
 }
 
