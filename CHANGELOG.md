@@ -1622,6 +1622,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Keyset (cursor) pagination silently dropped rows with a NULL sort value.**
+  On a DESC-forward or ASC-backward page over a nullable sort column, the keyset
+  predicate's three-valued logic (`col < ?` and `col = ?` are both false for
+  NULL) excluded every NULL-valued row from later pages — they were never
+  returned by ANY page, while `count` still counted them. A common case (a DESC
+  default sort on an optional Number/Date/Text field). The keyset now includes
+  `col IS NULL` on the affected directions, matching the `NULLS LAST` order.
+  Offset pagination was unaffected.
+
+- **Per-slug / per-queue job concurrency caps could be exceeded on a multi-node
+  Postgres cluster.** Each node claimed jobs in its own `READ COMMITTED`
+  transaction and read the "running" counts on a snapshot that couldn't see a
+  peer's in-flight (uncommitted) claims, so under backlog N nodes could each
+  claim up to the cap. The count+claim decision is now serialized with a
+  transaction-scoped advisory lock whenever a cap is configured (a no-op on
+  SQLite, whose IMMEDIATE transaction already serializes writers; skipped
+  entirely when no cap is set, so unconstrained deployments keep claiming in
+  parallel).
+
+- **A Lua job / custom-route / `crap.transaction` write invalidated the populate
+  cache *before* its transaction committed.** A concurrent read in that window
+  could repopulate the cache from the pre-commit snapshot, leaving it stale
+  indefinitely (memory backend, default config). The invalidation is now
+  deferred to post-commit — the write sets a transaction-scoped flag and the
+  commit-owning envelope clears the cache once the write is durable — mirroring
+  how events and upload-file cleanup are already deferred.
+
+- **`default_value = true` on a Checkbox field was silently stored as false.**
+  The parser, column DDL, and ALTER-backfill all honored the default, but the
+  runtime write path forced `0` for an absent checkbox. An absent checkbox on a
+  create now honors a configured boolean default (for API creates that omit the
+  field); the admin form normalizes an unchecked box to an explicit `0` (so form
+  "unchecked = false" still holds) and the new-item form renders the box checked
+  when the default is `true`.
+
 - **Enabling soft-delete on a collection with a unique field nested in a group
   (or other layout wrapper) left a stale inline `UNIQUE` on the upgraded table.**
   The rebuild that swaps inline `UNIQUE` for the partial `WHERE _deleted_at IS
@@ -4143,6 +4178,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- **`crap.storage.register` docs no longer show a `url` handler.** The inline
+  module example and two stale tests referenced a `url` handler the strict-key
+  validator rejects and no backend consumes (the served path is always the
+  frozen `/uploads/<key>` proxy). Docs and tests corrected to the real
+  `put`/`get`/`delete`/`exists` surface.
 
 - **Postgres behavioral test harness (dual-backend suite seed).** The
   unit suite ran only on SQLite, so Postgres-specific behavior (NULL sort

@@ -388,10 +388,21 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 }
 
 fn construct_checkbox(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
-    FieldContext::Checkbox(CheckboxField {
-        base,
-        checked: matches!(fc.value, "1" | "true" | "on" | "yes"),
-    })
+    // A new-item form has no submitted or stored value; fall back to the field's
+    // boolean `default_value` so a `default_value = true` checkbox renders
+    // checked (and, left as-is, submits `"on"`). A present value — an existing
+    // row's stored `0`/`1`, or a re-rendered submission — takes precedence.
+    let checked = if fc.value.is_empty() {
+        fc.field
+            .default_value
+            .as_ref()
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    } else {
+        matches!(fc.value, "1" | "true" | "on" | "yes")
+    };
+
+    FieldContext::Checkbox(CheckboxField { base, checked })
 }
 
 fn construct_choice<F>(base: BaseFieldData, fc: &SingleFieldCtx, variant: F) -> FieldContext

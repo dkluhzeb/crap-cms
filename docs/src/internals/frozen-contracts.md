@@ -341,6 +341,19 @@ changing a representation is a breaking change to every consumer.
   `service::versions::list_versions` (via `floor_optional_limit`, which lives in
   `db::query` so every surface and the service share one helper), so the Lua,
   gRPC, and MCP version listings all inherit the floor at one point.
+- **Keyset pagination returns every row, NULL sort values included.** A page
+  over a nullable sort column includes the NULL-valued rows (they sort to the
+  tail under the explicit `NULLS LAST` / head under `NULLS FIRST`); the keyset
+  predicate adds `col IS NULL` on the directions that advance toward them, so no
+  row is ever silently skipped across pages (three-valued `col < ?` would drop
+  them). `count` and the paged set agree.
+- **Cache invalidation happens after commit on every surface.** A write clears
+  the populate cache only once its transaction is durable — never before (a
+  pre-commit clear lets a concurrent read repopulate a stale entry). Pool-mode
+  clears post-commit in `run_pool_write`; conn-mode (Lua job / custom route /
+  `crap.transaction`) defers via a transaction-scoped `cache_dirty` flag that
+  the commit-owning envelope flushes, the same deferral events and upload-file
+  cleanup use.
 - **An unknown locale string errors on every surface — it is never silently
   dropped.** `LocaleContext::from_locale_string` rejects a locale outside the
   configured set, and every intake (Lua / gRPC / MCP / admin forms + validate
@@ -488,6 +501,13 @@ changing a representation is a breaking change to every consumer.
   only grow, never shrink.)
 
 ## Scheduler & jobs
+
+- **Per-slug / per-queue concurrency caps are exact per tick, cluster-wide.**
+  When any cap is configured, the job claim serializes its count+claim decision
+  with a transaction-scoped advisory lock so two Postgres nodes can't each claim
+  past the cap on a `READ COMMITTED` snapshot that misses the other's in-flight
+  claims. SQLite (IMMEDIATE) and single-node need no lock; an unconstrained
+  deployment skips it and claims in parallel.
 
 - **`JobStatus` value set** `{pending, running, completed, failed, stale}`
   (lowercase) — stored in `_crap_jobs.status`, matched in SQL, and surfaced to

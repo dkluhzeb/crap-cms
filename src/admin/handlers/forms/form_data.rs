@@ -12,11 +12,30 @@
 use std::collections::HashMap;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition},
+    core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields},
     service::values_from_strings,
 };
 
 use super::{join_data::extract_join_data_from_form, select_has_many::transform_select_has_many};
+
+/// Give every checkbox column an explicit value. An HTML checkbox submits
+/// nothing when unchecked, so an absent checkbox in a form submission means
+/// "unchecked" — make that explicit as `"0"` so the write path stores false
+/// rather than falling back to the field's `default_value`. That default is for
+/// API creates (Lua / gRPC / MCP) that genuinely omit the field; a form always
+/// reflects the box's shown state (the new-item form pre-checks a `true`
+/// default, so leaving it checked submits `"on"`). Walks groups + transparent
+/// wrappers exactly like the write path, so nested checkbox columns are covered.
+fn normalize_absent_checkboxes(raw: &mut HashMap<String, String>, fields: &[FieldDefinition]) {
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.field_type == FieldType::Checkbox {
+            raw.entry(prefixed_name(prefix, &field.name))
+                .or_insert_with(|| "0".to_string());
+        }
+
+        Ok(())
+    });
+}
 
 /// Form-submission state: raw `HashMap` plus extracted join (array/blocks/relationship) data.
 #[derive(Debug, Clone, Default)]
@@ -36,6 +55,7 @@ impl FormData {
     /// caller to extract via [`take`](Self::take) / [`take_action`](Self::take_action) etc.
     pub fn from_raw(mut raw: HashMap<String, String>, fields: &[FieldDefinition]) -> Self {
         transform_select_has_many(&mut raw, fields);
+        normalize_absent_checkboxes(&mut raw, fields);
         let join = extract_join_data_from_form(&raw, fields);
 
         Self { raw, join }
@@ -139,6 +159,43 @@ mod tests {
 
         assert_eq!(form.raw().get("title"), Some(&"Hello".to_string()));
         assert!(form.join().get("items").is_some());
+    }
+
+    /// An absent top-level checkbox is normalized to an explicit "0" (HTML omits
+    /// an unchecked box), so the write path stores false rather than the field's
+    /// `default_value`; a present checkbox value is left untouched. Group-nested
+    /// checkboxes get their prefixed column normalized too.
+    #[test]
+    fn from_raw_normalizes_absent_checkboxes() {
+        let mut group = make_field("meta", FieldType::Group);
+        group.fields = vec![make_field("flag", FieldType::Checkbox)];
+        let fields = vec![
+            make_field("featured", FieldType::Checkbox),
+            make_field("archived", FieldType::Checkbox),
+            group,
+        ];
+
+        // `featured` is checked (present); `archived` and `meta.flag` are absent.
+        let mut raw = HashMap::new();
+        raw.insert("featured".into(), "on".into());
+
+        let form = FormData::from_raw(raw, &fields);
+
+        assert_eq!(
+            form.raw().get("featured"),
+            Some(&"on".to_string()),
+            "present value untouched"
+        );
+        assert_eq!(
+            form.raw().get("archived"),
+            Some(&"0".to_string()),
+            "absent checkbox -> 0"
+        );
+        assert_eq!(
+            form.raw().get("meta__flag"),
+            Some(&"0".to_string()),
+            "absent nested checkbox -> 0"
+        );
     }
 
     #[test]

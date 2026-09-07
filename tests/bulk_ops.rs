@@ -7,6 +7,8 @@
 
 #![allow(clippy::missing_panics_doc, clippy::too_many_lines)]
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig, PasswordPolicy};
@@ -860,6 +862,71 @@ fn bulk_conn_paths_clear_cache() {
     assert!(
         cleared(&cache),
         "delete_many conn path must clear the cache"
+    );
+}
+
+/// Regression (conn-mode cache-invalidation ordering): inside a transaction
+/// (a `cache_dirty` flag present, as the Lua envelopes install), a conn-mode
+/// write must DEFER the cache clear — set the flag rather than clear
+/// immediately — so the enclosing envelope clears the populate cache only AFTER
+/// the write commits. Clearing pre-commit let a concurrent read repopulate a
+/// stale entry that then persisted (the "conn-mode invalidation asymmetry").
+#[test]
+fn conn_write_defers_cache_clear_until_after_commit() {
+    let s = setup(3);
+    let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new(64));
+    let shared: SharedCache = cache.clone();
+    cache.set("k", b"v").expect("seed cache");
+
+    let flag = Rc::new(Cell::new(false));
+    {
+        let mut conn = s.pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        let wh = RunnerWriteHooks::new(&s.runner)
+            .with_conn(&tx)
+            .with_override_access();
+        let ctx = ServiceContext::collection("posts", &s.def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .override_access(true)
+            .cache(Some(shared.clone()))
+            .cache_dirty(Some(flag.clone()))
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("status".to_string(), json!("published"));
+        update_many(
+            &ctx,
+            &[],
+            &data,
+            &LocaleConfig::default(),
+            &update_opts(100),
+        )
+        .expect("update_many conn");
+
+        // The write DEFERRED: the flag is set, the cache is NOT yet cleared
+        // (the transaction has not committed).
+        assert!(
+            flag.get(),
+            "a conn-mode write must set the cache-dirty flag"
+        );
+        assert!(
+            cache.has("k").expect("has"),
+            "the cache must NOT be cleared before the transaction commits"
+        );
+
+        drop(ctx);
+        drop(wh);
+        tx.commit().expect("commit");
+    }
+
+    // The commit-owning envelope flushes the deferred flag post-commit.
+    if flag.get() {
+        cache.clear().expect("clear");
+    }
+    assert!(
+        !cache.has("k").expect("has"),
+        "the cache must be cleared once the deferred flag is flushed post-commit"
     );
 }
 

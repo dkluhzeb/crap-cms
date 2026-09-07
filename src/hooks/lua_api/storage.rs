@@ -8,13 +8,14 @@
 //!   put = function(key, data, content_type) ... end,
 //!   get = function(key) return data end,
 //!   delete = function(key) ... end,
-//!   url = function(key) return "https://cdn.example.com/" .. key end,
+//!   exists = function(key) return true end,
 //! })
 //! ```
 //!
-//! `put`, `get`, and `delete` are required; `url` and `exists` are
-//! optional (the backend falls back to `/uploads/<key>` and a `get`
-//! probe respectively). The handler functions are stored as
+//! `put`, `get`, and `delete` are required; `exists` is optional (the
+//! backend falls back to a `get` probe). The served URL is always the
+//! backend-agnostic `/uploads/<key>` proxy path (a frozen pin), so no
+//! `url` handler exists. The handler functions are stored as
 //! `crap._storage` and invoked by the custom storage backend.
 
 use anyhow::Result;

@@ -92,7 +92,21 @@ fn inner_keyset_clause(
         params.push(sort_val);
         params.push(DbValue::Text(cursor_id.to_string()));
 
-        format!("({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2})")
+        let base = format!("({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2})");
+
+        // The `<` directions (DESC-forward / ASC-backward) resolve to an
+        // effective `DESC` order, which places NULLs LAST — so the scan advances
+        // TOWARD the NULL rows at the tail. Three-valued logic makes `col < ?`
+        // and `col = ?` both false for a NULL column, which would drop every
+        // NULL-sort-value row from the keyset forever (never returned by any
+        // page, while `count` still reports them). Include them explicitly. The
+        // `>` directions have already passed the NULL rows (NULLs FIRST), so
+        // they must stay excluded there.
+        if op == "<" {
+            format!("{base} OR {col} IS NULL")
+        } else {
+            base
+        }
     }
 }
 
@@ -250,6 +264,79 @@ mod tests {
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].get_str("title"), Some("Post 02"));
         assert_eq!(page2[1].get_str("title"), Some("Post 01"));
+    }
+
+    /// Regression: keyset pagination on a nullable DESC sort column must still
+    /// return the NULL-valued rows (they sort to the tail under `NULLS LAST`).
+    /// The non-null-cursor keyset used three-valued logic (`col < ?` / `col = ?`
+    /// both false for NULL) that silently dropped every NULL row from later
+    /// pages — they were never returned by ANY page, while `count` still counted
+    /// them.
+    #[test]
+    fn cursor_desc_pagination_includes_null_sort_rows() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        // Three rows with a status, two with NULL status.
+        for s in ["a", "b", "c"] {
+            let mut data = DocumentFields::new();
+            data.insert("status".to_string(), Value::String(s.to_string()));
+            create(&conn, "posts", &def, &data, None).unwrap();
+        }
+        for _ in 0..2 {
+            // No `status` key → NULL column.
+            create(&conn, "posts", &def, &DocumentFields::new(), None).unwrap();
+        }
+
+        // Walk every page (limit 2) via keyset and collect the ids.
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<CursorData> = None;
+        let mut guard = 0;
+
+        loop {
+            guard += 1;
+            assert!(guard < 20, "keyset pagination did not terminate");
+
+            let mut b = FindQuery::builder()
+                .order_by(Some("-status".to_string()))
+                .limit(Some(2));
+            if let Some(c) = cursor.take() {
+                b = b.after_cursor(Some(c));
+            }
+
+            let page = find(&conn, "posts", &def, &b.build(), None).unwrap();
+            if page.is_empty() {
+                break;
+            }
+
+            let last = page.last().unwrap();
+            cursor = Some(CursorData {
+                sort_col: "status".to_string(),
+                sort_dir: SortDirection::Desc,
+                sort_val: SortValue::from(&json!(last.get_str("status"))),
+                id: last.id.to_string(),
+                ..Default::default()
+            });
+
+            let full = page.len() == 2;
+            for d in page {
+                seen.push(d.id.to_string());
+            }
+
+            if !full {
+                break;
+            }
+        }
+
+        assert_eq!(
+            seen.len(),
+            5,
+            "keyset pagination must surface all 5 rows incl. the 2 NULL-status ones"
+        );
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 5, "no row should be returned more than once");
     }
 
     #[test]

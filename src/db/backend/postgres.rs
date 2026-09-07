@@ -136,6 +136,14 @@ macro_rules! pg_shared_methods {
             Ok(())
         }
 
+        fn advisory_xact_lock(&self, key: i64) -> Result<()> {
+            self.execute(
+                &format!("SELECT pg_advisory_xact_lock({})", self.placeholder(1)),
+                &[DbValue::Integer(key)],
+            )?;
+            Ok(())
+        }
+
         fn json_each_source(&self, source: &str, alias: &str) -> String {
             pg_json_each_source(source, alias)
         }

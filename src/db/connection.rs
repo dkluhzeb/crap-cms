@@ -43,6 +43,20 @@ pub trait DbConnection {
         Ok(())
     }
 
+    /// Acquire a transaction-scoped advisory lock keyed by `key`, serializing a
+    /// critical section across connections/nodes until the current transaction
+    /// commits or rolls back. Default: no-op — `SQLite`'s `IMMEDIATE`
+    /// transaction already serializes all writers, so a single-writer backend
+    /// needs no advisory lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the lock query fails.
+    fn advisory_xact_lock(&self, key: i64) -> Result<()> {
+        let _ = key;
+        Ok(())
+    }
+
     /// Execute a DDL statement (CREATE TABLE, ALTER TABLE, etc.).
     /// On Postgres, automatically adjusts `INTEGER` to `BIGINT` since
     /// `DbValue::Integer` is `i64` which tokio-postgres binds to `int8`.
@@ -389,6 +403,9 @@ macro_rules! impl_db_connection_delegate {
             }
             fn lock_row(&self, table: &str, id: &str) -> Result<()> {
                 self.inner.lock_row(table, id)
+            }
+            fn advisory_xact_lock(&self, key: i64) -> Result<()> {
+                self.inner.advisory_xact_lock(key)
             }
             fn json_each_source(&self, source: &str, alias: &str) -> String {
                 self.inner.json_each_source(source, alias)

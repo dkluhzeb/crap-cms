@@ -1,7 +1,7 @@
 //! Custom Lua-delegated storage backend.
 //!
 //! Delegates all storage operations to user-provided Lua functions
-//! registered via `crap.storage.register({ put, get, delete, url })`. The
+//! registered via `crap.storage.register({ put, get, delete, exists })`. The
 //! VM that runs the functions is supplied by a [`LuaVmLease`] — a
 //! `LocalLease` when used from inside a pool VM (e.g. CRUD delete), or the
 //! hook runner's pooled lease for external callers (upload-serving
@@ -141,7 +141,7 @@ mod tests {
     fn setup_lease() -> (Lua, Arc<dyn LuaVmLease>) {
         let lua = Lua::new();
         lua.load(
-            r#"
+            r"
             crap = {}
             crap._storage = {}
 
@@ -162,14 +162,10 @@ mod tests {
                 files[key] = nil
             end
 
-            crap._storage.url = function(key)
-                return "https://cdn.test/" .. key
-            end
-
             crap._storage.exists = function(key)
                 return files[key] ~= nil
             end
-            "#,
+            ",
         )
         .exec()
         .expect("Lua setup failed");
@@ -305,7 +301,7 @@ mod tests {
     fn exists_fallback_without_exists_function() {
         let lua = Lua::new();
         lua.load(
-            r#"
+            r"
             crap = {}
             crap._storage = {}
             local files = {}
@@ -318,9 +314,8 @@ mod tests {
                 return files[key]
             end
             crap._storage.delete = function(key) files[key] = nil end
-            crap._storage.url = function(key) return "/" .. key end
             -- No exists function — should fall back to get
-            "#,
+            ",
         )
         .exec()
         .expect("Lua setup failed");

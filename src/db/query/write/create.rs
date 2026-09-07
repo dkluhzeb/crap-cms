@@ -100,7 +100,13 @@ fn collect_leaf_param(
 
     let Some(value) = data.get(&data_key) else {
         if field.field_type == FieldType::Checkbox {
-            collector.push(conn, &col_name, DbValue::Integer(0));
+            // Absent checkbox on create honors a configured boolean default. The
+            // admin form normalizes an unchecked box to an explicit `0`, so a
+            // genuine absence here is an API create (Lua / gRPC / MCP) that
+            // omitted the field — which should inherit the default like every
+            // other field type does via its column `DEFAULT`. Falls back to 0.
+            let default_on = matches!(field.default_value.as_ref(), Some(Value::Bool(true)));
+            collector.push(conn, &col_name, DbValue::Integer(i64::from(default_on)));
         }
 
         return Ok(());
@@ -268,6 +274,40 @@ mod tests {
         // Checkbox should default to 0 (integer)
         let published = doc.get("published").unwrap();
         assert_eq!(published, &json!(0));
+    }
+
+    /// Regression: an absent checkbox with `default_value = true` must store
+    /// `1`, honoring the configured default like every other field type's column
+    /// `DEFAULT` — the write path previously forced `0` unconditionally.
+    #[test]
+    fn create_checkbox_honors_true_default() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                status TEXT,
+                featured INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = test_def();
+        def.fields.push(
+            FieldDefinition::builder("featured", FieldType::Checkbox)
+                .default_value(json!(true))
+                .build(),
+        );
+
+        // Create omitting the checkbox — an API create that doesn't send it.
+        let data = DocumentFields::new();
+        let doc = create(&conn, "posts", &def, &data, None).unwrap();
+
+        assert_eq!(
+            doc.get("featured").unwrap(),
+            &json!(1),
+            "an absent checkbox with default_value=true must store 1"
+        );
     }
 
     #[test]

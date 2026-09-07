@@ -526,6 +526,38 @@ memories; the load-bearing ones:
   round — a quiet-ish round. Round 7 pending; the biggest lever remains
   broadening PG behavioral coverage on the new harness + landing the
   drafted CI Postgres service job.
+- 2026-09-07 (18) — **CONVERGENCE ROUND 9** (5 fresh lenses: concurrency/
+  races, cache correctness, query-builder correctness, field-type correctness,
+  Lua API surface). **6 findings — 1 HIGH, 3 MED, 2 LOW — NOT quiet, but no new
+  class**, and it RESOLVED a long-standing noted-not-fixed item. Auth-token
+  lens equivalent (Lua API) came back essentially CLEAN (only a doc nit); the
+  query builder verified correct on both backends except one keyset case;
+  concurrency verified guarded except one multi-node-PG cap; cache keys verified
+  leak-free (per-user access applied post-fetch, override fetches never cache).
+  Fixed: **(1) HIGH — keyset pagination dropped NULL-sort-value rows** on
+  DESC-forward/ASC-backward pages (three-valued `col < ?` excluded NULLs that
+  sort to the tail); incomplete-fix sibling of the R5 NULLS-order work. `col IS
+  NULL` added on the `<` branch + end-to-end test. **(2) MED — per-slug/queue
+  job caps overshoot N× on multi-node Postgres** (SKIP LOCKED picks disjoint
+  rows, READ COMMITTED count misses peers' uncommitted claims): serialized the
+  count+claim with a transaction-scoped advisory lock when a cap is configured
+  (new `advisory_xact_lock`, PG mutual-exclusion test) + corrected the
+  over-claiming docstring. **(3) MED — conn-mode cache invalidation asymmetry
+  (the Round-4 noted-not-fixed item, now RESOLVED):** Lua job/route/transaction
+  writes cleared the populate cache pre-commit → stale-repopulation window;
+  deferred to post-commit via a `cache_dirty` flag mirroring the file-cleanup
+  deferral. **(4) MED — Checkbox `default_value = true` silently stored false**
+  (parser/DDL/backfill honored it, write path forced 0): fixed across 3 surfaces
+  (write-leaf honors the default for a genuinely-absent checkbox; admin form
+  normalizes an unchecked box to explicit 0; new-item form renders the default
+  as checked) per user's "make it work" choice. **(5) LOW — `crap.storage.register`
+  rustdoc showed a `url` handler the validator rejects** (doc/dead-test drift)
+  → corrected. **LOW noted (not fixed): a list `default_value` on a has-many
+  Select/Radio is silently discarded** (S1-shaped; analogous to the checkbox,
+  rarer — candidate for the same treatment or a load-time rejection). R8's
+  deferred pre-auth body-limit coupling (D-1) remains deferred. Round 10 pending;
+  the keyset HIGH resets the quiet streak, but "no new class + a tracked item
+  retired" continues the stabilization.
 - 2026-09-06 (17) — **CONVERGENCE ROUND 8** (5 fresh lenses: user-writable
   server-managed state, bulk operations, auth tokens/cookies/CSRF/reset,
   resource-exhaustion/DoS, migration/schema-evolution). **8 findings — 1 HIGH,

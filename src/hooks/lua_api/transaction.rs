@@ -27,20 +27,44 @@
 //! aren't supported (no `SAVEPOINT` mechanism in this alpha — defer
 //! until a real use case surfaces).
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Value};
 use tracing::warn;
 
 use crate::{
-    core::upload::delete_upload_files,
+    core::{SharedCache, upload::delete_upload_files},
     hooks::{
         lifecycle::{LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm},
         lua_api::crud::{TxSlot, ensure_writable},
     },
     service::{DeferredEffect, DeferredQueue, EffectOutcome, EventQueue, VerificationQueue},
 };
+
+/// Post-commit populate-cache invalidation for a `crap.transaction` scope:
+/// hand the dirty flag up to an enclosing scope if there is one, else clear the
+/// cache now (the write is durable).
+fn flush_cache_dirty(
+    dirty: &Cell<bool>,
+    outer: Option<&Rc<Cell<bool>>>,
+    cache: Option<&SharedCache>,
+) {
+    if !dirty.get() {
+        return;
+    }
+
+    if let Some(outer) = outer {
+        outer.set(true);
+    } else if let Some(cache) = cache
+        && let Err(e) = cache.clear()
+    {
+        warn!("crap.transaction: cache clear failed: {e:#}");
+    }
+}
 
 /// Wrap a Lua closure in a single IMMEDIATE transaction.
 ///
@@ -94,6 +118,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
         verification_queue: None,
         deferred: None,
         file_cleanup: None,
+        cache_dirty: None,
     });
     infra.deferred = Some(dq.clone());
 
@@ -109,6 +134,12 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     let outer_verifications = infra.verification_queue.replace(tx_verifications.clone());
     let tx_files: crate::hooks::lifecycle::FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
     let outer_files = infra.file_cleanup.replace(tx_files.clone());
+    // Per-transaction populate-cache invalidation flag (see `LuaCrudInfra`).
+    let tx_cache_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    let outer_cache_dirty = infra.cache_dirty.replace(tx_cache_dirty.clone());
+    // Capture the cache handle before `infra` is moved into `app_data`, so the
+    // post-commit flush below can clear it when there is no enclosing scope.
+    let tx_cache = infra.cache.clone();
     lua.set_app_data(infra);
 
     // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on this
@@ -174,6 +205,15 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
                     delete_upload_files(&*storage, &fields);
                 }
             }
+
+            // Populate-cache invalidation from writes inside this transaction:
+            // hand up to an enclosing scope, or — with none — clear now (we are
+            // post-commit) so a concurrent read can't have left a stale entry.
+            flush_cache_dirty(
+                &tx_cache_dirty,
+                outer_cache_dirty.as_ref(),
+                tx_cache.as_ref(),
+            );
 
             // Effects run in THIS VM: `PoolContext` is live again (job
             // context), so effect CRUD is pool-mode, and events queue into

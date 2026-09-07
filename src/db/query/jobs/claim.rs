@@ -8,6 +8,12 @@ use crate::core::{JobRun, JobStatus};
 use crate::db::query::jobs::{count_running_per_queue, count_running_per_slug};
 use crate::db::{DbConnection, DbRow, DbValue};
 
+/// Advisory-lock key identifying the job-claim critical section, derived from
+/// the ASCII bytes of `"crapjobs"` so the value is stable and recognizable
+/// rather than an opaque constant. Any fixed value would do — it only needs to
+/// not collide with another advisory lock, and crap uses no others.
+const JOB_CLAIM_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapjobs");
+
 /// Atomically claim up to `limit` pending jobs by setting them to running.
 /// Returns the claimed jobs. Respects per-slug + per-queue concurrency
 /// limits, and honors priority ordering globally.
@@ -26,8 +32,9 @@ use crate::db::{DbConnection, DbRow, DbValue};
 ///    locking already guarantees we own the row.
 ///
 /// Both backends get **strict global priority ordering** (the single
-/// SELECT) and **strict per-slug / per-queue caps within a tick** (the
-/// SELECT's locking holds candidate rows for our transaction).
+/// SELECT). Per-slug / per-queue caps are exact per tick — within one node via
+/// the SELECT's row locking, and across nodes via the advisory lock taken below
+/// when a cap is configured (see the `queue_concurrency` note).
 ///
 /// `decay_secs` controls priority aging: `0` disables decay (pure
 /// `priority DESC, created_at ASC` ordering — index-friendly fast path);
@@ -36,8 +43,12 @@ use crate::db::{DbConnection, DbRow, DbValue};
 ///
 /// `queue_concurrency` maps queue name → aggregate concurrent cap.
 /// A queue absent from the map is unconstrained (only the global
-/// `max_concurrent` and per-slug `job_concurrency` apply). Per-queue
-/// caps are enforced cluster-wide via DB-sourced running counts.
+/// `max_concurrent` and per-slug `job_concurrency` apply). When ANY per-slug
+/// or per-queue cap is configured, the count+claim decision is serialized with
+/// a transaction-scoped advisory lock, so the DB-sourced running counts are
+/// exact cluster-wide (on Postgres, two nodes' concurrent claims can't each
+/// miss the other's in-flight `running` rows under READ COMMITTED and overshoot
+/// the cap). Unconstrained deployments skip the lock and claim in parallel.
 ///
 /// # Errors
 ///
@@ -49,6 +60,17 @@ pub fn claim_pending_jobs(
     queue_concurrency: &HashMap<String, u32>,
     decay_secs: u64,
 ) -> Result<Vec<JobRun>> {
+    // Serialize the whole count+claim decision across connections/nodes when a
+    // cap is in play: the running counts below are read on a per-node READ
+    // COMMITTED snapshot that can't see a peer's uncommitted claims, so without
+    // this two Postgres workers would each claim up to the cap and overshoot it
+    // by the node count. Transaction-scoped, released at commit; no-op on SQLite
+    // (its IMMEDIATE transaction already serializes writers) and skipped
+    // entirely when no cap is configured, preserving parallel claiming.
+    if !job_concurrency.is_empty() || !queue_concurrency.is_empty() {
+        conn.advisory_xact_lock(JOB_CLAIM_LOCK_KEY)?;
+    }
+
     let now = conn.now_expr();
     let order_by = priority_order_by(conn.kind(), decay_secs);
 

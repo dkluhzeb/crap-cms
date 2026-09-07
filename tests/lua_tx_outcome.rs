@@ -326,6 +326,7 @@ fn rolled_back_transaction_publishes_no_events_committed_one_does() {
             event_queue: None,
             verification_queue: None,
             file_cleanup: None,
+            cache_dirty: None,
             deferred: None,
         };
         runner

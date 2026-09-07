@@ -571,6 +571,34 @@ mod tests {
         }
     }
 
+    /// Regression: on a new-item form (no submitted/stored value) a checkbox
+    /// with `default_value = true` renders CHECKED; a present stored value takes
+    /// precedence over the default.
+    #[test]
+    fn build_field_contexts_checkbox_true_default_checks_on_empty() {
+        let fields = vec![
+            FieldDefinition::builder("featured", FieldType::Checkbox)
+                .default_value(serde_json::json!(true))
+                .build(),
+        ];
+
+        // New form: no value → default applies → checked.
+        let result = build_value_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(
+            result[0]["checked"], true,
+            "default_value=true renders checked when there is no value"
+        );
+
+        // Present stored value overrides the default.
+        let mut values = HashMap::new();
+        values.insert("featured".to_string(), "0".to_string());
+        let result = build_value_contexts(&fields, &values, &HashMap::new(), false, false);
+        assert_eq!(
+            result[0]["checked"], false,
+            "a present stored value takes precedence over the default"
+        );
+    }
+
     // ── Upload ────────────────────────────────────────────────────────
 
     #[test]

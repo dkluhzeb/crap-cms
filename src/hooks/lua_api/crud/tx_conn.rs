@@ -16,9 +16,11 @@
 
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
+use tracing::warn;
+
 use crate::{
     db::DbConnection,
-    hooks::lifecycle::{PoolContext, PoolMode, TxContext},
+    hooks::lifecycle::{LuaCrudInfra, PoolContext, PoolMode, TxContext},
 };
 
 /// Get the active transaction connection from Lua `app_data`.
@@ -146,6 +148,20 @@ pub(crate) fn with_lua_db<R>(
         Ok(value) => {
             tx.commit()
                 .map_err(|e| RuntimeError(format!("commit transaction: {e}")))?;
+
+            // `with_lua_db` is the write path (reads use `with_lua_db_read`), and
+            // this branch owns the single op's commit. Invalidate the populate
+            // cache AFTER commit: the conn-mode write's own `clear_cache` fired
+            // pre-commit and a concurrent read could otherwise repopulate a stale
+            // entry before the commit lands. Clearing here closes that window.
+            if let Some(cache) = lua
+                .app_data_ref::<LuaCrudInfra>()
+                .and_then(|i| i.cache.clone())
+                && let Err(e) = cache.clear()
+            {
+                warn!("Cache clear after Lua write failed: {e:#}");
+            }
+
             Ok(value)
         }
         Err(e) => {

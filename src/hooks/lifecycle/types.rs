@@ -1,6 +1,6 @@
 //! Core types used across the lifecycle module.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -263,6 +263,15 @@ pub struct LuaCrudInfra {
     /// transaction scope; conn-mode deletes then fall back to their
     /// legacy immediate behavior.
     pub file_cleanup: Option<FileCleanupQueue>,
+    /// Per-transaction "the populate cache must be invalidated" flag. A
+    /// conn-mode write sets it via `ServiceContext::clear_cache` instead of
+    /// clearing immediately (which, before the enclosing transaction commits,
+    /// would let a concurrent read repopulate the cache from the pre-commit
+    /// snapshot and leave it stale). The commit-owning envelope (`with_lua_db`
+    /// / `crap.transaction` / `run_pool_write`) clears the cache once after
+    /// commit. `None` = no enclosing scope → clear immediately, same fallback
+    /// as `file_cleanup`.
+    pub cache_dirty: Option<Rc<Cell<bool>>>,
 }
 
 /// Queue of deleted upload documents' field maps, drained post-commit
@@ -286,6 +295,7 @@ impl LuaCrudInfra {
             verification_queue: None,
             deferred: None,
             file_cleanup: None,
+            cache_dirty: None,
         }
     }
 
@@ -304,6 +314,7 @@ impl LuaCrudInfra {
             verification_queue,
             deferred: None,
             file_cleanup: None,
+            cache_dirty: None,
         }
     }
 }

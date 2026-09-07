@@ -1,6 +1,8 @@
 //! Service context — calling environment for all service operations.
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use anyhow::{Context as _, anyhow};
 use tracing::warn;
@@ -105,6 +107,11 @@ pub struct ServiceContext<'a> {
     /// files). `None` = no enclosing scope; conn-mode deletes fall back
     /// to immediate deletion.
     pub file_cleanup: Option<crate::hooks::lifecycle::FileCleanupQueue>,
+    /// Post-commit populate-cache invalidation flag (conn mode). A write sets
+    /// it via [`Self::clear_cache`] instead of clearing immediately; the
+    /// commit-owning Lua/pool envelope clears the cache once after commit.
+    /// `None` = no enclosing scope → clear immediately.
+    pub cache_dirty: Option<Rc<Cell<bool>>>,
     /// Queue for verification emails accumulated during a transaction.
     /// Flushed after commit by the parent alongside events.
     pub verification_queue: Option<VerificationQueue>,
@@ -392,6 +399,16 @@ impl<'a> ServiceContext<'a> {
     /// Clear the populate cache after a write operation.
     /// No-op when no cache is attached.
     pub fn clear_cache(&self) {
+        // Inside a transaction, defer the invalidation to post-commit: clearing
+        // now would let a concurrent read repopulate the populate cache from the
+        // pre-commit snapshot and leave it stale. The commit-owning envelope
+        // clears the flag once the write is durable. Mirrors event/file deferral.
+        if let Some(dirty) = &self.cache_dirty {
+            dirty.set(true);
+
+            return;
+        }
+
         if let Some(ref cache) = self.cache
             && let Err(e) = cache.clear()
         {
@@ -563,6 +580,7 @@ pub struct ServiceContextBuilder<'a> {
     emit_events: bool,
     event_queue: Option<EventQueue>,
     file_cleanup: Option<crate::hooks::lifecycle::FileCleanupQueue>,
+    cache_dirty: Option<Rc<Cell<bool>>>,
     verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     locale_config: Option<&'a LocaleConfig>,
@@ -591,6 +609,7 @@ impl<'a> ServiceContextBuilder<'a> {
             emit_events: true,
             event_queue: None,
             file_cleanup: None,
+            cache_dirty: None,
             verification_queue: None,
             invalidation_transport: None,
             locale_config: None,
@@ -731,6 +750,14 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach a post-commit cache-invalidation flag (used inside transactions).
+    /// When set, `clear_cache` marks it instead of clearing immediately, and the
+    /// commit-owning envelope clears the cache once the write is durable.
+    pub fn cache_dirty(mut self, flag: Option<Rc<Cell<bool>>>) -> Self {
+        self.cache_dirty = flag;
+        self
+    }
+
     /// Attach a verification queue for deferred email sending (used inside transactions).
     pub fn verification_queue(mut self, queue: VerificationQueue) -> Self {
         self.verification_queue = Some(queue);
@@ -753,6 +780,7 @@ impl<'a> ServiceContextBuilder<'a> {
         }
         self.event_queue.clone_from(&infra.event_queue);
         self.file_cleanup.clone_from(&infra.file_cleanup);
+        self.cache_dirty.clone_from(&infra.cache_dirty);
         self.verification_queue
             .clone_from(&infra.verification_queue);
         self
@@ -828,6 +856,7 @@ impl<'a> ServiceContextBuilder<'a> {
             event_transport: self.event_transport,
             emit_events: self.emit_events,
             event_queue: self.event_queue,
+            cache_dirty: self.cache_dirty,
             file_cleanup: self.file_cleanup,
             verification_queue: self.verification_queue,
             invalidation_transport: self.invalidation_transport,

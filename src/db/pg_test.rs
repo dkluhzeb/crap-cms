@@ -322,4 +322,58 @@ mod tests {
             .execute(&format!("DROP TABLE \"{table}\""), &[])
             .unwrap();
     }
+
+    /// Regression: `advisory_xact_lock` serializes a critical section across
+    /// connections — the mechanism that makes per-slug/per-queue job caps exact
+    /// cluster-wide on Postgres (two nodes' concurrent claims can't both pass a
+    /// cap check that misses the other's in-flight `running` rows). While one
+    /// transaction holds the key, a peer cannot acquire it; once released, it can.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_advisory_xact_lock_is_mutually_exclusive_across_connections() {
+        const KEY: i64 = 424_242; // arbitrary key, distinct from JOB_CLAIM_LOCK_KEY
+
+        let Some(pool) = pg_test_pool() else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        let mut conn1 = pool.get().expect("conn1");
+        let mut conn2 = pool.get().expect("conn2");
+
+        let tx1 = conn1.transaction_immediate().unwrap();
+        tx1.advisory_xact_lock(KEY).unwrap();
+
+        // A peer cannot acquire the same key while tx1 holds it.
+        let try_acquire = |conn: &dyn DbConnection| -> i64 {
+            conn.query_one(
+                &format!(
+                    "SELECT pg_try_advisory_xact_lock({})::int AS got",
+                    conn.placeholder(1)
+                ),
+                &[DbValue::Integer(KEY)],
+            )
+            .unwrap()
+            .unwrap()
+            .get_i64("got")
+            .unwrap()
+        };
+
+        let tx2 = conn2.transaction_immediate().unwrap();
+        assert_eq!(
+            try_acquire(&tx2),
+            0,
+            "the key is held by tx1 — a peer must fail"
+        );
+        drop(tx2);
+
+        // Once tx1 releases the transaction-scoped lock, the key is free again.
+        drop(tx1);
+        let tx3 = conn2.transaction_immediate().unwrap();
+        assert_eq!(
+            try_acquire(&tx3),
+            1,
+            "after tx1 releases, the key is acquirable"
+        );
+        drop(tx3);
+    }
 }
