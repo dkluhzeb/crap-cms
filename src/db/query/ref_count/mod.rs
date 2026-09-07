@@ -14,8 +14,9 @@ mod walk;
 mod test_helpers;
 
 pub use api::{
-    after_create, after_create_from_data, after_update, before_hard_delete, data_touches_refs,
-    get_ref_count, get_ref_count_locked, lock_ref_targets_from_data, snapshot_outgoing_refs,
+    after_create, after_create_from_data, after_update, backfill_after_create, before_hard_delete,
+    data_touches_refs, get_ref_count, get_ref_count_locked, lock_ref_targets_from_data,
+    snapshot_outgoing_refs,
 };
 pub use outgoing_ref::OutgoingRef;
 pub(crate) use walk::{walk_blocks_with, walk_nested_with};

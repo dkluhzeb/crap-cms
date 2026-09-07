@@ -31,8 +31,8 @@ pub(crate) use execution::{
     apply_after_read_inner, resolve_hook_function, run_field_hooks_inner, run_hooks_inner,
 };
 pub(crate) use types::{
-    HookDepth, HookDepthGuard, LuaVmInfra, PoolContext, PoolMode, TxContext, TxContextGuard,
-    UiLocaleContext, UserContext,
+    AfterReadScope, AfterReadScopeGuard, HookDepth, HookDepthGuard, LuaVmInfra, PoolContext,
+    PoolMode, TxContext, TxContextGuard, UiLocaleContext, UserContext,
 };
 pub use validation::ValidationCtx;
 pub use validation::is_valid_email_format;

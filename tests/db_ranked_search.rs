@@ -44,9 +44,8 @@ fn seed(
     .into_iter()
     .collect();
     let doc = query::create(conn, "posts", def, &data, None).expect(id_hint);
-    let mut full = doc.clone();
-    full.fields = data;
-    query::fts::fts_upsert(conn, "posts", &full, Some(def)).expect("fts upsert");
+    query::fts::fts_upsert(conn, "posts", &doc.id, def, &LocaleConfig::default())
+        .expect("fts upsert");
     doc.id.to_string()
 }
 

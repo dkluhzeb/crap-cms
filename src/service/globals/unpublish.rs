@@ -58,6 +58,7 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
         &AccessCheckInput::builder("unpublish", ctx.slug)
             .access(def.access.update.as_ref())
             .user(ctx.user)
+            .id(Some("default"))
             .build(),
     )?;
 

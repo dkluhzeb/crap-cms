@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::core::lua_lease::LuaVmLease;
-use crate::hooks::lifecycle::types::MaxInstructions;
+use crate::hooks::lifecycle::types::{InstructionCounter, MaxInstructions};
 
 /// Builds a fresh, fully-initialized pool VM. The `usize` is the VM index
 /// (used only for the `vm-N` label). Boxed so the pool is decoupled from the
@@ -176,11 +176,28 @@ impl Drop for VmGuard<'_> {
     }
 }
 
+/// Re-arm the instruction budget on a leased VM.
+///
+/// The counter is armed once per lease. A Rust-driven loop that runs one hook
+/// per document on a single lease (batched `after_read`, batched field-access
+/// strip) would otherwise spend the whole budget across the page: past the
+/// cap every later document's hook fails — silently, for fail-open
+/// `after_read` — so the transform would vanish from the tail of a large
+/// page. Calling this per document makes the budget per hook invocation, as
+/// it is for single-document calls. Not reachable from Lua (a hook cannot
+/// extend its own budget).
+pub(crate) fn reset_instruction_budget(vm: &Lua) {
+    if let Some(counter) = vm.app_data_ref::<InstructionCounter>() {
+        counter.0.store(0, Ordering::Relaxed);
+    }
+}
+
 /// Set an instruction-counting hook on the VM if `MaxInstructions` is configured.
 fn set_instruction_hook(vm: &Lua) {
     let max = vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0);
     if max > 0 {
         let counter = Arc::new(AtomicU64::new(0));
+        vm.set_app_data(InstructionCounter(counter.clone()));
         let c = counter.clone();
         let _ = vm.set_hook(
             HookTriggers::new().every_nth_instruction(10_000),
@@ -339,6 +356,30 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("instruction limit"), "unexpected error: {err}");
+    }
+
+    /// The budget is per lease; a Rust-driven batch loop re-arms it per
+    /// document so the tail of a large page doesn't run out.
+    #[test]
+    fn instruction_budget_can_be_re_armed_within_a_lease() {
+        let pool = make_pool_with_instruction_limit(1, 200_000);
+        let guard = pool.acquire().expect("should acquire VM");
+        let burn = "local x = 0 for i = 1, 20000 do x = x + 1 end";
+
+        // The budget is shared across calls on one lease: repeating a call
+        // that fits on its own eventually trips the cap.
+        let mut fitted = 0;
+        while guard.load(burn).exec().is_ok() {
+            fitted += 1;
+            assert!(fitted < 100, "the shared budget never tripped");
+        }
+        assert!(fitted >= 1, "a single call must fit the budget on its own");
+
+        reset_instruction_budget(&guard);
+        guard
+            .load(burn)
+            .exec()
+            .expect("after re-arming, the same call fits again");
     }
 
     #[test]

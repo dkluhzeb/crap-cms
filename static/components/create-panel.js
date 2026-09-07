@@ -122,6 +122,31 @@ const sheet = css`
 /** Light-DOM components to unwrap from the embedded form. */
 const UNWRAP_TAGS = 'crap-dirty-form, crap-scroll-restore';
 
+/** Attributes that reference another element by id. */
+const ID_REF_ATTRS = ['for', 'aria-describedby', 'aria-labelledby', 'aria-controls', 'list'];
+
+/**
+ * Prefix every element id inside the panel form, and the attributes that
+ * reference them, so the page's own edit form — rendered from the same
+ * field templates, hence carrying the same `field-*` ids — keeps unique ids.
+ * Duplicate ids break label→input and `aria-describedby` associations for
+ * assistive tech (`getElementById` resolves to the inert page form). The
+ * form's own `#edit-form` id is left alone: in-panel components look it up
+ * scoped to their own subtree.
+ *
+ * @param {HTMLFormElement} form
+ */
+function namespaceIds(form) {
+  const prefix = 'cp-';
+  for (const el of form.querySelectorAll('[id]')) el.id = prefix + el.id;
+  for (const attr of ID_REF_ATTRS) {
+    for (const el of form.querySelectorAll(`[${attr}]`)) {
+      const refs = (el.getAttribute(attr) || '').split(/\s+/).filter(Boolean);
+      if (refs.length) el.setAttribute(attr, refs.map((id) => prefix + id).join(' '));
+    }
+  }
+}
+
 class CrapCreatePanel extends HTMLElement {
   constructor() {
     super();
@@ -255,6 +280,7 @@ class CrapCreatePanel extends HTMLElement {
     this._unwrapHostComponents(form);
     this._wireFormForHtmxSubmit(form);
     this._reorderEditLayout(form);
+    namespaceIds(form);
 
     clear(this._bodyEl);
     this._bodyEl.appendChild(form);

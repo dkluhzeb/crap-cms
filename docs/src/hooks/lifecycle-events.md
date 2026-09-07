@@ -10,7 +10,7 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 | `before_change` | create, update, update_many | Yes | Yes | Transform data after validation passes |
 | `after_change` | create, update, update_many | Yes | Yes | Runs inside the transaction. Audit logs, counters, side-effects. Errors roll back the entire operation. |
 | `before_read` | find, find_by_id | No | No* | Can abort the read by returning an error. Can seed `ctx.context` for `after_read` (shared per-read). |
-| `after_read` | find, find_by_id | Yes | No | Transform data before it reaches the client |
+| `after_read` | find, find_by_id | Yes | No | Transform data before it reaches the client. No CRUD on any surface — a `crap.*` call from it raises (it runs after the read is final and fails open, so a write from it could half-apply); do lookups in `before_read` and hand them over via `ctx.context`. |
 | `before_delete` | delete, delete_many | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
 | `after_delete` | delete, delete_many | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
 | `before_broadcast` | create, update, delete | Yes (data) | No | Can suppress or transform live update events. See [Live Updates](../live-updates/hooks.md). |

@@ -26,6 +26,14 @@ pub(super) fn read_outgoing_refs(
 
     collect_refs(conn, table, id, fields, locale_config, "", &mut refs)?;
 
+    // A document referencing itself protects nothing: deleting it removes the
+    // reference too. Counting it would block its own hard delete with a
+    // "referenced by 1 document" whose back-reference list (which already
+    // skips the owner) is empty. Filtered at the ONE reader every count path
+    // (create replay, update diff, hard-delete, backfill) goes through, so
+    // they agree.
+    refs.retain(|r| !(r.target_collection == table && r.target_id == id));
+
     Ok(refs)
 }
 

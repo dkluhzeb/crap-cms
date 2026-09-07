@@ -1,9 +1,7 @@
 //! Core update operation for collections.
 
 use crate::core::validate::{FieldError, ValidationError};
-use crate::core::{
-    CollectionDefinition, DocumentFields, flatten_group_fields, prefixed_name, walk_leaf_fields,
-};
+use crate::core::{CollectionDefinition, DocumentFields, FieldDefinition, flatten_group_fields};
 use crate::db::LocaleMode;
 
 use crate::{
@@ -36,7 +34,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 pub(crate) fn check_update_access(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     id: &str,
     data: &crate::core::DocumentFields,
     locale: Option<&str>,
@@ -62,54 +60,67 @@ pub(crate) fn check_update_access(
     Ok(())
 }
 
-/// Reject a non-default-locale write that includes locale-locked fields.
+/// Reject a non-default-locale write that carries a locale-locked (shared)
+/// field.
 ///
-/// A field that is not localized has exactly one (default-locale) column, so a
-/// write under `locale = "de"` cannot store it. These fields used to be
-/// **silently dropped** — the write succeeded while discarding data, the worst
-/// possible outcome. They are now a validation error naming each field; write
-/// shared fields under the default locale instead.
+/// A shared field lives in one column regardless of locale; the DB edge skips
+/// it under a non-default locale so a translation can never clobber the
+/// canonical value. Skipping silently would mean the write succeeds while
+/// discarding data — the worst possible outcome for a programmatic caller
+/// (gRPC/Lua/MCP) — so the presence of such a field is a validation error.
+/// The locked set is the SAME one the draft snapshot and the admin form strip
+/// use (`locale_locked_field_names`: scalar inheritance-aware, join-backed
+/// own-flag-only, tz companions), so every surface agrees on what "locked"
+/// means.
+///
+/// Called twice per write with different roles: on the caller's input
+/// (early, before hooks) and on the final post-hook data at persist time,
+/// where a `before_change` hook that injected a shared field is caught the
+/// same way — never silently dropped.
+///
+/// # Errors
+///
+/// Returns a `ValidationError` naming every locked field present in `data`.
 pub(crate) fn reject_locale_locked_fields(
-    def: &CollectionDefinition,
+    fields: &[FieldDefinition],
     data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
-    let Some(lctx) = locale_ctx else {
-        return Ok(());
-    };
-    let LocaleMode::Single(locale) = &lctx.mode else {
-        return Ok(());
-    };
-    if *locale == lctx.config.default_locale {
+    let locked = query::locale_locked_field_names(fields, locale_ctx);
+    if locked.is_empty() {
         return Ok(());
     }
+    let Some(LocaleContext {
+        mode: LocaleMode::Single(locale),
+        config,
+    }) = locale_ctx
+    else {
+        return Ok(());
+    };
 
     // Data arrives nested-canonical; flatten so presence checks use the same
-    // `group__sub` names the leaf walker produces.
-    let flat = flatten_group_fields(data, &def.fields);
+    // `group__sub` names the locked set carries.
+    let flat = flatten_group_fields(data, fields);
 
-    let mut errors = Vec::new();
-    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, inherited| {
-        if query::is_locale_locked_write(field, Some(lctx), inherited) {
-            let key = prefixed_name(prefix, &field.name);
-
-            if flat.contains_key(&key) {
-                errors.push(FieldError::new(
-                    key,
-                    format!(
-                        "not localized — this field only exists under the default locale \
-                         ('{}'); drop it from the '{locale}' write or mark it localized",
-                        lctx.config.default_locale
-                    ),
-                ));
-            }
-        }
-        Ok(())
-    });
-
-    if errors.is_empty() {
+    let mut present: Vec<&String> = flat.keys().filter(|k| locked.contains(*k)).collect();
+    if present.is_empty() {
         return Ok(());
     }
+    present.sort();
+
+    let errors = present
+        .into_iter()
+        .map(|key| {
+            FieldError::new(
+                key.clone(),
+                format!(
+                    "not localized — this field only exists under the default locale \
+                     ('{}'); drop it from the '{locale}' write or mark it localized",
+                    config.default_locale
+                ),
+            )
+        })
+        .collect();
 
     Err(ValidationError::new(errors).into())
 }
@@ -133,7 +144,7 @@ pub(crate) fn update_document_in_conn(
     // whole pipeline sees one shape, the DB edge flattens to columns.
     canonicalize_write_input(&mut input, def);
 
-    reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
+    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
 
     check_update_access(
         ctx,
@@ -298,7 +309,7 @@ mod locale_lock_tests {
         .into_iter()
         .collect();
 
-        let err = reject_locale_locked_fields(&def, &data, Some(&ctx("de"))).unwrap_err();
+        let err = reject_locale_locked_fields(&def.fields, &data, Some(&ctx("de"))).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("slug"), "{msg}");
         assert!(msg.contains("not localized"), "{msg}");
@@ -306,8 +317,10 @@ mod locale_lock_tests {
         let localized_only: DocumentFields = [("title".to_string(), json!("Titel"))]
             .into_iter()
             .collect();
-        assert!(reject_locale_locked_fields(&def, &localized_only, Some(&ctx("de"))).is_ok());
-        assert!(reject_locale_locked_fields(&def, &data, Some(&ctx("en"))).is_ok());
-        assert!(reject_locale_locked_fields(&def, &data, None).is_ok());
+        assert!(
+            reject_locale_locked_fields(&def.fields, &localized_only, Some(&ctx("de"))).is_ok()
+        );
+        assert!(reject_locale_locked_fields(&def.fields, &data, Some(&ctx("en"))).is_ok());
+        assert!(reject_locale_locked_fields(&def.fields, &data, None).is_ok());
     }
 }

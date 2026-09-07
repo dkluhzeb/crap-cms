@@ -34,11 +34,10 @@ pub fn persist_create(
 
     // `doc` here carries FLAT `group__sub` columns: `query::create` re-reads via
     // `find_by_id_raw`, which does NOT hydrate groups (only the read-path
-    // `hydrate_document` nests them). Persist-internal consumers below
-    // (`fts_upsert`, the version snapshot's own `build_snapshot` re-hydrate) rely
-    // on this flat shape; the service layer hydrates `doc` to nested afterwards
-    // for hooks/return. Do not make `find_by_id_raw` hydrate — it would silently
-    // break FTS indexing of group sub-fields.
+    // `hydrate_document` nests them). The version snapshot's own
+    // `build_snapshot` re-hydrate relies on this flat shape; the service layer
+    // hydrates `doc` to nested afterwards for hooks/return. (The FTS sync reads
+    // the row itself and is independent of this shape.)
     let doc = query::create(conn, slug, def, data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
@@ -58,7 +57,7 @@ pub fn persist_create(
     }
 
     if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+        query::fts::fts_upsert(conn, slug, &doc.id, def, &locale_cfg)?;
     }
 
     // Ref count UPDATE is last: it acquires a row-level lock on the target

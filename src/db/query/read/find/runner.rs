@@ -5,11 +5,13 @@ use std::fmt::Write as _;
 
 use anyhow::{Context as _, Result};
 
-use super::cursor::{SortInfo, apply_cursor_keyset};
+use super::cursor::{SortInfo, apply_cursor_keyset, check_cursor_sort_value};
 use super::sort::{apply_order_by, resolve_sort};
 use crate::core::CollectionDefinition;
 use crate::core::Document;
-use crate::db::query::filter::{build_where_clause, resolve_filter_column, resolve_filters};
+use crate::db::query::filter::{
+    build_where_clause, lookup_column_field_type, resolve_filter_column, resolve_filters,
+};
 use crate::db::query::read::select::apply_select_filter;
 use crate::db::query::{
     fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
@@ -67,6 +69,8 @@ pub fn find(
         };
 
         let resolved = resolve_filter_column(&sort_col, def, locale_ctx)?;
+        let sort_type = lookup_column_field_type(&sort_col, &def.fields);
+        check_cursor_sort_value(cursor, &sort_col, sort_type.as_ref())?;
 
         apply_cursor_keyset(
             conn,

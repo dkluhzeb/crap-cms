@@ -10,7 +10,7 @@ use crate::core::{
     BLOCK_TYPE_KEY, CollectionDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
 };
 use crate::db::{
-    DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext,
+    DbConnection, DbValue, Filter, FilterClause, LocaleContext,
     query::{helpers::locale_column, is_valid_identifier},
 };
 
@@ -34,6 +34,7 @@ fn build_filter_sql(
                 field: col,
                 op: f.op.clone(),
             },
+            &f.field,
             field_type.as_ref(),
             params,
         ),
@@ -48,7 +49,7 @@ fn build_filter_sql(
             parent_table,
             condition,
             locale_constraint.as_deref(),
-            &f.op,
+            f,
             params,
         ),
     }
@@ -66,23 +67,30 @@ fn build_subquery_sql(
     parent_table: &str,
     condition: &SubqueryCondition,
     locale_constraint: Option<&str>,
-    op: &FilterOp,
+    f: &Filter,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
+    let op = &f.op;
     match condition {
         SubqueryCondition::Column { col, field_type } => {
             if !is_valid_identifier(col) {
                 bail!("Invalid column name '{col}' in subquery");
             }
-            let op_sql = build_op_condition(conn, col, op, field_type.as_ref(), params);
+            let op_sql = build_op_condition(conn, &f.field, col, op, field_type.as_ref(), params)?;
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
             ))
         }
         SubqueryCondition::BlockType => {
-            let op_sql =
-                build_op_condition(conn, BLOCK_TYPE_KEY, op, Some(&FieldType::Text), params);
+            let op_sql = build_op_condition(
+                conn,
+                &f.field,
+                BLOCK_TYPE_KEY,
+                op,
+                Some(&FieldType::Text),
+                params,
+            )?;
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
@@ -104,7 +112,8 @@ fn build_subquery_sql(
             } else {
                 extract_expr.clone()
             };
-            let op_sql = build_op_condition(conn, &extract, op, field_type.as_ref(), params);
+            let op_sql =
+                build_op_condition(conn, &f.field, &extract, op, field_type.as_ref(), params)?;
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM {} WHERE \"{join_table}\".parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})",

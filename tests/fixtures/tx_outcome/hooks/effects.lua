@@ -44,4 +44,11 @@ function M.explode(_ctx)
     error("effect exploded")
 end
 
+-- after_read that tries to write: after_read has no CRUD, so this must be
+-- refused (and, being fail-open, must not break the read).
+function M.after_read_writes(ctx)
+	crap.collections.tx_log.create({ message = "after-read-write" })
+	return ctx
+end
+
 return M

@@ -1,9 +1,11 @@
 //! Operator SQL generation for individual filter conditions.
 
 use anyhow::{Result, bail};
-use tracing::warn;
 
-use crate::core::{FieldType, parse_bool};
+use crate::core::{
+    FieldType, parse_bool,
+    validate::{FieldError, ValidationError},
+};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
     query::{
@@ -16,10 +18,11 @@ use crate::db::{
 /// target field type.
 ///
 /// Unlike the write-path `coerce_value` helper:
-/// - Invalid numeric input falls back to `DbValue::Text` (and logs a warning)
-///   rather than becoming `DbValue::Null`, so the user's intent — find rows
-///   literally matching `"not-a-number"` — is preserved, while the mismatch
-///   is observable.
+/// - Input that does not fit the column's type (a non-numeric string for a
+///   Number field, a non-boolean for a Checkbox) is a typed
+///   [`ValidationError`] naming `field` — never a silent fallback to a text
+///   comparison, which `SQLite` absorbs through type affinity but Postgres
+///   rejects at execution time (an opaque 500 instead of a 400).
 /// - Empty strings remain as `DbValue::Text("")` rather than `Null`, because
 ///   filter semantics differ from write semantics (matching an empty column
 ///   vs. writing a null).
@@ -28,46 +31,47 @@ use crate::db::{
 ///
 /// Text-only operators (`Like`, `Contains`) always bind as `DbValue::Text`
 /// regardless of the field type — no numeric/date casting is meaningful.
+///
+/// # Errors
+///
+/// Returns a [`ValidationError`] when `value` does not fit the field type.
 pub(super) fn coerce_filter_value(
+    field: &str,
     field_type: Option<&FieldType>,
     op: &FilterOp,
     value: &str,
-) -> DbValue {
+) -> Result<DbValue> {
     if is_text_only_op(op) {
-        return DbValue::Text(value.to_string());
+        return Ok(DbValue::Text(value.to_string()));
     }
 
     let Some(ft) = field_type else {
-        return DbValue::Text(value.to_string());
+        return Ok(DbValue::Text(value.to_string()));
     };
 
     match ft {
         FieldType::Number => match value.parse::<f64>() {
-            Ok(n) if n.is_finite() => DbValue::Real(n),
-            _ => {
-                warn!(
-                    "Filter value '{}' is not a valid finite number for Number field; \
-                     falling back to Text comparison",
-                    value
-                );
-                DbValue::Text(value.to_string())
-            }
+            Ok(n) if n.is_finite() => Ok(DbValue::Real(n)),
+            _ => Err(filter_type_error(
+                field,
+                format!("filter value '{value}' is not a valid number"),
+            )),
         },
-        FieldType::Checkbox => {
-            if let Some(b) = parse_bool(value) {
-                DbValue::Integer(i64::from(b))
-            } else {
-                warn!(
-                    "Filter value '{}' is not a recognized boolean for Checkbox field; \
-                     falling back to Text comparison",
-                    value
-                );
-                DbValue::Text(value.to_string())
-            }
-        }
-        FieldType::Date => DbValue::Text(normalize_date_value(value)),
-        _ => DbValue::Text(value.to_string()),
+        FieldType::Checkbox => parse_bool(value)
+            .map(|b| DbValue::Integer(i64::from(b)))
+            .ok_or_else(|| {
+                filter_type_error(
+                    field,
+                    format!("filter value '{value}' is not a boolean (true/false)"),
+                )
+            }),
+        FieldType::Date => Ok(DbValue::Text(normalize_date_value(value))),
+        _ => Ok(DbValue::Text(value.to_string())),
     }
+}
+
+fn filter_type_error(field: &str, message: String) -> anyhow::Error {
+    ValidationError::new(vec![FieldError::new(field, message)]).into()
 }
 
 /// `Like` and `Contains` operate on string patterns and never benefit from
@@ -79,109 +83,80 @@ fn is_text_only_op(op: &FilterOp) -> bool {
 /// Generate a SQL condition applying a [`FilterOp`] to an arbitrary SQL
 /// expression, appending bind parameters to `params`.
 ///
-/// `field_type` informs how operand values are bound: `None` means the
-/// caller could not determine the field type and we fall back to `Text`
-/// (today's default behavior). See [`coerce_filter_value`] for the casting
-/// rules.
-pub(super) fn build_op_condition(
+/// `field` is the caller-facing field path, used only to name the field in a
+/// value-type error. `field_type` informs how operand values are bound:
+/// `None` means the caller could not determine the field type and we fall
+/// back to `Text`. See [`coerce_filter_value`] for the casting rules.
+///
+/// # Errors
+///
+/// Returns a [`ValidationError`] when an operand does not fit the field type.
+pub(crate) fn build_op_condition(
     conn: &dyn DbConnection,
+    field: &str,
     expr: &str,
     op: &FilterOp,
     field_type: Option<&FieldType>,
     params: &mut Vec<DbValue>,
-) -> String {
-    match op {
-        FilterOp::Equals(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} = {ph}")
-        }
-        FilterOp::NotEquals(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} != {ph}")
-        }
-        FilterOp::Like(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(DbValue::Text(v.clone()));
-            format!("{} {} {}", expr, conn.like_operator(), ph)
-        }
+) -> Result<String> {
+    // A pattern match against a numeric/boolean column: compare its text
+    // form. `SQLite` does that implicitly; Postgres has no `bigint LIKE text`.
+    let text_expr;
+    let expr = if is_text_only_op(op)
+        && matches!(field_type, Some(FieldType::Number | FieldType::Checkbox))
+    {
+        text_expr = format!("CAST({expr} AS TEXT)");
+        text_expr.as_str()
+    } else {
+        expr
+    };
+
+    let mut bind = |v: &str| -> Result<String> {
+        let ph = conn.placeholder(params.len() + 1);
+        params.push(coerce_filter_value(field, field_type, op, v)?);
+        Ok(ph)
+    };
+
+    Ok(match op {
+        FilterOp::Equals(v) => format!("{expr} = {}", bind(v)?),
+        FilterOp::NotEquals(v) => format!("{expr} != {}", bind(v)?),
+        FilterOp::Like(v) => format!("{} {} {}", expr, conn.like_operator(), bind(v)?),
         FilterOp::Contains(v) => {
             let escaped = like_escape(v);
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(DbValue::Text(format!("%{escaped}%")));
+            let ph = bind(&format!("%{escaped}%"))?;
             format!("{} {} {} ESCAPE '\\'", expr, conn.like_operator(), ph)
         }
-        FilterOp::GreaterThan(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} > {ph}")
-        }
-        FilterOp::LessThan(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} < {ph}")
-        }
-        FilterOp::GreaterThanOrEqual(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} >= {ph}")
-        }
-        FilterOp::LessThanOrEqual(v) => {
-            let ph = conn.placeholder(params.len() + 1);
-            params.push(coerce_filter_value(field_type, op, v));
-            format!("{expr} <= {ph}")
-        }
+        FilterOp::GreaterThan(v) => format!("{expr} > {}", bind(v)?),
+        FilterOp::LessThan(v) => format!("{expr} < {}", bind(v)?),
+        FilterOp::GreaterThanOrEqual(v) => format!("{expr} >= {}", bind(v)?),
+        FilterOp::LessThanOrEqual(v) => format!("{expr} <= {}", bind(v)?),
+        // Empty IN list: "x IN ()" is a SQL error, so emit always-false.
+        // Semantically correct: nothing is "in" an empty set.
+        FilterOp::In(vals) if vals.is_empty() => "0 = 1".to_string(),
         FilterOp::In(vals) => {
-            // Empty IN list: "x IN ()" is a SQL error, so emit always-false.
-            // Semantically correct: nothing is "in" an empty set.
-            if vals.is_empty() {
-                return "0 = 1".to_string();
-            }
-
-            let placeholders: Vec<_> = vals
-                .iter()
-                .map(|v| {
-                    let ph = conn.placeholder(params.len() + 1);
-                    params.push(coerce_filter_value(field_type, op, v));
-                    ph
-                })
-                .collect();
+            let placeholders = vals.iter().map(|v| bind(v)).collect::<Result<Vec<_>>>()?;
             format!("{} IN ({})", expr, placeholders.join(", "))
         }
+        // Empty NOT IN list: everything is "not in" an empty set.
+        // Vacuously true — emit always-true to avoid SQL error.
+        FilterOp::NotIn(vals) if vals.is_empty() => "1 = 1".to_string(),
         FilterOp::NotIn(vals) => {
-            // Empty NOT IN list: everything is "not in" an empty set.
-            // Vacuously true — emit always-true to avoid SQL error.
-            if vals.is_empty() {
-                return "1 = 1".to_string();
-            }
-
-            let placeholders: Vec<_> = vals
-                .iter()
-                .map(|v| {
-                    let ph = conn.placeholder(params.len() + 1);
-                    params.push(coerce_filter_value(field_type, op, v));
-                    ph
-                })
-                .collect();
+            let placeholders = vals.iter().map(|v| bind(v)).collect::<Result<Vec<_>>>()?;
             format!("{} NOT IN ({})", expr, placeholders.join(", "))
         }
-        FilterOp::Exists => {
-            format!("{expr} IS NOT NULL")
-        }
-        FilterOp::NotExists => {
-            format!("{expr} IS NULL")
-        }
-    }
+        FilterOp::Exists => format!("{expr} IS NOT NULL"),
+        FilterOp::NotExists => format!("{expr} IS NULL"),
+    })
 }
 
 /// Build a single [`Filter`] into a SQL condition string and append its bind
 /// parameters to `params`.
 ///
-/// `field_type` is used to cast filter operand values to the correct
-/// [`DbValue`] variant for comparison operators. Pass `None` when the field
-/// type cannot be determined (values are bound as `DbValue::Text`, matching
-/// today's default).
+/// `field` is the caller-facing field path (for error messages); `f.field`
+/// is the resolved column. `field_type` is used to cast filter operand values
+/// to the correct [`DbValue`] variant for comparison operators. Pass `None`
+/// when the field type cannot be determined (values are bound as
+/// `DbValue::Text`, matching today's default).
 ///
 /// Defense-in-depth: rejects field names that are not valid SQL identifiers
 /// (alphanumeric + underscore), even though higher-level validation should
@@ -189,6 +164,7 @@ pub(super) fn build_op_condition(
 pub(crate) fn build_filter_condition(
     conn: &dyn DbConnection,
     f: &Filter,
+    field: &str,
     field_type: Option<&FieldType>,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
@@ -198,9 +174,7 @@ pub(crate) fn build_filter_condition(
             f.field
         );
     }
-    Ok(build_op_condition(
-        conn, &f.field, &f.op, field_type, params,
-    ))
+    build_op_condition(conn, field, &f.field, &f.op, field_type, params)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -224,7 +198,7 @@ mod tests {
             op: FilterOp::Equals("active".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "status = ?1");
         assert_eq!(params.len(), 1);
     }
@@ -237,7 +211,7 @@ mod tests {
             op: FilterOp::NotEquals("draft".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "status != ?1");
         assert_eq!(params.len(), 1);
     }
@@ -250,7 +224,7 @@ mod tests {
             op: FilterOp::Like("%hello%".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "title LIKE ?1");
         assert_eq!(params.len(), 1);
     }
@@ -263,7 +237,7 @@ mod tests {
             op: FilterOp::Contains("search term".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "body LIKE ?1 ESCAPE '\\'");
         assert_eq!(params.len(), 1);
     }
@@ -276,7 +250,7 @@ mod tests {
             op: FilterOp::GreaterThan("18".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "age > ?1");
         assert_eq!(params.len(), 1);
     }
@@ -289,7 +263,7 @@ mod tests {
             op: FilterOp::LessThan("100".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "price < ?1");
         assert_eq!(params.len(), 1);
     }
@@ -302,7 +276,7 @@ mod tests {
             op: FilterOp::GreaterThanOrEqual("50".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "score >= ?1");
         assert_eq!(params.len(), 1);
     }
@@ -315,7 +289,7 @@ mod tests {
             op: FilterOp::LessThanOrEqual("5".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "rating <= ?1");
         assert_eq!(params.len(), 1);
     }
@@ -328,7 +302,7 @@ mod tests {
             op: FilterOp::In(vec!["a".into(), "b".into(), "c".into()]),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "status IN (?1, ?2, ?3)");
         assert_eq!(params.len(), 3);
     }
@@ -341,7 +315,7 @@ mod tests {
             op: FilterOp::NotIn(vec!["banned".into(), "suspended".into()]),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "role NOT IN (?1, ?2)");
         assert_eq!(params.len(), 2);
     }
@@ -354,7 +328,7 @@ mod tests {
             op: FilterOp::Exists,
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "avatar IS NOT NULL");
         assert_eq!(params.len(), 0);
     }
@@ -367,16 +341,97 @@ mod tests {
             op: FilterOp::NotExists,
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, None, &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
         assert_eq!(sql, "deleted_at IS NULL");
         assert_eq!(params.len(), 0);
+    }
+
+    /// A value that cannot bind to the column's type is a typed validation
+    /// error naming the caller's field — not a silent text comparison.
+    #[test]
+    fn filter_value_type_mismatch_is_a_validation_error() {
+        let c = conn();
+        let mut params: Vec<DbValue> = Vec::new();
+        let err = build_op_condition(
+            &c,
+            "meta.price",
+            "price",
+            &FilterOp::GreaterThan("abc".into()),
+            Some(&FieldType::Number),
+            &mut params,
+        )
+        .unwrap_err();
+        let ve = err
+            .downcast_ref::<ValidationError>()
+            .expect("typed validation error");
+        assert_eq!(ve.errors[0].field, "meta.price");
+        assert!(ve.errors[0].message.contains("not a valid number"));
+
+        let err = build_op_condition(
+            &c,
+            "flag",
+            "flag",
+            &FilterOp::In(vec!["true".into(), "maybe".into()]),
+            Some(&FieldType::Checkbox),
+            &mut params,
+        )
+        .unwrap_err();
+        assert!(err.downcast_ref::<ValidationError>().is_some());
+    }
+
+    /// A pattern match on a numeric/boolean column compares its text form on
+    /// both backends (Postgres has no `bigint LIKE text`).
+    #[test]
+    fn pattern_ops_on_numeric_columns_cast_to_text() {
+        let c = conn();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_op_condition(
+            &c,
+            "price",
+            "price",
+            &FilterOp::Contains("4".into()),
+            Some(&FieldType::Number),
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "CAST(price AS TEXT) LIKE ?1 ESCAPE '\\'");
+
+        let sql = build_op_condition(
+            &c,
+            "flag",
+            "flag",
+            &FilterOp::Like("1%".into()),
+            Some(&FieldType::Checkbox),
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "CAST(flag AS TEXT) LIKE ?2");
+
+        let sql = build_op_condition(
+            &c,
+            "title",
+            "title",
+            &FilterOp::Like("a%".into()),
+            Some(&FieldType::Text),
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "title LIKE ?3", "text columns are not cast");
     }
 
     #[test]
     fn filter_condition_in_empty_is_false() {
         let c = conn();
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_op_condition(&c, "status", &FilterOp::In(vec![]), None, &mut params);
+        let sql = build_op_condition(
+            &c,
+            "status",
+            "status",
+            &FilterOp::In(vec![]),
+            None,
+            &mut params,
+        )
+        .unwrap();
         assert_eq!(sql, "0 = 1");
         assert_eq!(params.len(), 0);
     }
@@ -385,7 +440,15 @@ mod tests {
     fn filter_condition_not_in_empty_is_true() {
         let c = conn();
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_op_condition(&c, "status", &FilterOp::NotIn(vec![]), None, &mut params);
+        let sql = build_op_condition(
+            &c,
+            "status",
+            "status",
+            &FilterOp::NotIn(vec![]),
+            None,
+            &mut params,
+        )
+        .unwrap();
         assert_eq!(sql, "1 = 1");
         assert_eq!(params.len(), 0);
     }
@@ -398,7 +461,7 @@ mod tests {
             op: FilterOp::Equals("v".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let result = build_filter_condition(&c, &f, None, &mut params);
+        let result = build_filter_condition(&c, &f, &f.field, None, &mut params);
         assert!(result.is_err());
         assert!(
             result
@@ -418,7 +481,8 @@ mod tests {
             op: FilterOp::GreaterThan("42".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
+            .unwrap();
         assert_eq!(sql, "age > ?1");
         assert_eq!(params, vec![DbValue::Real(42.0)]);
     }
@@ -431,7 +495,8 @@ mod tests {
             op: FilterOp::Equals("2.5".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
+            .unwrap();
         assert_eq!(sql, "score = ?1");
         assert_eq!(params, vec![DbValue::Real(2.5)]);
     }
@@ -445,7 +510,8 @@ mod tests {
             op: FilterOp::LessThan("-12.5".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
+            .unwrap();
         assert_eq!(sql, "balance < ?1");
         assert_eq!(params, vec![DbValue::Real(-12.5)]);
     }
@@ -459,27 +525,29 @@ mod tests {
             op: FilterOp::GreaterThanOrEqual("1e3".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
+            .unwrap();
         assert_eq!(sql, "big >= ?1");
         assert_eq!(params, vec![DbValue::Real(1000.0)]);
     }
 
     #[test]
-    fn filter_number_invalid_input_falls_back_to_text() {
+    fn filter_number_invalid_input_is_rejected() {
         let c = conn();
         let f = Filter {
             field: "age".into(),
             op: FilterOp::GreaterThan("not-a-number".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
-        assert_eq!(sql, "age > ?1");
-        assert_eq!(params, vec![DbValue::Text("not-a-number".into())]);
+        let err = build_filter_condition(&c, &f, "age", Some(&FieldType::Number), &mut params)
+            .unwrap_err();
+        assert!(err.downcast_ref::<ValidationError>().is_some());
+        assert!(params.is_empty(), "nothing is bound on rejection");
     }
 
     #[test]
-    fn filter_number_nan_and_infinity_fall_back_to_text() {
-        // Regression: NaN/Infinity must not poison comparisons; fall back to Text.
+    fn filter_number_nan_and_infinity_are_rejected() {
+        // NaN/Infinity must not poison comparisons — they are not valid input.
         for bad in &["NaN", "inf", "infinity", "-inf"] {
             let c = conn();
             let f = Filter {
@@ -487,11 +555,11 @@ mod tests {
                 op: FilterOp::GreaterThan((*bad).into()),
             };
             let mut params: Vec<DbValue> = Vec::new();
-            build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
-            assert_eq!(
-                params,
-                vec![DbValue::Text((*bad).into())],
-                "expected Text fallback for '{bad}'"
+            let err = build_filter_condition(&c, &f, "age", Some(&FieldType::Number), &mut params)
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<ValidationError>().is_some(),
+                "expected a validation error for '{bad}'"
             );
         }
     }
@@ -504,7 +572,7 @@ mod tests {
             op: FilterOp::Equals("true".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Checkbox), &mut params).unwrap();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Checkbox), &mut params).unwrap();
         assert_eq!(params, vec![DbValue::Integer(1)]);
     }
 
@@ -526,7 +594,8 @@ mod tests {
                 op: FilterOp::Equals((*input).into()),
             };
             let mut params: Vec<DbValue> = Vec::new();
-            build_filter_condition(&c, &f, Some(&FieldType::Checkbox), &mut params).unwrap();
+            build_filter_condition(&c, &f, &f.field, Some(&FieldType::Checkbox), &mut params)
+                .unwrap();
             assert_eq!(
                 params,
                 vec![DbValue::Integer(*expected)],
@@ -536,15 +605,16 @@ mod tests {
     }
 
     #[test]
-    fn filter_checkbox_unknown_input_falls_back_to_text() {
+    fn filter_checkbox_unknown_input_is_rejected() {
         let c = conn();
         let f = Filter {
             field: "active".into(),
             op: FilterOp::Equals("maybe".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Checkbox), &mut params).unwrap();
-        assert_eq!(params, vec![DbValue::Text("maybe".into())]);
+        let err = build_filter_condition(&c, &f, "active", Some(&FieldType::Checkbox), &mut params)
+            .unwrap_err();
+        assert!(err.downcast_ref::<ValidationError>().is_some());
     }
 
     #[test]
@@ -556,7 +626,7 @@ mod tests {
             op: FilterOp::GreaterThan("2024-01-15".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Date), &mut params).unwrap();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Date), &mut params).unwrap();
         assert_eq!(
             params,
             vec![DbValue::Text("2024-01-15T12:00:00.000Z".into())],
@@ -573,7 +643,8 @@ mod tests {
             op: FilterOp::Contains("42".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
+            .unwrap();
         assert!(sql.contains("LIKE"));
         assert_eq!(params, vec![DbValue::Text("%42%".into())]);
     }
@@ -586,7 +657,7 @@ mod tests {
             op: FilterOp::Like("10%".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params).unwrap();
         assert_eq!(params, vec![DbValue::Text("10%".into())]);
     }
 
@@ -599,7 +670,7 @@ mod tests {
             op: FilterOp::Equals("alice".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Text), &mut params).unwrap();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Text), &mut params).unwrap();
         assert_eq!(params, vec![DbValue::Text("alice".into())]);
     }
 
@@ -611,7 +682,7 @@ mod tests {
             op: FilterOp::In(vec!["18".into(), "21".into(), "30".into()]),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        build_filter_condition(&c, &f, Some(&FieldType::Number), &mut params).unwrap();
+        build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params).unwrap();
         assert_eq!(
             params,
             vec![

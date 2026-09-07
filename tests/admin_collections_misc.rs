@@ -445,7 +445,7 @@ async fn search_uses_configured_searchable_fields() {
     ])
     .into();
     let doc = query::create(&tx, "sposts", &def, &data, None).unwrap();
-    query::fts::fts_upsert(&tx, "sposts", &doc, Some(&def)).unwrap();
+    query::fts::fts_upsert(&tx, "sposts", &doc.id, &def, &LocaleConfig::default()).unwrap();
     tx.commit().unwrap();
 
     let resp = app

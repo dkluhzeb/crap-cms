@@ -176,13 +176,16 @@ impl ServiceError {
             return Self::UniqueViolation(String::new());
         }
 
-        // Hook/runtime errors — user-facing messages.
+        // Hook/runtime errors — user-facing messages. A reference to a
+        // vanished target is the caller's mistake (a stale or mistyped id),
+        // reported as such rather than as a server fault.
         if msg.contains("hook error:")
             || msg.contains("validation error:")
             || msg.contains("Validation failed:")
             || msg.contains("runtime error:")
+            || msg.contains("cannot reference ")
         {
-            return Self::HookError(msg);
+            return Self::HookError(strip_lua_traceback(&msg));
         }
 
         Self::Internal(e)
@@ -231,12 +234,49 @@ impl ServiceError {
     }
 }
 
+/// Drop the Lua stack traceback mlua appends to every Lua-originated error.
+///
+/// The message before it is the user-facing text (`error("…")` in a hook);
+/// the traceback names internal hook modules, line numbers, and functions,
+/// which belongs in the server log, not in a client response or admin toast.
+fn strip_lua_traceback(msg: &str) -> String {
+    msg.split("\nstack traceback:")
+        .next()
+        .unwrap_or(msg)
+        .trim_end()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
 
     use super::*;
     use crate::core::{FieldError, ValidationError};
+
+    /// A hook error carries only its message to the client: the Lua
+    /// traceback mlua appends (module paths, line numbers) is stripped.
+    #[test]
+    fn hook_error_drops_the_lua_traceback() {
+        let raw = anyhow!(
+            "runtime error: hook error: title is taken\nstack traceback:\n\t[C]: in function 'error'\n\thooks/posts.lua:12: in function <hooks/posts.lua:10>"
+        );
+        let ServiceError::HookError(msg) = ServiceError::classify(raw, "sqlite") else {
+            panic!("expected HookError");
+        };
+        assert_eq!(msg, "runtime error: hook error: title is taken");
+    }
+
+    /// A reference to a vanished target is a caller error (400), not an
+    /// internal fault.
+    #[test]
+    fn dangling_reference_write_is_a_hook_error_not_internal() {
+        let raw = anyhow!("cannot reference authors/ghost: target no longer exists");
+        assert!(matches!(
+            ServiceError::classify(raw, "sqlite"),
+            ServiceError::HookError(m) if m.contains("authors/ghost")
+        ));
+    }
 
     /// `into_anyhow_scrubbed` must hide the raw Internal/Transient chain
     /// (backend/pool text — DB identifiers, driver vocabulary) from

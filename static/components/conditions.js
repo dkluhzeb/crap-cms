@@ -19,6 +19,7 @@
  */
 
 import { csrfHeaders } from './_internal/util/csrf.js';
+import { EV_CHANGE } from './events.js';
 
 /**
  * @typedef {{ field?: string, equals?: any, not_equals?: any,
@@ -204,14 +205,26 @@ class CrapConditions extends HTMLElement {
       }
     };
 
+    // Every control carrying the name, not just the first: a radio group is
+    // N inputs sharing one name, and `change` fires on the radio that was
+    // clicked — a listener on the first radio alone never sees a switch to
+    // any other option, so the table would stick at its server-rendered
+    // state until reload.
     for (const fieldName of watched) {
-      const input = form.querySelector(`[name="${CSS.escape(fieldName)}"]`);
-      if (!input) continue;
-      for (const type of /** @type {const} */ (['input', 'change'])) {
-        input.addEventListener(type, run);
-        this._clientListeners.push({ el: input, type, fn: run });
+      const inputs = form.querySelectorAll(`[name="${CSS.escape(fieldName)}"]`);
+      for (const input of inputs) {
+        for (const type of /** @type {const} */ (['input', 'change'])) {
+          input.addEventListener(type, run);
+          this._clientListeners.push({ el: input, type, fn: run });
+        }
       }
     }
+
+    // Custom inputs (relationship, upload, tags) announce edits with
+    // `crap:change` instead of native events; without this a condition on
+    // one of them would never re-evaluate client-side.
+    form.addEventListener(EV_CHANGE, run);
+    this._clientListeners.push({ el: form, type: EV_CHANGE, fn: run });
   }
 
   /**

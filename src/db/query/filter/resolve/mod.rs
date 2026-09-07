@@ -13,6 +13,7 @@ mod types;
 #[cfg(test)]
 mod test_helpers;
 
+pub(crate) use lookup::lookup_column_field_type;
 pub use normalize::normalize_filter_fields;
 pub(super) use path::resolve_filter;
 pub(super) use types::{ResolvedFilter, SubqueryCondition};

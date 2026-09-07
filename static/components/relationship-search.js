@@ -489,6 +489,11 @@ class CrapRelationshipSearch extends HTMLElement {
     if (!this._hiddenContainer) return;
     clear(this._hiddenContainer);
     this._hiddenContainer.appendChild(this._buildHiddenInput());
+    // Keep the `selected` attribute current: a cloned host (array-row
+    // "Duplicate") re-reads its selection from the attribute in
+    // `connectedCallback`, so a stale attribute would resurrect the
+    // server-rendered selection in the copy.
+    this.setAttribute('selected', JSON.stringify(this._selected));
     this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
     this._updateViewLink();
   }

@@ -10,7 +10,9 @@ use crate::{
 };
 
 use super::post_process::post_process_docs;
-use super::validate_filters::{validate_user_filters, validate_user_select};
+use super::validate_filters::{
+    QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters, validate_user_select,
+};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -75,6 +77,17 @@ pub fn find_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
+    reject_unreadable_query_fields(
+        hooks,
+        def,
+        ctx.slug,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        &QueryFieldRefs {
+            filters: &input.query.filters,
+            order_by: input.query.order_by.as_deref(),
+        },
+    )?;
     validate_user_select(input.query.select.as_deref(), def)?;
 
     let mut fq = input.query.clone();

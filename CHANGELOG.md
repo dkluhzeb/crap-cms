@@ -8,6 +8,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **A filter value that does not fit the field's type is now a validation
+  error.** `where = { price = { greater_than = "abc" } }` on a Number field
+  (or a non-boolean on a Checkbox) used to fall back to a text comparison
+  that SQLite absorbed by affinity and Postgres rejected at execution time
+  as an opaque 500. Every surface now returns a 400 naming the field. A
+  forged or stale keyset cursor whose sort value cannot bind to the sort
+  column's type is rejected the same way. `like` / `contains` on a Number
+  or Checkbox column now cast to text so they execute on Postgres.
+
+- **Hidden and read-denied fields can no longer be filtered or sorted on.**
+  A `hidden = true` field, or a field whose `access.read` rule denies the
+  caller without row data, is rejected as a filter/sort target on every
+  read surface — a `like` filter or an ordering on such a field recovered
+  the value the read strip removes. Hidden and read-gated fields are also
+  out of the default full-text index; a read-gated field can still be
+  listed in `list_searchable_fields` explicitly.
+
+- **`after_read` hooks can no longer call `crap.*` CRUD.** The contract
+  always said so; on a Lua-driven read the hook nevertheless inherited the
+  read's transaction, and — `after_read` being fail-open — a write from an
+  erroring hook still committed. The call now raises on every surface.
+
+- **A relationship / upload value must be an id.** A number, boolean,
+  populated document object (a `depth > 0` read sent back unchanged), or a
+  list with non-string items is now a validation error instead of being
+  stored as text — a dangling reference that was never existence-checked,
+  never ref-counted, and unresolvable on populate. A polymorphic target
+  must be written as `collection/id`.
+
 - **An empty group inside a `where` `or` is now a hard error on every
   surface.** `{"or": [{"status": "a"}, {}]}` (and `{"or": []}`) used to be
   accepted with a vacuously-true group, silently making the whole `or` match
@@ -661,6 +690,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **Read-denied fields are no longer a query oracle.** See the breaking
+  entry: filtering, sorting, and (default) search on hidden or
+  read-gated fields are refused instead of answered.
+
+- **Hook errors no longer carry the Lua stack traceback to clients.** The
+  traceback mlua appends to every Lua-originated error (hook module
+  paths, line numbers, function names) travelled inside the hook-error
+  text to gRPC, MCP, and admin toasts. It is stripped at the one error
+  classification chokepoint; the message the hook raised is kept.
 
 - **`update_many` did not strip server-derived upload columns, so a forged
   `url`/`*_url`/`filename` could be written across a whole match-set at once.**
@@ -1631,6 +1670,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Full-text search was blanked on every write to a localized collection
+  (SQLite).** The per-document index sync read `title__en`-style keys from
+  a document that the write path had re-read under a locale alias
+  (`title__en AS title`), so every column indexed as empty and the row was
+  unsearchable until the next restart rebuilt the index. The sync now reads
+  the indexed columns from the row itself, using the same column list the
+  startup rebuild uses — which also stops Postgres from indexing every
+  string column (system columns and select values included) instead of the
+  searchable set.
+
+- **Undelete failed on every localized soft-delete collection** — the
+  post-restore read used bare column names that do not exist on a
+  localized table, rolling the undelete back with a 500 on every surface.
+
+- **Searching the trash view always returned nothing.** Soft delete removed
+  the row from the search index while the trash view still filtered by it.
+  Soft-deleted rows now keep their index entry; only a hard delete drops it.
+
+- **Globals accepted a non-default-locale write of a shared field and
+  silently dropped it.** Collections reject such a write (the field only
+  exists under the default locale); the global path skipped the field at
+  the DB edge and reported success. Globals now reject too, and the admin
+  globals form strips its read-only shared fields before the service sees
+  them — like the collection publish path — so a translation save is not
+  rejected. A `before_change` hook that injects a shared field into a
+  non-default-locale write is caught at persist time the same way.
+
+- **Postgres: concurrent global updates (and bulk updates, and version
+  restores) could double-apply a ref-count delta.** The outgoing-reference
+  snapshot was taken without the row lock the single-document update path
+  takes; each of those paths now locks the row first.
+
+- **Global version restore lacked the service-level versioning gate** and
+  a connection-mode dispatch; a global `after_read` hook saw a single
+  `ctx.locale` in all-locales mode where collections report `nil`; global
+  access functions now receive `ctx.id = "default"` like collection ones.
+
+- **`crap.tx.on_commit` from a hook fired by a bare pool-mode CRUD call
+  rolled the write back.** A single `crap.collections.x.create(...)` in a
+  job, route, or effect (no `crap.transaction`) opened a per-op transaction
+  with no `crap.tx` queue, so the collection's own `before_change` hook
+  failed with "requires an active write transaction". The same gap meant
+  upload files from such a delete were removed before the commit and a
+  commit failure could still publish the op's event. One shared
+  transaction scope now backs `crap.transaction(fn)` and the per-op path.
+
+- **A stored reference to a since-vanished document made the server refuse
+  to start.** The ref-count backfill (run on upgrade and whenever a new
+  collection is registered) treated the dangling reference like a live
+  write and aborted the migration. It now skips it with a warning.
+
+- **A document referencing itself was delete-protected by its own
+  reference** ("referenced by 1 document" with an empty back-reference
+  list). Self-references are no longer counted.
+
+- **A reference to a mistyped or stale id reported as an internal error**
+  (500, scrubbed) on every surface; it is now a 400 naming the target.
+
+- **Instruction budget on batched hooks.** `after_read` and field-access
+  hooks over a page of documents shared one instruction budget per VM
+  lease, so past the cap every later document's hook failed — silently
+  for fail-open `after_read`. The budget is re-armed per document.
+
+- **Admin: the leave-page prompt was lost after a failed pre-submit
+  validation** (upload collections) and after saving a related item from
+  the inline-create panel — any non-GET htmx request cleared the dirty
+  flag, including cancelled and unrelated ones. Only the form's own sent
+  request clears it now.
+
+- **Admin: client-side display conditions ignored radio groups** (only the
+  first radio was watched) and custom inputs (relationship, upload, tags)
+  that report edits via `crap:change`.
+
+- **Admin: "Duplicate row" copied the server-rendered relationship /
+  upload selection and `<select>` choice** rather than the current unsaved
+  one, and nested rows in the copy stopped mirroring their label field.
+
+- **Admin: day-only date columns in list views rendered as local
+  timestamps** (a clock time, and the wrong day east of UTC+11). Cells now
+  carry the field's `picker_appearance`; day-only and month-only values
+  render as calendar values in UTC, time-only values as stored.
+
+- **Admin: the inline-create panel duplicated every `field-*` id** of the
+  page's own form (labels and `aria-describedby` resolved to the inert page
+  form for assistive tech). Panel ids are namespaced.
+
+- **A display condition whose hook could not be resolved or called showed
+  the field silently.** It now logs a warning naming the ref and the
+  reason. Hook-ref resolution errors name both attempts (the file-per-hook
+  file and the `module.function` fallback), so a broken hook file is no
+  longer reported as "module not found".
 
 - **Publishing a translation (a non-default-locale edit) is no longer rejected
   because of shared fields.** The admin edit form submits non-localized (shared)

@@ -328,16 +328,9 @@ fn find_purge_candidates(
 fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let def = registry
-        .collections
-        .get(collection)
-        .with_context(|| format!("Collection '{collection}' not found"))?;
-
     let mut conn = pool.get().context("Failed to get DB connection")?;
-    // `transaction_immediate()` — restore reads (find_by_id_unfiltered
-    // for the FTS re-sync) and writes (UPDATE deleted_at, FTS upsert)
-    // on the same tx. Avoid `SQLITE_BUSY_SNAPSHOT` against concurrent
-    // writers.
+    // `transaction_immediate()` — avoid `SQLITE_BUSY_SNAPSHOT` against
+    // concurrent writers.
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let restored = query::restore(&tx, collection, id)?;
@@ -346,13 +339,8 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
         bail!("Document '{id}' not found or not in trash");
     }
 
-    // Re-sync FTS index (FTS row was deleted on soft-delete)
-    if tx.supports_fts()
-        && let Ok(Some(doc)) = query::find_by_id_unfiltered(&tx, collection, def, id, None)
-    {
-        query::fts::fts_upsert(&tx, collection, &doc, Some(def))?;
-    }
-
+    // The FTS row survives a soft delete (the trash view is searchable), so
+    // nothing to re-index here.
     tx.commit().context("Commit restore")?;
 
     cli::success(&format!("Restored document '{id}' in '{collection}'."));

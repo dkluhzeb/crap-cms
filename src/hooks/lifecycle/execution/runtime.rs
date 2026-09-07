@@ -202,10 +202,18 @@ pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()>
 pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunction> {
     let require: LuaFunction = lua.globals().get("require")?;
 
-    // Try file-per-hook: require("hooks.posts.auto_slug") → function
-    if let Ok(Value::Function(f)) = require.call::<Value>(hook_ref) {
-        return Ok(f);
-    }
+    // Try file-per-hook: require("hooks.posts.auto_slug") → function. A
+    // failure here is kept and reported with the fallback's, so a broken
+    // hook file (syntax error, non-function return) is named rather than
+    // hidden behind "module not found".
+    let per_file = match require.call::<Value>(hook_ref) {
+        Ok(Value::Function(f)) => return Ok(f),
+        Ok(other) => format!(
+            "'{hook_ref}' resolved to a {} instead of a function",
+            other.type_name()
+        ),
+        Err(e) => format!("{e}"),
+    };
 
     // Fallback: module.function pattern
     let parts: Vec<&str> = hook_ref.split('.').collect();
@@ -216,9 +224,9 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunc
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
 
-    let module: Table = require
-        .call(module_path.clone())
-        .with_context(|| format!("Failed to require module '{module_path}'"))?;
+    let module: Table = require.call(module_path.clone()).with_context(|| {
+        format!("Failed to require module '{module_path}' (file-per-hook attempt: {per_file})")
+    })?;
     let func: LuaFunction = module
         .get(func_name)
         .with_context(|| format!("Function '{func_name}' not found in module '{module_path}'"))?;
@@ -289,6 +297,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A ref that resolves neither as a file-per-hook nor as module.function
+    /// names BOTH attempts, so a broken hook file is not hidden behind the
+    /// fallback's "module not found".
+    #[test]
+    fn unresolvable_ref_error_names_both_attempts() {
+        let lua = Lua::new();
+        let err = resolve_hook_function(&lua, "hooks.nowhere.fn")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hooks.nowhere"), "{err}");
+        assert!(err.contains("file-per-hook attempt"), "{err}");
+    }
 
     /// Regression: a caller sends `subtitle = null` to clear a column; a
     /// before-hook that returns its context table (the ubiquitous "mutate and

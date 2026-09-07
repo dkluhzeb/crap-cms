@@ -7,7 +7,10 @@ use crate::{
     admin::handlers::shared::{
         ListUrlContext, auto_label_from_name, is_column_eligible, is_sortable_column, url_decode,
     },
-    core::{FieldDefinition, FieldType, collection::CollectionDefinition, document::Document},
+    core::{
+        FieldDefinition, FieldType, collection::CollectionDefinition, document::Document,
+        field::PickerAppearance,
+    },
     db::query::{FilterClause, FilterOp},
 };
 
@@ -147,8 +150,15 @@ pub(super) fn compute_cells(
                             }
                             FieldType::Date => {
                                 let val = raw.as_str().unwrap_or("");
+                                // The cell tells `<crap-time>` how the value was
+                                // stored so a day-only date renders as a calendar
+                                // date (in UTC), not a local timestamp.
+                                let format = f
+                                    .picker_appearance
+                                    .as_ref()
+                                    .map_or("dayOnly", PickerAppearance::as_str);
 
-                                json!({ "value": val, "is_date": true })
+                                json!({ "value": val, "is_date": true, "format": format })
                             }
                             FieldType::Select | FieldType::Radio => {
                                 let raw_val = raw.as_str().unwrap_or("");
@@ -617,6 +627,45 @@ mod tests {
         let columns = vec![json!({"key": "created_at"})];
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["is_date"], true);
+    }
+
+    /// A Date field's cell carries how it was stored so the client renders a
+    /// day-only date as a calendar date, not a local timestamp.
+    #[test]
+    fn compute_cells_date_field_carries_its_picker_format() {
+        let mut def = test_collection();
+        def.fields.push(
+            FieldDefinition::builder("event_date", FieldType::Date)
+                .picker_appearance(PickerAppearance::DayOnly)
+                .build(),
+        );
+        def.fields.push(
+            FieldDefinition::builder("starts_at", FieldType::Date)
+                .picker_appearance(PickerAppearance::DayAndTime)
+                .build(),
+        );
+        def.fields
+            .push(FieldDefinition::builder("bare", FieldType::Date).build());
+        let mut doc = DocumentBuilder::new("1").build();
+        doc.fields
+            .insert("event_date".into(), json!("2026-01-15T12:00:00.000Z"));
+        doc.fields
+            .insert("starts_at".into(), json!("2026-01-15T09:30:00.000Z"));
+        doc.fields
+            .insert("bare".into(), json!("2026-01-15T12:00:00.000Z"));
+
+        let columns = vec![
+            json!({"key": "event_date"}),
+            json!({"key": "starts_at"}),
+            json!({"key": "bare"}),
+        ];
+        let cells = compute_cells(&doc, &columns, &def);
+        assert_eq!(cells[0]["format"], "dayOnly");
+        assert_eq!(cells[1]["format"], "dayAndTime");
+        assert_eq!(
+            cells[2]["format"], "dayOnly",
+            "the parser default is day-only"
+        );
     }
 
     #[test]

@@ -7,7 +7,10 @@ use tracing::error;
 
 use crate::{
     core::{Document, FieldDefinition, ReqContext, collection::Hooks, document::DocumentBuilder},
-    hooks::lifecycle::{FieldHookEvent, HookEvent, context::HookContext, runner::FieldHooksCall},
+    hooks::lifecycle::{
+        AfterReadScopeGuard, FieldHookEvent, HookEvent, context::HookContext,
+        runner::FieldHooksCall,
+    },
 };
 
 use super::field_hooks::{has_any_field_hook, run_field_hooks_inner};
@@ -41,6 +44,9 @@ pub struct AfterReadCtx<'a> {
 /// degraded-to-original outcome, or do its own `pcall`; redaction belongs in
 /// `access.read`, not here.
 pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
+    // No CRUD from `after_read` on any surface (see `refuse_in_after_read`).
+    let _no_crud = AfterReadScopeGuard::install(lua);
+
     let has_field_hooks = has_any_field_hook(ctx.fields, &FieldHookEvent::AfterRead);
 
     let has_collection_hooks = !ctx.hooks.after_read.is_empty();

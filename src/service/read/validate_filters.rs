@@ -29,11 +29,128 @@
 
 use std::collections::HashSet;
 
+use serde_json::Value;
+
 use crate::{
-    core::{FieldDefinition, prefixed_name, walk_leaf_fields},
+    core::{CollectionDefinition, Document, FieldDefinition, prefixed_name, walk_leaf_fields},
     db::{Filter, FilterClause, FilterOp},
-    service::ServiceError,
+    service::{ReadHooks, ServiceError, helpers::collect_api_hidden_field_names},
 };
+
+/// What a read query references by field: the filter paths plus the sort
+/// column. Shared by the unreadable-field check across find/count/search.
+pub(crate) struct QueryFieldRefs<'a> {
+    pub filters: &'a [FilterClause],
+    pub order_by: Option<&'a str>,
+}
+
+/// Reject a filter or sort on a field the caller may not read.
+///
+/// A filter is an oracle: `where = { secret = { like = "a%" } }` recovers a
+/// value the read strip would have removed, and a sort exposes its ordering.
+/// Two rules, one chokepoint (every read surface funnels through the service
+/// find/count/search):
+///
+/// - **`hidden` fields** (API-hidden, at any depth) are never filterable or
+///   sortable — static, user-independent.
+/// - **Fields with an `access.read` rule** are filterable/sortable only when
+///   the rule allows without row data: the rule is evaluated once through the
+///   same read strip that guards responses, against a probe carrying the
+///   referenced keys with `null` values. A data-dependent rule that needs the
+///   row therefore denies (fail-closed).
+///
+/// `_rank` is the one virtual sort and is skipped.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` naming the first unreadable field.
+pub(crate) fn reject_unreadable_query_fields(
+    hooks: &dyn ReadHooks,
+    def: &CollectionDefinition,
+    slug: &str,
+    user: Option<&Document>,
+    locale: Option<&str>,
+    refs: &QueryFieldRefs<'_>,
+) -> Result<(), ServiceError> {
+    let paths = referenced_field_paths(refs);
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let hidden = collect_api_hidden_field_names(&def.fields, "");
+    for path in &paths {
+        if hidden
+            .iter()
+            .any(|d| denial_covers(&d.display_path(), path))
+        {
+            return Err(unreadable(path));
+        }
+    }
+
+    let mut probe = Document::new(String::new());
+    for path in &paths {
+        probe.fields.insert(root_key(path).to_string(), Value::Null);
+    }
+    hooks.strip_read_access_doc(&def.fields, &mut probe, slug, user, locale);
+
+    for path in &paths {
+        if !probe.fields.contains_key(root_key(path)) {
+            return Err(unreadable(path));
+        }
+    }
+
+    Ok(())
+}
+
+/// Every field path a query references: filter leaves (recursively through
+/// AND/OR groups) and the sort column (minus the `-` prefix and `_rank`).
+fn referenced_field_paths(refs: &QueryFieldRefs<'_>) -> Vec<String> {
+    let mut paths = Vec::new();
+    for clause in refs.filters {
+        collect_filter_paths(clause, &mut paths);
+    }
+
+    if let Some(order) = refs.order_by {
+        let col = order.strip_prefix('-').unwrap_or(order);
+        if col != "_rank" {
+            paths.push(col.to_string());
+        }
+    }
+
+    paths
+}
+
+fn collect_filter_paths(clause: &FilterClause, out: &mut Vec<String>) {
+    match clause {
+        FilterClause::Single(f) => out.push(f.field.clone()),
+        FilterClause::And(subs) | FilterClause::Or(subs) => {
+            for sub in subs {
+                collect_filter_paths(sub, out);
+            }
+        }
+    }
+}
+
+/// A denial at `denied` covers `path` when they are equal, when `path` is a
+/// dot-path beneath it (`arr.sub` under `arr`), or a flattened group child
+/// (`seo__title` under `seo`).
+fn denial_covers(denied: &str, path: &str) -> bool {
+    path == denied
+        || path
+            .strip_prefix(denied)
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with("__"))
+}
+
+/// The document-level key a path resolves through: the first dot segment.
+fn root_key(path: &str) -> &str {
+    path.split('.').next().unwrap_or(path)
+}
+
+fn unreadable(path: &str) -> ServiceError {
+    ServiceError::AccessDenied(format!(
+        "Cannot filter or sort on '{path}': the field is not readable in this context"
+    ))
+}
 
 /// Validate that user-supplied filter clauses do not target system columns.
 ///

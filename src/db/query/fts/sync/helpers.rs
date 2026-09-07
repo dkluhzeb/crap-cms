@@ -1,6 +1,8 @@
-//! FTS-table introspection helpers shared by migration + upsert.
+//! FTS helpers shared by migration + upsert.
 
+#[cfg(test)]
 use crate::db::query::fts::search::table_exists;
+#[cfg(test)]
 use crate::db::{DbConnection, DbValue};
 
 /// The Postgres full-text-search configuration used for every `to_tsvector`
@@ -14,11 +16,10 @@ pub(super) fn pg_tsvector(text_expr: &str) -> String {
     format!("to_tsvector('{PG_FTS_CONFIG}', {text_expr})")
 }
 
-/// Get column names from the FTS table (excludes `id`).
-///
-/// Returns `None` if the FTS table doesn't exist or has no columns.
-/// For `PostgreSQL`, the FTS table has a single `tsv` column — this returns `None`
-/// so that callers use the Postgres-specific upsert path instead.
+/// Get column names from the FTS table (excludes `id`) — a test probe for the
+/// rebuilt table's shape. Returns `None` if the FTS table doesn't exist or has
+/// no columns (Postgres has only `tsv`, so it always yields `None` there).
+#[cfg(test)]
 pub(super) fn get_fts_table_columns(
     conn: &dyn DbConnection,
     fts_table: &str,

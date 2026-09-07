@@ -41,6 +41,7 @@ pub(crate) use document::{
 // locale
 pub(crate) use locale::{
     build_locale_template_data, extract_editor_locale, is_non_default_locale, parse_request_locale,
+    strip_locale_locked_for_publish,
 };
 
 // pagination

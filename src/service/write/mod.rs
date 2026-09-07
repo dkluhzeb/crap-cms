@@ -15,7 +15,7 @@ use crate::service::ServiceError;
 pub(crate) use create::check_create_access;
 pub use create::create_document_in_conn;
 pub(crate) use delete::delete_document_in_conn;
-pub(crate) use update::check_update_access;
 pub(crate) use update::update_document_in_conn;
+pub(crate) use update::{check_update_access, reject_locale_locked_fields};
 pub(crate) use update_many_single::update_many_single_in_conn;
 pub use validate::{ValidateContext, validate_document, validate_outcome};

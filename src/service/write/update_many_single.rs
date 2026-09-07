@@ -13,6 +13,7 @@ use crate::{
 };
 
 use super::ServiceError;
+use super::update::reject_locale_locked_fields;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::collect_api_hidden_field_names;
 use crate::service::write::check_update_access;
@@ -39,7 +40,7 @@ pub(crate) fn update_many_single_in_conn(
     // single create/update use) — bulk update must not be a forgery hole.
     canonicalize_write_input(&mut input, def);
 
-    crate::service::write::update::reject_locale_locked_fields(def, &input.data, input.locale_ctx)?;
+    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
 
     // The one shared `update` gate (also used by single update and the
     // update-mode dry-run) — Denied + Constrained row enforcement.

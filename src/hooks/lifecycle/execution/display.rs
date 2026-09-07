@@ -28,9 +28,35 @@ pub(crate) fn call_display_condition_with_lua(
     form_data: &JsonValue,
     ctx: &ConditionContext<'_>,
 ) -> Option<DisplayConditionResult> {
-    let func = resolve_hook_function(lua, func_ref).ok()?;
-    let data_lua = lua_api::json_to_lua(lua, form_data).ok()?;
-    let ctx_lua = lua.to_value(ctx).ok()?;
+    // A condition that cannot even be called shows the field (fail-open is
+    // the documented `nil` behavior) — but never silently: the operator must
+    // be able to see why a configured condition had no effect.
+    let func = match resolve_hook_function(lua, func_ref) {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Display condition '{func_ref}' could not be resolved: {e:#} — showing field");
+
+            return None;
+        }
+    };
+    let data_lua = match lua_api::json_to_lua(lua, form_data) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                "Display condition '{func_ref}': form data not convertible: {e:#} — showing field"
+            );
+
+            return None;
+        }
+    };
+    let ctx_lua = match lua.to_value(ctx) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Display condition '{func_ref}': context not convertible: {e:#} — showing field");
+
+            return None;
+        }
+    };
 
     match func.call::<Value>((data_lua, ctx_lua)) {
         Ok(Value::Boolean(b)) => Some(DisplayConditionResult::Bool(b)),

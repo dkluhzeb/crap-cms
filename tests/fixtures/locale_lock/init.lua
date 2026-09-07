@@ -1,0 +1,1 @@
+-- locale-lock guard test fixture: no init-time registrations needed.

@@ -174,6 +174,12 @@ impl Registry {
                     "Collection '{}': list_searchable_fields references '{}' which is not a field",
                     slug, name
                 );
+            } else if Self::field_is_hidden_recursive(name, &def.fields) {
+                warn!(
+                    "Collection '{}': list_searchable_fields references hidden field '{}' — \
+                     hidden fields are never indexed (a search hit would leak the value)",
+                    slug, name
+                );
             }
         }
 
@@ -203,6 +209,18 @@ impl Registry {
             Ok(())
         });
         found
+    }
+
+    /// Whether the leaf field at flat name `name` is API-hidden.
+    fn field_is_hidden_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
+        let mut hidden = false;
+        let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+            if prefixed_name(prefix, &field.name) == name {
+                hidden = field.hidden;
+            }
+            Ok(())
+        });
+        hidden
     }
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.

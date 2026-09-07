@@ -84,7 +84,7 @@ pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
     // fields) stays in sync.
     query::ref_count::after_create(&tx, p.collection, &doc.id, &def.fields, p.locale)
         .context("Failed to adjust ref counts")?;
-    query::fts::fts_upsert(&tx, p.collection, &doc, Some(&def))
+    query::fts::fts_upsert(&tx, p.collection, &doc.id, &def, p.locale)
         .context("Failed to sync FTS index")?;
 
     tx.commit().context("Failed to commit transaction")?;

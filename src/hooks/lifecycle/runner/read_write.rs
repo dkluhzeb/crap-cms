@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::run::{FieldHooksCall, FieldWriteCtx};
+use super::vm_pool::reset_instruction_budget;
 use crate::{
     core::{
         Document, DocumentFields, FieldDefinition, FieldError, Hooks, ReqContext, ValidationError,
@@ -147,7 +148,12 @@ impl HookRunner {
         );
 
         docs.into_iter()
-            .map(|doc| apply_after_read_inner(&lua, ctx, doc))
+            .map(|doc| {
+                // One instruction budget per document, as for a single read.
+                reset_instruction_budget(&lua);
+
+                apply_after_read_inner(&lua, ctx, doc)
+            })
             .collect()
     }
 

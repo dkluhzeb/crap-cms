@@ -481,3 +481,95 @@ async fn array_edit_updates_row_in_place_keeping_its_id() {
 
     server_handle.abort();
 }
+
+// ── duplicate_row_copies_the_current_select_choice ────────────────────────
+
+/// A `<select>` changed but not yet saved keeps its choice in the duplicate:
+/// `cloneNode` copies input/textarea values but not select selectedness,
+/// so the copy would otherwise revert to the server-rendered option.
+fn make_array_select_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("teams");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Team".to_string())),
+        plural: Some(LocalizedString::Plain("Teams".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("name", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("members", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("member_name", FieldType::Text).build(),
+                FieldDefinition::builder("role", FieldType::Select)
+                    .options(vec![
+                        SelectOption::new(LocalizedString::Plain("Dev".into()), "dev"),
+                        SelectOption::new(LocalizedString::Plain("Ops".into()), "ops"),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+    def
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn duplicate_row_copies_the_current_select_choice() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_array_select_def(), make_users_def()],
+        vec![],
+        "bdup@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/teams/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
+    page.find_element("button[data-action=\"add-array-row\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
+
+    // Change the row's select to a non-default option (unsaved), then duplicate.
+    page.evaluate(
+        "() => { const s = document.querySelector('.form__array-row select'); s.value = 'ops'; s.dispatchEvent(new Event('change', { bubbles: true })); }",
+    )
+    .await
+    .unwrap();
+    page.find_element("button[data-action=\"duplicate-row\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    browser::wait_for_element_count(&page, ".form__array-row", 2).await;
+
+    let values = page
+        .evaluate(
+            "() => Array.from(document.querySelectorAll('.form__array-row select')).map((s) => s.value).join(',')",
+        )
+        .await
+        .unwrap();
+    let values: String = values.into_value().unwrap();
+    assert_eq!(
+        values, "ops,ops",
+        "the duplicate keeps the changed select choice"
+    );
+
+    server_handle.abort();
+}

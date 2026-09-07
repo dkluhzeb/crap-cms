@@ -1,6 +1,8 @@
 //! Lightweight search for relationship fields.
 
-use super::validate_filters::validate_user_filters;
+use super::validate_filters::{
+    QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters,
+};
 use crate::{
     core::{Document, upload},
     db::{LocaleContext, query},
@@ -30,6 +32,18 @@ pub fn search_documents(
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
+
+    reject_unreadable_query_fields(
+        hooks,
+        def,
+        ctx.slug,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        &QueryFieldRefs {
+            filters: &input.query.filters,
+            order_by: input.query.order_by.as_deref(),
+        },
+    )?;
 
     // Reject user filters on system columns (`_status`/`_deleted_at`/…) before
     // the engine composes its own view filters — parity with `find_documents`

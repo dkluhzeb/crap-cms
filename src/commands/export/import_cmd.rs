@@ -346,18 +346,9 @@ fn import_single_document(
     }
 
     // Index the imported document for full-text search, exactly as the service
-    // write path does. Re-read the just-written row via `find_by_id_raw` so the
-    // FTS input carries the same flat `group__sub` physical-column shape
-    // `persist_create`/`persist_update` feed — building a `Document` from the
-    // exported JSON instead would risk a shape mismatch that silently mis-indexes.
-    // Read under a default-locale context so a localized collection's per-locale
-    // columns (`title__en`) are selected; locales-disabled yields `None` (bare
-    // columns), the correct shape there.
-    let fts_locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
-    if tx.supports_fts()
-        && let Some(doc) = query::find_by_id_raw(tx, slug, def, id, fts_locale_ctx.as_ref(), false)?
-    {
-        query::fts::fts_upsert(tx, slug, &doc, Some(def))
+    // write path does (the sync reads the row's indexed columns itself).
+    if tx.supports_fts() {
+        query::fts::fts_upsert(tx, slug, id, def, locale)
             .with_context(|| format!("Failed to index {id} in '{slug}' for search"))?;
     }
 

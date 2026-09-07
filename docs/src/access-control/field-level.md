@@ -138,3 +138,22 @@ crap.fields.select({
 ## Error Behavior
 
 If a field access function throws an error, the field is treated as **denied** (fail-closed) and a warning is logged.
+
+## Filtering, Sorting, and Search
+
+A field the caller cannot read is never a query oracle. On every read
+surface (`find`, `count`, search, the admin list), a `where` filter or an
+`order_by` on such a field is rejected with an access error:
+
+- a field with `hidden = true` — always, for every caller;
+- a field with an `access.read` rule — when the rule denies for this caller
+  **without row data**. The rule is evaluated once, through the same read
+  strip that guards responses, against a probe carrying `null` values; a
+  rule that needs the row to decide therefore denies.
+
+Full-text search follows the same idea at index time: hidden fields and
+fields with an `access.read` rule are excluded from the default searchable
+set (the index is shared by every reader). An operator may still list a
+read-gated field in `list_searchable_fields` explicitly — that is a choice
+to make it searchable by everyone who can search the collection. A hidden
+field listed there is ignored with a startup warning.

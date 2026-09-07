@@ -103,6 +103,7 @@ impl ValidationWalker<'_> {
             is_update,
             errors,
         );
+        checks::check_relationship_shape(field, &data_key, value, errors);
         checks::check_polymorphic_allowlist(field, &data_key, value, errors);
 
         self.validate_array_or_blocks_rows(field, &data_key, value, errors);

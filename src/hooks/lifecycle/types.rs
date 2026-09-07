@@ -178,6 +178,36 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 /// Maximum Lua instructions per hook invocation. Stored in `app_data`.
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
+/// The live instruction counter armed on a leased VM (see
+/// `vm_pool::set_instruction_hook`). Kept in `app_data` so a Rust-driven batch
+/// loop can re-arm the budget per document instead of spending one budget
+/// across a whole page.
+pub(crate) struct InstructionCounter(pub(crate) std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+/// Marker installed in Lua `app_data` for the duration of an `after_read` hook
+/// call. The CRUD entry points refuse to run while it is present — `after_read`
+/// has no CRUD access on any surface (see `refuse_in_after_read`).
+pub(crate) struct AfterReadScope;
+
+/// RAII installer for [`AfterReadScope`]: present while held, removed on drop
+/// (including on the unwind path).
+pub(crate) struct AfterReadScopeGuard<'a>(&'a Lua);
+
+impl<'a> AfterReadScopeGuard<'a> {
+    #[must_use]
+    pub(crate) fn install(lua: &'a Lua) -> Self {
+        lua.set_app_data(AfterReadScope);
+
+        Self(lua)
+    }
+}
+
+impl Drop for AfterReadScopeGuard<'_> {
+    fn drop(&mut self) {
+        self.0.remove_app_data::<AfterReadScope>();
+    }
+}
+
 /// VM-stable infrastructure bundle, set once in Lua `app_data` at VM build
 /// (`create_lua_vm`) and read by the CRUD and access layers. Bundles what used
 /// to be six separate app-data newtypes so a VM can't end up with a partial

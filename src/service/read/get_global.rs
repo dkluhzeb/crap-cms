@@ -164,7 +164,10 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         fields: &def.fields,
         collection: ctx.slug,
         operation: "get",
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        // `hook_locale`, as for collections: in All-locale mode the values are
+        // per-locale maps, so `ctx.locale` is None rather than a misleading
+        // single locale.
+        locale: input.locale_ctx.and_then(LocaleContext::hook_locale),
         user: ctx.user,
         ui_locale: input.ui_locale,
         context: req_context,

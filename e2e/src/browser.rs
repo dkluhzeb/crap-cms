@@ -45,7 +45,21 @@ pub async fn spawn_server_with_config(
     globals: Vec<GlobalDefinition>,
     config: CrapConfig,
 ) -> (String, JoinHandle<()>, TestApp) {
-    let app = helpers::setup_app_with_config(collections, globals, config);
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    spawn_server_at(collections, globals, config, tmp).await
+}
+
+/// Like [`spawn_server_with_config`] but takes an externally-prepared
+/// config dir (`tempdir`) so a test can drop `hooks/` / `access/` Lua
+/// files in before the app boots.
+pub async fn spawn_server_at(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+    tmp: tempfile::TempDir,
+) -> (String, JoinHandle<()>, TestApp) {
+    let app = helpers::setup_app_at(collections, globals, config, tmp);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
     let base_url = format!("http://{addr}");
@@ -337,8 +351,22 @@ pub async fn setup_browser_test_with_config(
     email: &str,
     password: &str,
 ) -> BrowserTestCtx {
-    let (base_url, server_handle, app) =
-        spawn_server_with_config(collections, globals, config).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    setup_browser_test_at(collections, globals, config, tmp, email, password).await
+}
+
+/// Like [`setup_browser_test_with_config`] but boots from a prepared
+/// config dir (see [`spawn_server_at`]).
+pub async fn setup_browser_test_at(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+    tmp: tempfile::TempDir,
+    email: &str,
+    password: &str,
+) -> BrowserTestCtx {
+    let (base_url, server_handle, app) = spawn_server_at(collections, globals, config, tmp).await;
     let user_id = helpers::create_test_user(&app, email, password);
     let (browser, _browser_handle) = launch_browser().await;
     let page = browser.new_page("about:blank").await.unwrap();

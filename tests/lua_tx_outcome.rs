@@ -60,6 +60,22 @@ fn tx_log_def() -> CollectionDefinition {
 }
 
 fn setup(hook_ref: &str) -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
+    setup_with(tx_articles_def(hook_ref))
+}
+
+/// `tx_articles` with an `after_read` hook instead of `before_change`.
+fn tx_articles_after_read_def(hook_ref: &str) -> CollectionDefinition {
+    let mut def = tx_articles_def(hook_ref);
+    def.hooks = Hooks {
+        after_read: vec![HookRef::new(hook_ref)],
+        ..Default::default()
+    };
+    def
+}
+
+fn setup_with(
+    articles: CollectionDefinition,
+) -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
@@ -69,7 +85,7 @@ fn setup(hook_ref: &str) -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunne
     let shared = Registry::shared();
     {
         let mut reg = shared.write().unwrap();
-        reg.register_collection(tx_articles_def(hook_ref));
+        reg.register_collection(articles);
         reg.register_collection(tx_log_def());
     }
     let registry = Registry::snapshot(&shared);
@@ -157,7 +173,20 @@ fn on_rollback_runs_when_hook_errors() {
         .collect();
     let res = create_article(&pool, &registry, &runner, data);
 
-    assert!(res.is_err(), "hook error must fail the write");
+    // Surfaces reclassify at their boundary (gRPC/MCP/admin); the hook's
+    // message reaches the caller, the Lua traceback does not.
+    let err = res
+        .expect_err("hook error must fail the write")
+        .reclassify("sqlite");
+    assert!(
+        matches!(&err, crap_cms::service::ServiceError::HookError(m) if m.contains("boom requested")),
+        "the hook's message reaches the caller as a hook error: {err}"
+    );
+    let err = err.to_string();
+    assert!(
+        !err.contains("stack traceback"),
+        "the Lua traceback stays in the server log, not the error: {err}"
+    );
     assert_eq!(log_messages(&pool, &registry), vec!["rollback:B:rollback"]);
     assert!(
         article_titles(&pool, &registry).is_empty(),
@@ -194,6 +223,65 @@ fn failing_effect_is_skipped_others_run() {
 
     assert_eq!(log_messages(&pool, &registry), vec!["commit:D:commit"]);
     assert_eq!(article_titles(&pool, &registry), vec!["D"]);
+}
+
+// ── Bare pool-mode CRUD (no crap.transaction) ───────────────────────────
+
+/// A bare CRUD call in a job opens a per-op transaction with the FULL scope:
+/// the collection's `before_change` hook can register `crap.tx.on_commit`,
+/// and it runs after that op's commit — exactly as under `crap.transaction`
+/// or the service envelope.
+#[test]
+fn bare_pool_mode_create_scopes_its_own_transaction() {
+    let (_tmp, pool, registry, runner) = setup("hooks.effects.register");
+
+    let result = run_job(&runner, &pool, "jobs.tx_job.run_bare").expect("result json");
+    let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(json["ok"], json!(true), "the bare create succeeds: {json}");
+
+    assert_eq!(article_titles(&pool, &registry), vec!["bare"]);
+    assert_eq!(log_messages(&pool, &registry), vec!["commit:bare:commit"]);
+}
+
+/// A hook error inside a bare op rolls that op back and runs only the
+/// `on_rollback` compensation.
+#[test]
+fn bare_pool_mode_hook_error_rolls_the_op_back() {
+    let (_tmp, pool, registry, runner) = setup("hooks.effects.register");
+
+    let result = run_job(&runner, &pool, "jobs.tx_job.run_bare_boom").expect("result json");
+    let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(json["ok"], json!(false), "the create must fail: {json}");
+
+    assert!(article_titles(&pool, &registry).is_empty());
+    assert_eq!(
+        log_messages(&pool, &registry),
+        vec!["rollback:doomed:rollback"]
+    );
+}
+
+/// `after_read` has no CRUD on any surface: a write attempted from it is
+/// refused, and — `after_read` being fail-open — the read still succeeds.
+#[test]
+fn after_read_hook_cannot_write() {
+    let (_tmp, pool, registry, runner) = setup_with(tx_articles_after_read_def(
+        "hooks.effects.after_read_writes",
+    ));
+    let data: DocumentFields = [("title".into(), json!("E"))].into_iter().collect();
+    create_article(&pool, &registry, &runner, data).expect("create");
+
+    let result = run_job(&runner, &pool, "jobs.tx_job.run_find").expect("result json");
+    let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(
+        json["ok"],
+        json!(true),
+        "the read is not broken by the hook: {json}"
+    );
+
+    assert!(
+        log_messages(&pool, &registry).is_empty(),
+        "nothing may be written from after_read"
+    );
 }
 
 // ── crap.transaction(fn) in job pool-mode ───────────────────────────────

@@ -1742,7 +1742,7 @@ async fn list_items_with_search_and_pagination() {
         let data: DocumentFields =
             HashMap::from([("title".to_string(), json!(format!("Searchable Item {}", i)))]).into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
-        query::fts::fts_upsert(&tx, "posts", &doc, Some(&def)).unwrap();
+        query::fts::fts_upsert(&tx, "posts", &doc.id, &def, &LocaleConfig::default()).unwrap();
         tx.commit().unwrap();
     }
 

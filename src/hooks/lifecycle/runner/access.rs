@@ -5,6 +5,7 @@ use mlua::{LuaSerdeExt, Value};
 use serde_json::Map;
 use tracing::error;
 
+use super::vm_pool::reset_instruction_budget;
 use crate::{
     core::{
         Document, DocumentFields, FieldDefinition, FieldDenial, HookRef, document::DocumentBuilder,
@@ -305,6 +306,11 @@ impl HookRunner {
         let _guard = lua.map(|l| TxContextGuard::set(l, conn, None, None, None));
 
         for doc in docs.iter_mut() {
+            // One instruction budget per document, as for a single strip.
+            if let Some(l) = lua {
+                reset_instruction_budget(l);
+            }
+
             let document = doc.fields.clone();
             let mut level: Map<String, serde_json::Value> = std::mem::take(&mut doc.fields)
                 .into_inner()

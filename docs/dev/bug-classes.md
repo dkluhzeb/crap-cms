@@ -284,6 +284,16 @@ memories; the load-bearing ones:
   dishonest abstraction; `field_children` is the answer.
 - Over-abstraction declined by agreement: 4 CRUD surfaces, 3 document
   serializers, per-surface password extraction, 3 `FieldType` mappers.
+- Populate access/draft/trash gating, embedded-doc field strip,
+  override-access cache isolation, polymorphic allowlist on write, depth
+  caps, has-many order, back-reference gating — verified CLEAN (R12).
+- Custom routes: reserved prefixes, method allowlist, CSRF double-submit,
+  rate-limit keying behind `trust_proxy`, body limit both layers — CLEAN
+  (R12). FTS query injection (both backends) and JSON-path injection in
+  dot filters — CLEAN (R12).
+- Client: `json` helper `</` escaping, CSP nonce on every inline script,
+  richtext link protocol allowlist, SVG served as attachment + sandbox,
+  server minting a fresh id for a duplicated row id — CLEAN (R12).
 
 ## Maintenance
 
@@ -553,6 +563,107 @@ memories; the load-bearing ones:
   round — a quiet-ish round. Round 7 pending; the biggest lever remains
   broadening PG behavioral coverage on the new harness + landing the
   drafted CI Postgres service job.
+- 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
+  collections parity, relationships/populate/back-refs/ref-count, hook
+  semantics & Lua-from-hook contracts, client-side JS/templates/htmx,
+  search/filter/sort ingress + custom routes). **2 HIGH, ~12 MED, ~10 LOW —
+  NOT quiet, no new class**; every finding an instance of an existing row
+  (D/M locale-ctx footgun, P chokepoint, F fail-closed/oracle, S strictness,
+  M12–M14 client family). Populate/access/CSP/escaping/custom-routes/
+  cursor-injection all verified CLEAN. All fixed test-first (RED shown for
+  both HIGHs), gates green, UNCOMMITTED.
+  **HIGH — SQLite FTS blanked on every write to a localized collection**
+  (D-class locale-ctx footgun, M-class mechanism): the per-doc sync read
+  `title__en` keys from a locale-aliased re-read → every column indexed
+  empty until restart. FIX (structural): `fts_upsert` is row-backed —
+  takes an id, reads the indexed columns itself using the SAME
+  `get_fts_columns` set the rebuild uses, on both backends (also retires
+  PG's "index every string column" drift, F2). **HIGH — undelete failed on
+  every localized soft-delete collection** (locale-ctx footgun again;
+  `find_by_id(.., None)`) → `ctx.default_locale_ctx()`. MED: hidden /
+  read-denied fields were a filter/sort/search oracle (F-class) → ONE
+  service chokepoint `reject_unreadable_query_fields` (find/count/search)
+  + FTS default-set exclusion + docs; `after_read` had CRUD on Lua-driven
+  reads and fail-open committed its writes → `AfterReadScope` marker
+  refused at the CRUD entry points; bare pool-mode CRUD lacked the tx scope
+  (`crap.tx.on_commit` from a hook rolled the op back; files-before-commit;
+  phantom event on commit failure) → ONE `run_scoped_tx` behind
+  `with_lua_db` and `crap.transaction`; globals silently dropped a shared
+  field under a non-default locale (P-class parity; same guard collections
+  have) → `reject_locale_locked_fields` generalized to fields + admin
+  globals strip via the shared helper + persist-level check catching
+  hook-injected fields (H4); PG lock_row missing on global update / bulk
+  update / restore (L-class race, sibling of R5's fix); relationship
+  values stored as text when not an id (S-class) → shape check; backfill
+  aborted boot on a dangling ref → skip+warn; self-reference blocked its
+  own delete → not counted at the ONE ref reader; Lua traceback in hook
+  errors (F17 secondary-channel leak) → stripped at classify; filter value
+  type mismatch → 400 not PG 500, LIKE on numeric casts, cursor type check
+  (S/L). Client (M12–M14): dirty-form cleared by cancelled/unrelated htmx
+  requests, radio groups never re-evaluated client conditions, duplicate-
+  row cloned stale selections, day-only dates rendered as local timestamps,
+  nested label watchers, duplicate panel ids. Diagnosability: unresolvable
+  display condition now warns; hook-ref resolver names both attempts.
+  **Feature gaps noted, not bugs:** no `UnpublishGlobal` RPC/MCP tool; no
+  populate `depth` on `get_global`; global version ops admin-only; export
+  omits globals (documented). Two lessons: (1) an e2e `..` destructure of
+  `BrowserTestCtx` drops `app` and with it the temp config dir → lazily
+  `require`d hooks vanish (bind `app: _app`, as `browser: _browser`);
+  (2) `.ok()?` on a hook-resolve path hid a failure for a full debugging
+  round — every fail-open must log. Round 13 pending; still need TWO
+  consecutive genuinely-quiet rounds.
+- 2026-09-07 (20) — **CONVERGENCE ROUND 11** (5 fresh lenses: uploads/media,
+  live-updates/SSE, scheduler/jobs, migration/DDL/dialect, admin-render with
+  fresh eyes on the new array row-identity code). **1 HIGH, 4 MED, 3 LOW, 1
+  doc — NOT quiet, no new class.** Row-identity change reviewed CLEAN
+  (duplicate/forged id, JS reindex, XSS, lifecycle). Fixed: **HIGH — publishing
+  a translation was rejected**: the admin form submits locale-locked shared
+  fields read-only under a non-default locale (the hidden row-id input made an
+  all-disabled shared array submit a key too); the service rejects shared fields
+  on a non-default write (guards gRPC/Lua/MCP from silent default-locale
+  overwrite); save_draft stripped them, publish didn't → admin publish now strips
+  like save_draft (`strip_locale_locked_for_publish`), service guard kept for
+  programmatic surfaces. **MED — `delete_upload_files` deleted user `*_url`
+  fields** (suffix heuristic + hand-maintained `image_url` carve-out instead of
+  the authoritative `system_field_names`; a forged user `source_url` → cross-
+  document file deletion) → `upload_file_keys` resolves only server-derived url
+  columns; `FileCleanupQueue` carries pre-resolved keys. **MED — backfill
+  global legacy flag short-circuited per-collection detection** (a collection
+  added later never backfilled → ref-count under-count / delete bypass) →
+  always run per-slug detection. **MED — `identifier_check` skipped version
+  index names** (~33+ char slug truncates on PG → unique index silently
+  skipped → duplicate version rows) → validated at load. **MED — redis
+  invalidation pump dropped its own `Lagged`** (try_send on the same full
+  queue → lost revocation fail-open) → evict-on-overflow for invalidation,
+  events best-effort; frozen-contract line extended. **LOW** `execute_ddl`
+  `" INTEGER"→" BIGINT"` rewrote string literals → quote-aware
+  `pg_widen_integer`; auto_purge measured from created_at → COALESCE(completed_at,
+  created_at). **FALSE POSITIVE reverted:** ALTER-adds-timestamp-DEFAULT (SQLite
+  forbids non-constant defaults on added columns; writes bind timestamps) —
+  recorded in Appendix 2. **DOC** jobs.md called per-queue caps "soft" — they are
+  advisory-lock exact. Round 12 pending; HIGH resets the quiet streak.
+- 2026-09-07 (19) — **CONVERGENCE ROUND 10** (5 fresh lenses: write-path data
+  integrity, error-status classification, admin field-context, DB-dialect/import,
+  CLI outcome-reporting). **1 HIGH, several MED/LOW — NOT quiet, no new class.**
+  Fixed: **HIGH — SQLite import upsert data loss**: `INSERT OR REPLACE`
+  deleted+reinserted the row, zeroing unlisted system columns → re-importing a
+  referenced doc reset `_ref_count` to 0, defeating delete protection (PG's `ON
+  CONFLICT` was already safe) → SQLite `ON CONFLICT … DO UPDATE`; import writes
+  present-null explicitly vs preserving absent, and carries `_status` (M2/D8).
+  **MED — all-locales read leaked denied locales** (field-read strip evaluated
+  `access.read` once at the default locale, keeping/dropping the whole
+  `{locale:value}` map) → per-locale; frozen-contract line added. **MED — import
+  skipped `fts_upsert`** → imported docs unsearchable (P5) → re-read + index like
+  the service path. **MED — 8 gRPC job/auth handlers skipped `reclassify`** and
+  the TOTP flow's 3 `pool.get()` sites used `Internal` not `classify` (500 not
+  503) → fixed. **LOW** relationship inline-create label blank
+  (`collection_singular_name` never supplied) → populated in
+  `enrich_relationship`, crate-level `admin::test_state` builder promoted; admin
+  `NotFound` → 500 instead of 404 → arm added; `restore --include-uploads`
+  reported success on tar failure (L17) → fails the command. **Array/blocks
+  row-identity (A-1)** designed in `array-row-identity.md` (since IMPLEMENTED —
+  see priority queue). **CLEAN, added to Appendix 2:** sort/filter never
+  silently falls back; `from_locale_string(None)` re-verified. Round 11 pending.
 - 2026-09-07 (18) — **CONVERGENCE ROUND 9** (5 fresh lenses: concurrency/
   races, cache correctness, query-builder correctness, field-type correctness,
   Lua API surface). **6 findings — 1 HIGH, 3 MED, 2 LOW — NOT quiet, but no new

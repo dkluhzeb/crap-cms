@@ -8,7 +8,9 @@ use crate::{
     },
 };
 
-use super::validate_filters::validate_user_filters;
+use super::validate_filters::{
+    QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters,
+};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -29,6 +31,18 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
+
+    reject_unreadable_query_fields(
+        hooks,
+        def,
+        ctx.slug,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        &QueryFieldRefs {
+            filters: input.filters,
+            order_by: None,
+        },
+    )?;
 
     let trash_active = input.trash && def.soft_delete;
 

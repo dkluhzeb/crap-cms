@@ -1209,16 +1209,21 @@ fn numeric_greater_than_with_actual_integers_in_db() {
     assert!(labels2.contains(&"one"));
     assert!(labels2.contains(&"ten"));
 
-    // Regression: a text-shaped input that doesn't parse as a number must
-    // fall back to Text comparison (and thus match 0 rows here, not error).
+    // A text-shaped input that doesn't parse as a number is a validation
+    // error naming the field — never a silent text comparison (which SQLite
+    // would absorb and Postgres would reject as an opaque backend error).
     let q3 = query::FindQuery::builder()
         .filters(vec![query::FilterClause::Single(query::Filter {
             field: "value".to_string(),
             op: query::FilterOp::GreaterThan("not-a-number".to_string()),
         })])
         .build();
-    let docs3 = ops::find_documents(&pool, "scores", &def, &q3, None).expect("find");
-    assert_eq!(docs3.len(), 0);
+    let err = ops::find_documents(&pool, "scores", &def, &q3, None)
+        .expect_err("non-numeric input on a Number field is rejected");
+    let ve = err
+        .downcast_ref::<crap_cms::core::ValidationError>()
+        .expect("typed validation error");
+    assert_eq!(ve.errors[0].field, "value");
 }
 
 // ── Localized array sub-field filter (dot notation) ─────────────────────────

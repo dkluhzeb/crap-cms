@@ -197,8 +197,10 @@ pub(crate) fn delete_document_in_conn(
         }
     }
 
-    // Cleanup
-    if conn.supports_fts() {
+    // Cleanup. A soft-deleted row keeps its FTS entry so the trash view stays
+    // searchable (the normal view is filtered by `_deleted_at` before the FTS
+    // membership clause); only a hard delete drops it.
+    if !def.soft_delete && conn.supports_fts() {
         query::fts::fts_delete(conn, ctx.slug, id)?;
     }
     if def.is_upload_collection() {

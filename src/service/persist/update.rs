@@ -6,7 +6,7 @@ use crate::{
     config::LocaleConfig,
     core::{Document, DocumentFields},
     db::{LocaleContext, query},
-    service::{PersistOptions, ServiceContext, versions},
+    service::{PersistOptions, ServiceContext, versions, write::reject_locale_locked_fields},
 };
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
@@ -26,6 +26,10 @@ pub fn persist_update(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
     let slug = ctx.slug;
+
+    // Final post-hook data: a before-hook that injected a locale-locked field
+    // is rejected here rather than silently skipped at the DB edge.
+    reject_locale_locked_fields(&def.fields, data, opts.locale_ctx)?;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
     let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
@@ -73,7 +77,7 @@ pub fn persist_update(
     }
 
     if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+        query::fts::fts_upsert(conn, slug, &doc.id, def, &locale_cfg)?;
     }
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
@@ -99,9 +103,16 @@ pub(crate) fn persist_bulk_update(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
+    reject_locale_locked_fields(&def.fields, data, locale_ctx)?;
+
     let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
 
     let old_refs = if touches_refs {
+        // Same row lock as the single-document path: the outgoing-ref snapshot
+        // below is unlocked, and two concurrent updates of one row on Postgres
+        // would otherwise both read the stale `old_refs` and double-apply.
+        conn.lock_row(ctx.slug, id)?;
+
         query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, locale_config)?;
 
         Some(query::ref_count::snapshot_outgoing_refs(
@@ -129,7 +140,7 @@ pub(crate) fn persist_bulk_update(
     }
 
     if conn.supports_fts() {
-        query::fts::fts_upsert(conn, ctx.slug, &updated, Some(def))?;
+        query::fts::fts_upsert(conn, ctx.slug, id, def, locale_config)?;
     }
 
     // Ref count last: minimizes row-level lock hold time on shared targets.

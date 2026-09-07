@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, bail};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 
@@ -49,6 +49,27 @@ pub(super) fn apply_deltas(
     conn: &dyn DbConnection,
     deltas: &HashMap<(String, String), i64>,
 ) -> Result<()> {
+    apply_deltas_with(conn, deltas, MissingTarget::Reject)
+}
+
+/// What an increment against a vanished target means to the caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MissingTarget {
+    /// A live write: the caller is about to persist a reference to a row that
+    /// no longer exists, so the transaction must roll back.
+    Reject,
+    /// A repair replay over existing rows (the ref-count backfill): the
+    /// dangling reference is already stored; skip it with a warning rather
+    /// than refusing to start.
+    Skip,
+}
+
+/// [`apply_deltas`] with an explicit missing-target policy.
+pub(super) fn apply_deltas_with(
+    conn: &dyn DbConnection,
+    deltas: &HashMap<(String, String), i64>,
+    on_missing: MissingTarget,
+) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
     }
@@ -76,14 +97,24 @@ pub(super) fn apply_deltas(
             format!("Failed to batch-update _ref_count on {collection} by {delta}")
         })?;
 
-        // Increment against vanished targets is a hard error: the caller is
-        // about to persist references to rows that no longer exist. Bail so
-        // the enclosing transaction rolls back, preventing dangling refs.
+        // Increment against vanished targets is a hard error on a live write:
+        // the caller is about to persist references to rows that no longer
+        // exist. Bail so the enclosing transaction rolls back, preventing
+        // dangling refs. A repair replay skips them instead (they are already
+        // dangling; refusing would block startup on data it cannot fix).
         if *delta > 0 && affected < ids.len() {
             let missing = find_missing_ids(conn, collection, ids);
-            bail!(
-                "cannot reference {collection}/{missing}: target no longer exists \
-                 (concurrently hard-deleted)"
+
+            if on_missing == MissingTarget::Reject {
+                bail!(
+                    "cannot reference {collection}/{missing}: target no longer exists \
+                     (concurrently hard-deleted)"
+                );
+            }
+
+            warn!(
+                "Ref-count backfill: {collection}/{missing} no longer exists — a dangling \
+                 reference was skipped (clear or update the referencing document)"
             );
         }
 

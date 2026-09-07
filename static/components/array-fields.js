@@ -86,6 +86,25 @@ function rewriteRefs(root, rewriter, recurseTemplates = true) {
   }
 }
 
+/**
+ * Copy every `<select>`'s current selection from `source` to the
+ * position-matched `<select>` in `clone` (multi-selects included).
+ *
+ * @param {Element} source
+ * @param {Element} clone
+ */
+function copySelectValues(source, clone) {
+  const from = source.querySelectorAll('select');
+  const to = clone.querySelectorAll('select');
+  from.forEach((src, i) => {
+    const dst = to[i];
+    if (!dst) return;
+    Array.from(src.options).forEach((opt, j) => {
+      if (dst.options[j]) dst.options[j].selected = opt.selected;
+    });
+  });
+}
+
 class CrapArrayField extends HTMLElement {
   constructor() {
     super();
@@ -372,7 +391,17 @@ class CrapArrayField extends HTMLElement {
     if (this._isAtMax()) return;
 
     const clone = /** @type {HTMLElement} */ (row.cloneNode(true));
+    // Cloning copies `<input>`/`<textarea>` values but NOT `<select>`
+    // selectedness (the spec has cloning steps only for the former), so a
+    // changed-but-unsaved select would revert to its server-rendered option
+    // in the copy. Custom inputs keep their state in attributes they sync
+    // themselves (`<crap-relationship-search selected>`).
+    copySelectValues(row, clone);
+    // Nested rows re-arm their label watchers in the copy too.
     delete clone.dataset.labelInit;
+    for (const nested of clone.querySelectorAll('[data-label-init]')) {
+      delete (/** @type {HTMLElement} */ (nested).dataset.labelInit);
+    }
     row.after(clone);
     this._initClonedSubtree(clone);
     this._afterRowChange();

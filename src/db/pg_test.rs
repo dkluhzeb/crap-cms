@@ -44,8 +44,9 @@ mod tests {
 
     use super::*;
     use crate::core::{FieldDefinition, FieldType};
+    use crate::db::query::filter::build_op_condition;
     use crate::db::query::join::{find_array_rows, set_array_rows};
-    use crate::db::{DbConnection, DbValue};
+    use crate::db::{DbConnection, DbValue, FilterOp};
 
     /// Smoke test: prove the harness can connect to Postgres and round-trip a
     /// value through the `DbConnection` trait. Skips when `TEST_DATABASE_URL`
@@ -258,6 +259,51 @@ mod tests {
             eq.is_some(),
             "numeric equality on a nested JSON Number must match"
         );
+
+        conn.execute(&format!("DROP TABLE \"{table}\""), &[])
+            .unwrap();
+    }
+
+    /// A `contains`/`like` filter on a numeric column must execute on Postgres
+    /// (no `bigint ~~ text` operator): the op builder casts the column to text.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_pattern_filter_on_numeric_column_executes() {
+        let Some(pool) = pg_test_pool() else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        let conn = pool.get().expect("get PG connection");
+        let table = unique_slug("numlike");
+        conn.execute(
+            &format!("CREATE TABLE \"{table}\" (id TEXT, price DOUBLE PRECISION)"),
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            &format!("INSERT INTO \"{table}\" (id, price) VALUES ('a', 42), ('b', 7)"),
+            &[],
+        )
+        .unwrap();
+
+        let mut params = Vec::new();
+        let condition = build_op_condition(
+            &conn,
+            "price",
+            "price",
+            &FilterOp::Contains("4".into()),
+            Some(&FieldType::Number),
+            &mut params,
+        )
+        .unwrap();
+        let rows = conn
+            .query_all(
+                &format!("SELECT id FROM \"{table}\" WHERE {condition} ORDER BY id"),
+                &params,
+            )
+            .expect("a pattern match on a numeric column must not be a backend error");
+        let ids: Vec<String> = rows.iter().filter_map(|r| r.opt_text_at(0)).collect();
+        assert_eq!(ids, vec!["a".to_string()]);
 
         conn.execute(&format!("DROP TABLE \"{table}\""), &[])
             .unwrap();

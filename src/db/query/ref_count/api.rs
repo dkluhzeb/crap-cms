@@ -21,7 +21,7 @@ use crate::db::query::helpers::prefixed_name;
 use crate::db::{DbConnection, DbValue};
 
 use super::compute::compute_refs_from_data;
-use super::delta::{apply_deltas, to_delta_map};
+use super::delta::{MissingTarget, apply_deltas, apply_deltas_with, to_delta_map};
 use super::outgoing_ref::OutgoingRef;
 use super::read::read_outgoing_refs;
 
@@ -220,6 +220,30 @@ pub fn after_create(
     let deltas = to_delta_map(&[], &new_refs);
 
     apply_deltas(conn, &deltas)
+}
+
+/// Replay a document's outgoing refs during the ref-count backfill.
+///
+/// Identical to [`after_create`] except that a reference whose target no
+/// longer exists is skipped with a warning instead of failing: the backfill
+/// runs inside the startup migration, and a single dangling reference (left
+/// by a crash between a hard delete and its ref-count update, or by direct
+/// SQL) must not make the server refuse to start on data it cannot repair.
+///
+/// # Errors
+///
+/// Returns a backend error if reading outgoing refs or the UPDATEs fail.
+pub fn backfill_after_create(
+    conn: &dyn DbConnection,
+    table: &str,
+    id: &str,
+    fields: &[FieldDefinition],
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
+    let deltas = to_delta_map(&[], &new_refs);
+
+    apply_deltas_with(conn, &deltas, MissingTarget::Skip)
 }
 
 /// Adjust ref counts after creating a new document — data-driven variant.

@@ -328,6 +328,25 @@ changing a representation is a breaking change to every consumer.
 
 [`RenderCrud`]: https://docs.rs/crap-cms/latest/crap_cms/hooks/lifecycle/enum.RenderCrud.html
 
+- **`after_read` has no CRUD, enforced.** A `crap.*` CRUD call from an
+  `after_read` hook raises on every surface (Lua-driven reads included) —
+  the hook runs after the read is final and fails open, so a write from it
+  could half-apply. `before_read` + `ctx.context` is the sanctioned path.
+- **A locale-locked (shared) field in a non-default-locale write is
+  rejected at persist time too**, for collections and globals alike — so a
+  `before_change` hook that injects one fails the write loudly instead of
+  the field being silently skipped at the DB edge. The admin form strips
+  its read-only shared fields before the service sees them (collections and
+  globals), so a translation save is never rejected for them.
+- **Bare pool-mode CRUD has the full transaction scope.** A single
+  `crap.collections.x.create(...)` in a job, route, or effect runs in its
+  own transaction with the same `crap.tx` queue, event gating, file
+  cleanup, and cache invalidation as `crap.transaction(fn)` and the service
+  envelope — one implementation (`run_scoped_tx`) behind all three.
+- **Hook errors carry no Lua traceback to clients.** The message before
+  `stack traceback:` is what a client, admin toast, or MCP response sees;
+  the traceback goes to the server log.
+
 ## Read-surface invariants
 
 - **Pagination limit and populate depth are clamped at every read surface**
@@ -416,6 +435,35 @@ changing a representation is a breaking change to every consumer.
   absent from the incoming set are deleted; `_order` follows the incoming
   position. A surface that does not round-trip the id degrades to a full replace,
   never worse.
+
+- **A field the caller cannot read is never a query oracle.** `hidden`
+  fields are never filterable, sortable, or searchable; a field with an
+  `access.read` rule is filterable/sortable only when the rule allows the
+  caller without row data, and is out of the default search index (listing
+  it in `list_searchable_fields` is an explicit opt-in). Enforced at the
+  service find/count/search chokepoint.
+- **The full-text index is row-backed and write-path complete.** The
+  per-document sync reads the indexed columns from the row itself (both
+  backends index exactly `get_fts_columns`), so it cannot depend on the
+  shape of an in-memory document; every write path (create, update, bulk
+  update, undelete, restore, import, CLI) keeps it current. Soft-deleted
+  rows keep their index entry (trash view search); only a hard delete
+  drops it.
+- **A filter value that does not fit the column type is a validation
+  error** (400 naming the field) on every surface — never a silent text
+  comparison — and a keyset cursor whose sort value cannot bind to the
+  sort column's type is rejected the same way.
+- **A relationship / upload value is an id (or a list of ids).** A number,
+  boolean, populated document object, or list with non-string items is a
+  validation error on write; a polymorphic target must be `collection/id`.
+  A reference to an id that does not exist is a caller error (400 naming
+  the target), not an internal fault.
+- **A self-reference never counts.** A document referencing itself adds
+  nothing to its own `_ref_count` (on create, update, hard delete, and the
+  backfill alike), so it stays deletable — matching the back-reference
+  list, which already omits the owner. The startup ref-count backfill
+  skips (and logs) a stored reference whose target no longer exists
+  instead of refusing to start.
 
 ## Server-config posture (frozen defaults)
 

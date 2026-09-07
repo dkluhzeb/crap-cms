@@ -29,7 +29,12 @@
         {{> partials/status-badge status=this.value}}
       {{/if}}
       {{#if this.is_date}}
-        <crap-time datetime="{{this.value}}">{{this.value}}</crap-time>
+        <crap-time
+          datetime="{{this.value}}"
+          format="{{this.format}}"
+        >
+          {{this.value}}
+        </crap-time>
       {{/if}}
       {{#if this.is_bool}}
         {{#if this.value}}

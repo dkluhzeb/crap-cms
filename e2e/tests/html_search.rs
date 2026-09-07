@@ -167,7 +167,14 @@ fn seed_post(app: &TestApp, title: &str) -> String {
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     // `query::create` doesn't fire the FTS upsert that the service layer
     // does — call it manually so the doc is discoverable by search.
-    fts_upsert(&tx, "posts", &doc, Some(&def)).expect("fts upsert");
+    fts_upsert(
+        &tx,
+        "posts",
+        &doc.id,
+        &def,
+        &crap_cms::config::LocaleConfig::default(),
+    )
+    .expect("fts upsert");
     tx.commit().unwrap();
     doc.id.to_string()
 }

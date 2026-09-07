@@ -26,6 +26,11 @@
 //! ops continue to share the outer tx. Nested explicit transactions
 //! aren't supported (no `SAVEPOINT` mechanism in this alpha — defer
 //! until a real use case surfaces).
+//!
+//! The transaction scope itself ([`run_scoped_tx`]) is shared with the
+//! per-op transaction a bare pool-mode CRUD call opens (`with_lua_db`), so
+//! `crap.tx.*`, event gating, file cleanup, and cache invalidation behave
+//! identically at both commit points.
 
 use std::{
     cell::{Cell, RefCell},
@@ -38,8 +43,11 @@ use tracing::warn;
 
 use crate::{
     core::{SharedCache, upload::delete_storage_keys},
+    db::DbConnection,
     hooks::{
-        lifecycle::{LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm},
+        lifecycle::{
+            FileCleanupQueue, LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm,
+        },
         lua_api::crud::{TxSlot, ensure_writable},
     },
     service::{DeferredEffect, DeferredQueue, EffectOutcome, EventQueue, VerificationQueue},
@@ -66,43 +74,53 @@ fn flush_cache_dirty(
     }
 }
 
-/// Wrap a Lua closure in a single IMMEDIATE transaction.
+/// Run `work` inside a fresh IMMEDIATE transaction with the FULL transaction
+/// scope every commit point shares:
 ///
-/// Errors out if called outside a job context (no `PoolContext` and no
-/// `TxContext` — e.g., from `init.lua` or a top-level script).
-#[allow(clippy::needless_pass_by_value)]
-fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
-    // Checked first, for the same reason `with_lua_db` does: a read-only
-    // render context installs a `TxContext` while a read is in flight, and
-    // the pass-through below would otherwise hand that read connection to a
-    // block whose whole purpose is to write.
-    ensure_writable(lua)?;
-
-    // Pass-through: already inside a shared tx (hook context, or a
-    // surrounding `crap.transaction(fn)`). Call `fn` directly.
-    if lua.app_data_ref::<TxContext>().is_some() {
-        return fn_arg.call::<Value>(());
-    }
-
+/// - a per-transaction `crap.tx.on_commit` / `on_rollback` queue, so a hook
+///   fired by CRUD inside `work` can register effects (they run after the
+///   outcome, in pool-mode);
+/// - fresh event / verification queues handed up to the ambient (job or
+///   route) queues only on commit — a rolled-back write never emits;
+/// - a per-transaction upload file-cleanup queue drained after commit, and a
+///   populate-cache dirty flag cleared after commit.
+///
+/// This is the ONE implementation behind both pool-mode commit points:
+/// `crap.transaction(fn)` and the per-op transaction `with_lua_db` opens for a
+/// bare CRUD call in a job / route / effect. A hook therefore behaves the
+/// same whether its write came through the service envelope, an explicit
+/// transaction, or a bare call.
+///
+/// `label` prefixes the pool/begin/commit error text.
+///
+/// # Errors
+///
+/// Returns a Lua runtime error when no pool context is installed, when the
+/// transaction cannot be opened or committed, or when `work` errors (the
+/// transaction is rolled back and compensations run first).
+pub(crate) fn run_scoped_tx<R>(
+    lua: &Lua,
+    label: &str,
+    work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
+) -> LuaResult<R> {
     let pool = lua
         .app_data_ref::<PoolContext>()
         .ok_or_else(|| {
-            RuntimeError(
-                "crap.transaction() requires a job or pool context — call it from \
-                 inside a Lua job handler, not from init.lua / collection definitions / \
-                 top-level scripts"
-                    .into(),
-            )
+            RuntimeError(format!(
+                "{label} requires a job or pool context — call it from inside a Lua job \
+                 handler, a custom route handler, or an effect, not from init.lua / \
+                 collection definitions / top-level scripts"
+            ))
         })?
         .pool
         .clone();
 
     let mut conn = pool
         .write()
-        .map_err(|e| RuntimeError(format!("crap.transaction: pool.write: {e}")))?;
+        .map_err(|e| RuntimeError(format!("{label}: pool.write: {e}")))?;
     let tx = conn
         .transaction_immediate()
-        .map_err(|e| RuntimeError(format!("crap.transaction: begin: {e}")))?;
+        .map_err(|e| RuntimeError(format!("{label}: begin: {e}")))?;
 
     // Per-transaction queue for `crap.tx.on_commit` / `on_rollback`
     // registrations inside the closure. Installed by swapping a modified
@@ -132,7 +150,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
     let tx_verifications: VerificationQueue = Rc::new(RefCell::new(Vec::new()));
     let outer_events = infra.event_queue.replace(tx_events.clone());
     let outer_verifications = infra.verification_queue.replace(tx_verifications.clone());
-    let tx_files: crate::hooks::lifecycle::FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
+    let tx_files: FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
     let outer_files = infra.file_cleanup.replace(tx_files.clone());
     // Per-transaction populate-cache invalidation flag (see `LuaCrudInfra`).
     let tx_cache_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
@@ -160,7 +178,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
             prev: prev_infra,
         };
 
-        fn_arg.call::<Value>(())
+        work(&tx)
     };
 
     let effects: Vec<DeferredEffect> = dq.borrow_mut().drain(..).collect();
@@ -172,7 +190,7 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
                 // events/verifications die with the transaction.
                 run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
 
-                return Err(RuntimeError(format!("crap.transaction: commit: {e}")));
+                return Err(RuntimeError(format!("{label}: commit: {e}")));
             }
 
             // Committed: hand the transaction's events/verifications up to
@@ -181,8 +199,8 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
                 outer.borrow_mut().extend(tx_events.borrow_mut().drain(..));
             } else if !tx_events.borrow().is_empty() {
                 warn!(
-                    "crap.transaction: {} event(s) from a committed transaction had \
-                     no ambient queue to flush into and were dropped",
+                    "{label}: {} event(s) from a committed transaction had no ambient queue \
+                     to flush into and were dropped",
                     tx_events.borrow().len()
                 );
             }
@@ -230,6 +248,27 @@ fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
             Err(e)
         }
     }
+}
+
+/// Wrap a Lua closure in a single IMMEDIATE transaction.
+///
+/// Errors out if called outside a job context (no `PoolContext` and no
+/// `TxContext` — e.g., from `init.lua` or a top-level script).
+#[allow(clippy::needless_pass_by_value)]
+fn lua_transaction(lua: &Lua, fn_arg: Function) -> LuaResult<Value> {
+    // Checked first, for the same reason `with_lua_db` does: a read-only
+    // render context installs a `TxContext` while a read is in flight, and
+    // the pass-through below would otherwise hand that read connection to a
+    // block whose whole purpose is to write.
+    ensure_writable(lua)?;
+
+    // Pass-through: already inside a shared tx (hook context, or a
+    // surrounding `crap.transaction(fn)`). Call `fn` directly.
+    if lua.app_data_ref::<TxContext>().is_some() {
+        return fn_arg.call::<Value>(());
+    }
+
+    run_scoped_tx(lua, "crap.transaction", |_| fn_arg.call::<Value>(()))
 }
 
 /// RAII restore for the transaction-scoped [`LuaCrudInfra`] swap. On

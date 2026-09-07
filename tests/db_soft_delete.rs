@@ -394,7 +394,7 @@ fn find_query_include_deleted_defaults_false() {
 // ── Test k: soft delete removes from FTS ─────────────────────────────────
 
 #[test]
-fn soft_delete_removes_from_fts() {
+fn soft_delete_keeps_the_fts_entry_and_the_normal_view_hides_it() {
     let def = make_soft_delete_def();
     let (_tmp, pool, _reg) = create_pool_and_migrate(vec![def.clone()]);
 
@@ -408,37 +408,46 @@ fn soft_delete_removes_from_fts() {
     // Sync FTS and index the document
     let conn = pool.get().unwrap();
     query::fts::sync_fts_table(&conn, "articles", &def, &LocaleConfig::default()).unwrap();
+    query::fts::fts_upsert(&conn, "articles", &id, &def, &LocaleConfig::default()).unwrap();
 
-    // Build a document and upsert into FTS
-    let doc = query::find_by_id_unfiltered(&conn, "articles", &def, &id, None)
-        .unwrap()
-        .unwrap();
-    query::fts::fts_upsert(&conn, "articles", &doc, Some(&def)).unwrap();
-
-    // Verify FTS finds it
     let results = fts_match_ids(&conn, "articles", "Unicorn");
     assert_eq!(
         results.len(),
         1,
-        "FTS should find the document before soft-delete"
+        "FTS finds the document before soft-delete"
     );
 
-    // Soft-delete and remove from FTS (mirrors what delete_document does)
+    // Soft-delete (mirrors what delete_document does: the FTS row stays so the
+    // trash view is searchable; the normal view filters it out by `_deleted_at`).
     query::soft_delete(&conn, "articles", &id).unwrap();
-    query::fts::fts_delete(&conn, "articles", &id).unwrap();
 
-    // Verify FTS no longer finds it
     let results = fts_match_ids(&conn, "articles", "Unicorn");
-    assert!(
-        results.is_empty(),
-        "FTS should not find soft-deleted document"
+    assert_eq!(
+        results,
+        vec![id.clone()],
+        "FTS entry survives a soft delete"
     );
+
+    let query = FindQuery::builder().search(Some("Unicorn".into())).build();
+    let docs = ops::find_documents(&pool, "articles", &def, &query, None).unwrap();
+    assert!(
+        docs.is_empty(),
+        "the normal view never returns a trashed row"
+    );
+
+    let query = FindQuery::builder()
+        .search(Some("Unicorn".into()))
+        .include_deleted(true)
+        .build();
+    let docs = ops::find_documents(&pool, "articles", &def, &query, None).unwrap();
+    assert_eq!(docs.len(), 1, "the trash view can search the trashed row");
+    assert_eq!(docs[0].id.to_string(), id);
 }
 
-// ── Test l: restore re-adds to FTS ───────────────────────────────────────
+// ── Test l: hard delete drops the FTS entry ──────────────────────────────
 
 #[test]
-fn restore_re_adds_to_fts() {
+fn hard_delete_drops_the_fts_entry() {
     let def = make_soft_delete_def();
     let (_tmp, pool, _reg) = create_pool_and_migrate(vec![def.clone()]);
 
@@ -451,32 +460,18 @@ fn restore_re_adds_to_fts() {
 
     let conn = pool.get().unwrap();
     query::fts::sync_fts_table(&conn, "articles", &def, &LocaleConfig::default()).unwrap();
+    query::fts::fts_upsert(&conn, "articles", &id, &def, &LocaleConfig::default()).unwrap();
+    assert_eq!(
+        fts_match_ids(&conn, "articles", "Phoenix"),
+        vec![id.clone()]
+    );
 
-    // Index the document
-    let doc = query::find_by_id_unfiltered(&conn, "articles", &def, &id, None)
-        .unwrap()
-        .unwrap();
-    query::fts::fts_upsert(&conn, "articles", &doc, Some(&def)).unwrap();
-
-    // Soft-delete + FTS cleanup
-    query::soft_delete(&conn, "articles", &id).unwrap();
+    // Purge (hard delete) + FTS cleanup, as the purge paths do.
+    query::delete(&conn, "articles", &id).unwrap();
     query::fts::fts_delete(&conn, "articles", &id).unwrap();
 
-    // Verify gone from FTS
     let results = fts_match_ids(&conn, "articles", "Phoenix");
-    assert!(results.is_empty(), "should not be in FTS after soft-delete");
-
-    // Restore + re-index FTS (mirrors what undelete_document does)
-    query::restore(&conn, "articles", &id).unwrap();
-    let doc = query::find_by_id_unfiltered(&conn, "articles", &def, &id, None)
-        .unwrap()
-        .unwrap();
-    query::fts::fts_upsert(&conn, "articles", &doc, Some(&def)).unwrap();
-
-    // Verify back in FTS
-    let results = fts_match_ids(&conn, "articles", "Phoenix");
-    assert_eq!(results.len(), 1, "should be back in FTS after restore");
-    assert_eq!(results[0], id);
+    assert!(results.is_empty(), "gone from FTS after a hard delete");
 }
 
 // ── Test: count with include_deleted returns all docs ────────────────────

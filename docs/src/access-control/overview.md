@@ -144,6 +144,12 @@ Access functions run with transaction context — they can call `crap.collection
 >     local count = crap.collections.items.count({ override_access = true })
 >     return count < 100  -- allow if under limit
 > end
+>
+> A CRUD call made from an access function runs with **no identity**: the
+> nested call's own access rules see `ctx.user == nil`, and it carries no
+> event or cache infrastructure. Treat it as a raw lookup (hence
+> `override_access = true`), not as an action performed by the user being
+> checked.
 > ```
 
 ## Programmatic Access Checks

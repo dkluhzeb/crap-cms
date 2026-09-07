@@ -51,7 +51,7 @@ Every field type accepts these properties:
 | `required_locales` | `"all"` \| string[] | `nil` | For a `required` + `localized` field: which locales must be filled before a non-draft save (default: only the default locale). See [Required across locales](../locale/overview.md#required-across-locales). |
 | `validate` | string or table | `nil` | Lua function ref for custom validation — a `"module.fn"` string or `{ ref, options }` table (see below). |
 | `default_value` | any | `nil` | Default value applied on create if no value provided. |
-| `hidden` | boolean | `false` | Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use `admin.hidden` instead. |
+| `hidden` | boolean | `false` | Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Never filterable, sortable, or searchable (see [field-level access](../access-control/field-level.md#filtering-sorting-and-search)). Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use `admin.hidden` instead. |
 | `admin` | table | `{}` | Admin UI display options. |
 | `hooks` | table | `{}` | Per-field lifecycle hooks. |
 | `access` | table | `{}` | Per-field access control. |

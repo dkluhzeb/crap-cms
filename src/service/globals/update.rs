@@ -11,6 +11,7 @@ use crate::{
         AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
         helpers as svc_helpers, run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
+        write::reject_locale_locked_fields,
     },
 };
 
@@ -72,6 +73,10 @@ pub fn update_global_in_conn(
 
     // Canonicalize incoming data to nested groups up front (idempotent).
     input.data = nest_group_fields(&input.data, &def.fields);
+
+    // Same shared-field guard as collections: a non-default-locale write that
+    // carries a locale-locked field is rejected, never silently skipped.
+    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
 
     check_global_update_access(
         ctx,
@@ -150,6 +155,7 @@ pub(crate) fn check_global_update_access(
         &AccessCheckInput::builder("update", ctx.slug)
             .access(def.access.update.as_ref())
             .user(ctx.user)
+            .id(Some("default"))
             .data(data)
             .locale(locale)
             .ui_locale(ui_locale)
@@ -245,6 +251,14 @@ fn persist_global_published_update(
         .locale_ctx
         .map(|lctx| lctx.config.clone())
         .unwrap_or_default();
+
+    // Final post-hook data (see the collection persist path).
+    reject_locale_locked_fields(&def.fields, &final_ctx.data, input.locale_ctx)?;
+
+    // Lock the row BEFORE the (unlocked) outgoing-ref snapshot — parity with
+    // `persist_update`: on Postgres two concurrent global updates could both
+    // read the stale `old_refs` and double-apply a ref-count delta.
+    conn.lock_row(gtable, "default")?;
 
     let old_refs = query::ref_count::snapshot_outgoing_refs(
         conn,

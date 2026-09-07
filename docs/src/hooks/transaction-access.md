@@ -88,8 +88,12 @@ Semantics:
 
 Valid anywhere a write transaction is active: write lifecycle hooks
 (`before_validate`, `before_change`, `after_change`, `before_delete`,
-`after_delete`) and inside `crap.transaction(fn)` in a job. Registering
-without an active transaction raises a descriptive error.
+`after_delete`), inside `crap.transaction(fn)` in a job, and inside the
+per-op transaction a bare CRUD call opens in a job, route, or effect — a
+hook fired by `crap.collections.posts.create(...)` from a job handler
+registers against that call's own transaction and its effects run after
+that call commits. Registering without an active transaction (a job body
+outside any CRUD call, `init.lua`) raises a descriptive error.
 
 ## Calling CRUD Outside Hooks
 

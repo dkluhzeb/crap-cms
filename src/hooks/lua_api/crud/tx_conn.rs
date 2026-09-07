@@ -6,9 +6,10 @@
 //!   op uses that shared transaction.
 //! - **Pool-mode** (job handlers): a `PoolContext` is set instead, and
 //!   each CRUD op opens its own short-lived `IMMEDIATE` transaction via
-//!   the pool. Avoids the `SQLITE_BUSY_SNAPSHOT` hazard that fires when
-//!   a long-running handler's read snapshot collides with concurrent
-//!   writers.
+//!   the pool — with the full transaction scope `crap.transaction(fn)`
+//!   gets (`run_scoped_tx`). Avoids the `SQLITE_BUSY_SNAPSHOT` hazard that
+//!   fires when a long-running handler's read snapshot collides with
+//!   concurrent writers.
 //!
 //! Callers should use [`with_lua_db`] which handles both modes uniformly;
 //! [`get_tx_conn`] is the conn-mode-only path retained for hook-internal
@@ -16,11 +17,12 @@
 
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
-use tracing::warn;
-
 use crate::{
     db::DbConnection,
-    hooks::lifecycle::{LuaCrudInfra, PoolContext, PoolMode, TxContext},
+    hooks::{
+        lifecycle::{AfterReadScope, PoolContext, PoolMode, TxContext},
+        lua_api::transaction::run_scoped_tx,
+    },
 };
 
 /// Get the active transaction connection from Lua `app_data`.
@@ -77,10 +79,11 @@ impl Drop for TxSlot<'_> {
 /// - **`TxContext`** already present → conn-mode pass-through. Just
 ///   calls `work` — the outer caller (hook runner, `crap.transaction`)
 ///   already installed the shared tx.
-/// - **`PoolContext`** present → pool-mode. Pulls a fresh connection,
-///   opens an `IMMEDIATE` transaction, **installs the tx as
-///   `TxContext`** for the duration of `work`, runs `work`, removes
-///   the `TxContext`, and commits on `Ok` (or rolls back on `Err`).
+/// - **`PoolContext`** present → pool-mode. Opens a per-op `IMMEDIATE`
+///   transaction with the full transaction scope (`run_scoped_tx`: the
+///   same `crap.tx` queue, event gating, file cleanup, and cache
+///   invalidation `crap.transaction(fn)` gets), runs `work` inside it, and
+///   commits on `Ok` (or rolls back on `Err`).
 /// - Neither set → returns a clear error.
 ///
 /// `work` receives the same connection that's now visible to nested
@@ -95,8 +98,9 @@ impl Drop for TxSlot<'_> {
 ///
 /// # Errors
 ///
-/// Returns a Lua runtime error if neither context is set, or if pool
-/// acquisition / `BEGIN IMMEDIATE` / `COMMIT` fail.
+/// Returns a Lua runtime error if neither context is set, if the call
+/// comes from an `after_read` hook, or if pool acquisition / `BEGIN
+/// IMMEDIATE` / `COMMIT` fail.
 pub(crate) fn with_lua_db<R>(
     lua: &Lua,
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
@@ -106,6 +110,7 @@ pub(crate) fn with_lua_db<R>(
     // of a read, and a `before_read` hook firing inside that read would
     // otherwise reach the pass-through and write on the read connection.
     ensure_writable(lua)?;
+    refuse_in_after_read(lua)?;
 
     // Conn-mode: a shared outer tx is already open. Hand the existing
     // connection to `work` — `get_tx_conn(lua)` inside `work` sees the
@@ -115,60 +120,39 @@ pub(crate) fn with_lua_db<R>(
         return work(conn);
     }
 
-    // Pool-mode: open a short-lived IMMEDIATE tx for this single op
-    // and install it as `TxContext` so existing `get_tx_conn` users
-    // inside `work` continue to work transparently.
-    let pool = lua
-        .app_data_ref::<PoolContext>()
-        .ok_or_else(no_db_context)?
-        .pool
-        .clone();
-
-    // Pool-mode always opens an IMMEDIATE tx (even for `find`/`count`), so
-    // it is write-capable and must draw from the write pool.
-    let mut conn = pool
-        .write()
-        .map_err(|e| RuntimeError(format!("pool.write: {e}")))?;
-    let tx = conn
-        .transaction_immediate()
-        .map_err(|e| RuntimeError(format!("begin transaction: {e}")))?;
-
-    // SAFETY: TxContext stores a fat-pointer to `&tx`. `tx` lives on this
-    // function's stack and outlives the `work(&tx)` call below. `TxSlot`
-    // removes the pointer when the inner scope ends — including on unwind,
-    // and always before `tx` is committed or dropped.
-    lua.set_app_data(TxContext::new(&tx));
-    let result = {
-        let _slot = TxSlot(lua);
-
-        work(&tx)
-    };
-
-    match result {
-        Ok(value) => {
-            tx.commit()
-                .map_err(|e| RuntimeError(format!("commit transaction: {e}")))?;
-
-            // `with_lua_db` is the write path (reads use `with_lua_db_read`), and
-            // this branch owns the single op's commit. Invalidate the populate
-            // cache AFTER commit: the conn-mode write's own `clear_cache` fired
-            // pre-commit and a concurrent read could otherwise repopulate a stale
-            // entry before the commit lands. Clearing here closes that window.
-            if let Some(cache) = lua
-                .app_data_ref::<LuaCrudInfra>()
-                .and_then(|i| i.cache.clone())
-                && let Err(e) = cache.clear()
-            {
-                warn!("Cache clear after Lua write failed: {e:#}");
-            }
-
-            Ok(value)
-        }
-        Err(e) => {
-            // `tx` drops here → automatic rollback.
-            Err(e)
-        }
+    if lua.app_data_ref::<PoolContext>().is_none() {
+        return Err(no_db_context());
     }
+
+    // Pool-mode: a per-op transaction with the full scope, so a hook fired
+    // by this single op sees the same `crap.tx` / event / file-cleanup
+    // semantics as under `crap.transaction(fn)` or the service envelope.
+    run_scoped_tx(lua, "crap.collections", work)
+}
+
+/// Refuse CRUD from inside an `after_read` hook.
+///
+/// `after_read` runs after the read's data is final and fails open (an error
+/// is logged, the read succeeds). It has no transaction of its own on the
+/// Rust-driven surfaces, and on a Lua-driven read it would write on the read's
+/// transaction — which then commits even when the hook itself errored. The
+/// contract is therefore "no CRUD in `after_read`" on every surface.
+///
+/// # Errors
+///
+/// Returns a Lua runtime error naming the alternative when an `after_read`
+/// scope is active.
+fn refuse_in_after_read(lua: &Lua) -> LuaResult<()> {
+    if lua.app_data_ref::<AfterReadScope>().is_none() {
+        return Ok(());
+    }
+
+    Err(RuntimeError(
+        "crap.* CRUD is not available inside an after_read hook — it runs after the \
+         read is final and fails open, so a write from it could half-apply. Do the \
+         lookup in before_read (hand it over via ctx.context) or in the caller instead."
+            .into(),
+    ))
 }
 
 /// Refuse a write when the active context is read-only.
@@ -231,6 +215,8 @@ pub(crate) fn with_lua_db_read<R>(
     lua: &Lua,
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
 ) -> LuaResult<R> {
+    refuse_in_after_read(lua)?;
+
     if lua.app_data_ref::<TxContext>().is_some() {
         let conn = get_tx_conn(lua)?;
         return work(conn);

@@ -419,6 +419,7 @@ fn validate_leaf_sub_field(
     //     here too, exactly as at the top level. The save path descends into
     //     nested composites, so skipping this would let an attacker reference a
     //     collection the field author never allowed.
+    checks::check_relationship_shape(sf, qualified, value, errors);
     checks::check_polymorphic_allowlist(sf, qualified, value, errors);
 
     // 8c. Row bounds (min_rows / max_rows) for a nested Array/Blocks sub-field.

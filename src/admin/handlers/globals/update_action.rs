@@ -23,7 +23,7 @@ use crate::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
                 parse_request_locale, paths, redirect_response, split_sidebar_fields,
-                toast_only_error, translate_validation_errors,
+                strip_locale_locked_for_publish, toast_only_error, translate_validation_errors,
             },
         },
     },
@@ -70,7 +70,17 @@ fn update_global_document_blocking(
 
         Ok((doc, ReqContext::new()))
     } else {
-        let args = UpdateGlobalArgs::builder(params.form.into())
+        // The form submits shared (locale-locked) fields read-only under a
+        // non-default locale; strip them exactly as the collection publish
+        // path does, so the service's shared-field guard doesn't reject the
+        // translation save.
+        let data = strip_locale_locked_for_publish(
+            params.form.into(),
+            &params.def.fields,
+            params.locale_ctx.as_ref(),
+            params.draft,
+        );
+        let args = UpdateGlobalArgs::builder(data)
             .locale_ctx(params.locale_ctx)
             .draft(params.draft)
             .build();

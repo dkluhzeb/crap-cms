@@ -368,14 +368,31 @@ pub fn restore_global_version(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
-    run_pool_write(
-        ctx,
-        None,
-        |inner| restore_global_version_core(inner, version_id, locale_config),
-        |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
-        },
-    )
+    // Capability gate at the one service chokepoint, as for collections.
+    if !ctx.has_versions() {
+        return Err(ServiceError::HookError(format!(
+            "'{}' does not have versioning enabled",
+            ctx.slug
+        )));
+    }
+
+    if ctx.pool.is_some() {
+        return run_pool_write(
+            ctx,
+            None,
+            |inner| restore_global_version_core(inner, version_id, locale_config),
+            |ctx, doc| {
+                ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
+            },
+        );
+    }
+
+    let doc = restore_global_version_core(ctx, version_id, locale_config)?;
+
+    ctx.clear_cache();
+    ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
+
+    Ok(doc)
 }
 
 /// Core logic for global version restore on an existing connection/transaction.
@@ -393,6 +410,7 @@ pub(crate) fn restore_global_version_core(
         &AccessCheckInput::builder("restore", ctx.slug)
             .access(def.access.update.as_ref())
             .user(ctx.user)
+            .id(Some("default"))
             .build(),
     )?;
 

@@ -11,7 +11,7 @@ use crate::{
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Core undelete logic on an existing connection: access check + restore row + FTS re-sync.
+/// Core undelete logic on an existing connection: access check + restore row.
 ///
 /// Does NOT manage transactions — caller must open/commit.
 fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
@@ -54,13 +54,12 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
         ));
     }
 
-    if conn.supports_fts()
-        && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, ctx.slug, def, id, None)
-    {
-        query::fts::fts_upsert(conn, ctx.slug, &doc, Some(def))?;
-    }
-
-    let mut doc = query::find_by_id(conn, ctx.slug, def, id, None)?
+    // A soft-deleted row keeps its FTS entry (the trash view is searchable),
+    // so nothing to re-index. Re-read under the default locale context: a
+    // localized collection's per-locale columns (`title__en`) only resolve with
+    // one; the bare `title` column does not exist there.
+    let locale_ctx = ctx.default_locale_ctx();
+    let mut doc = query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())?
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
 
     write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);

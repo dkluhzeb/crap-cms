@@ -453,7 +453,7 @@ All filter operators (equals, contains, like, in, greater_than, etc.) work with 
 
 ## Full-Text Search
 
-Use the `search` parameter for fast full-text search — powered by SQLite FTS5 or Postgres `tsvector`, depending on the backend. This searches across all text-like fields (text, textarea, richtext, email, code) — including text-like fields inside groups, indexed under their `group__field` column name — or the fields specified in `list_searchable_fields` in the collection's admin config (which may also reference group sub-fields by their `group__field` name).
+Use the `search` parameter for fast full-text search — powered by SQLite FTS5 or Postgres `tsvector`, depending on the backend. This searches across all text-like fields (text, textarea, richtext, email, code) — including text-like fields inside groups, indexed under their `group__field` column name — or the fields specified in `list_searchable_fields` in the collection's admin config (which may also reference group sub-fields by their `group__field` name). Hidden fields and fields with an `access.read` rule are left out of the default set (the index is shared by every reader); a read-gated field can be listed in `list_searchable_fields` explicitly, a hidden one cannot. Both backends index exactly that set, and the per-document index is kept in sync on every write path — including localized collections, undelete, version restore, and import. Soft-deleted documents stay indexed, so `search` works in the trash view too (the normal view never returns them).
 
 **Lua:**
 
@@ -488,6 +488,17 @@ grpcurl -plaintext -d '{
 The FTS index is automatically created and rebuilt on server startup for every collection with text fields.
 
 ## Valid Filter Fields
+
+A filter or sort on a field the caller cannot read is rejected with an
+access error rather than answered — `hidden` fields for everyone, fields
+with an `access.read` rule for callers the rule denies. See
+[field-level access](../access-control/field-level.md#filtering-sorting-and-search).
+
+A filter value that does not fit the field's type — a non-numeric string
+on a Number field, a non-boolean on a Checkbox — is a validation error
+naming the field (400 on every surface), never a silent text comparison.
+`like` / `contains` on a Number or Checkbox field match the value's text
+form on both backends.
 
 You can filter on any column in the collection table:
 

@@ -719,6 +719,8 @@ crap-cms export [-c <COLLECTION>] [-o <FILE>]
 
 Export includes `crap_version` and `exported_at` metadata in the JSON envelope. On import, a version mismatch produces a warning (but does not abort).
 
+Export covers **collections only** — globals are not part of the envelope. For a complete copy of a deployment (globals, versions, uploads) use `backup` / `restore`.
+
 ```bash
 crap-cms export
 crap-cms export -c posts -o posts.json

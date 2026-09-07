@@ -143,7 +143,7 @@ fn recompute_table(
             continue;
         };
 
-        ref_count::after_create(conn, table, id, fields, locale_config)?;
+        ref_count::backfill_after_create(conn, table, id, fields, locale_config)?;
     }
 
     Ok(())
@@ -234,6 +234,41 @@ mod tests {
 
         assert_eq!(get_ref_count(&conn, "media", "m1"), 2);
         assert_eq!(get_ref_count(&conn, "media", "m2"), 1);
+    }
+
+    /// A stored reference whose target no longer exists (a crash between a
+    /// hard delete and its ref-count update, or direct SQL) must not abort
+    /// the backfill — and with it startup. It is skipped; intact references
+    /// still count.
+    #[test]
+    fn backfill_skips_a_dangling_reference() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p1', 'm1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p2', 'ghost')", &[])
+            .unwrap();
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
+            &[],
+        )
+        .unwrap();
+
+        backfill_if_needed(&conn, &registry, &no_locale())
+            .expect("a dangling reference is skipped, not fatal");
+
+        assert_eq!(get_ref_count(&conn, "media", "m1"), 1);
     }
 
     // ── Has-many backfill ────────────────────────────────────────────────

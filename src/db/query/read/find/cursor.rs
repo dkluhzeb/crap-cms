@@ -8,9 +8,46 @@
 
 use anyhow::{Result, bail};
 
-use crate::db::query::cursor::{CursorData, SortDirection};
+use crate::core::{
+    FieldType,
+    validate::{FieldError, ValidationError},
+};
+use crate::db::query::cursor::{CursorData, SortDirection, SortValue};
 use crate::db::query::helpers::append_sql_condition;
 use crate::db::{DbConnection, DbValue};
+
+/// Reject a cursor whose sort value cannot bind to the sort column's type.
+///
+/// Cursors are unsigned client tokens: a forged (or stale, after a field
+/// type change) text `sort_val` on a Number/Checkbox column is a typed 400
+/// here, not a backend type error at execution time (an opaque 500 on
+/// Postgres; `SQLite` would silently compare by affinity).
+///
+/// # Errors
+///
+/// Returns a [`ValidationError`] on a type mismatch.
+pub(super) fn check_cursor_sort_value(
+    cursor: &CursorData,
+    sort_col: &str,
+    field_type: Option<&FieldType>,
+) -> Result<()> {
+    let mismatch = matches!(
+        (field_type, &cursor.sort_val),
+        (
+            Some(FieldType::Number | FieldType::Checkbox),
+            SortValue::Text(_)
+        )
+    );
+    if !mismatch {
+        return Ok(());
+    }
+
+    Err(ValidationError::new(vec![FieldError::new(
+        "cursor",
+        format!("cursor sort value for '{sort_col}' does not match the column type"),
+    )])
+    .into())
+}
 
 /// Resolved sort configuration for cursor pagination.
 pub(super) struct SortInfo<'a> {
@@ -137,6 +174,35 @@ mod tests {
     use crate::db::query::read::find::test_helpers::*;
     use crate::db::query::{SortValue, cursor::build_cursors, write::create};
     use crate::db::{DbConnection, DbValue, Filter, FilterClause, FilterOp, FindQuery, pool};
+
+    /// A text sort value on a numeric/boolean sort column is rejected up
+    /// front as a validation error instead of reaching the backend.
+    #[test]
+    fn cursor_sort_value_must_match_the_column_type() {
+        let cursor = CursorData {
+            sort_col: "price".to_string(),
+            sort_dir: SortDirection::Asc,
+            sort_val: SortValue::Text("abc".to_string()),
+            id: "x".to_string(),
+            status_val: None,
+        };
+
+        let err =
+            super::check_cursor_sort_value(&cursor, "price", Some(&FieldType::Number)).unwrap_err();
+        assert!(
+            err.downcast_ref::<crate::core::validate::ValidationError>()
+                .is_some(),
+            "typed validation error, got: {err:#}"
+        );
+        super::check_cursor_sort_value(&cursor, "price", Some(&FieldType::Checkbox)).unwrap_err();
+
+        super::check_cursor_sort_value(&cursor, "title", Some(&FieldType::Text)).unwrap();
+        let numeric = CursorData {
+            sort_val: SortValue::Real(1.5),
+            ..cursor
+        };
+        super::check_cursor_sort_value(&numeric, "price", Some(&FieldType::Number)).unwrap();
+    }
 
     #[test]
     fn cursor_and_offset_mutual_exclusion() {

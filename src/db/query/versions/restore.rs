@@ -68,6 +68,8 @@ pub fn restore_version(
 
     let locale_ctx = default_locale_ctx(locale_config);
 
+    // Row lock before the unlocked ref snapshot (see `persist_update`).
+    conn.lock_row(slug, parent_id)?;
     let old_refs =
         ref_count::snapshot_outgoing_refs(conn, slug, parent_id, &def.fields, locale_config)?;
 
@@ -79,7 +81,7 @@ pub fn restore_version(
     ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
 
     // Re-sync the FTS index to the restored content.
-    crate::db::query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    crate::db::query::fts::fts_upsert(conn, slug, parent_id, def, locale_config)?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, slug, parent_id, status)?;
@@ -113,6 +115,7 @@ pub fn restore_global_version(
 
     let locale_ctx = default_locale_ctx(locale_config);
 
+    conn.lock_row(&gtable, "default")?;
     let old_refs =
         ref_count::snapshot_outgoing_refs(conn, &gtable, "default", &def.fields, locale_config)?;
 

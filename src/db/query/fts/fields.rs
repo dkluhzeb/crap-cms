@@ -6,8 +6,9 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
+    core::{CollectionDefinition, FieldDefinition, FieldDenial, FieldType, Registry},
     db::query::helpers::{locale_column, prefixed_name, walk_leaf_fields},
+    hooks::lifecycle::access::collect_denials_flat,
 };
 
 /// Field types that live in separate tables and have no column on the parent table.
@@ -46,18 +47,45 @@ fn is_text_like(field_type: &FieldType) -> bool {
 pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     if !def.admin.list_searchable_fields.is_empty() {
         // Only keep fields that actually exist as columns on the parent table.
-        // Exclude: container types (stored in separate tables) and names that
-        // don't match any field definition at all.
+        // Exclude: container types (stored in separate tables), names that
+        // don't match any field definition at all, and API-hidden fields (a
+        // search hit would leak a value the read strip removes).
+        let hidden = column_prefixes(&def.fields, &|f| f.hidden);
+
         return def
             .admin
             .list_searchable_fields
             .iter()
             .filter(|name| is_fts_eligible_field(name, &def.fields))
+            .filter(|name| !covered_by(&hidden, name))
             .cloned()
             .collect();
     }
 
     collect_fts_defaults(&def.fields)
+}
+
+/// Flat column names (and `group__` prefixes) whose field — or an ancestor —
+/// matches `is_denied`. Shares the field-access denial walker so "beneath a
+/// denied parent" means the same thing here as in the read strip.
+fn column_prefixes(
+    fields: &[FieldDefinition],
+    is_denied: &impl Fn(&FieldDefinition) -> bool,
+) -> Vec<String> {
+    let mut denials = Vec::new();
+    collect_denials_flat(fields, is_denied, "", &mut denials);
+
+    denials.iter().map(FieldDenial::display_path).collect()
+}
+
+/// Whether `name` is one of `prefixes` or a `group__child` beneath one.
+fn covered_by(prefixes: &[String], name: &str) -> bool {
+    prefixes.iter().any(|p| {
+        name == p
+            || name
+                .strip_prefix(p.as_str())
+                .is_some_and(|rest| rest.starts_with("__"))
+    })
 }
 
 /// Check if a field name refers to an FTS-eligible column. Resolves the same
@@ -81,11 +109,19 @@ fn is_fts_eligible_field(name: &str, fields: &[FieldDefinition]) -> bool {
 /// `group__field` columns), and layout-wrapper-promoted children. Array/Blocks
 /// sub-fields are excluded (they live in join tables, visited here as opaque
 /// leaf columns and filtered out by the text-like check).
+///
+/// API-hidden fields and fields with an `access.read` rule are never indexed
+/// by default: the index is shared by every reader, so a search hit on such a
+/// field would leak what the read strip removes. An operator can still list a
+/// read-gated field in `list_searchable_fields` explicitly.
 fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
+    let guarded = column_prefixes(fields, &|f| f.hidden || f.access.read.is_some());
+
     let mut result = Vec::new();
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if is_text_like(&field.field_type) {
-            result.push(prefixed_name(prefix, &field.name));
+        let name = prefixed_name(prefix, &field.name);
+        if is_text_like(&field.field_type) && !covered_by(&guarded, &name) {
+            result.push(name);
         }
         Ok(())
     });
@@ -222,6 +258,51 @@ pub(super) fn build_node_searchable_map<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hidden and read-gated fields never enter the default index; a hidden
+    /// field is dropped even when listed explicitly, a read-gated one is kept
+    /// when the operator lists it.
+    #[test]
+    fn default_fts_fields_skip_hidden_and_read_gated() {
+        let mut def = CollectionDefinition::new("vault");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("secret", FieldType::Text)
+                .hidden(true)
+                .build(),
+            FieldDefinition::builder("notes", FieldType::Textarea)
+                .access(crate::core::field::FieldAccess {
+                    read: Some(crate::core::HookRef::new("access.admin_only")),
+                    ..Default::default()
+                })
+                .build(),
+        ];
+
+        assert_eq!(get_fts_fields(&def), vec!["title".to_string()]);
+
+        def.admin.list_searchable_fields = vec!["title".into(), "secret".into(), "notes".into()];
+        assert_eq!(
+            get_fts_fields(&def),
+            vec!["title".to_string(), "notes".to_string()]
+        );
+    }
+
+    /// A hidden group hides every `group__child` column beneath it.
+    #[test]
+    fn default_fts_fields_skip_children_of_a_hidden_group() {
+        let mut def = CollectionDefinition::new("vault");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("internal", FieldType::Group)
+                .hidden(true)
+                .fields(vec![
+                    FieldDefinition::builder("memo", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        assert_eq!(get_fts_fields(&def), vec!["title".to_string()]);
+    }
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::migrate::collection::test_helpers::{locale_en_de, localized_field, text_field};

@@ -15,7 +15,7 @@ use crate::core::{FieldChildren, FieldDefinition, FieldType, field_children, fin
 ///
 /// Returns `None` when the column cannot be mapped to a known field —
 /// callers fall back to `DbValue::Text` binding.
-pub(super) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
+pub(crate) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
     // Fast path: a top-level scalar/layout leaf named exactly `col`.
     if let Some(f) = find_field(col, fields)
         && !matches!(
