@@ -96,7 +96,7 @@ fn crypto_random_bytes(
     returns_doc = "Base64-encoded ciphertext."
 )]
 fn crypto_encrypt(state: &CryptoState, _: &Lua, plaintext: String) -> LuaResult<String> {
-    encrypt(&state.secret, &plaintext)
+    encrypt(state.key_secret()?, &plaintext)
 }
 
 /// Decrypt ciphertext produced by `encrypt`.
@@ -109,7 +109,7 @@ fn crypto_decrypt(
     _: &Lua,
     #[lua(doc = "Base64-encoded ciphertext from `encrypt`.")] ciphertext: String,
 ) -> LuaResult<String> {
-    decrypt(&state.secret, &ciphertext)
+    decrypt(state.key_secret()?, &ciphertext)
 }
 
 lua_table! {
@@ -136,6 +136,25 @@ lua_table! {
 
 /// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, `random_bytes`.
 /// Parent `crap` table must already be in globals.
+impl CryptoState {
+    /// The key material, refused when empty: a key derived from `""` is the
+    /// public SHA-256 of the empty string, so "encrypting" with it would
+    /// only look like encryption. The secret is resolved at config load
+    /// (generated + persisted when unset), so this only fires for a VM built
+    /// from an unresolved config — fail closed rather than leak.
+    fn key_secret(&self) -> LuaResult<&str> {
+        if self.secret.is_empty() {
+            return Err(RuntimeError(
+                "crap.crypto.encrypt/decrypt require a configured [auth] secret (or the \
+                 generated data/.jwt_secret) — the key is derived from it"
+                    .into(),
+            ));
+        }
+
+        Ok(&self.secret)
+    }
+}
+
 pub(super) fn register_crypto(lua: &Lua, auth_secret: &str) -> Result<()> {
     register_crap_crypto_stateless(lua, ())?;
     register_crap_crypto_stateful(
@@ -281,6 +300,21 @@ pub(super) fn hex_encode(bytes: &[u8]) -> String {
 )]
 mod tests {
     use super::*;
+
+    /// An empty secret must not silently key AES with SHA-256("").
+    #[test]
+    fn empty_secret_refuses_to_encrypt_or_decrypt() {
+        let state = CryptoState {
+            secret: String::new(),
+        };
+        let err = state.key_secret().unwrap_err().to_string();
+        assert!(err.contains("[auth] secret"), "{err}");
+
+        let keyed = CryptoState {
+            secret: "k".repeat(32),
+        };
+        assert!(keyed.key_secret().is_ok());
+    }
 
     fn setup_lua(secret: &str) -> Lua {
         let lua = Lua::new();

@@ -17,10 +17,14 @@ use crate::core::collection::{Auth, Surface};
 use crate::{
     api::{
         content,
-        handlers::{ContentService, proto::document_to_proto},
+        handlers::{
+            ContentService, auth::user_response::prepare_user_document,
+            content_service::pool_error_status, proto::document_to_proto,
+        },
     },
     core::{
-        CollectionDefinition, SharedPasswordProvider, Slug, auth::ClaimsBuilder, normalize_email,
+        CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder,
+        normalize_email,
     },
     service::{
         AppInfra,
@@ -60,6 +64,38 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<LoginOutcome, Status> {
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
+    /// Hydrate + strip a freshly authenticated user document for the wire.
+    ///
+    /// Runs on a blocking thread: the strip evaluates field `access.read`
+    /// hooks against a pooled connection.
+    pub(super) async fn prepare_login_user(
+        &self,
+        collection: &str,
+        user: Document,
+    ) -> Result<Document, Status> {
+        let infra = Arc::clone(&self.infra);
+        let collection = collection.to_string();
+
+        task::spawn_blocking(move || -> Result<Document, Status> {
+            let Some(def) = infra.registry.get_collection(&collection).cloned() else {
+                return Err(Status::unauthenticated("Auth collection no longer exists"));
+            };
+            let conn = infra
+                .pool
+                .get()
+                .inspect_err(|e| error!("Login response pool error: {e}"))
+                .map_err(|e| pool_error_status(e, infra.pool.kind()))?;
+
+            let mut user = user;
+            prepare_user_document(&infra, &def, &collection, &mut user, &conn);
+
+            Ok(user)
+        })
+        .await
+        .inspect_err(|e| error!("Login response task error: {e}"))
+        .map_err(|_| Status::internal("Internal error"))?
+    }
+
     /// Authenticate with email/password and return a JWT token.
     pub(in crate::api::handlers) async fn login_impl(
         &self,
@@ -147,7 +183,11 @@ impl ContentService {
             }
         };
 
-        let user = verified.user;
+        // The credential lookup is a raw row read; give the response document
+        // the same shape and stripping every other `Document` on the wire has.
+        let user = self
+            .prepare_login_user(&req.collection, verified.user)
+            .await?;
         let user_email = user
             .fields
             .get("email")

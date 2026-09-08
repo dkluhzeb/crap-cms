@@ -29,11 +29,34 @@ fn collections_define_init(
 
     let def = parse_collection_definition(lua, &slug, &config)
         .map_err(|e| RuntimeError(format!("Failed to parse collection '{slug}': {e}")))?;
-    state
-        .write()
-        .map_err(registry_lock_poisoned)?
-        .register_collection(def);
+    let mut registry = state.write().map_err(registry_lock_poisoned)?;
+    reject_cross_kind_slug(&registry, &slug, "collection")?;
+    registry.register_collection(def);
     Ok(())
+}
+
+/// A collection and a global must not share a slug: the MCP surface keys
+/// exposure, gating, and description by slug alone, so a denied global that
+/// shares a collection's slug is still executable through the global tools.
+///
+/// Re-defining the SAME kind is deliberately allowed — that is how a plugin
+/// extends a collection (read the definition, append fields, define again).
+pub(super) fn reject_cross_kind_slug(registry: &Registry, slug: &str, kind: &str) -> LuaResult<()> {
+    let taken = match kind {
+        "collection" => registry.get_global(slug).is_some().then_some("global"),
+        _ => registry
+            .get_collection(slug)
+            .is_some()
+            .then_some("collection"),
+    };
+    let Some(taken) = taken else {
+        return Ok(());
+    };
+
+    Err(RuntimeError(format!(
+        "Cannot define {kind} '{slug}': a {taken} with that slug is already defined — a slug \
+         names either a collection or a global, never both"
+    )))
 }
 
 /// Pool-VM no-op variant — same `InitPhase` guard, but never writes

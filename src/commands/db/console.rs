@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::{
     cli,
-    config::CrapConfig,
+    config::{CrapConfig, DbUrl},
     db::{DbConnection, pool},
 };
 
@@ -68,8 +68,14 @@ fn console_command(kind: &str, db_path: &Path, pg_url: Option<&str>) -> Result<p
                 .filter(|u| !u.is_empty())
                 .ok_or_else(|| anyhow!("database.url must be set to open a PostgreSQL console"))?;
 
+            // The password goes through the environment, not the argument
+            // list: argv is world-readable in /proc for the session's lifetime.
+            let (url, password) = DbUrl::from(url).without_password();
             let mut cmd = process::Command::new("psql");
             cmd.arg(url);
+            if let Some(password) = password {
+                cmd.env("PGPASSWORD", password);
+            }
 
             Ok(cmd)
         }

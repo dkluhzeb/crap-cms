@@ -1556,3 +1556,80 @@ fn service_update_draft_uses_locale_context() {
         );
     }
 }
+
+// ── Audit-trail collections (versions without drafts) ─────────────────────
+
+/// A `versions = { drafts = false }` collection has no `_status` column, so
+/// restore must not try to write one — it would fail with a raw backend error
+/// after the before-hooks already ran.
+#[tokio::test]
+async fn grpc_restore_works_without_drafts() {
+    let ts = setup_service(vec![make_versioned_no_drafts_def()]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "docs".to_string(),
+            data: Some(make_struct(&[("title", "First")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "docs".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("title", "Second")])),
+            locale: None,
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .unwrap();
+
+    let versions = ts
+        .service
+        .list_versions(Request::new(content::ListVersionsRequest {
+            collection: "docs".to_string(),
+            id: doc.id.clone(),
+            limit: None,
+            offset: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .versions;
+    let first = versions.last().expect("the create version");
+
+    // Every version row carries its creation timestamp.
+    assert!(
+        !first.created_at.is_empty(),
+        "version rows must carry created_at, got {:?}",
+        first.created_at
+    );
+
+    let restored = ts
+        .service
+        .restore_version(Request::new(content::RestoreVersionRequest {
+            collection: "docs".to_string(),
+            document_id: doc.id.clone(),
+            version_id: first.id.clone(),
+        }))
+        .await
+        .expect("restore must work on a drafts=false collection")
+        .into_inner()
+        .document
+        .unwrap();
+
+    assert_eq!(
+        get_proto_field(&restored, "title").as_deref(),
+        Some("First")
+    );
+}

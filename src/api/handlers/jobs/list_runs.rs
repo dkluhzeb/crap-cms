@@ -10,7 +10,7 @@ use crate::{
     api::handlers::proto::pagination_result_to_proto,
     api::{
         content,
-        handlers::{ContentService, enum_mapping},
+        handlers::{ContentService, content_service::pool_error_status, enum_mapping},
     },
     core::JobRun,
     service::{self, AppInfra, PaginatedResult, ServiceContext},
@@ -36,11 +36,12 @@ fn list_job_runs_blocking(
 ) -> Result<PaginatedResult<JobRun>, Status> {
     let infra = &input.infra;
 
+    let kind = infra.pool.kind();
     let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("ListJobRuns pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .map_err(|e| pool_error_status(e, kind))?;
 
     let token = input.token;
     let headers = input.headers;
@@ -52,6 +53,7 @@ fn list_job_runs_blocking(
         &infra.hook_runner,
         &infra.registry,
         &conn,
+        &input.infra.locale_config,
     )?;
 
     if auth_user.is_none() {

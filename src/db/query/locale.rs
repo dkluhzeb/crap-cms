@@ -28,9 +28,24 @@ pub struct LocaleContext {
 }
 
 impl LocaleContext {
+    /// The default-locale context for `config`, or `None` when localization
+    /// is disabled. Every internal read of a possibly-localized row goes
+    /// through this: a `None` context on a localized collection selects bare
+    /// column names that do not exist (`title` vs `title__en`) and errors.
+    #[must_use]
+    pub fn default_for(config: &LocaleConfig) -> Option<Self> {
+        if !config.is_enabled() {
+            return None;
+        }
+
+        Some(Self {
+            mode: LocaleMode::Default,
+            config: config.clone(),
+        })
+    }
+
     /// Build a `LocaleContext` from an optional locale string and config.
     /// Returns `Ok(None)` if localization is disabled (empty `locales` vec).
-    /// Returns `Err` if the locale string is not a valid configured locale.
     /// `"all"` → `All`, a specific code → `Single`, `None` → `Default`.
     ///
     /// # Errors

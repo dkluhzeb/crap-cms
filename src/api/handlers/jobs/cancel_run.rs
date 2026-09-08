@@ -7,7 +7,10 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::{content, handlers::ContentService},
+    api::{
+        content,
+        handlers::{ContentService, content_service::pool_error_status},
+    },
     service::{self, AppInfra, ServiceContext},
 };
 
@@ -22,11 +25,12 @@ struct CancelJobRunBlockingInput {
 fn cancel_job_run_blocking(input: &CancelJobRunBlockingInput) -> Result<bool, Status> {
     let infra = &input.infra;
 
+    let kind = infra.pool.kind();
     let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("CancelJobRun pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .map_err(|e| pool_error_status(e, kind))?;
 
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
@@ -35,6 +39,7 @@ fn cancel_job_run_blocking(input: &CancelJobRunBlockingInput) -> Result<bool, St
         &infra.hook_runner,
         &infra.registry,
         &conn,
+        &input.infra.locale_config,
     )?;
 
     if auth_user.is_none() {

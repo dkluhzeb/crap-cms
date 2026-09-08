@@ -26,7 +26,7 @@ pub(crate) fn load_auth_user(
     locale_config: &LocaleConfig,
 ) -> Option<AuthUser> {
     let conn = pool.get().ok()?;
-    let mut auth = load_authenticated_user(claims, registry, &conn)?;
+    let mut auth = load_authenticated_user(claims, registry, &conn, locale_config)?;
 
     auth.ui_locale = query::get_user_settings(&conn, &claims.sub)
         .ok()

@@ -6,24 +6,19 @@ use tracing::warn;
 
 use crate::{
     cli,
-    core::{Document, Registry},
-    db::{DbPool, query},
+    core::Document,
+    db::query,
     service::{self, ServiceContext},
 };
 
-use super::helpers::{get_user_email, resolve_user};
+use super::helpers::{UserLookup, get_user_email, resolve_user};
 use crate::core::collection::Auth;
 
 /// Show detailed info for a single user.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn user_info(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-) -> Result<()> {
-    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub(super) fn user_info(lookup: &UserLookup<'_>) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (def, doc) = resolve_user(lookup)?;
     let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;

@@ -260,6 +260,38 @@ pub fn is_process_running(pid: u32) -> bool {
     send_signal(pid, 0).is_ok()
 }
 
+/// The server's PID file name (written by `serve`, read by the destructive
+/// database commands to refuse running under a live server).
+pub const SERVER_PID_FILENAME: &str = "crap.pid";
+
+/// Refuse a destructive database command while `serve` is running from the
+/// same config dir: swapping the database file under an open pool leaves the
+/// server writing to the renamed-aside old file while new connections open
+/// the restored one.
+///
+/// # Errors
+///
+/// Returns an error naming the live PID when the server is running.
+#[cfg(unix)]
+pub fn refuse_if_server_running(config_dir: &Path, command: &str) -> Result<()> {
+    let Some(pid) = read_pid(config_dir, SERVER_PID_FILENAME) else {
+        return Ok(());
+    };
+    if !is_process_running(pid) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "`{command}` refused: the server is running (PID {pid}). Stop it first — a live \
+         pool would keep writing to the old database file."
+    )
+}
+
+#[cfg(not(unix))]
+pub fn refuse_if_server_running(_config_dir: &Path, _command: &str) -> Result<()> {
+    Ok(())
+}
+
 /// Check if a PID file exists and warn if the process is still running.
 #[cfg(unix)]
 pub fn check_existing_pid(config_dir: &Path, filename: &str) {

@@ -23,7 +23,6 @@ enum QueueError {
     /// keeps the status the synchronous call would have returned.
     Service(crate::service::ServiceError),
     UnknownCollection(String),
-    Insert(String),
 }
 
 impl ContentService {
@@ -63,10 +62,12 @@ impl ContentService {
             // which needs the resolved identity: a caller who may not
             // perform the operation is refused synchronously rather than
             // handed a job id for work that could never succeed.
-            let conn = infra
-                .pool
-                .get()
-                .map_err(|e| QueueError::Insert(format!("pool: {e}")))?;
+            let conn = infra.pool.get().map_err(|e| {
+                QueueError::Service(crate::service::ServiceError::classify(
+                    anyhow::anyhow!(e),
+                    infra.pool.kind(),
+                ))
+            })?;
 
             let def = infra
                 .registry
@@ -86,9 +87,12 @@ impl ContentService {
 
             drop(conn);
 
+            // Typed error kept: the document cap is `LimitExceeded`
+            // (FAILED_PRECONDITION, like the synchronous call) and a busy pool
+            // is `Transient` (UNAVAILABLE), never a blanket INTERNAL.
             bulk_queue::queue_bulk(&infra.pool, &data)
                 .map(|run| run.id)
-                .map_err(|e| QueueError::Insert(format!("{e:?}")))
+                .map_err(QueueError::Service)
         })
         .await
         .map_err(|e| {
@@ -106,10 +110,6 @@ impl ContentService {
             }
             QueueError::UnknownCollection(slug) => {
                 Status::not_found(format!("Collection '{slug}' not found"))
-            }
-            QueueError::Insert(detail) => {
-                error!("queue_bulk insert: {detail}");
-                Status::internal("Internal error")
             }
         })
     }

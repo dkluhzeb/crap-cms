@@ -142,7 +142,7 @@ pub fn find_by_ids(
 }
 
 /// Build SELECT column expressions for a collection, handling locale if enabled.
-fn select_columns(
+pub(crate) fn select_columns(
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Vec<String>> {

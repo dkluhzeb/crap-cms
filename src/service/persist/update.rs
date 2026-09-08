@@ -4,10 +4,36 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, DocumentFields},
-    db::{LocaleContext, query},
+    core::{CollectionDefinition, Document, DocumentFields, collection::Auth},
+    db::{DbConnection, LocaleContext, query},
     service::{PersistOptions, ServiceContext, versions, write::reject_locale_locked_fields},
 };
+
+/// The address an update is about to write, when it differs from the stored
+/// one on a collection that requires email verification.
+///
+/// Changing the address invalidates the confirmation the old one carried: the
+/// new address has never been confirmed, so leaving `_verified` set would let
+/// a user log in with an address nobody proved they control.
+fn changed_email(
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+    slug: &str,
+    id: &str,
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
+) -> Option<String> {
+    if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
+        return None;
+    }
+
+    let new_email = data.get("email").and_then(|v| v.as_str())?;
+    let current = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)
+        .ok()
+        .flatten()?;
+
+    (current.get_str("email") != Some(new_email)).then(|| new_email.to_string())
+}
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
 /// Performs: update -> join data -> password -> version snapshot (published).
@@ -58,6 +84,9 @@ pub fn persist_update(
         None
     };
 
+    // Detected BEFORE the UPDATE — afterwards the stored address is the new one.
+    let new_email = changed_email(conn, def, slug, id, data, opts.locale_ctx);
+
     let doc = query::update(conn, slug, def, id, data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
@@ -67,11 +96,18 @@ pub fn persist_update(
         query::update_password(conn, slug, &doc.id, pw)?;
     }
 
+    if new_email.is_some() {
+        query::mark_unverified(conn, slug, &doc.id)?;
+        // Queued like a create's: the mail goes out only if the write commits.
+        ctx.maybe_send_verification(&doc);
+    }
+
     if def.has_versions() {
         let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
+            .locale_config(ctx.locale_config)
             .build();
         versions::create_version_snapshot(conn, &ctx, "published", &doc)?;
     }

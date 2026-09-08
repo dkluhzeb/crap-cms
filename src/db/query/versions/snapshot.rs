@@ -3,13 +3,17 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
+use crate::config::LocaleConfig;
 use crate::core::{
     Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, field_children,
     flatten_group_fields, prefixed_name, walk_leaf_fields,
 };
 use crate::db::{
-    DbConnection,
-    query::{helpers::tz_column, join::hydrate_document},
+    DbConnection, DbValue,
+    query::{
+        LocaleContext, LocaleMode, get_locale_select_columns_full, helpers::tz_column,
+        join::hydrate_document,
+    },
 };
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
@@ -22,11 +26,18 @@ pub fn build_snapshot(
     slug: &str,
     fields: &[FieldDefinition],
     doc: &Document,
+    locale_config: Option<&LocaleConfig>,
 ) -> Result<Value> {
     let mut hydrated = doc.clone();
     hydrate_document(conn, slug, fields, &mut hydrated, None, None)?;
 
     let mut data: Map<String, Value> = hydrated.fields.into_iter().collect();
+
+    // `doc` was resolved under ONE locale, so it carries a single value per
+    // localized field. A snapshot must hold every locale's column: restore
+    // writes the decorated `field__xx` columns back, and anything missing
+    // there is written as NULL — losing the other locales' translations.
+    add_locale_columns(conn, slug, fields, &doc.id, locale_config, &mut data)?;
 
     if let Some(ts) = &doc.created_at {
         data.insert("created_at".to_string(), Value::String(ts.clone()));
@@ -36,6 +47,54 @@ pub fn build_snapshot(
     }
 
     Ok(Value::Object(data))
+}
+
+/// Read the per-locale columns (`title__en`, `title__de`, …) of one row and
+/// merge them into `data` under their decorated names. No-op when
+/// localization is disabled or the collection has no localized field.
+fn add_locale_columns(
+    conn: &dyn DbConnection,
+    slug: &str,
+    fields: &[FieldDefinition],
+    id: &str,
+    locale_config: Option<&LocaleConfig>,
+    data: &mut Map<String, Value>,
+) -> Result<()> {
+    let Some(config) = locale_config.filter(|c| c.is_enabled()) else {
+        return Ok(());
+    };
+
+    let ctx = LocaleContext {
+        mode: LocaleMode::All,
+        config: config.clone(),
+    };
+    let (exprs, names) = get_locale_select_columns_full(fields, false, false, false, &ctx)?;
+
+    // Only the decorated columns are interesting; `id` rides along in both.
+    if names.iter().all(|n| !n.contains("__")) {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "SELECT {} FROM \"{slug}\" WHERE id = {}",
+        exprs.join(", "),
+        conn.placeholder(1)
+    );
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(id.to_string())])? else {
+        return Ok(());
+    };
+
+    for (i, name) in names.iter().enumerate() {
+        if !name.contains("__") {
+            continue;
+        }
+        let value = row
+            .text_at(i)
+            .map_or(Value::Null, |t| Value::String(t.to_string()));
+        data.insert(name.clone(), value);
+    }
+
+    Ok(())
 }
 
 /// Whether a snapshot JSON value is a scalar that maps to a column write.

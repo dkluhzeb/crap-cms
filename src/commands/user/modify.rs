@@ -11,7 +11,7 @@ use crate::{
     service::{self, ServiceContext, ServiceError},
 };
 
-use super::helpers::{get_user_email, require_verify_email, resolve_user};
+use super::helpers::{UserLookup, get_user_email, require_verify_email, resolve_user};
 
 /// Args for [`user_delete`].
 pub struct UserDeleteParams<'a> {
@@ -32,7 +32,14 @@ pub struct UserDeleteParams<'a> {
 /// transaction fails, or any of the delete/ref-count steps fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
-    let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;
+    let (_, doc) = resolve_user(&UserLookup {
+        pool: p.pool,
+        registry: p.registry,
+        collection: p.collection,
+        email: p.email,
+        id: p.id,
+        locale: p.locale,
+    })?;
     let user_email = get_user_email(&doc);
 
     if !p.confirm {
@@ -86,14 +93,9 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
 /// Returns an error if the user can't be resolved, the connection fails, or
 /// the lock operation fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_lock(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-) -> Result<()> {
-    let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub fn user_lock(lookup: &UserLookup<'_>) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (_, doc) = resolve_user(lookup)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 
@@ -120,14 +122,9 @@ pub fn user_lock(
 /// Returns an error if the user can't be resolved, the connection fails, or
 /// the unlock operation fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_unlock(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-) -> Result<()> {
-    let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub fn user_unlock(lookup: &UserLookup<'_>) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (_, doc) = resolve_user(lookup)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 
@@ -149,14 +146,9 @@ pub fn user_unlock(
 
 /// Verify a user account (mark email as verified).
 #[cfg(not(tarpaulin_include))]
-pub(super) fn user_verify(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-) -> Result<()> {
-    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub(super) fn user_verify(lookup: &UserLookup<'_>) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (def, doc) = resolve_user(lookup)?;
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
@@ -179,14 +171,9 @@ pub(super) fn user_verify(
 
 /// Unverify a user account (mark email as unverified).
 #[cfg(not(tarpaulin_include))]
-pub(super) fn user_unverify(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-) -> Result<()> {
-    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub(super) fn user_unverify(lookup: &UserLookup<'_>) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (def, doc) = resolve_user(lookup)?;
 
     require_verify_email(&def, collection)?;
 
@@ -217,15 +204,9 @@ pub(super) fn user_unverify(
 /// Returns an error if the user can't be resolved, the collection doesn't
 /// use `mfa = "totp"`, the prompt fails, or the DB update fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_reset_totp(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-    confirm: bool,
-) -> Result<()> {
-    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub fn user_reset_totp(lookup: &UserLookup<'_>, confirm: bool) -> Result<()> {
+    let (pool, collection) = (lookup.pool, lookup.collection);
+    let (def, doc) = resolve_user(lookup)?;
 
     let uses_totp = def
         .auth
@@ -278,6 +259,7 @@ pub struct UserChangePasswordParams<'a> {
     pub id: Option<String>,
     pub password: Option<String>,
     pub password_policy: &'a PasswordPolicy,
+    pub locale: &'a LocaleConfig,
 }
 
 /// Change a user's password.
@@ -288,7 +270,14 @@ pub struct UserChangePasswordParams<'a> {
 /// fails, the password fails policy validation, or the DB update fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_change_password(p: UserChangePasswordParams<'_>) -> Result<()> {
-    let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;
+    let (_, doc) = resolve_user(&UserLookup {
+        pool: p.pool,
+        registry: p.registry,
+        collection: p.collection,
+        email: p.email,
+        id: p.id,
+        locale: p.locale,
+    })?;
 
     let password = match p.password {
         Some(pw) => {

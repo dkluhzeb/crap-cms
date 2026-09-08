@@ -563,6 +563,61 @@ memories; the load-bearing ones:
   round — a quiet-ish round. Round 7 pending; the biggest lever remains
   broadening PG behavioral coverage on the new harness + landing the
   drafted CI Postgres service job.
+- 2026-09-08 (22) — **CONVERGENCE ROUND 13** (5 fresh lenses: MCP surface
+  end-to-end, gRPC wire codec, drafts/`_status`/versions across surfaces,
+  config loading + startup validation + secrets, email/reset/verify/MFA
+  delivery). **3 HIGH, ~10 MED, ~15 LOW — NOT quiet, and one HIGH is a NEW
+  class (F-class secret-derivation: a key derived from an unset config value).**
+  All personally verified + fixed; gates green; UNCOMMITTED.
+  - **HIGH (NEW class) — `crap.crypto` encrypted under a publicly known key.**
+    With no `[auth] secret` (the default; the server generates and persists one
+    for JWTs), the Lua crypto helpers keyed AES from the *raw* empty config
+    value = SHA-256(""). FIX (structural): the secret is resolved at CONFIG
+    LOAD (`AuthConfig::resolve_secret`), so every consumer — JWT, crypto, TOTP
+    sealing, signed URLs — reads one resolved value; the helpers additionally
+    refuse an empty key. Retires the "which consumer sees which secret"
+    divergence rather than patching one call site.
+  - **HIGH — versions lost every other locale's content** (D-class locale-ctx
+    footgun, again): snapshots were built from the row as resolved under the
+    WRITING locale, so restore wrote that value into the default-locale column
+    and NULLed the rest. FIX: snapshots record every locale's decorated column;
+    restore prefers those (bare key only as the legacy fallback); the draft
+    overlay resolves per READING locale. `tests/versions_localized.rs`.
+  - **HIGH — `LoginResponse.user` / `VerifyMfa` shipped unstripped rows**
+    (P-class parity): the credential lookups are raw reads, so `hidden` and
+    `access.read`-denied fields rode along while `Me` stripped them. One shared
+    `prepare_user_document` now serves all three.
+  - **MED — restore/unpublish wrote `_status` on `drafts = false` collections**
+    (no such column → raw backend error after hooks ran); version rows never
+    selected `created_at` (every consumer rendered an empty date); localized
+    auth collections broke login and every bearer request (bare column names);
+    MCP write tools dropped `null` (no way to clear a field / remove a
+    translation); a collection and a global sharing a slug conflated
+    `access.mcp` on MCP (cross-kind slug now rejected at load — same-kind
+    redefinition stays legal, it is the documented plugin pattern); queued bulk
+    over the cap returned INTERNAL not FAILED_PRECONDITION; NaN/Inf on the wire
+    silently CLEARED a field; changing an email kept the verified flag;
+    `read_config_file` redaction was line-based (dotted keys / inline tables /
+    multi-line strings leaked); `restore --include-uploads` extracted a whole
+    archive into the config dir (operator-code overwrite) and both destructive
+    db commands ran happily under a live server.
+  - **LOW** — pool-acquire errors INTERNAL on 8 RPCs (now classified);
+    `scheduled_by` UNSPECIFIED for gRPC-queued bulk (enum gained MCP + CLI);
+    Subscribe accepted unknown operation names; email templates rendered
+    "expires in60minutes"; loose-permission warning covered 3 of 8 secret
+    fields; `.jwt_secret` briefly world-readable; `db console` leaked the PG
+    password via argv; libpq/`/`-containing password masking gaps; MCP
+    `list_job_runs` uncapped; MCP client name unsanitized in audit logs; docs
+    drift (job tiers, `access.mcp` evaluation timing).
+  - **CLEAN (evidence in the reports):** MCP tool naming/schema-vs-runtime/
+    session tracking/error scrubbing/exhaustion caps; the gRPC value mapping,
+    present-null contract, pagination, locale validation, enum exhaustiveness
+    and codegen parity; config parsing strictness (deny_unknown_fields
+    everywhere, numeric-knob pin), env substitution, feature/cross-field
+    validation, startup hook-ref completeness, identifier-length checks;
+    token entropy/expiry/single-use/constant-time, enumeration resistance,
+    MFA pending-token binding, password-hash never leaving the DB.
+  Convergence: a new class appeared, so the streak stays 0. Round 14 pending.
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

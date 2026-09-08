@@ -83,8 +83,12 @@ pub fn restore_version(
     // Re-sync the FTS index to the restored content.
     crate::db::query::fts::fts_upsert(conn, slug, parent_id, def, locale_config)?;
 
-    // Update status and create a new version for the restore
-    set_document_status(conn, slug, parent_id, status)?;
+    // `_status` only exists when the collection has drafts — an audit-trail
+    // collection (`versions = { drafts = false }`) has no such column, and
+    // writing it would fail the restore with a raw backend error.
+    if def.has_drafts() {
+        set_document_status(conn, slug, parent_id, status)?;
+    }
     create_version(conn, slug, parent_id, status, snapshot)?;
 
     Ok(doc)
@@ -133,8 +137,9 @@ pub fn restore_global_version(
         &old_refs,
     )?;
 
-    // Update status and create a new version for the restore
-    set_document_status(conn, &gtable, "default", status)?;
+    if def.has_drafts() {
+        set_document_status(conn, &gtable, "default", status)?;
+    }
     create_version(conn, &gtable, "default", status, snapshot)?;
 
     Ok(doc)
@@ -240,20 +245,25 @@ fn collect_locale_restore_fields(
                 resolve_snapshot_value(obj, &base, prefix, &field.name)
             };
 
-            // Per-locale snapshot lookup: the default locale uses the plain
-            // key; every other locale looks up the decorated `key__xx` form
-            // the snapshot carries (top-level or nested in a group object).
+            // Per-locale snapshot lookup: EVERY locale prefers the decorated
+            // `key__xx` column the snapshot carries. The bare key is only the
+            // default locale's fallback, for snapshots written before
+            // snapshots recorded every locale — it holds whichever locale the
+            // write that produced it was made under, so preferring it would
+            // copy (say) a German edit into the English column on restore.
             let value_for = |locale: &str| {
-                if *locale == locale_config.default_locale {
-                    return val;
-                }
-
                 let decorated_base = format!("{base}__{locale}");
-                if prefix.is_empty() {
+                let decorated = if prefix.is_empty() {
                     obj.get(&decorated_base)
                 } else {
                     let decorated_field = format!("{}__{locale}", field.name);
                     resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
+                };
+
+                match decorated {
+                    Some(v) => Some(v),
+                    None if *locale == locale_config.default_locale => val,
+                    None => None,
                 }
             };
 

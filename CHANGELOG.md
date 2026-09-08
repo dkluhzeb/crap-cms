@@ -8,6 +8,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **MCP write tools no longer drop `null`.** `update_posts {"id":…,
+  "subtitle":null}` silently kept the old value; a present null now clears the
+  field, the contract gRPC and Lua already had. (Removing a translation —
+  documented as writing that locale's fields as null — was impossible over
+  MCP.) An unknown field name is now rejected whatever its value.
+
+- **Non-finite numbers are rejected on the gRPC wire.** `NaN` / `±Inf` in a
+  `double_value` were converted to `null`, which under the present-null
+  contract *cleared* the field. They are now `INVALID_ARGUMENT`, matching Lua.
+
+- **`crap.crypto.encrypt` / `decrypt` refuse an unset `[auth] secret`**
+  instead of deriving a key from the empty string.
+
+- **A collection and a global can no longer share a slug.** The MCP surface
+  keys exposure and gating by slug alone, so a global denied by `access.mcp`
+  stayed executable when a collection had the same slug. Re-defining the same
+  kind (the plugin extension pattern) is unaffected.
+
+- **Subscribe rejects an unknown operation name.** `operations: ["creat"]`
+  used to open a stream that silently never delivered.
+
 - **A filter value that does not fit the field's type is now a validation
   error.** `where = { price = { greater_than = "abc" } }` on a Number field
   (or a non-boolean on a Checkbox) used to fall back to a text comparison
@@ -690,6 +711,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **`crap.crypto` no longer encrypts under a publicly known key.** With no
+  `[auth] secret` configured — the default, where the server generates and
+  persists one for JWTs — the Lua crypto helpers derived their AES key from
+  the *empty* config value, i.e. the SHA-256 of the empty string. Anyone with
+  the ciphertext could decrypt it. The generated secret is now resolved at
+  config load, so every consumer (JWT signing, `crap.crypto`, TOTP sealing,
+  signed upload URLs) keys off the same value, and the crypto helpers refuse
+  an empty key outright.
+
+- **`LoginResponse.user` was not stripped.** The login and MFA lookups read
+  the user row raw, so a `hidden` field or one denied by its `access.read`
+  rule rode along on the login response while `Me` removed it. Both now go
+  through the same hydrate + strip as every other document on the wire.
+
+- **`read_config_file` redaction is structural.** Secrets written as dotted
+  keys (`auth.secret = …`), inline tables, or multi-line strings — all valid
+  TOML — slipped past the line-based masking. The file is now parsed and
+  re-serialized with the secret values replaced, and a file that does not
+  parse is withheld rather than returned raw.
+
+- **`restore --include-uploads` extracts only the `uploads` member.** A
+  tampered archive carrying `init.lua`, `hooks/`, or `crap.toml` could
+  overwrite operator code on restore. Ownership is no longer taken from the
+  archive either, and the destructive database commands (`restore`,
+  `migrate fresh`) refuse to run while the server is running.
+
+- **`db console` no longer puts the Postgres password in `argv`** (visible in
+  `/proc` to every local user); it goes through `PGPASSWORD`.
+
+- **Changing a user's email requires re-verification.** On a collection with
+  `verify_email`, the verified flag survived an address change, so a user
+  could log in with an address nobody had confirmed.
 
 - **Read-denied fields are no longer a query oracle.** See the breaking
   entry: filtering, sorting, and (default) search on hidden or
@@ -1670,6 +1724,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Versions lost every other locale's content.** A snapshot was built from
+  the row as resolved under the *writing* locale, so it held one value per
+  localized field. Restoring it wrote that value into the default locale's
+  column and `NULL`ed the rest — a German edit restored over the English
+  title, and the other translations vanished. Snapshots now record every
+  locale's column, restore prefers those columns (falling back to the bare
+  key only for pre-existing snapshots), and a draft is read back per locale
+  instead of serving whichever locale last saved it.
+
+- **Restore failed on `versions = { drafts = false }` collections.** The
+  restore and unpublish paths wrote `_status`, a column only created for
+  drafts-enabled collections, so restore on an audit-trail collection died
+  with a raw backend error after the hooks had already run.
+
+- **Version rows never carried their timestamp.** `created_at` was in the
+  table and rendered by the admin sidebar, the version table, Lua
+  `list_versions` and the gRPC codec, but no query selected it — every
+  version showed an empty date.
+
+- **Login and every bearer-authenticated request failed on a localized auth
+  collection.** The user lookups selected bare column names, which do not
+  exist when a field is localized: login returned INTERNAL and any
+  authenticated RPC came back UNAVAILABLE.
+
+- **A queued bulk operation over the document cap returned INTERNAL.** It is
+  the same refusal the synchronous call reports as FAILED_PRECONDITION; a
+  busy pool likewise now reports UNAVAILABLE rather than INTERNAL, on that
+  path and on the seven other RPCs that mapped a pool timeout to INTERNAL.
+
+- **`scheduled_by` was `UNSPECIFIED` for gRPC-queued bulk runs.** The enum
+  gained `MCP` and `CLI` variants, and the `api` value a queued bulk records
+  maps to `GRPC`.
+
+- **Email templates rendered "expires in60minutes" and "Sent byCrap CMS"** —
+  the interpolations had lost their surrounding spaces.
+
+- **A world-readable `crap.toml` warned only for three of the eight
+  secret-bearing settings**; an MCP key or a credentialed database/Redis URL
+  now warns too. The generated `data/.jwt_secret` is created owner-only
+  rather than chmod-ed afterwards, and password masking covers the libpq
+  spellings (`password = 'a b'`) and passwords containing `/`.
+
+- **MCP `list_job_runs` ignored the pagination cap**, so one call could
+  return the entire runs table.
 
 - **Full-text search was blanked on every write to a localized collection
   (SQLite).** The per-document index sync read `title__en`-style keys from

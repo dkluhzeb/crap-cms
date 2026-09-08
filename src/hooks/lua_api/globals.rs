@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
+use super::collections::reject_cross_kind_slug;
 use super::serializers::global_config_to_lua;
 use super::utils::{registry_lock_poisoned, require_init_phase};
 
@@ -28,10 +29,9 @@ fn globals_define_init(
     require_init_phase(lua, DEFINE_INIT_ONLY_ERROR)?;
     let def = parse_global_definition(lua, &slug, &config)
         .map_err(|e| RuntimeError(format!("Failed to parse global '{slug}': {e}")))?;
-    state
-        .write()
-        .map_err(registry_lock_poisoned)?
-        .register_global(def);
+    let mut registry = state.write().map_err(registry_lock_poisoned)?;
+    reject_cross_kind_slug(&registry, &slug, "global")?;
+    registry.register_global(def);
     Ok(())
 }
 

@@ -20,6 +20,7 @@ const SENTINELS: &[(&str, &str)] = &[
     ),
     ("upload.s3.secret_key", "SENTINEL-S3-SECRET-KEY-VALUE"),
     ("email.smtp_pass", "SENTINEL-SMTP-PASSWORD-VALUE"),
+    ("database.url password", "SENTINEL-PG-PASSWORD"),
     ("mcp.api_key", "SENTINEL-MCP-API-KEY-0123456789abcdef00"),
     ("cache.redis_url password", "SENTINEL-REDIS-PW"),
     ("auth.rate_limit_redis_url password", "SENTINEL-RL-REDIS-PW"),

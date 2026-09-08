@@ -273,7 +273,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO posts (id, title) VALUES ('p1', 'Original Title');",
         )
@@ -505,7 +506,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO posts (id, title, author) VALUES ('p1', 'Theirs', 'other');
             INSERT INTO posts (id, title, author) VALUES ('p2', 'Mine', 'me');

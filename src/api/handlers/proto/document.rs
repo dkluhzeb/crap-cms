@@ -104,12 +104,12 @@ fn field_value_to_json(v: &FieldValue, depth: usize, max: usize) -> Result<JsonV
     let json = match &v.kind {
         Some(Kind::BoolValue(b)) => JsonValue::Bool(*b),
         Some(Kind::IntValue(i)) => JsonValue::Number(Number::from(*i)),
-        Some(Kind::DoubleValue(n)) => Number::from_f64(*n).map_or_else(
-            || {
-                warn!("Non-finite float {n} in gRPC request, converting to null");
-                JsonValue::Null
-            },
-            JsonValue::Number,
+        // NaN / ±Inf are legal on the wire but have no JSON form; silently
+        // turning them into `null` would CLEAR the field under the
+        // present-null contract. Reject, like the Lua surface does.
+        Some(Kind::DoubleValue(n)) => JsonValue::Number(
+            Number::from_f64(*n)
+                .ok_or_else(|| format!("non-finite number {n} is not a valid field value"))?,
         ),
         Some(Kind::StringValue(s)) => JsonValue::String(s.clone()),
         Some(Kind::ListValue(list)) => {

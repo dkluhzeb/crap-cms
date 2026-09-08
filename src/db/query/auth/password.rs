@@ -7,7 +7,7 @@ use crate::{
     db::{
         DbConnection, DbValue,
         document::row_to_document,
-        query::{get_column_names, helpers::SOFT_DELETE_ACTIVE},
+        query::{LocaleContext, helpers::SOFT_DELETE_ACTIVE, read::select_columns},
     },
 };
 
@@ -31,6 +31,7 @@ pub fn find_by_email(
     def: &CollectionDefinition,
     email: &str,
     include_deleted: bool,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<Option<Document>> {
     // Email is matched case-insensitively: addresses are case-insensitive in
     // practice, and a user who registered as "Test@Example.com" must be able
@@ -38,10 +39,13 @@ pub fn find_by_email(
     // are lowercased so the comparison is symmetric. (Preventing creation of
     // case-variant duplicate accounts is a separate write-path/unique-index
     // concern — see CHANGELOG.)
-    let column_names = get_column_names(def);
+    // Locale-aware column list: on a localized auth collection the bare
+    // logical names (`title`) do not exist as columns — the same footgun the
+    // read paths guard against.
+    let column_exprs = select_columns(def, locale_ctx)?;
     let mut sql = format!(
         "SELECT {} FROM \"{}\" WHERE LOWER(email) = {}",
-        column_names.join(", "),
+        column_exprs.join(", "),
         slug,
         conn.placeholder(1)
     );
@@ -209,7 +213,8 @@ mod tests {
     #[test]
     fn find_by_email_found() {
         let (_dir, conn) = setup();
-        let result = find_by_email(&conn, "users", &auth_def(), "test@example.com", false).unwrap();
+        let result =
+            find_by_email(&conn, "users", &auth_def(), "test@example.com", false, None).unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, "user1");
     }
@@ -220,7 +225,7 @@ mod tests {
     fn find_by_email_is_case_insensitive() {
         let (_dir, conn) = setup();
         for variant in ["Test@Example.com", "TEST@EXAMPLE.COM", "test@example.COM"] {
-            let result = find_by_email(&conn, "users", &auth_def(), variant, false).unwrap();
+            let result = find_by_email(&conn, "users", &auth_def(), variant, false, None).unwrap();
             assert_eq!(
                 result.map(|d| d.id.to_string()),
                 Some("user1".to_string()),
@@ -232,8 +237,15 @@ mod tests {
     #[test]
     fn find_by_email_not_found() {
         let (_dir, conn) = setup();
-        let result =
-            find_by_email(&conn, "users", &auth_def(), "nobody@example.com", false).unwrap();
+        let result = find_by_email(
+            &conn,
+            "users",
+            &auth_def(),
+            "nobody@example.com",
+            false,
+            None,
+        )
+        .unwrap();
         assert!(result.is_none());
     }
 
@@ -257,14 +269,15 @@ mod tests {
         def.soft_delete = true;
 
         // The auth paths (include_deleted = false) must not see the trashed user.
-        let hidden = find_by_email(&conn, "users", &def, "test@example.com", false).unwrap();
+        let hidden = find_by_email(&conn, "users", &def, "test@example.com", false, None).unwrap();
         assert!(
             hidden.is_none(),
             "soft-deleted user must be excluded from login/reset lookups"
         );
 
         // Admin tooling (include_deleted = true) can still reach it for recovery.
-        let reachable = find_by_email(&conn, "users", &def, "test@example.com", true).unwrap();
+        let reachable =
+            find_by_email(&conn, "users", &def, "test@example.com", true, None).unwrap();
         assert_eq!(
             reachable.map(|d| d.id.to_string()),
             Some("user1".to_string()),

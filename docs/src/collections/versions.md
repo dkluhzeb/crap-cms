@@ -266,6 +266,14 @@ end
 This is a write-side concern, separate from the read-side `access.draft` key
 above (which controls who can *see* unpublished content).
 
+## What a Snapshot Holds
+
+A snapshot records the document as stored: every field, the join-table rows
+(arrays, blocks, has-many), and — on a localized collection — **every
+locale's column**, not just the locale the write was made under. Restoring
+therefore returns each locale to the value it had in that version and leaves
+no translation behind.
+
 ## Versions Without Drafts
 
 You can enable version history without the draft/publish workflow:

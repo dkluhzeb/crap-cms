@@ -104,6 +104,7 @@ pub fn verify_login(
     if allows_password {
         let ctx = ServiceContext::collection(req.slug, req.def)
             .conn(&conn)
+            .locale_config(Some(&infra.locale_config))
             .build();
 
         match authenticate_local(

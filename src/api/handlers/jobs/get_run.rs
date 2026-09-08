@@ -7,7 +7,10 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::{content, handlers::ContentService},
+    api::{
+        content,
+        handlers::{ContentService, content_service::pool_error_status},
+    },
     core::JobRun,
     service::{self, AppInfra, ServiceContext},
 };
@@ -26,11 +29,12 @@ struct GetJobRunBlockingInput {
 fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status> {
     let infra = &input.infra;
 
+    let kind = infra.pool.kind();
     let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("GetJobRun pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .map_err(|e| pool_error_status(e, kind))?;
 
     let token = input.token;
     let headers = input.headers;
@@ -42,6 +46,7 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
         &infra.hook_runner,
         &infra.registry,
         &conn,
+        &input.infra.locale_config,
     )?;
 
     if auth_user.is_none() {

@@ -105,6 +105,7 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
         &def.fields,
         def.versions.as_ref(),
         &doc,
+        ctx.locale_config,
     )?;
 
     let mut doc = doc;

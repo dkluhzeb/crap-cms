@@ -3,6 +3,7 @@
 use anyhow::Result;
 
 use crate::{
+    config::LocaleConfig,
     core::{Document, FieldDefinition, collection::VersionsConfig},
     db::{DbConnection, query},
 };
@@ -18,10 +19,16 @@ pub(crate) fn unpublish_with_snapshot(
     fields: &[FieldDefinition],
     versions: Option<&VersionsConfig>,
     doc: &Document,
+    locale_config: Option<&LocaleConfig>,
 ) -> Result<()> {
-    query::set_document_status(conn, table, parent_id, "draft")?;
+    // Same `_status` guard as the restore path: a `drafts = false` collection
+    // has no such column. (`unpublish` is meaningless without drafts, but the
+    // capability gate is `has_versions`, so guard rather than crash.)
+    if versions.is_some_and(|v| v.drafts) {
+        query::set_document_status(conn, table, parent_id, "draft")?;
+    }
 
-    let snapshot = query::build_snapshot(conn, table, fields, doc)?;
+    let snapshot = query::build_snapshot(conn, table, fields, doc, locale_config)?;
 
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
 

@@ -98,39 +98,72 @@ const SECRET_TOML_KEYS: &[&str] = &[
 /// (`WebhookHeaders` — values like `Authorization = "Bearer …"`).
 const SECRET_TOML_SECTIONS: &[&str] = &["email.webhook_headers"];
 
-/// Mask the values of known secret keys in raw `crap.toml` text so reading it
-/// through the tool never surfaces the JWT secret, SMTP password, MCP `api_key`,
-/// or S3 credentials — matching the `crap://config` resource, which redacts the
-/// same fields via their `Serialize` impls. Comments and structure are
-/// preserved; only the secret values are replaced.
-fn redact_toml_secrets(content: &str) -> String {
-    let mut out = String::with_capacity(content.len());
-    let mut in_secret_section = false;
+const REDACTED: &str = "***REDACTED***";
 
-    for line in content.lines() {
-        let indent_len = line.len() - line.trim_start().len();
-        let (indent, rest) = line.split_at(indent_len);
+/// Redact every secret in a `crap.toml` document so reading it through the
+/// tool never surfaces the JWT secret, SMTP password, MCP `api_key`, S3 or
+/// URL credentials — matching the `crap://config` resource, which redacts the
+/// same fields via their `Serialize` impls.
+///
+/// Structural, not textual: the document is parsed and re-serialized, so a
+/// secret written as a dotted key (`auth.secret = "…"`), an inline table
+/// (`auth = { secret = "…" }`), or a multi-line string is redacted exactly
+/// like the `[section]` + `key = value` form. Comments are not preserved.
+///
+/// # Errors
+///
+/// Returns an error when the file is not valid TOML — its contents are
+/// withheld rather than returned raw, since a raw read could expose secrets.
+fn redact_toml_secrets(content: &str) -> Result<String> {
+    let mut value: toml::Value = toml::from_str(content).context(
+        "crap.toml is not valid TOML — contents withheld (a raw read could expose secrets)",
+    )?;
 
-        if rest.starts_with('[') {
-            let section = rest.trim().trim_matches(['[', ']']);
-            in_secret_section = SECRET_TOML_SECTIONS.contains(&section);
+    redact_value(&mut value, "");
+
+    Ok(toml::to_string_pretty(&value)?)
+}
+
+/// Walk a TOML value; `path` is the dotted key path of `value`.
+fn redact_value(value: &mut toml::Value, path: &str) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, child) in table.iter_mut() {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+
+                if SECRET_TOML_SECTIONS.contains(&child_path.as_str()) {
+                    redact_all(child);
+                } else if SECRET_TOML_KEYS.contains(&key.as_str()) {
+                    *child = toml::Value::String(REDACTED.to_string());
+                } else {
+                    redact_value(child, &child_path);
+                }
+            }
         }
-
-        if let Some((key, _value)) = rest.split_once('=')
-            && !rest.starts_with('#')
-            && (in_secret_section || SECRET_TOML_KEYS.contains(&key.trim()))
-        {
-            out.push_str(indent);
-            out.push_str(key.trim());
-            out.push_str(" = \"***REDACTED***\"");
-        } else {
-            out.push_str(line);
+        toml::Value::Array(items) => {
+            for item in items {
+                redact_value(item, path);
+            }
         }
-
-        out.push('\n');
+        _ => {}
     }
+}
 
-    out
+/// Replace every leaf beneath a secret section (e.g. `[email.webhook_headers]`).
+fn redact_all(value: &mut toml::Value) {
+    match value {
+        toml::Value::Table(table) => {
+            for (_, child) in table.iter_mut() {
+                redact_all(child);
+            }
+        }
+        toml::Value::Array(items) => items.iter_mut().for_each(redact_all),
+        leaf => *leaf = toml::Value::String(REDACTED.to_string()),
+    }
 }
 
 /// Read a file from the config directory. `crap.toml` is returned with its
@@ -144,7 +177,7 @@ pub(in crate::mcp::tools) fn exec_read_config_file(
         .with_context(|| format!("Failed to read {}", full_path.display()))?;
 
     if full_path.file_name().is_some_and(|n| n == "crap.toml") {
-        return Ok(redact_toml_secrets(&content));
+        return redact_toml_secrets(&content);
     }
 
     Ok(content)
@@ -228,7 +261,7 @@ api_key = "MCPKEY0123"
 [upload.s3]
 secret_key = "S3SECRET"
 "#;
-        let redacted = super::redact_toml_secrets(toml);
+        let redacted = super::redact_toml_secrets(toml).unwrap();
         for secret in [
             "PGPW",
             "JWTSECRET",
@@ -279,7 +312,7 @@ api_key = \"mcp-key-abc\"
 secret_key = \"s3-secret\"
 bucket = \"my-bucket\"
 ";
-        let out = redact_toml_secrets(toml);
+        let out = redact_toml_secrets(toml).unwrap();
 
         // Secrets gone.
         assert!(!out.contains("super-secret-jwt"), "{out}");
@@ -391,5 +424,45 @@ bucket = \"my-bucket\"
         let result = exec_list_config_files(Some("nonexistent"), dir.path()).unwrap();
         let files: Vec<Value> = from_str(&result).unwrap();
         assert!(files.is_empty());
+    }
+
+    /// Secrets written as dotted keys, inline tables, or multi-line strings —
+    /// all valid `crap.toml` — are redacted like the canonical section form.
+    #[test]
+    fn redaction_is_structural_not_line_based() {
+        let toml = r#"
+auth.secret = "DOTTED-JWT"
+upload = { s3 = { secret_key = "INLINE-S3" } }
+
+[email]
+webhook_headers = { Authorization = "INLINE-WH" }
+smtp_pass = """
+MULTI-LINE-SMTP
+"""
+
+[[jobs.list]]
+api_key = "ARRAY-KEY"
+"#;
+        let redacted = super::redact_toml_secrets(toml).unwrap();
+        for secret in [
+            "DOTTED-JWT",
+            "INLINE-S3",
+            "INLINE-WH",
+            "MULTI-LINE-SMTP",
+            "ARRAY-KEY",
+        ] {
+            assert!(
+                !redacted.contains(secret),
+                "secret {secret} survived structural redaction:\n{redacted}"
+            );
+        }
+        assert!(redacted.contains("***REDACTED***"));
+    }
+
+    /// Unparseable TOML is withheld, never returned raw.
+    #[test]
+    fn unparseable_toml_is_withheld() {
+        let err = super::redact_toml_secrets("[auth\nsecret = \"x").unwrap_err();
+        assert!(err.to_string().contains("withheld"), "{err}");
     }
 }

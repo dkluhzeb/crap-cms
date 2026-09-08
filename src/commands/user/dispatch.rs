@@ -6,10 +6,13 @@ use std::path::Path;
 use crate::{
     commands::{UserAction, load_config_and_sync},
     config::CrapConfig,
+    core::Registry,
+    db::DbPool,
 };
 
 use super::{
     create::{UserCreateParams, user_create},
+    helpers::UserLookup,
     info::user_info,
     list::user_list,
     modify::{
@@ -28,6 +31,9 @@ use super::{
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
     let (pool, registry) = load_config_and_sync(config_dir)?;
+    // One load for every subcommand: each needs at least the locale config to
+    // read a (possibly localized) auth collection's rows.
+    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
 
     match action {
         UserAction::Create {
@@ -35,85 +41,116 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             email,
             password,
             fields,
-        } => {
-            let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            user_create(UserCreateParams {
-                pool: &pool,
-                registry: &registry,
-                collection: &collection,
-                email,
-                password,
-                fields,
-                password_policy: &cfg.auth.password_policy,
-                locale: &cfg.locale,
-            })
-        }
-        UserAction::List { collection } => user_list(&pool, &registry, &collection),
-        UserAction::Info {
-            collection,
+        } => user_create(UserCreateParams {
+            pool: &pool,
+            registry: &registry,
+            collection: &collection,
             email,
-            id,
-        } => user_info(&pool, &registry, &collection, email, id),
+            password,
+            fields,
+            password_policy: &cfg.auth.password_policy,
+            locale: &cfg.locale,
+        }),
+        UserAction::List { collection } => user_list(&pool, &registry, &collection),
         UserAction::Delete {
             collection,
             email,
             id,
             confirm,
-        } => {
-            let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            user_delete(UserDeleteParams {
-                pool: &pool,
-                registry: &registry,
-                locale: &cfg.locale,
-                collection: &collection,
-                email,
-                id,
-                confirm,
-            })
-        }
-        UserAction::Lock {
-            collection,
-            email,
-            id,
-        } => user_lock(&pool, &registry, &collection, email, id),
-        UserAction::Unlock {
-            collection,
-            email,
-            id,
-        } => user_unlock(&pool, &registry, &collection, email, id),
-        UserAction::Verify {
-            collection,
-            email,
-            id,
-        } => user_verify(&pool, &registry, &collection, email, id),
-        UserAction::Unverify {
-            collection,
-            email,
-            id,
-        } => user_unverify(&pool, &registry, &collection, email, id),
-        UserAction::ResetTotp {
-            collection,
+        } => user_delete(UserDeleteParams {
+            pool: &pool,
+            registry: &registry,
+            locale: &cfg.locale,
+            collection: &collection,
             email,
             id,
             confirm,
-        } => user_reset_totp(&pool, &registry, &collection, email, id, confirm),
+        }),
         UserAction::ChangePassword {
             collection,
             email,
             id,
             password,
-        } => {
-            let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
+        } => user_change_password(UserChangePasswordParams {
+            pool: &pool,
+            registry: &registry,
+            collection: &collection,
+            email,
+            id,
+            password,
+            password_policy: &cfg.auth.password_policy,
+            locale: &cfg.locale,
+        }),
+        ref other => run_lookup_action(&pool, &registry, &cfg, other),
+    }
+}
 
-            user_change_password(UserChangePasswordParams {
-                pool: &pool,
-                registry: &registry,
-                collection: &collection,
-                email,
-                id,
-                password,
-                password_policy: &cfg.auth.password_policy,
-            })
+/// The subcommands that only need to find one user and act on it. Split from
+/// [`run`] so each half stays readable — they all build the same
+/// [`UserLookup`].
+#[cfg(not(tarpaulin_include))]
+fn run_lookup_action(
+    pool: &DbPool,
+    registry: &Registry,
+    cfg: &CrapConfig,
+    action: &UserAction,
+) -> Result<()> {
+    // Pull the shared lookup arguments out once, then dispatch on the action.
+    let (collection, email, id, confirm) = match action {
+        UserAction::Info {
+            collection,
+            email,
+            id,
         }
+        | UserAction::Lock {
+            collection,
+            email,
+            id,
+        }
+        | UserAction::Unlock {
+            collection,
+            email,
+            id,
+        }
+        | UserAction::Verify {
+            collection,
+            email,
+            id,
+        }
+        | UserAction::Unverify {
+            collection,
+            email,
+            id,
+        } => (collection.clone(), email.clone(), id.clone(), false),
+        UserAction::ResetTotp {
+            collection,
+            email,
+            id,
+            confirm,
+        } => (collection.clone(), email.clone(), id.clone(), *confirm),
+        // Handled by `run`; listed so a new variant fails the build here.
+        UserAction::Create { .. }
+        | UserAction::List { .. }
+        | UserAction::Delete { .. }
+        | UserAction::ChangePassword { .. } => unreachable!("handled in run()"),
+    };
+
+    let lookup = UserLookup {
+        pool,
+        registry,
+        collection: &collection,
+        email,
+        id,
+        locale: &cfg.locale,
+    };
+
+    match action {
+        UserAction::Info { .. } => user_info(&lookup),
+        UserAction::Lock { .. } => user_lock(&lookup),
+        UserAction::Unlock { .. } => user_unlock(&lookup),
+        UserAction::Verify { .. } => user_verify(&lookup),
+        UserAction::Unverify { .. } => user_unverify(&lookup),
+        UserAction::ResetTotp { .. } => user_reset_totp(&lookup, confirm),
+        _ => unreachable!("handled in run()"),
     }
 }

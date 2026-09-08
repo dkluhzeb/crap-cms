@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use serde_json::{Map, Value};
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -10,12 +9,13 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, proto::document_to_proto},
+        handlers::{
+            ContentService, auth::user_response::prepare_user_document, proto::document_to_proto,
+        },
     },
-    core::{CollectionDefinition, Document},
-    db::{BoxedConnection, query},
-    hooks::lifecycle::access::ReadStripInput,
-    service::{AppInfra, helpers::collect_api_hidden_field_names},
+    core::Document,
+    db::{LocaleContext, query},
+    service::AppInfra,
 };
 
 /// Owned bundle for the `Me` spawn-blocking body. Process-stable dependencies
@@ -46,6 +46,7 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
         &input.infra.hook_runner,
         &input.infra.registry,
         &conn,
+        &input.infra.locale_config,
     )?
     .ok_or_else(|| Status::unauthenticated("Missing token"))?;
 
@@ -57,49 +58,15 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
         .get_collection(&collection)
         .ok_or_else(|| Status::unauthenticated("Invalid or expired token"))?;
 
-    let mut doc = query::find_by_id(&conn, &collection, def, &id, None)
+    let locale_ctx = LocaleContext::default_for(&input.infra.locale_config);
+    let mut doc = query::find_by_id(&conn, &collection, def, &id, locale_ctx.as_ref())
         .inspect_err(|e| error!("Me find_by_id error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?
         .ok_or_else(|| Status::not_found("User not found"))?;
 
-    query::hydrate_document(&conn, &collection, &def.fields, &mut doc, None, None)
-        .inspect_err(|e| error!("Me hydrate_document error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
-
-    strip_for_response(&input.infra, def, &collection, &mut doc, &conn);
+    prepare_user_document(&input.infra, def, &collection, &mut doc, &conn);
 
     Ok((doc, collection))
-}
-
-/// Apply field-read access rules (with the user's own document as context)
-/// and the API-hidden strip to the user document before it leaves the server.
-fn strip_for_response(
-    infra: &AppInfra,
-    def: &CollectionDefinition,
-    collection: &str,
-    doc: &mut Document,
-    conn: &BoxedConnection,
-) {
-    let user_snapshot = doc.clone();
-    let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
-        .into_inner()
-        .into_iter()
-        .collect();
-
-    infra.hook_runner.strip_read_access(
-        &def.fields,
-        &mut level,
-        &ReadStripInput {
-            document: &user_snapshot.fields,
-            collection,
-            user: Some(&user_snapshot),
-            locale: None,
-        },
-        conn,
-    );
-
-    doc.fields = level.into_iter().collect();
-    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 }
 
 #[cfg(not(tarpaulin_include))]

@@ -102,6 +102,35 @@ mod tests {
         assert!(html.contains("reset") || html.contains("password"));
     }
 
+    /// Interpolated values must not be glued to the surrounding words —
+    /// "expires in60minutes" shipped for three releases because the only
+    /// assertion was that the sender name appeared somewhere.
+    #[test]
+    fn rendered_text_keeps_spaces_around_interpolations() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+
+        let html = renderer
+            .render(
+                "password_reset",
+                &PasswordResetEmailContext {
+                    reset_url: "http://example.com/reset?token=abc",
+                    expiry_minutes: 60,
+                    from_name: "Acme",
+                },
+            )
+            .expect("render");
+
+        assert!(
+            html.contains("expires in 60 minutes"),
+            "expiry sentence reads as prose: {html}"
+        );
+        assert!(
+            html.contains("Sent by Acme"),
+            "footer reads as prose: {html}"
+        );
+    }
+
     #[test]
     fn renderer_overlay_replaces_template() {
         let tmp = tempfile::tempdir().expect("tempdir");

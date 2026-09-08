@@ -231,7 +231,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO _global_settings (id, title, _status)
                 VALUES ('default', 'UNPUBLISHED DRAFT', 'draft');",
@@ -324,7 +325,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO _global_settings (id, title, _status)
                 VALUES ('default', 'Published Main', 'published');

@@ -55,7 +55,9 @@ pub fn generate_reset_token(
 
     // A soft-deleted account is disabled: don't issue a reset token for a trashed
     // user (consistent with login and the per-request evaluator).
-    let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false)? else {
+    let locale_ctx = ctx.default_locale_ctx();
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false, locale_ctx.as_ref())?
+    else {
         return Ok(None);
     };
 

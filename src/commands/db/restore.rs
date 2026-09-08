@@ -6,7 +6,10 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli::{self, Spinner},
-    commands::db::manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+    commands::{
+        db::manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+        helpers,
+    },
     config::CrapConfig,
     db::{DbConnection, pool},
 };
@@ -30,6 +33,8 @@ pub fn restore(
              Pass --confirm / -y to proceed."
         );
     }
+
+    helpers::refuse_if_server_running(config_dir, "restore")?;
 
     let config_dir = config_dir
         .canonicalize()
@@ -239,12 +244,17 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) -> Result<()> {
 
     let spin = Spinner::new("Extracting uploads...");
 
+    // Extract ONLY the `uploads` member the backup wrote: an archive carrying
+    // `init.lua`, `hooks/`, or `crap.toml` must not be able to overwrite
+    // operator code. `--no-same-owner` keeps ownership at the restoring user.
     let status = process::Command::new("tar")
         .args([
             "xzf",
             &archive_path.to_string_lossy(),
+            "--no-same-owner",
             "-C",
             &config_dir.to_string_lossy(),
+            "uploads",
         ])
         .status();
 

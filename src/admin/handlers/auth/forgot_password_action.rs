@@ -16,7 +16,7 @@ use crate::{
             ForgotPasswordForm, client_ip, get_auth_collections, render_forgot_success,
         },
     },
-    config::EmailConfig,
+    config::{EmailConfig, LocaleConfig},
     core::{
         CollectionDefinition, email,
         email::{EmailRenderer, PasswordResetEmailContext},
@@ -37,6 +37,7 @@ struct ResetEmailParams {
     base_url: String,
     reset_expiry: u64,
     email_max_attempts: u32,
+    locale_config: LocaleConfig,
 }
 
 /// Check whether the collection supports forgot-password.
@@ -71,6 +72,7 @@ fn send_reset_email(params: &ResetEmailParams) {
 
     let ctx = ServiceContext::collection(&params.slug, &params.def)
         .conn(&conn)
+        .locale_config(Some(&params.locale_config))
         .build();
 
     let token_result = match generate_reset_token(&ctx, &params.user_email, params.reset_expiry) {
@@ -154,6 +156,7 @@ pub async fn forgot_password_action(
             base_url: state.config.server.base_url(),
             reset_expiry: state.config.auth.reset_token_expiry,
             email_max_attempts: state.config.jobs.system_email_max_attempts(),
+            locale_config: state.config.locale.clone(),
         };
 
         task::spawn_blocking(move || send_reset_email(&params));

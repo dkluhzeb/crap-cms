@@ -99,6 +99,7 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
 
     let svc_ctx = ServiceContext::collection(ctx.slug, ctx.def)
         .conn(&conn)
+        .locale_config(Some(&ctx.infra.locale_config))
         .build();
 
     let token_result = match generate_reset_token(&svc_ctx, ctx.user_email, ctx.reset_expiry) {

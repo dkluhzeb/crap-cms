@@ -217,7 +217,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO posts (id, title, _status) VALUES ('p1', 'Original', 'published');",
         )

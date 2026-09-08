@@ -3,6 +3,7 @@
 
 mod config;
 mod password_policy;
+mod secret_file;
 
 pub use config::{AuthConfig, RateLimitBackend, SessionCookieSameSite};
 pub use password_policy::PasswordPolicy;

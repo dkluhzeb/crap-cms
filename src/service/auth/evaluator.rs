@@ -28,13 +28,14 @@ use std::collections::HashMap;
 use chrono::Utc;
 use tracing::{debug, warn};
 
+use crate::config::LocaleConfig;
 use crate::core::{
     AuthUser, Claims, Document, Registry, Slug,
     auth::{ClaimsBuilder, TokenProvider},
     collection::{Auth, Surface},
     parse_truthy,
 };
-use crate::db::{DbConnection, query};
+use crate::db::{DbConnection, LocaleContext, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
 use crate::service::{self, AppInfra, ServiceContext};
 
@@ -71,6 +72,9 @@ pub struct EvaluateDeps<'a> {
     pub token_provider: &'a dyn TokenProvider,
     pub hook_runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,
+    /// Needed to read the user row of a LOCALIZED auth collection (a bare
+    /// column list errors there).
+    pub locale_config: &'a LocaleConfig,
 }
 
 /// Outcome of evaluating a request against the registry's auth
@@ -466,7 +470,14 @@ where
         return TokenOutcome::NotAccepted;
     }
 
-    let doc = match query::find_by_id(deps.conn, &claims.collection, def, &claims.sub, None) {
+    let locale_ctx = LocaleContext::default_for(deps.locale_config);
+    let doc = match query::find_by_id(
+        deps.conn,
+        &claims.collection,
+        def,
+        &claims.sub,
+        locale_ctx.as_ref(),
+    ) {
         Ok(Some(d)) => d,
         Ok(None) => {
             debug!(user = %claims.sub, collection = %claims.collection, "user missing");
@@ -550,11 +561,19 @@ pub fn load_authenticated_user(
     claims: &Claims,
     registry: &Registry,
     conn: &dyn DbConnection,
+    locale_config: &LocaleConfig,
 ) -> Option<AuthUser> {
     let def = registry.get_collection(&claims.collection)?;
-    let doc = query::find_by_id(conn, &claims.collection, def, &claims.sub, None)
-        .ok()
-        .flatten()?;
+    let locale_ctx = LocaleContext::default_for(locale_config);
+    let doc = query::find_by_id(
+        conn,
+        &claims.collection,
+        def,
+        &claims.sub,
+        locale_ctx.as_ref(),
+    )
+    .ok()
+    .flatten()?;
 
     if is_locked(&doc) {
         return None;
@@ -582,7 +601,7 @@ pub fn load_authenticated_user(
 pub fn reload_authenticated_user(infra: &AppInfra, claims: &Claims) -> Option<AuthUser> {
     let conn = infra.pool.get().ok()?;
 
-    load_authenticated_user(claims, &infra.registry, &conn)
+    load_authenticated_user(claims, &infra.registry, &conn, &infra.locale_config)
 }
 
 /// Build claims + `AuthUser` for a strategy-authenticated request.

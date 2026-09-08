@@ -52,6 +52,7 @@ pub fn persist_create(
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
+            .locale_config(ctx.locale_config)
             .build();
         versions::create_version_snapshot(conn, &ctx, status, &doc)?;
     }

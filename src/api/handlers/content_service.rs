@@ -16,7 +16,7 @@ use crate::{
         content::{self, content_api_server::ContentApi},
         handlers::ContentServiceDeps,
     },
-    config::ServerConfig,
+    config::{LocaleConfig, ServerConfig},
     core::{
         AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
         SharedPasswordProvider, SharedTokenProvider, auth::TokenProvider, collection::Surface,
@@ -217,6 +217,7 @@ struct SchemaAuthBlockingInput {
     token_provider: SharedTokenProvider,
     hook_runner: HookRunner,
     registry: Arc<Registry>,
+    locale_config: LocaleConfig,
 }
 
 /// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
@@ -306,6 +307,7 @@ impl ContentService {
         hook_runner: &HookRunner,
         registry: &Registry,
         conn: &dyn DbConnection,
+        locale_config: &LocaleConfig,
     ) -> Result<Option<AuthUser>, Status> {
         let request = AuthRequest {
             surface: Surface::Grpc,
@@ -318,6 +320,7 @@ impl ContentService {
             token_provider,
             hook_runner,
             conn,
+            locale_config,
         };
         match service::auth::evaluate(&request, &deps) {
             Resolution::Authenticated(auth) => Ok(Some(auth.user)),
@@ -336,7 +339,7 @@ impl ContentService {
             .pool
             .get()
             .inspect_err(|e| error!("Schema introspection auth pool error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))?;
+            .map_err(|e| pool_error_status(anyhow::anyhow!(e), input.pool.kind()))?;
 
         Self::resolve_auth_user(
             input.token.as_deref(),
@@ -345,6 +348,7 @@ impl ContentService {
             &input.hook_runner,
             &input.registry,
             &conn,
+            &input.locale_config,
         )
     }
 
@@ -367,6 +371,7 @@ impl ContentService {
             token_provider: self.infra.token_provider.clone(),
             hook_runner: self.infra.hook_runner.clone(),
             registry: Arc::clone(&self.infra.registry),
+            locale_config: self.infra.locale_config.clone(),
         };
 
         let authed =
@@ -405,6 +410,17 @@ impl ContentService {
             }
         }
     }
+}
+
+/// Status for a failed pool acquisition: a busy or timed-out pool is
+/// UNAVAILABLE (retryable), anything else INTERNAL — the same classification
+/// every op-core handler gets through `core_error_status`, so a client keying
+/// its retries on UNAVAILABLE sees one behavior across every RPC.
+pub(in crate::api::handlers) fn pool_error_status(
+    e: impl Into<anyhow::Error>,
+    db_kind: &str,
+) -> Status {
+    Status::from(service::ServiceError::classify(e.into(), db_kind))
 }
 
 /// Precise per-failure gRPC statuses for credential rejection. None expose

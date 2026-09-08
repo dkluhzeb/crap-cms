@@ -32,7 +32,7 @@ The config structure mirrors `crap.toml`:
 | `server.host` | string | "0.0.0.0" |
 | `database.path` | string | "data/crap.db" |
 | `admin.dev_mode` | boolean | false |
-| `auth.secret` | string | "" |
+| `auth.secret` (always `"[REDACTED]"` — secrets never reach Lua) | string | "" |
 | `auth.token_expiry` | integer | 7200 |
 | `depth.default_depth` | integer | 1 |
 | `depth.max_depth` | integer | 10 |

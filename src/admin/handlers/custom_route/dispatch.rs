@@ -197,6 +197,7 @@ fn resolve_principal(
             token_provider: state.infra.token_provider.as_ref(),
             hook_runner: &state.infra.hook_runner,
             conn: &conn,
+            locale_config: &state.infra.locale_config,
         },
     );
 

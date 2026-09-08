@@ -148,7 +148,12 @@ impl ContentService {
 
         Ok(Response::new(content::LoginResponse {
             token,
-            user: Some(document_to_proto(&resolved.user_doc, &req.collection)),
+            user: Some(document_to_proto(
+                &self
+                    .prepare_login_user(&req.collection, resolved.user_doc.clone())
+                    .await?,
+                &req.collection,
+            )),
             mfa_required: None,
             mfa_challenge: None,
             totp_provisioning_uri: None,

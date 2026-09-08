@@ -177,7 +177,7 @@ mod tests {
             );
             CREATE TABLE _versions_posts (
                 id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
-                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT, created_at TEXT
             );
             -- Another owner's published doc + a published version snapshot.
             INSERT INTO posts (id, title, author, _status) VALUES ('d1', 'x', 'other', 'published');

@@ -795,7 +795,7 @@ async fn restore_confirm_get_renders_for_existing_version() {
     let data: DocumentFields =
         HashMap::from([("title".to_string(), json!("Restore Confirm Target"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&tx, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&tx, "articles", &def.fields, &doc, None).unwrap();
     query::create_version(&tx, "articles", &doc.id, "published", &snap).unwrap();
     tx.commit().unwrap();
 

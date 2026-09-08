@@ -224,7 +224,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "data",
                 ty: "DataMap",
                 tag: 2,
-                doc: "Document field values as a protobuf Struct (JSON-compatible key/value map).\nFor auth collections, include a \"password\" key; it is extracted before\nhooks run and stored as an Argon2id hash in a hidden column.",
+                doc: "Document field values as a DataMap (JSON-compatible key/value map).\nFor auth collections, include a \"password\" key; it is extracted before\nhooks run and stored as an Argon2id hash in a hidden column.",
             },
             ProtoField {
                 name: "locale",
@@ -398,7 +398,7 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
                 name: "documents",
                 ty: "repeated DataMap",
                 tag: 2,
-                doc: "List of documents to create. Each item is a protobuf Struct with field values.",
+                doc: "List of documents to create. Each item is a DataMap with field values.",
             },
             ProtoField {
                 name: "locale",

@@ -228,14 +228,7 @@ impl<'a> ServiceContext<'a> {
     /// all locales in snapshots is a separate change.
     #[must_use]
     pub fn default_locale_ctx(&self) -> Option<crate::db::query::LocaleContext> {
-        let config = self.locale_config?;
-        if !config.is_enabled() {
-            return None;
-        }
-        Some(crate::db::query::LocaleContext {
-            mode: crate::db::query::LocaleMode::Default,
-            config: config.clone(),
-        })
+        crate::db::query::LocaleContext::default_for(self.locale_config?)
     }
 
     /// Get the definition as a `CollectionDefinition`. Errors if the context

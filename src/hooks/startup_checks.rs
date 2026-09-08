@@ -699,6 +699,15 @@ pub fn validate_table_name_collisions(registry: &Registry) -> Result<()> {
     }
 
     for slug in registry.globals.keys() {
+        // A global never shares a TABLE with a collection (`_global_` prefix),
+        // but it must not share a SLUG either: the MCP surface keys exposure,
+        // gating, and description by slug.
+        if registry.collections.contains_key(slug) {
+            conflicts.push(format!(
+                "slug '{slug}' is used by both a collection and a global — slugs are unique \
+                 across both"
+            ));
+        }
         claim_table(
             &mut owners,
             &mut conflicts,
@@ -1214,6 +1223,28 @@ mod tests {
         assert!(
             msg.contains("posts_tags"),
             "expected colliding table: {msg}"
+        );
+    }
+
+    /// A global and a collection never share a table, but they must not share
+    /// a slug: the MCP surface keys exposure and gating by slug alone.
+    #[test]
+    fn shared_collection_and_global_slug_rejected() {
+        let registry = Registry::shared();
+        registry
+            .write()
+            .unwrap()
+            .register_collection(CollectionDefinition::new("settings"));
+        registry
+            .write()
+            .unwrap()
+            .register_global(crate::core::GlobalDefinition::new("settings"));
+
+        let err = validate_table_name_collisions(&registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("slug 'settings' is used by both"),
+            "expected the shared-slug conflict: {msg}"
         );
     }
 

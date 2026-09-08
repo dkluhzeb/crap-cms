@@ -314,11 +314,11 @@ fn exec_list_job_runs(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
 
     let slug = args.get("slug").and_then(Value::as_str);
     let status = args.get("status").and_then(Value::as_str);
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_i64)
-        .unwrap_or(DEFAULT_RUN_LIMIT)
-        .max(0);
+    // Capped by the same pagination config every other surface uses — an
+    // uncapped limit would return the whole runs table in one response.
+    let requested = args.get("limit").and_then(Value::as_i64);
+    let limit = crate::db::query::PaginationCtx::from_config(&ctx.config.pagination)
+        .resolve_limit(Some(requested.unwrap_or(DEFAULT_RUN_LIMIT)));
     let offset = args
         .get("offset")
         .and_then(Value::as_i64)

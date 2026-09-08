@@ -87,6 +87,6 @@ pub use update::UpdateCmd;
 // items reached externally ≥2 times live at `commands::*` rather
 // than `commands::user::*` so callers don't repeat the deep path.
 pub use user::{
-    UserChangePasswordParams, UserCreateParams, UserDeleteParams, user_change_password,
+    UserChangePasswordParams, UserCreateParams, UserDeleteParams, UserLookup, user_change_password,
     user_create, user_delete, user_list, user_lock, user_unlock,
 };

@@ -302,7 +302,7 @@ fn cmd_user_create_via_library() {
     // Verify user was created in DB
     let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
-    let found = query::find_by_email(&conn, "users", def, "lib_create@example.com", false)
+    let found = query::find_by_email(&conn, "users", def, "lib_create@example.com", false, None)
         .unwrap()
         .expect("user should exist after create");
     assert_eq!(found.get_str("email"), Some("lib_create@example.com"));
@@ -336,7 +336,7 @@ fn cmd_user_create_extra_fields() {
 
     let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
-    let found = query::find_by_email(&conn, "users", def, "extra@example.com", false)
+    let found = query::find_by_email(&conn, "users", def, "extra@example.com", false, None)
         .unwrap()
         .expect("user should exist");
     assert_eq!(found.get_str("name"), Some("Admin User"));
@@ -1021,7 +1021,7 @@ fn cli_user_paths_maintain_ref_counts_and_fts() {
     );
 
     let users_def = registry.get_collection("users").unwrap();
-    let user_id = query::find_by_email(&conn, "users", users_def, "ref@example.com", false)
+    let user_id = query::find_by_email(&conn, "users", users_def, "ref@example.com", false, None)
         .unwrap()
         .unwrap()
         .id;

@@ -26,6 +26,7 @@ use crate::admin::{
     },
     server::extract_cookie,
 };
+use crate::config::LocaleConfig;
 use crate::core::{AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface};
 use crate::db::{BoxedConnection, DbPool, query};
 use crate::hooks::HookRunner;
@@ -160,6 +161,7 @@ struct ResolveAuthParams {
     bearer_token: Option<String>,
     session_token: Option<String>,
     headers_map: HashMap<String, String>,
+    locale_config: LocaleConfig,
 }
 
 /// Resolve the request's principal on a blocking thread: run the unified
@@ -192,6 +194,7 @@ fn resolve_auth(p: &ResolveAuthParams) -> AdminAuthOutcome {
             token_provider: p.token_provider.as_ref(),
             hook_runner: &p.hook_runner,
             conn: &conn,
+            locale_config: &p.locale_config,
         },
     );
 
@@ -252,6 +255,7 @@ pub(in crate::admin) async fn auth_middleware(
         bearer_token,
         session_token,
         headers_map: headers_to_map(request.headers()),
+        locale_config: state.config.locale.clone(),
     };
 
     let resolution = spawn_blocking(move || resolve_auth(&params)).await;

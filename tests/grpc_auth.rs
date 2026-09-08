@@ -119,13 +119,31 @@ fn setup_service_with_init_lua(
     globals: Vec<GlobalDefinition>,
     init_lua: Option<&str>,
 ) -> TestSetup {
+    setup_service_full(collections, globals, init_lua, None)
+}
+
+/// Like [`setup_service`], but with an explicit config (e.g. locales enabled).
+fn setup_service_with_config(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+) -> TestSetup {
+    setup_service_full(collections, globals, None, Some(config))
+}
+
+fn setup_service_full(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    init_lua: Option<&str>,
+    config: Option<CrapConfig>,
+) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     if let Some(src) = init_lua {
         std::fs::write(tmp.path().join("init.lua"), src).expect("write init.lua");
     }
 
-    let mut config = CrapConfig::test_default();
+    let mut config = config.unwrap_or_else(CrapConfig::test_default);
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -1849,4 +1867,199 @@ async fn totp_login_provisions_verifies_and_confirms() {
         resp.totp_provisioning_uri.is_none(),
         "confirmed enrollment must not re-expose provisioning"
     );
+}
+
+// ── Login / VerifyMfa user document ───────────────────────────────────────
+
+/// `LoginResponse.user` carries the same contract every other `Document` on
+/// the wire does — the credential lookup is a raw row read, so without an
+/// explicit strip it would ship `hidden` columns and read-denied fields that
+/// `Me` removes.
+fn make_users_def_with_hidden() -> CollectionDefinition {
+    let mut def = make_users_def();
+    def.fields.push(
+        FieldDefinition::builder("internal_note", FieldType::Text)
+            .hidden(true)
+            .build(),
+    );
+    def
+}
+
+#[tokio::test]
+async fn login_response_strips_hidden_fields_like_me() {
+    let ts = setup_service(vec![make_users_def_with_hidden()], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "hid@example.com"),
+                ("password", "secret123"),
+                ("internal_note", "eyes only"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("create");
+
+    let login = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "hid@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .expect("login")
+        .into_inner();
+
+    let user = login.user.expect("login returns the user document");
+    assert_eq!(
+        get_proto_field(&user, "internal_note"),
+        None,
+        "a hidden column must not ride along on the login response"
+    );
+    assert_eq!(
+        get_proto_field(&user, "email").as_deref(),
+        Some("hid@example.com"),
+        "ordinary fields are still returned"
+    );
+
+    // `Me` on the same token agrees — one contract, both RPCs.
+    let me = ts
+        .service
+        .me(Request::new(content::MeRequest { token: login.token }))
+        .await
+        .expect("me")
+        .into_inner();
+    assert_eq!(get_proto_field(&me.user.unwrap(), "internal_note"), None);
+}
+
+/// A LOCALIZED auth collection: the credential lookup and the `Me` read must
+/// select the per-locale columns (`name__en`), not the bare logical names,
+/// which do not exist there.
+#[tokio::test]
+async fn login_and_me_work_on_a_localized_auth_collection() {
+    let mut def = make_users_def();
+    for field in &mut def.fields {
+        if field.name == "name" {
+            field.localized = true;
+        }
+    }
+
+    let mut config = CrapConfig::test_default();
+    config.locale = crap_cms::config::LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+    let ts = setup_service_with_config(vec![def], vec![], config);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "l10n@example.com"),
+                ("password", "secret123"),
+                ("name", "Ada"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("create on a localized auth collection");
+
+    let login = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "l10n@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .expect("login must not error on a localized auth collection")
+        .into_inner();
+
+    let user = login.user.expect("user document");
+    assert_eq!(get_proto_field(&user, "name").as_deref(), Some("Ada"));
+
+    let me = ts
+        .service
+        .me(Request::new(content::MeRequest { token: login.token }))
+        .await
+        .expect("me must not error on a localized auth collection")
+        .into_inner();
+    assert_eq!(
+        get_proto_field(&me.user.unwrap(), "name").as_deref(),
+        Some("Ada")
+    );
+}
+
+/// Changing a user's email address clears the verified flag: the new address
+/// has never been confirmed, and `verify_email` promises a user cannot log in
+/// with an unconfirmed one.
+#[tokio::test]
+async fn changing_the_email_requires_re_verification() {
+    let ts = setup_service(vec![make_verify_users_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "members".to_string(),
+            data: Some(make_struct(&[
+                ("email", "first@example.com"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("create")
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Confirm the original address so the account is live.
+    {
+        let conn = ts.pool.get().unwrap();
+        crap_cms::db::query::mark_verified(&conn, "members", &doc.id).unwrap();
+    }
+    ts.service
+        .login(Request::new(content::LoginRequest {
+            collection: "members".to_string(),
+            email: "first@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .expect("verified user can log in");
+
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "members".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("email", "second@example.com")])),
+            locale: None,
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .expect("update the address");
+
+    let err = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "members".to_string(),
+            email: "second@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .expect_err("the new address is unconfirmed");
+    // Unverified reports as generic invalid credentials by design — the login
+    // surface never discloses account state.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err:?}");
 }

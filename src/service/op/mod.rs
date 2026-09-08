@@ -386,6 +386,7 @@ pub fn resolve_queue_actor(
                 token_provider: infra.token_provider.as_ref(),
                 hook_runner: &infra.hook_runner,
                 conn: &conn,
+                locale_config: &infra.locale_config,
             };
 
             match evaluate(&request, &deps) {
@@ -472,6 +473,7 @@ fn resolve_principal(
                 token_provider: infra.token_provider.as_ref(),
                 hook_runner: &infra.hook_runner,
                 conn,
+                locale_config: &infra.locale_config,
             };
 
             match evaluate(&request, &deps) {

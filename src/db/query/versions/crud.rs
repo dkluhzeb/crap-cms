@@ -31,6 +31,10 @@ fn row_to_version(row: &DbRow) -> Result<VersionSnapshot> {
                 serde_json::from_str(&snapshot_str)
                     .context("Failed to parse version snapshot JSON")?,
             )
+            // Every consumer renders this (admin sidebar/table, Lua
+            // `list_versions`, the gRPC codec); selecting it is what makes it
+            // more than an empty string.
+            .maybe_created_at(row.get_string("created_at").ok())
             .build(),
     )
 }
@@ -109,7 +113,7 @@ pub fn find_latest_version(
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot \
+        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at \
          FROM {table} WHERE _parent = {p1} AND _latest = 1 LIMIT 1"
     );
 
@@ -138,7 +142,7 @@ pub fn find_latest_published_version(
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot \
+        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at \
          FROM {table} WHERE _parent = {p1} AND _status = 'published' \
          ORDER BY _version DESC LIMIT 1"
     );
@@ -227,7 +231,7 @@ pub fn list_versions(
     };
 
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot \
+        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at \
          FROM {table} WHERE _parent = {p1}{status} ORDER BY _version DESC{limit_clause}{offset_clause}"
     );
 
@@ -250,7 +254,7 @@ pub fn find_version_by_id(
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot \
+        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at \
          FROM {table} WHERE id = {p1} LIMIT 1"
     );
 

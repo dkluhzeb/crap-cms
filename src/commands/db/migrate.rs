@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli::{self, Spinner, Table},
-    commands::MigrateAction,
+    commands::{MigrateAction, helpers},
     config::CrapConfig,
     core::Registry,
     db::{DbPool, migrate as db_migrate, pool},
@@ -177,6 +177,8 @@ fn migrate_fresh(
              Pass --confirm to proceed."
         );
     }
+
+    helpers::refuse_if_server_running(config_dir, "migrate fresh")?;
 
     let spin = Spinner::new("Dropping all tables...");
     db_migrate::drop_all_tables(pool)?;

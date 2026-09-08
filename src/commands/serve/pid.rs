@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::helpers;
 
-/// Server PID filename.
-const PID_FILENAME: &str = "crap.pid";
+/// Server PID filename (shared with the destructive db commands' guard).
+const PID_FILENAME: &str = helpers::SERVER_PID_FILENAME;
 
 /// Path to the server PID file.
 #[cfg_attr(not(test), allow(dead_code))]

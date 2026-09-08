@@ -10,8 +10,9 @@ use serde_json::Value;
 
 use crate::{
     cli::{self, crap_theme},
+    config::LocaleConfig,
     core::{CollectionDefinition, Document, Registry, field::FieldType},
-    db::{BoxedConnection, DbPool, query},
+    db::{BoxedConnection, DbPool, LocaleContext, query},
 };
 
 use crate::core::collection::Auth;
@@ -54,38 +55,56 @@ pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str)
     Ok(())
 }
 
+/// What every user subcommand needs to find the user it operates on.
+/// `locale` is required because a LOCALIZED auth collection's rows can only
+/// be selected under a locale context (bare column names don't exist there).
+pub struct UserLookup<'a> {
+    pub pool: &'a DbPool,
+    pub registry: &'a Registry,
+    pub collection: &'a str,
+    pub email: Option<String>,
+    pub id: Option<String>,
+    pub locale: &'a LocaleConfig,
+}
+
 /// Resolve a user by --email or --id. Returns (def, document).
 /// Untestable: interactive fallback uses `dialoguer::Select` for user selection.
 #[cfg(not(tarpaulin_include))]
 pub(super) fn resolve_user(
-    pool: &DbPool,
-    registry: &Registry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
+    lookup: &UserLookup<'_>,
 ) -> Result<(Arc<CollectionDefinition>, Document)> {
+    let UserLookup {
+        pool,
+        registry,
+        collection,
+        email,
+        id,
+        locale,
+    } = lookup;
+    let (email, id) = (email.clone(), id.clone());
     let def = load_auth_collection(registry, collection)?;
     let conn = pool.get().context("Failed to get database connection")?;
+    let locale_ctx = LocaleContext::default_for(locale);
 
     if let Some(email) = email {
         // Admin tooling reaches soft-deleted users too (e.g. password recovery
         // for a trashed account) — unlike the HTTP login/reset paths, which
         // exclude them.
-        let doc = query::find_by_email(&conn, collection, &def, &email, true)?
+        let doc = query::find_by_email(&conn, collection, &def, &email, true, locale_ctx.as_ref())?
             .ok_or_else(|| anyhow!("No user found with email '{email}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
 
     if let Some(id) = id {
-        let doc = query::find_by_id(&conn, collection, &def, &id, None)?
+        let doc = query::find_by_id(&conn, collection, &def, &id, locale_ctx.as_ref())?
             .ok_or_else(|| anyhow!("No user found with id '{id}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
 
     // Interactive: select from existing users
-    select_user_interactive(&conn, collection, &def)
+    select_user_interactive(&conn, collection, &def, locale_ctx.as_ref())
 }
 
 /// Interactively select a user from the collection.
@@ -94,9 +113,10 @@ fn select_user_interactive(
     conn: &BoxedConnection,
     collection: &str,
     def: &Arc<CollectionDefinition>,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<(Arc<CollectionDefinition>, Document)> {
     let find_query = query::FindQuery::default();
-    let users = query::find(conn, collection, def, &find_query, None)?;
+    let users = query::find(conn, collection, def, &find_query, locale_ctx)?;
 
     if users.is_empty() {
         bail!("No users in '{collection}'");

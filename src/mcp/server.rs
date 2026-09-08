@@ -137,7 +137,14 @@ impl McpServer {
         // MCP spec `initialize` happens once per session, so a second
         // call here is a protocol violation — silently ignore the set
         // failure and keep the original name.
-        let _ = self.client_name.set(client_name.to_string());
+        // Audit-log label: strip control characters (a newline would forge a
+        // log line) and cap the length.
+        let label: String = client_name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        let _ = self.client_name.set(label);
 
         info!(
             "MCP initialize: client={}/{} protocol={} capabilities={}",

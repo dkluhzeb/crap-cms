@@ -15,7 +15,7 @@ Add an `[mcp]` section to `crap.toml`:
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
-job_tools = false           # Job tools: false (none) | "read" (introspection) | "all" (+ trigger_job)
+job_tools = false           # Job tools: false (none) | "read" (introspection) | "all" (+ trigger_job, cancel_job_run)
 api_key = ""                # API key for HTTP auth (required, min 32 chars, when http = true)
 http_max_body_bytes = "1MB" # Max /mcp request-body size (int bytes or "16MB"-style string)
 include_collections = []    # Whitelist (empty = all)
@@ -182,6 +182,12 @@ covers reads as well as writes:
 > `force_hard_delete`, or `queue` would have it shadowed by the reserved argument — the
 > same caveat that already applies to `id` and `password`.
 
+**`null` clears a field.** A field set to `null` in a write tool's arguments
+is written as null (the same contract gRPC and Lua have), which is how a
+translation is removed. Omit the key to leave a field untouched. An argument
+that is neither a reserved name nor a field of the collection is rejected,
+whatever its value.
+
 ### Global CRUD (per global)
 
 For each global (e.g., `settings`):
@@ -211,7 +217,7 @@ Always available:
 |------|-------|
 | `false` | none |
 | `"read"` | `list_jobs`, `get_job_run`, `list_job_runs` |
-| `"all"` | the above **plus** `trigger_job` |
+| `"all"` | the above **plus** `trigger_job` and `cancel_job_run` |
 
 | Tool | Description |
 |------|-------------|
@@ -368,9 +374,10 @@ and at execution time, so knowing a collection slug is not enough to bypass the 
 
 A second, per-collection control is the **`access.mcp`** rule (set on the
 collection or global definition). Unlike per-user access (which MCP bypasses),
-`access.mcp` is a user-independent boolean gate evaluated at startup: it decides
-whether the collection is exposed to the MCP surface *at all* — its tools,
-resources, and schema introspection. The default is permissive (a collection is
+`access.mcp` is a user-independent boolean gate evaluated per request (on tool
+listing, resource reads, and every CRUD call — the rule may read the database
+and change its answer): it decides whether the collection is exposed to the
+MCP surface *at all* — its tools, resources, and schema introspection. The default is permissive (a collection is
 exposed when MCP is enabled globally), so `access.mcp` only ever *removes* a
 collection — e.g. keep an internal collection out of the LLM surface while still
 serving it over the admin/gRPC APIs. It must return `true`/`false`; a filter

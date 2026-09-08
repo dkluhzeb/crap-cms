@@ -347,6 +347,20 @@ changing a representation is a breaking change to every consumer.
   `stack traceback:` is what a client, admin toast, or MCP response sees;
   the traceback goes to the server log.
 
+- **A version snapshot records every locale's column.** Snapshots carry the
+  decorated `field__xx` columns for every configured locale, not just the
+  value the writing locale resolved; restore prefers those columns and falls
+  back to the bare key only for snapshots written before this was true. A
+  draft is read back for the locale being read.
+- **`_status` is written only where it exists.** Restore and unpublish stamp
+  it only for a drafts-enabled collection — an audit-trail collection
+  (`versions = { drafts = false }`) has no such column.
+- **A user document on an auth response is a normal `Document`.** `Login`,
+  `VerifyMfa` and `Me` return it hydrated, field-read-stripped and
+  API-hidden-stripped, like every other document on the wire.
+- **Changing an email address clears the verified flag** on a collection that
+  requires verification.
+
 ## Read-surface invariants
 
 - **Pagination limit and populate depth are clamped at every read surface**
@@ -464,6 +478,16 @@ changing a representation is a breaking change to every consumer.
   list, which already omits the owner. The startup ref-count backfill
   skips (and logs) a stored reference whose target no longer exists
   instead of refusing to start.
+
+- **The auth secret is resolved once, at config load.** An empty `[auth]
+  secret` is replaced by the generated, persisted `data/.jwt_secret` before
+  any consumer sees it, so JWT signing, `crap.crypto`, TOTP sealing and
+  signed upload URLs all key off the same value. Deriving a key from an empty
+  secret is refused, never silently done.
+- **A slug names either a collection or a global, never both.** Re-defining
+  the same kind stays legal (the plugin extension pattern).
+- **`null` means "clear" on every write surface**, MCP included; non-finite
+  numbers are rejected rather than coerced to null.
 
 ## Server-config posture (frozen defaults)
 

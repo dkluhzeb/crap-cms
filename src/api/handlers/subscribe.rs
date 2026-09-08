@@ -17,10 +17,14 @@ use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
 use crate::admin::handlers::shared::response::on_blocking_section;
+use crate::config::LocaleConfig;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, enum_mapping, proto::json_to_field_value},
+        handlers::{
+            ContentService, content_service::pool_error_status, enum_mapping,
+            proto::json_to_field_value,
+        },
     },
     core::{
         Document, EventReceiver, MutationEvent, Registry, SharedTokenProvider,
@@ -336,22 +340,11 @@ impl ContentService {
         let token = Self::bearer_or_body_token(&metadata, &req.token);
         let headers = self.metadata_headers(&metadata);
 
-        // Empty = ALL operations, including the lifecycle ones.
-        let requested_ops: HashSet<String> = if req.operations.is_empty() {
-            [
-                "create",
-                "update",
-                "delete",
-                "undelete",
-                "unpublish",
-                "restore",
-            ]
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect()
-        } else {
-            req.operations.into_iter().collect()
-        };
+        // Empty = ALL operations, including the lifecycle ones. A name outside
+        // the known set is rejected rather than accepted as a stream that
+        // never delivers.
+        let requested_ops =
+            requested_operations(req.operations).map_err(Status::invalid_argument)?;
 
         let access = self
             .resolve_subscribe_access(token, headers, req.collections, req.globals)
@@ -418,6 +411,7 @@ impl ContentService {
             headers,
             collections_req,
             globals_req,
+            locale_config: self.infra.locale_config.clone(),
         };
 
         task::spawn_blocking(move || resolve_subscribe_access_blocking(input))
@@ -437,6 +431,7 @@ struct ResolveSubscribeAccessBlockingInput {
     token: Option<String>,
     collections_req: Vec<String>,
     globals_req: Vec<String>,
+    locale_config: LocaleConfig,
 }
 
 /// Walk every requested collection + global, run their per-view `access` hooks
@@ -445,11 +440,12 @@ struct ResolveSubscribeAccessBlockingInput {
 fn resolve_subscribe_access_blocking(
     input: ResolveSubscribeAccessBlockingInput,
 ) -> Result<SubscribeAccess, Status> {
+    let kind = input.pool.kind();
     let mut conn = input
         .pool
         .get()
         .inspect_err(|e| error!("Subscribe pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .map_err(|e| pool_error_status(e, kind))?;
 
     let auth_user = ContentService::resolve_auth_user(
         input.token.as_deref(),
@@ -458,6 +454,7 @@ fn resolve_subscribe_access_blocking(
         &input.hook_runner,
         &input.registry,
         &conn,
+        &input.locale_config,
     )?;
     let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
 
@@ -508,9 +505,54 @@ fn resolve_subscribe_access_blocking(
     })
 }
 
+/// Every operation a subscription can carry.
+const SUBSCRIBE_OPERATIONS: [&str; 6] = [
+    "create",
+    "update",
+    "delete",
+    "undelete",
+    "unpublish",
+    "restore",
+];
+
+/// Resolve the requested operation set: empty means all six; an unknown
+/// name is an error (it would otherwise yield a stream that never delivers).
+fn requested_operations(ops: Vec<String>) -> Result<HashSet<String>, String> {
+    if ops.is_empty() {
+        return Ok(SUBSCRIBE_OPERATIONS
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect());
+    }
+
+    if let Some(unknown) = ops
+        .iter()
+        .find(|o| !SUBSCRIBE_OPERATIONS.contains(&o.as_str()))
+    {
+        return Err(format!(
+            "unknown operation '{unknown}' — valid operations: {}",
+            SUBSCRIBE_OPERATIONS.join(", ")
+        ));
+    }
+
+    Ok(ops.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requested_operations_validates_names() {
+        let all = requested_operations(vec![]).unwrap();
+        assert_eq!(all.len(), 6);
+
+        let some = requested_operations(vec!["create".into(), "restore".into()]).unwrap();
+        assert_eq!(some.len(), 2);
+
+        let err = requested_operations(vec!["creat".into()]).unwrap_err();
+        assert!(err.contains("unknown operation 'creat'"), "{err}");
+    }
 
     #[test]
     fn subscribe_slot_acquire_within_limit() {

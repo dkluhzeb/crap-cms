@@ -716,7 +716,7 @@ message CreateRequest {
   // The collection slug.
   string collection = 1;
 
-  // Document field values as a protobuf Struct (JSON-compatible key/value map).
+  // Document field values as a DataMap (JSON-compatible key/value map).
   // For auth collections, include a "password" key; it is extracted before
   // hooks run and stored as an Argon2id hash in a hidden column.
   DataMap data = 2;
@@ -744,7 +744,7 @@ message CreateManyRequest {
   // The collection slug.
   string collection = 1;
 
-  // List of documents to create. Each item is a protobuf Struct with field values.
+  // List of documents to create. Each item is a DataMap with field values.
   repeated DataMap documents = 2;
 
   // BCP-47 locale for localized field writes.
@@ -1333,8 +1333,9 @@ message SubscribeRequest {
   // Global slugs to subscribe to. Empty = subscribe to all accessible globals.
   repeated string globals = 2;
 
-  // Operation types to receive: "create", "update", "delete".
-  // Empty = subscribe to all three operation types.
+  // Operation types to receive: "create", "update", "delete", "undelete",
+  // "unpublish", "restore". Empty = subscribe to all six. An unknown name is
+  // rejected with INVALID_ARGUMENT.
   repeated string operations = 3;
 
   // JWT token for auth. Required when target collections enforce read access.
@@ -1389,6 +1390,10 @@ enum JobScheduledBy {
   JOB_SCHEDULED_BY_GRPC = 1;
   JOB_SCHEDULED_BY_CRON = 2;
   JOB_SCHEDULED_BY_HOOK = 3;
+  // Queued through an MCP tool.
+  JOB_SCHEDULED_BY_MCP = 4;
+  // Queued from the command line (`crap-cms jobs trigger`).
+  JOB_SCHEDULED_BY_CLI = 5;
 }
 
 // MutationEvent is a single real-time event delivered on the Subscribe stream.

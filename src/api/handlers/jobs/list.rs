@@ -10,7 +10,10 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::{content, handlers::ContentService},
+    api::{
+        content,
+        handlers::{ContentService, content_service::pool_error_status},
+    },
     service::{self, AppInfra, ServiceContext},
 };
 
@@ -22,11 +25,12 @@ fn readable_job_slugs_blocking(
     token: Option<&str>,
     headers: &HashMap<String, String>,
 ) -> Result<HashSet<String>, Status> {
+    let kind = infra.pool.kind();
     let conn = infra
         .pool
         .get()
         .inspect_err(|e| error!("ListJobs pool error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        .map_err(|e| pool_error_status(e, kind))?;
 
     let auth_user = ContentService::resolve_auth_user(
         token,
@@ -35,6 +39,7 @@ fn readable_job_slugs_blocking(
         &infra.hook_runner,
         &infra.registry,
         &conn,
+        &infra.locale_config,
     )?;
 
     if auth_user.is_none() {

@@ -97,6 +97,7 @@ fn account_action_blocking(
         &infra.hook_runner,
         &infra.registry,
         &conn,
+        &input.infra.locale_config,
     )?;
 
     let Some(auth_user) = auth_user else {

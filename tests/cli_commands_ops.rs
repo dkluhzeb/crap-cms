@@ -157,6 +157,27 @@ return M
 // 18. Command Export/Import Functions
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Build the lookup bundle the user subcommands take.
+fn user_lookup<'a>(
+    pool: &'a DbPool,
+    registry: &'a crap_cms::core::Registry,
+    collection: &'a str,
+    email: Option<String>,
+    id: Option<String>,
+) -> commands::UserLookup<'a> {
+    commands::UserLookup {
+        pool,
+        registry,
+        collection,
+        email,
+        id,
+        locale: &LOCALE,
+    }
+}
+
+static LOCALE: std::sync::LazyLock<crap_cms::config::LocaleConfig> =
+    std::sync::LazyLock::new(crap_cms::config::LocaleConfig::default);
+
 #[test]
 fn cmd_user_lock_by_email() {
     let (_tmp, pool, registry) = full_setup();
@@ -176,13 +197,13 @@ fn cmd_user_lock_by_email() {
     drop(conn);
 
     // Lock via command
-    commands::user_lock(
+    commands::user_lock(&user_lookup(
         &pool,
         &registry,
         "users",
         Some("lockme@example.com".to_string()),
         None,
-    )
+    ))
     .unwrap();
 
     // Verify locked
@@ -204,7 +225,14 @@ fn cmd_user_lock_by_id() {
     );
 
     // Lock via ID
-    commands::user_lock(&pool, &registry, "users", None, Some(doc.id.to_string())).unwrap();
+    commands::user_lock(&user_lookup(
+        &pool,
+        &registry,
+        "users",
+        None,
+        Some(doc.id.to_string()),
+    ))
+    .unwrap();
 
     let conn = pool.get().unwrap();
     assert!(query::is_locked(&conn, "users", &doc.id).unwrap());
@@ -230,13 +258,13 @@ fn cmd_user_unlock_by_email() {
     drop(conn);
 
     // Unlock via command
-    commands::user_unlock(
+    commands::user_unlock(&user_lookup(
         &pool,
         &registry,
         "users",
         Some("unlockme@example.com".to_string()),
         None,
-    )
+    ))
     .unwrap();
 
     let conn = pool.get().unwrap();
@@ -348,6 +376,7 @@ fn cmd_user_change_password_by_email() {
         id: None,
         password: Some("newpw123".to_string()),
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &LOCALE,
     })
     .unwrap();
 
@@ -381,6 +410,7 @@ fn cmd_user_change_password_by_id() {
         id: Some(doc.id.to_string()),
         password: Some("newpw456".to_string()),
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &LOCALE,
     })
     .unwrap();
 
@@ -403,6 +433,7 @@ fn cmd_user_change_password_nonexistent_errors() {
         id: None,
         password: Some("newpw".to_string()),
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &LOCALE,
     });
     assert!(result.is_err());
 }
@@ -411,13 +442,13 @@ fn cmd_user_change_password_nonexistent_errors() {
 fn cmd_user_lock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user_lock(
+    let result = commands::user_lock(&user_lookup(
         &pool,
         &registry,
         "posts",
         Some("anyone@example.com".to_string()),
         None,
-    );
+    ));
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {err}");
@@ -427,13 +458,13 @@ fn cmd_user_lock_non_auth_errors() {
 fn cmd_user_unlock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user_unlock(
+    let result = commands::user_unlock(&user_lookup(
         &pool,
         &registry,
         "posts",
         Some("anyone@example.com".to_string()),
         None,
-    );
+    ));
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {err}");
@@ -469,6 +500,7 @@ fn cmd_user_change_password_non_auth_errors() {
         id: None,
         password: Some("newpw".to_string()),
         password_policy: &crap_cms::config::PasswordPolicy::default(),
+        locale: &LOCALE,
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();

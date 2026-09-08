@@ -98,6 +98,14 @@ impl VersionSnapshotBuilder {
         self
     }
 
+    /// Set the creation timestamp from an optional value (a row read that may
+    /// not carry the column).
+    #[must_use]
+    pub fn maybe_created_at(mut self, ts: Option<String>) -> Self {
+        self.created_at = ts;
+        self
+    }
+
     /// Set the last update timestamp for this version.
     #[must_use]
     pub fn updated_at(mut self, ts: impl Into<String>) -> Self {

@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::core::{
     CollectionDefinition, Document, DocumentFields, collection::GlobalDefinition,
-    document::DocumentBuilder,
+    document::DocumentBuilder, prefixed_name, walk_leaf_fields,
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
@@ -92,6 +92,50 @@ pub struct FindByIdFullParams<'a> {
     pub include_deleted: bool,
 }
 
+/// Resolve a draft snapshot's per-locale columns for the locale being read.
+///
+/// Snapshots store `title__en` / `title__de` alongside the value that was
+/// resolved when the draft was saved. Without this, a draft saved in one
+/// locale would be served as the content of every other locale.
+fn resolve_snapshot_locale(
+    doc: &mut Document,
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) {
+    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
+        return;
+    };
+    let locale = ctx.access_locale();
+    let fallback = ctx
+        .config
+        .fallback
+        .then(|| ctx.config.default_locale.clone());
+
+    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, inherited| {
+        if !(field.localized || inherited) {
+            return Ok(());
+        }
+        let name = prefixed_name(prefix, &field.name);
+        let value = doc
+            .fields
+            .get(&format!("{name}__{locale}"))
+            .filter(|v| !v.is_null())
+            .or_else(|| {
+                fallback
+                    .as_ref()
+                    .and_then(|f| doc.fields.get(&format!("{name}__{f}")))
+                    .filter(|v| !v.is_null())
+            })
+            .cloned();
+
+        if let Some(value) = value {
+            doc.fields.insert(name, value);
+        }
+
+        Ok(())
+    });
+}
+
 /// Find a document by ID with full hydration and optional draft overlay.
 ///
 /// Unified read path used by admin UI, gRPC, and Lua. Handles:
@@ -112,6 +156,11 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         && version.status == "draft"
         && let Some(mut doc) = document_from_snapshot(p.id, &version.snapshot)
     {
+        // A snapshot carries every locale's decorated column plus the value
+        // resolved at save time. Resolve for the READING locale, so a draft
+        // saved under `en` doesn't surface as the `de` value (and vice versa).
+        resolve_snapshot_locale(&mut doc, p.def, p.locale_ctx);
+
         // SECURITY: the snapshot bypasses the SQL `WHERE` path, so the view's
         // row constraint (e.g. a `draft = { author = me }` rule) must be enforced
         // here against the snapshot fields. Without this, a caller with a

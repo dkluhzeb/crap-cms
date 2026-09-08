@@ -258,7 +258,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );
             INSERT INTO posts (id, title, _status) VALUES ('pub1', 'Published', 'published');
             INSERT INTO posts (id, title, _status) VALUES ('draft1', 'Secret Draft', 'draft');",
@@ -398,7 +399,7 @@ mod tests {
             );
             CREATE TABLE _versions_posts (
                 id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
-                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT, created_at TEXT
             );
             -- d1: another owner's never-published draft (content in the snapshot).
             INSERT INTO posts (id, title, author, _status) VALUES ('d1', 'x', 'other', 'draft');
@@ -535,7 +536,7 @@ mod tests {
             );
             CREATE TABLE _versions_posts (
                 id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
-                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT, created_at TEXT
             );
             -- A LIVE (non-deleted) document carrying a pending draft snapshot.
             INSERT INTO posts (id, title, _deleted_at) VALUES ('live1', 'Live', NULL);

@@ -35,14 +35,16 @@ pub(in crate::api::handlers) fn job_run_status(status: JobStatus) -> content::Jo
     }
 }
 
-/// Map the stored `scheduled_by` string (`"grpc"`/`"cron"`/`"hook"`) to its
-/// proto enum. Anything else — `"cli"` (no proto variant), unknown values, or
-/// `None` — is `Unspecified`.
+/// Map the stored `scheduled_by` string to its proto enum. `"api"` is what a
+/// queued bulk operation over gRPC records, so it maps to `Grpc`; unknown
+/// values or `None` are `Unspecified`.
 pub(in crate::api::handlers) fn job_scheduled_by(value: Option<&str>) -> content::JobScheduledBy {
     match value {
-        Some("grpc") => content::JobScheduledBy::Grpc,
+        Some("grpc" | "api") => content::JobScheduledBy::Grpc,
         Some("cron") => content::JobScheduledBy::Cron,
         Some("hook") => content::JobScheduledBy::Hook,
+        Some("mcp") => content::JobScheduledBy::Mcp,
+        Some("cli") => content::JobScheduledBy::Cli,
         _ => content::JobScheduledBy::Unspecified,
     }
 }
@@ -142,10 +144,15 @@ mod tests {
             job_scheduled_by(Some("hook")),
             content::JobScheduledBy::Hook
         );
+        // A queued bulk op over gRPC is recorded as "api"; MCP and CLI have
+        // their own variants.
+        assert_eq!(job_scheduled_by(Some("api")), content::JobScheduledBy::Grpc);
+        assert_eq!(job_scheduled_by(Some("mcp")), content::JobScheduledBy::Mcp);
+        assert_eq!(job_scheduled_by(Some("cli")), content::JobScheduledBy::Cli);
         // Absent or unrecognized → Unspecified.
         assert_eq!(job_scheduled_by(None), content::JobScheduledBy::Unspecified);
         assert_eq!(
-            job_scheduled_by(Some("api")),
+            job_scheduled_by(Some("something-else")),
             content::JobScheduledBy::Unspecified
         );
     }

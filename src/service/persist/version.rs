@@ -67,7 +67,15 @@ pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx.as_ref(), false)?
         .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
-    versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;
+    versions::unpublish_with_snapshot(
+        conn,
+        slug,
+        id,
+        &def.fields,
+        def.versions.as_ref(),
+        &doc,
+        ctx.locale_config,
+    )?;
 
     Ok(doc)
 }

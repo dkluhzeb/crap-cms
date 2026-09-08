@@ -240,7 +240,7 @@ fn create_version_and_find_latest() {
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
     // Build snapshot and create version
-    let snapshot = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snapshot = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     let v1 = query::create_version(&conn, "articles", &doc.id, "published", &snapshot).unwrap();
 
     assert_eq!(v1.version, 1);
@@ -265,7 +265,7 @@ fn multiple_versions_latest_flag() {
     let data: DocumentFields = [("title".into(), json!("V1"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
     let v3 = query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
@@ -290,7 +290,7 @@ fn list_versions_newest_first() {
 
     let data: DocumentFields = [("title".into(), json!("Ordered"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
 
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
@@ -311,7 +311,7 @@ fn list_versions_with_limit() {
 
     let data: DocumentFields = [("title".into(), json!("Limited"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
 
     for _ in 0..5 {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
@@ -332,7 +332,7 @@ fn find_version_by_id_found_and_not_found() {
 
     let data: DocumentFields = [("title".into(), json!("FindById"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     let v = query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
 
     // Find existing
@@ -381,7 +381,7 @@ fn prune_versions_keeps_newest() {
         .into_iter()
         .collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
 
     for _ in 0..10 {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
@@ -411,7 +411,7 @@ fn prune_versions_zero_means_unlimited() {
 
     let data: DocumentFields = [("title".into(), json!("No Prune"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
 
     for _ in 0..5 {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
@@ -441,7 +441,7 @@ fn build_snapshot_includes_all_fields() {
     .collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
-    let snapshot = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snapshot = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     let obj = snapshot.as_object().unwrap();
     assert_eq!(
         obj.get("title").and_then(|v| v.as_str()),
@@ -468,7 +468,7 @@ fn restore_version_updates_main_table() {
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
     // Create v1 snapshot
-    let snap_v1 = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap_v1 = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap_v1).unwrap();
 
     // Update document
@@ -484,7 +484,8 @@ fn restore_version_updates_main_table() {
     let doc_updated = query::find_by_id(&conn, "articles", &def, &doc.id, None)
         .unwrap()
         .unwrap();
-    let snap_v2 = query::build_snapshot(&conn, "articles", &def.fields, &doc_updated).unwrap();
+    let snap_v2 =
+        query::build_snapshot(&conn, "articles", &def.fields, &doc_updated, None).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap_v2).unwrap();
 
     // Verify current state is updated
@@ -561,7 +562,7 @@ fn restore_version_clears_locale_columns() {
     let doc = query::create(&conn, "articles", &def, &data, Some(&en_ctx)).unwrap();
 
     // Create v1 snapshot (only English)
-    let snap_v1 = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap_v1 = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap_v1).unwrap();
 
     // Now add a German translation
@@ -628,7 +629,7 @@ fn delete_document_cascades_to_versions() {
 
     let data: DocumentFields = [("title".into(), json!("Cascade"))].into_iter().collect();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+    let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
 
@@ -719,7 +720,7 @@ fn restore_version_with_group_fields() {
     let doc = query::create(&conn, "pages_ver", &def, &data, None).unwrap();
 
     // Snapshot v1
-    let snap_v1 = query::build_snapshot(&conn, "pages_ver", &def.fields, &doc).unwrap();
+    let snap_v1 = query::build_snapshot(&conn, "pages_ver", &def.fields, &doc, None).unwrap();
     query::create_version(&conn, "pages_ver", &doc.id, "published", &snap_v1).unwrap();
 
     // Update group fields
@@ -799,7 +800,8 @@ fn restore_global_version_with_group_fields() {
 
     // Snapshot v1
     let doc = query::get_global(&conn, "site_ver", &gdef, None).unwrap();
-    let snap_v1 = query::build_snapshot(&conn, "_global_site_ver", &gdef.fields, &doc).unwrap();
+    let snap_v1 =
+        query::build_snapshot(&conn, "_global_site_ver", &gdef.fields, &doc, None).unwrap();
     query::create_version(&conn, "_global_site_ver", "default", "published", &snap_v1).unwrap();
 
     // Update group fields
@@ -905,7 +907,7 @@ fn restore_version_with_localized_group_fields() {
     let doc_snap = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&default_ctx))
         .unwrap()
         .unwrap();
-    let snap_v1 = query::build_snapshot(&conn, "pages_ver", &def.fields, &doc_snap).unwrap();
+    let snap_v1 = query::build_snapshot(&conn, "pages_ver", &def.fields, &doc_snap, None).unwrap();
     query::create_version(&conn, "pages_ver", &doc.id, "published", &snap_v1).unwrap();
 
     // Update English
@@ -1531,7 +1533,7 @@ fn bulk_hard_delete_cascades_to_versions_via_service() {
             .into_iter()
             .collect();
         let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
-        let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+        let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc, None).unwrap();
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
         query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
         doc_ids.push(doc.id.to_string());

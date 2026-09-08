@@ -73,7 +73,13 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<()> {
         .updated_at(existing_doc.updated_at.as_deref())
         .build();
 
-    let mut snapshot = query::build_snapshot(conn, table, fields, &snapshot_doc)?;
+    let mut snapshot = query::build_snapshot(
+        conn,
+        table,
+        fields,
+        &snapshot_doc,
+        locale_ctx.map(|c| &c.config),
+    )?;
 
     // `build_snapshot` rebuilds join data (arrays/blocks/has-many) from the DB —
     // the pre-edit state — so re-overlay the edited join values from the
@@ -302,7 +308,8 @@ mod tests {
                 _version INTEGER,
                 _status TEXT,
                 _latest INTEGER DEFAULT 0,
-                snapshot TEXT
+                snapshot TEXT,
+                created_at TEXT
             );",
         )
         .unwrap();

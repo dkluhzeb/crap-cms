@@ -156,7 +156,7 @@ pub(in crate::mcp::tools) fn extract_data_from_args(
     let mut data = DocumentFields::new();
 
     for (k, v) in obj {
-        if skip_keys.contains(&k.as_str()) || v.is_null() {
+        if skip_keys.contains(&k.as_str()) {
             continue;
         }
 
@@ -164,6 +164,10 @@ pub(in crate::mcp::tools) fn extract_data_from_args(
             bail!("unknown field '{k}' for this collection");
         }
 
+        // `null` is KEPT, not dropped: a present null clears the field, the
+        // same contract gRPC and Lua have. Dropping it made a clear silently
+        // no-op — and made removing a translation (documented as writing that
+        // locale's fields as null) impossible over MCP.
         data.insert(k.clone(), v.clone());
     }
 
@@ -559,6 +563,18 @@ mod tests {
         assert!(parse_where_filters(&args).is_err());
     }
 
+    /// A present `null` reaches the write path (it clears the column), while
+    /// a reserved key is still skipped — parity with gRPC and Lua.
+    #[test]
+    fn extract_data_keeps_present_nulls() {
+        let fields = vec![text_field("title"), text_field("subtitle")];
+        let args = json!({ "title": "t", "subtitle": null, "locale": null });
+
+        let data = extract_data_from_args(&args, &["locale"], &fields).unwrap();
+        assert_eq!(data.get("subtitle"), Some(&Value::Null));
+        assert!(!data.contains_key("locale"), "reserved keys stay skipped");
+    }
+
     // ── extract_data_from_args: strict unknown-field rejection ────────────
 
     fn text_field(name: &str) -> FieldDefinition {
@@ -568,12 +584,16 @@ mod tests {
     #[test]
     fn extract_data_keeps_known_fields_and_skips_reserved() {
         let fields = vec![text_field("title"), text_field("body")];
-        let args = json!({ "title": "Hi", "body": "x", "locale": "en", "extra_null": null });
+        let args = json!({ "title": "Hi", "body": "x", "locale": "en" });
         let data = extract_data_from_args(&args, &["locale"], &fields).unwrap();
         assert_eq!(data.get("title").and_then(Value::as_str), Some("Hi"));
         assert_eq!(data.get("body").and_then(Value::as_str), Some("x"));
         assert!(data.get("locale").is_none(), "reserved key excluded");
-        assert!(data.get("extra_null").is_none(), "null dropped");
+
+        // An unknown key is rejected whatever its value — a null no longer
+        // buys silence, since a present null is now meaningful (it clears).
+        let args = json!({ "title": "Hi", "extra_null": null });
+        assert!(extract_data_from_args(&args, &["locale"], &fields).is_err());
     }
 
     /// Regression: an unknown/misspelled field name must fail loudly rather than

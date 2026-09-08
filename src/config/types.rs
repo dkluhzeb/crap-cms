@@ -83,12 +83,26 @@ pub struct CrapConfig {
     pub update: UpdateConfig,
 }
 
-/// True if the config contains any non-empty secret.
+/// True if the config contains any non-empty secret — every secret-typed
+/// field, not just the three oldest, so a world-readable `crap.toml` holding
+/// only an MCP key or a credentialed database/redis URL still warns.
 #[cfg(unix)]
 fn has_any_secret(config: &CrapConfig) -> bool {
     !config.auth.secret.is_empty()
         || !config.email.smtp_pass.is_empty()
         || !config.upload.s3.secret_key.is_empty()
+        || !config.mcp.api_key.is_empty()
+        // A URL is only a secret when it actually carries a credential:
+        // masking changes the string only then, so the default
+        // `redis://127.0.0.1:6379` doesn't count.
+        || config
+            .database
+            .url
+            .as_ref()
+            .is_some_and(|u| u.masked() != u.as_str())
+        || config.cache.redis_url.masked() != config.cache.redis_url.as_str()
+        || config.auth.rate_limit_redis_url.masked() != config.auth.rate_limit_redis_url.as_str()
+        || !config.email.webhook_headers.is_empty()
 }
 
 /// Pure check for whether a given Unix permissions mode is considered "loose"
@@ -175,12 +189,17 @@ impl CrapConfig {
 
             warn_on_loose_permissions(&config_path, &config);
 
+            // One resolved secret for every consumer (JWT, crypto, TOTP
+            // sealing, signed URLs) — see `AuthConfig::resolve_secret`.
+            config.auth.resolve_secret(config_dir)?;
+
             Ok(config)
         } else {
             info!("No crap.toml found, using defaults");
 
             let mut config = CrapConfig::default();
             config.jobs.apply_queue_defaults();
+            config.auth.resolve_secret(config_dir)?;
             Ok(config)
         }
     }
@@ -188,11 +207,16 @@ impl CrapConfig {
     /// Create a configuration with permissive defaults for testing.
     ///
     /// Same as `Default` but with `access.default_deny = false` so tests that don't
-    /// configure access functions aren't blocked.
+    /// configure access functions aren't blocked, and a fixed auth secret —
+    /// `CrapConfig::load` always resolves one (generating and persisting it
+    /// when unset), so an empty secret is not a state the server ever runs in
+    /// and the secret-derived features (crypto, TOTP sealing, signed URLs)
+    /// would refuse to work.
     #[must_use]
     pub fn test_default() -> Self {
         let mut config = Self::default();
         config.access.default_deny = false;
+        config.auth.secret = crate::core::JwtSecret::new("test-secret-0123456789abcdef0123456789");
         config.jobs.apply_queue_defaults();
         config
     }

@@ -3,6 +3,7 @@
 use anyhow::Result;
 
 use crate::{
+    config::LocaleConfig,
     core::{Builder, Document, FieldDefinition, collection::VersionsConfig},
     db::{DbConnection, query},
 };
@@ -18,6 +19,9 @@ pub(crate) struct VersionSnapshotCtx<'a> {
     pub(in crate::service::versions) fields: &'a [FieldDefinition],
     pub(in crate::service::versions) versions: Option<&'a VersionsConfig>,
     pub(in crate::service::versions) has_drafts: bool,
+    /// Needed so the snapshot records EVERY locale's column, not just the
+    /// one the write resolved (see `build_snapshot`).
+    pub(in crate::service::versions) locale_config: Option<&'a LocaleConfig>,
 }
 
 /// Set document status, create a version snapshot, and prune.
@@ -30,7 +34,7 @@ pub(crate) fn create_version_snapshot(
     if ctx.has_drafts {
         query::set_document_status(conn, ctx.table, ctx.parent_id, status)?;
     }
-    let mut snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc)?;
+    let mut snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc, ctx.locale_config)?;
 
     // The snapshot must record the status this version is stamped with, not
     // whatever the in-memory doc happened to carry: on a draft create, `doc`
