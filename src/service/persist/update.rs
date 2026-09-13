@@ -167,10 +167,15 @@ pub(crate) fn persist_bulk_update(
     query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, locale_ctx)?;
 
     if def.has_versions() {
+        // The locale config is what makes the snapshot record EVERY locale's
+        // column. Without it a bulk-update snapshot held one value per
+        // localized field, and restoring it NULLed every other translation —
+        // the single-document path above already passes it.
         let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.slug, &updated.id)
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
+            .locale_config(Some(locale_config))
             .build();
         versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)?;
     }

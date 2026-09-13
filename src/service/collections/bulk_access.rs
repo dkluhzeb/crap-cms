@@ -16,7 +16,7 @@ use crate::{
 
 /// What a bulk operation is gated by. All fields required; constructed at the
 /// four call sites (pool/conn × update/delete) — plain struct literal.
-pub(super) struct BulkScope<'a> {
+pub(crate) struct BulkScope<'a> {
     /// Access operation string (`"update"`, `"trash"`, `"delete"`).
     pub operation: &'a str,
     /// The access hook to evaluate (the operation's own gate).
@@ -79,7 +79,7 @@ pub(super) fn scope_bulk_access(
 /// soft delete → `access.trash ?? update`; permanent → `access.delete`. The
 /// adjusted definition encodes force-hard-delete and trash purges, so the
 /// derivation is uniform across surfaces.
-pub(super) fn delete_scope(def: &CollectionDefinition) -> BulkScope<'_> {
+pub(crate) fn delete_scope(def: &CollectionDefinition) -> BulkScope<'_> {
     if def.soft_delete {
         BulkScope {
             operation: "trash",

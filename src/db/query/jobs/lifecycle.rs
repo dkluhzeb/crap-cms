@@ -354,7 +354,9 @@ pub fn complete_job_repairing(
 /// user row deliberately stores only as a digest. Keeping it would leave the
 /// credential readable in `_crap_jobs` for as long as the row survives, and
 /// `[jobs] auto_purge` is off by default, so that is indefinitely. A pending
-/// or failed run keeps its data: the retry needs it.
+/// run that will be retried keeps its data — the retry needs it. A terminally
+/// failed or stale run is scrubbed the same way (see [`fail_job`] and
+/// [`mark_stale`]): nothing ever retries a terminal run.
 ///
 /// # Errors
 ///
@@ -450,11 +452,16 @@ pub fn fail_job(
         )
         .context("Failed to retry job")?;
     } else {
-        let p3 = conn.placeholder(3);
+        let (p3, p4) = (conn.placeholder(3), conn.placeholder(4));
 
+        // Terminal: nothing retries a failed run, so the payload no longer
+        // earns its keep. For `_system_email` it is the rendered message — a
+        // live reset or verification link, or an MFA code — so it is emptied
+        // exactly as a completed run's is. See `complete_job`.
         conn.execute(
             &format!(
-                "UPDATE _crap_jobs SET status = 'failed', error = {p2}, completed_at = {}
+                "UPDATE _crap_jobs SET status = 'failed', error = {p2}, completed_at = {},
+                    data = CASE WHEN slug = {p4} THEN '{{}}' ELSE data END
              WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
                 conn.now_expr()
             ),
@@ -462,6 +469,7 @@ pub fn fail_job(
                 DbValue::Text(id.to_string()),
                 DbValue::Text(error.to_string()),
                 DbValue::Integer(i64::from(attempt)),
+                DbValue::Text(SYSTEM_EMAIL_JOB.to_string()),
             ],
         )
         .context("Failed to fail job")?;
@@ -500,11 +508,13 @@ pub fn mark_stale(conn: &dyn DbConnection, id: &str, attempt: u32, error: &str) 
         conn.placeholder(2),
         conn.placeholder(3),
     );
+    let p4 = conn.placeholder(4);
     // Compare-and-set on (running, attempt) — a peer that already reclaimed or
     // completed this job, or a concurrent recoverer, must not be clobbered.
     conn.execute(
         &format!(
-            "UPDATE _crap_jobs SET status = 'stale', error = {p2}, completed_at = {}
+            "UPDATE _crap_jobs SET status = 'stale', error = {p2}, completed_at = {},
+                data = CASE WHEN slug = {p4} THEN '{{}}' ELSE data END
          WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
             conn.now_expr()
         ),
@@ -512,6 +522,8 @@ pub fn mark_stale(conn: &dyn DbConnection, id: &str, attempt: u32, error: &str) 
             DbValue::Text(id.to_string()),
             DbValue::Text(error.to_string()),
             DbValue::Integer(i64::from(attempt)),
+            // A stale run is terminal too; scrub it for the same reason.
+            DbValue::Text(SYSTEM_EMAIL_JOB.to_string()),
         ],
     )?;
 
@@ -713,6 +725,113 @@ mod tests {
             fetched.retry_after.is_some(),
             "retry_after should be set for backoff"
         );
+    }
+
+    // ── _system_email payload scrub ─────────────────────────────────
+
+    fn mark_running(conn: &dyn DbConnection, id: &str) {
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
+            &[DbValue::Text(id.to_string())],
+        )
+        .unwrap();
+    }
+
+    fn stored_data(conn: &dyn DbConnection, id: &str) -> String {
+        conn.query_one(
+            "SELECT data FROM _crap_jobs WHERE id = ?1",
+            &[DbValue::Text(id.to_string())],
+        )
+        .unwrap()
+        .unwrap()
+        .get_string("data")
+        .unwrap()
+    }
+
+    const EMAIL_BODY: &str =
+        r#"{"to":"a@b.c","html":"https://x/admin/reset-password?token=live-token"}"#;
+
+    /// A terminally failed `_system_email` run has its payload emptied: the
+    /// body carries a live reset/verification link or MFA code, and nothing
+    /// ever retries a terminal run.
+    #[test]
+    fn terminal_email_failure_scrubs_the_payload() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(
+            &conn,
+            SYSTEM_EMAIL_JOB,
+            EMAIL_BODY,
+            "system",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+        mark_running(&conn, &job.id);
+
+        fail_job(&conn, &job.id, "smtp down", false, 1).unwrap();
+
+        assert_eq!(stored_data(&conn, &job.id), "{}");
+        assert_eq!(
+            get_job_run(&conn, &job.id).unwrap().unwrap().status,
+            JobStatus::Failed
+        );
+    }
+
+    /// A failure that WILL be retried keeps its payload — the retry needs it.
+    #[test]
+    fn retryable_email_failure_keeps_the_payload() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(
+            &conn,
+            SYSTEM_EMAIL_JOB,
+            EMAIL_BODY,
+            "system",
+            3,
+            "default",
+            0,
+        )
+        .unwrap();
+        mark_running(&conn, &job.id);
+
+        fail_job(&conn, &job.id, "smtp down", true, 1).unwrap();
+
+        assert_eq!(stored_data(&conn, &job.id), EMAIL_BODY);
+    }
+
+    /// A stale run is terminal too, and scrubbed for the same reason.
+    #[test]
+    fn stale_email_run_scrubs_the_payload() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(
+            &conn,
+            SYSTEM_EMAIL_JOB,
+            EMAIL_BODY,
+            "system",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+        mark_running(&conn, &job.id);
+
+        mark_stale(&conn, &job.id, 1, "heartbeat expired").unwrap();
+
+        assert_eq!(stored_data(&conn, &job.id), "{}");
+    }
+
+    /// The scrub is scoped to system email: any other job keeps its data
+    /// even when it fails for good.
+    #[test]
+    fn terminal_failure_of_other_jobs_keeps_data() {
+        let (_dir, conn) = setup_db();
+        let data = r#"{"report":"weekly"}"#;
+        let job = insert_job(&conn, "weekly_report", data, "cron", 1, "default", 0).unwrap();
+        mark_running(&conn, &job.id);
+
+        fail_job(&conn, &job.id, "boom", false, 1).unwrap();
+
+        assert_eq!(stored_data(&conn, &job.id), data);
     }
 
     // ── insert_job_with: delay ──────────────────────────────────────

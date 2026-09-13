@@ -8,6 +8,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Timezone dates nested in JSON rows are stored as UTC.** A date with
+  `timezone = true` inside a blocks row, inside a group within an array or
+  blocks row, or inside a nested array row was stored as the wall-clock digits
+  the editor entered, while top-level and array-row dates are stored as UTC.
+  Date filters compared the two formats against each other, and API consumers
+  could not tell which one they received. Writes now convert nested dates too,
+  and a one-time migration converts existing rows at startup. **Migration:** API
+  consumers that read those nested dates now receive UTC values (`…Z`); convert
+  them for display with the neighbouring `_tz` value, as for top-level dates.
+
+- **Field `access.update` rules judge the stored document.** On update, a
+  field rule's `ctx.document` was the incoming patch, not the stored row the
+  documentation describes. A rule such as "only the owner may change
+  `salary`" (`ctx.document.owner == ctx.user.id`) therefore passed for any
+  caller who wrote their own id into `owner` in the same request. Update,
+  bulk update, global update and the update-mode validate dry-run now pass
+  the stored document; `ctx.data` is still the incoming level, and create
+  rules still see the incoming document. **Migration:** a rule that read
+  incoming values from `ctx.document` must read them from `ctx.data`.
+
+- **An empty `[auth] secret` is refused when more than one node can run.**
+  With the secret unset, each node generated its own `data/.jwt_secret`: a
+  session minted on one node was rejected by the next, and whatever one node
+  derived from the secret — MFA code digests, sealed TOTP secrets,
+  `crap.crypto` values, signed URLs — was unusable on the others. When a Redis
+  cache, event transport, or rate-limit backend is configured, loading the
+  configuration now fails without an explicit secret — in the server and in
+  every CLI command; on Postgres without any of them it logs a warning. **Migration:** set `[auth] secret`, identically on every node.
+
+- **Redis cache keys have their own namespace; overlapping prefixes are
+  refused.** Cache keys were stored as `{prefix}{key}` and a clear deleted
+  `{prefix}*`. With the defaults (`crap:` for the cache, `crap:rl:` for rate
+  limits) on one Redis, every content write reset every login lockout in the
+  cluster. Cache keys now live at `{prefix}cache:{key}`, a clear touches only
+  that namespace, and loading the configuration fails for an
+  `auth.rate_limit_prefix` that overlaps it on the same Redis (URLs are
+  compared by host, port and database, not spelling). **Migration:** none with the defaults. Keys
+  written by the previous version are no longer read; flush them when
+  convenient.
+
+- **Mutation events carry a `publisher` id, and `sequence` is monotonic per
+  publisher.** Every node counts from 1, so on a Redis event transport the
+  sequence numbers of different nodes interleaved: gap detection on
+  `sequence` alone reported gaps that were not there and missed ones that
+  were. gRPC `MutationEvent.publisher` (field 8) and the SSE payload's
+  `publisher` identify the emitting process, and a coalesced burst of events
+  keeps arrival order instead of being sorted by `sequence`. **Migration:** key
+  gap detection on the `(publisher, sequence)` pair.
+
+- **JWTs are rejected the moment they expire.** The token library's default
+  60-second leeway kept bearer, gRPC session and MFA-pending tokens valid for
+  up to a minute past `exp`; they are now invalid from their `exp` second on.
+  **Migration:** refresh before `exp`.
+
+- **A local time that does not exist in its timezone is a validation error.**
+  For a timezone-enabled date, a wall-clock time inside a daylight-saving gap
+  (`2024-03-31T02:30` in `Europe/Berlin`) was stored as if it were UTC — hours
+  off, with no error. It now fails with `validation.nonexistent_local_time`.
+
 - **Password-reset, email-verification and MFA codes are stored hashed.**
   They were kept in the clear, so anyone who could read a row — a DB backup,
   a replica, a log of a stray query — held a live credential. Tokens are
@@ -747,6 +806,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **Rate limits: budgets that were shared, missing, or wiped.**
+  - gRPC `ResetPassword` counted against the forgot-password per-IP budget
+    while the admin reset used its own, so switching surfaces bought a fresh
+    budget. Both now use one reset-token keyspace.
+  - gRPC `VerifyEmail` had no rate limit. It now shares the admin endpoint's
+    per-IP verification keyspace.
+  - MFA code issuance was throttled only on the admin login; gRPC relied on
+    the per-email login counter, which the admin login clears on every
+    password success, so a password holder could flood the victim's inbox
+    through gRPC. Both surfaces now use one per-user issuance limiter. Over
+    budget, the login is refused with an explicit error: the admin login used
+    to hand out a challenge whose earlier code had already expired or been
+    used, locking the user out without explanation.
+  - A gRPC `Login` for an MFA account left the per-email and per-IP login
+    counters charged, so an MFA user logging in a few times in a row was
+    locked out. It now settles them like the admin login.
+  - A successful OAuth callback and a successful admin MFA step **cleared**
+    the shared per-IP counter, wiping other accounts' failures from the same
+    IP. They now refund the one attempt, as password login does.
+  - The in-memory backend's overflow sweep pruned every key by the calling
+    limiter's window, deleting longer-lived lockouts. Each key now keeps its
+    own window, and a map full of live keys is no longer rescanned on every
+    write.
+  - The Redis backend counted two attempts recorded in the same instant as
+    one.
+  - Resend-verification applied different thresholds on each surface to one
+    shared counter. It has its own keyspaces, with the same thresholds
+    everywhere.
+
+- **`auth.session_absolute_max_age` is a hard ceiling.** A session refresh
+  shortly before the ceiling issued a token and cookie valid for a full
+  `token_expiry` past it. The new expiry is capped at the ceiling, and a
+  refresh at the ceiling itself is refused.
+
+- **Version restore could overwrite write-denied fields.** The field-access
+  strip removed a field's resolved value but left its per-locale columns and a
+  date's timezone in the snapshot, and restore wrote them. Restore also judged
+  field `access.update` rules against the snapshot, so a caller named as owner
+  in an old version passed an owner rule on a document they no longer own;
+  rules now judge the live document, as on update.
+
+- **Queued `delete_many` checked the wrong access gate.** On a soft-delete
+  collection the queue-time check used `access.delete`, while the run trashes
+  under the trash gate (and a forced hard delete under `access.delete`). The
+  queue-time check now derives the gate the run will use.
+
+- **A global read with drafts could return published content to a draft-only
+  reader.** With `access.read` denied, the draft view allowed, and no pending
+  draft, the published global was served. The read is now denied.
+
+- **Failed and stale email jobs kept their rendered links.** Only a completed
+  `_system_email` run had its payload emptied; a run that fails for the last
+  time or is marked stale is now emptied too.
+
+- **A job run's stored error could disclose the validation-error marker.**
+  The per-process value that keeps hook validation errors unforgeable reached
+  `JobRun.error` inside the raw error text. The stored error is now the
+  readable validation message.
+
+- **`email.webhook_url` is treated as a secret.** It is redacted from the MCP
+  config-file view and counts toward the world-readable `crap.toml` warning;
+  webhook URLs usually carry their token.
+
+- **Log forging through the admin display-conditions endpoint.** A rejected,
+  client-sent field name was logged verbatim; it is now quoted.
 
 - **MCP no longer confirms which collections exist.** A direct tool call
   against a collection filtered out by the `[mcp]` include/exclude lists, or
@@ -1796,6 +1921,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Admin: timezone dates in array rows shifted on every save.** The form
+  showed the stored UTC value as if it were local time and saved it back as
+  local time, moving the date by its UTC offset each time the document was
+  saved. Dates in array rows, blocks rows and groups inside rows are now shown
+  in their own timezone.
+
+- **Legacy space-separated timestamps misordered in SQL.** Databases created by
+  early SQLite schemas held `YYYY-MM-DD HH:MM:SS` values. Reads normalized them,
+  but sorting, keyset pagination and date filters compared the stored text, where
+  a space sorts before `T`. They are rewritten to ISO 8601 once, at startup.
+
+- **Restoring a version gave the default locale the wrong timezone.** The
+  bare `_tz` column won over the locale's own `_tz__{locale}` column.
+
+- **Restoring a bulk-update version wiped every non-default translation.**
+  The bulk update path took its version snapshot without the locale
+  configuration, so the snapshot held one value per localized field.
+
+- **`crap-cms images purge --older-than` deleted every finished image job.**
+  The cutoff was computed in the future. Age is now also measured from when a
+  run finished, like `crap-cms jobs purge`.
+
+- **Retention purge could hard-delete a document restored moments earlier**
+  (Postgres). The trash state is now re-checked under the row lock.
+
+- **`[cache] max_age_secs` only took effect on nodes serving gRPC.** Admin-only
+  nodes (`serve --only admin`), `crap-cms work` and `crap-cms mcp` never
+  cleared their memory cache. With the Redis backend, entries already expire
+  after `max_age_secs`, so no node wipes the shared store any more.
+
+- **`updated_at` always ended in `.000`.** Timestamps written in the same
+  second compared equal, and could sort before an earlier write that carried
+  real milliseconds.
+
+- **Nodes starting together on Postgres raced schema sync**, and all but one
+  could fail on duplicate DDL. Schema sync is now serialized across nodes.
 
 - **A trashed document's pending draft was served as a live document.** The
   draft overlay bypasses the SQL lifecycle filter, so a soft-deleted document
@@ -3858,6 +4020,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`--password-stdin` for `crap-cms user create` and `user change-password`.**
+  Reads the password from the first line of standard input, so provisioning
+  scripts no longer have to pass it as a visible argument. `-p` still works and
+  now warns.
 
 - **`crap.validation_error` exists.** The structured way for a hook to reject
   a write was documented and covered by a test, but the function was never

@@ -27,10 +27,11 @@ fn resolve_global_doc(
     slug: &str,
     def: &GlobalDefinition,
     include_drafts: bool,
+    published_visible: bool,
     locale_ctx: Option<&LocaleContext>,
-) -> anyhow::Result<Document> {
+) -> anyhow::Result<Option<Document>> {
     if !def.has_drafts() {
-        return query::get_global(conn, slug, def, locale_ctx);
+        return query::get_global(conn, slug, def, locale_ctx).map(Some);
     }
 
     let gtable = global_table(slug);
@@ -50,19 +51,26 @@ fn resolve_global_doc(
                     .insert("_status".to_string(), Value::String(row_status));
             }
 
-            return Ok(doc);
+            return Ok(Some(doc));
         }
 
-        return query::get_global(conn, slug, def, locale_ctx);
+        // No pending draft edit, so the main row is what remains. It is draft
+        // content only while the global is unpublished; otherwise it is the
+        // published content, which a viewer granted only the draft view may
+        // not read.
+        let main = query::get_global(conn, slug, def, locale_ctx)?;
+        let main_is_draft = main.fields.get("_status").and_then(Value::as_str) == Some("draft");
+
+        return Ok((main_is_draft || published_visible).then_some(main));
     }
 
     let main = query::get_global(conn, slug, def, locale_ctx)?;
 
     if main.fields.get("_status").and_then(Value::as_str) == Some("draft") {
-        return published_global_or_empty(conn, &gtable);
+        return published_global_or_empty(conn, &gtable).map(Some);
     }
 
-    Ok(main)
+    Ok(Some(main))
 }
 
 /// The published content to serve when an unpublished global is read without a
@@ -152,7 +160,17 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     // Resolve the document with draft visibility applied identically to the
     // collection `find_by_id` path (see `resolve_global_doc`). `draft_visible`
     // is the downgraded opt-in: a denied draft view falls back to published.
-    let mut doc = resolve_global_doc(conn, ctx.slug, def, draft_visible, input.locale_ctx)?;
+    let Some(mut doc) = resolve_global_doc(
+        conn,
+        ctx.slug,
+        def,
+        draft_visible,
+        published_visible,
+        input.locale_ctx,
+    )?
+    else {
+        return Err(ServiceError::AccessDenied("Read access denied".into()));
+    };
 
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
 
@@ -184,7 +202,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            Document, FieldDefinition, FieldType, GlobalDefinition, Hooks, ReqContext,
+            Document, FieldDefinition, FieldType, GlobalDefinition, HookRef, Hooks, ReqContext,
             collection::VersionsConfig,
         },
         hooks::lifecycle::AfterReadCtx,
@@ -192,6 +210,77 @@ mod tests {
     };
 
     struct NoopReadHooks;
+
+    /// Denies the published view (`access.read = "deny_read"`), allows the rest.
+    struct DraftOnlyReadHooks;
+
+    impl ReadHooks for DraftOnlyReadHooks {
+        fn before_read(
+            &self,
+            _hooks: &Hooks,
+            _slug: &str,
+            _op: &str,
+            _locale: Option<&str>,
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(match input.access.map(HookRef::reference) {
+                Some("deny_read") => AccessResult::Denied,
+                _ => AccessResult::Allowed,
+            })
+        }
+    }
+
+    /// A viewer granted only the draft view, reading a published global with
+    /// no pending draft, must not be handed the published content.
+    #[test]
+    fn draft_only_viewer_gets_no_published_content_without_a_pending_draft() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_settings (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions__global_settings (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT,
+                created_at TEXT
+            );
+            INSERT INTO _global_settings (id, title, _status)
+                VALUES ('default', 'Published Main', 'published');",
+        )
+        .unwrap();
+
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.access.read = Some("deny_read".into());
+        def.access.draft = Some("allow_draft".into());
+
+        let rh = DraftOnlyReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let result =
+            get_global_document(&ctx, &GetGlobalInput::new(None, None).include_drafts(true));
+
+        assert!(matches!(result, Err(ServiceError::AccessDenied(_))));
+    }
 
     impl ReadHooks for NoopReadHooks {
         fn before_read(

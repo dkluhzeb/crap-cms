@@ -6,7 +6,9 @@ use crate::{
         nest_group_fields,
     },
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
-    hooks::{AccessCheckInput, HookContext, ValidationCtx},
+    hooks::{
+        AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
+    },
     service::{
         AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
         helpers as svc_helpers,
@@ -18,6 +20,27 @@ use crate::{
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Load the stored global that field-level `access.update` rules judge as
+/// `ctx.document` — the global twin of
+/// [`stored_fields_for_update_rules`](crate::service::stored_fields_for_update_rules).
+/// Skips the read when no field configures `access.update`.
+///
+/// # Errors
+///
+/// Returns an error if the global row cannot be read.
+pub(crate) fn stored_global_fields_for_update_rules(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &GlobalDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<DocumentFields> {
+    if !has_any_field_access(&def.fields, |f| f.access.update.as_ref()) {
+        return Ok(DocumentFields::default());
+    }
+
+    Ok(query::get_global(conn, slug, def, locale_ctx)?.fields)
+}
 
 /// Update a global document.
 ///
@@ -94,14 +117,15 @@ pub fn update_global_in_conn(
     let ui_locale = input.ui_locale.as_deref();
 
     // Data-aware write strip (each `access.update` rule sees `ctx.data` = its
-    // level and `ctx.document` = the full incoming document).
-    write_hooks.strip_write_access_data(
+    // level and `ctx.document` = the stored global, never the patch).
+    let stored = stored_global_fields_for_update_rules(conn, ctx.slug, def, input.locale_ctx)?;
+    write_hooks.strip_write_access_update(
         &def.fields,
         &mut input.data,
+        &stored,
         ctx.slug,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
-        "update",
     );
 
     let final_ctx =

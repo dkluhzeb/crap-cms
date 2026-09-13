@@ -1,6 +1,7 @@
 //! Shared `_crap_meta` key/value accessors for versioned one-time migrations.
 //!
-//! One-time migrations (the ref-count backfill, the checkbox retype) gate
+//! One-time migrations (the ref-count backfill, the checkbox retype, the
+//! legacy-timestamp rewrite) gate
 //! themselves on a version stored as the meta *value* under a stable key — see
 //! [`super::backfill_ref_counts`] and [`super::checkbox_columns`]. Each reads the
 //! current value to decide whether to run and, on completion, writes the current

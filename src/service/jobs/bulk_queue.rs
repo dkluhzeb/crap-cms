@@ -11,13 +11,15 @@
 //! for the actor that queued them (the run's `data` carries the full
 //! request payload) — see [`can_read_bulk_run`].
 
+use std::borrow::Cow;
+
 use crate::{
     core::{
-        Document, DocumentFields,
+        CollectionDefinition, Document, DocumentFields,
         job::{JobRun, SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
     },
     db::{DbPool, query},
-    service::ServiceError,
+    service::{ServiceError, collections::delete_scope},
 };
 use serde::{Deserialize, Serialize};
 
@@ -156,6 +158,23 @@ pub fn enforce_queue_limit(data: &BulkJobData) -> Result<(), ServiceError> {
     Ok(())
 }
 
+/// The definition a queued run's access gate must judge: the one the run
+/// executes with. A forced hard delete clears soft delete first, exactly as
+/// the operation does, so its gate is `access.delete` rather than the trash
+/// gate — and a plain delete on a soft-delete collection is gated by trash.
+fn gate_definition<'a>(
+    def: &'a CollectionDefinition,
+    data: &BulkJobData,
+) -> Cow<'a, CollectionDefinition> {
+    if data.op == BulkOpKind::DeleteMany && data.force_hard_delete && def.soft_delete {
+        let mut hard = def.clone();
+        hard.make_hard_delete();
+        return Cow::Owned(hard);
+    }
+
+    Cow::Borrowed(def)
+}
+
 /// The collection-level access gate, run at QUEUE time so a caller who may
 /// not perform the operation is refused synchronously instead of being
 /// handed a `job_id` for work that can only fail. Execution still runs the
@@ -189,10 +208,16 @@ pub fn check_queue_access(
         QueuedBy::System => None,
     };
 
+    let gate_def = gate_definition(def, data);
     let (operation, access_fn) = match data.op {
-        BulkOpKind::CreateMany => ("create", def.access.create.as_ref()),
-        BulkOpKind::UpdateMany => ("update", def.access.update.as_ref()),
-        BulkOpKind::DeleteMany => ("delete", def.access.delete.as_ref()),
+        BulkOpKind::CreateMany => ("create", gate_def.access.create.as_ref()),
+        BulkOpKind::UpdateMany => ("update", gate_def.access.update.as_ref()),
+        // The derivation the operation's own bulk gate uses: the trash gate
+        // when soft-deleting, `access.delete` when deleting permanently.
+        BulkOpKind::DeleteMany => {
+            let scope = delete_scope(&gate_def);
+            (scope.operation, scope.access_fn)
+        }
     };
 
     let result = runner
@@ -256,6 +281,41 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn delete_job(force_hard_delete: bool) -> BulkJobData {
+        BulkJobData {
+            op: BulkOpKind::DeleteMany,
+            collection: "posts".into(),
+            queued_by: QueuedBy::System,
+            locale: None,
+            ui_locale: None,
+            draft: false,
+            hooks: true,
+            events: false,
+            max_documents: 0,
+            documents: None,
+            where_clause: None,
+            data: None,
+            force_hard_delete,
+        }
+    }
+
+    /// The queue-time gate derives from the definition the run executes with:
+    /// trash on a soft-delete collection, `access.delete` once a hard delete is
+    /// forced. It used to check `access.delete` for both.
+    #[test]
+    fn queued_delete_gate_matches_the_executed_operation() {
+        let mut def = CollectionDefinition::new("posts");
+        def.soft_delete = true;
+        def.access.delete = Some("can_delete".into());
+        def.access.trash = Some("can_trash".into());
+
+        let soft = gate_definition(&def, &delete_job(false));
+        assert_eq!(delete_scope(&soft).operation, "trash");
+
+        let hard = gate_definition(&def, &delete_job(true));
+        assert_eq!(delete_scope(&hard).operation, "delete");
+    }
 
     #[test]
     fn job_data_round_trips_with_where_rename() {

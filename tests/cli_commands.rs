@@ -293,6 +293,7 @@ fn cmd_user_create_via_library() {
         collection: "users",
         email: Some("lib_create@example.com".to_string()),
         password: Some("password123".to_string()),
+        password_stdin: false,
         fields: vec![("name".to_string(), "Lib User".to_string())],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
         locale: &crap_cms::config::LocaleConfig::default(),
@@ -325,6 +326,7 @@ fn cmd_user_create_extra_fields() {
         collection: "users",
         email: Some("extra@example.com".to_string()),
         password: Some("secret456".to_string()),
+        password_stdin: false,
         fields: vec![
             ("name".to_string(), "Admin User".to_string()),
             ("role".to_string(), "admin".to_string()),
@@ -353,6 +355,7 @@ fn cmd_user_create_non_auth_errors() {
         collection: "posts",
         email: Some("fail@example.com".to_string()),
         password: Some("password".to_string()),
+        password_stdin: false,
         fields: vec![],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
         locale: &crap_cms::config::LocaleConfig::default(),
@@ -1004,6 +1007,7 @@ fn cli_user_paths_maintain_ref_counts_and_fts() {
         collection: "users",
         email: Some("ref@example.com".to_string()),
         password: Some("password-12345".to_string()),
+        password_stdin: false,
         fields: vec![
             ("name".to_string(), "Ref User".to_string()),
             ("avatar".to_string(), media_id.to_string()),

@@ -18,11 +18,11 @@ use anyhow::Context as _;
 
 use crate::{
     core::{DocumentFields, ValidationError, nest_group_fields},
-    db::{LocaleContext, query::helpers::global_table},
+    db::{DbConnection, LocaleContext, query::helpers::global_table},
     service::{
         Def, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext, WriteInput,
         check_create_access, check_global_update_access, check_update_access, hooks::WriteHooks,
-        validate_document,
+        stored_fields_for_update_rules, stored_global_fields_for_update_rules, validate_document,
     },
 };
 
@@ -89,8 +89,13 @@ fn run_validate(
             .ui_locale(ctx.ui_locale.clone())
             .build();
         let conn = ctx.resolve_conn()?;
+        let stored = stored_for_update_rules(ctx, vctx, conn.as_ref(), locale_ctx.as_ref())?;
+        let vctx = ValidateContext {
+            stored_document: stored.as_ref(),
+            ..*vctx
+        };
 
-        return as_outcome(validate_document(conn.as_ref(), wh, vctx, input, ctx.user));
+        return as_outcome(validate_document(conn.as_ref(), wh, &vctx, input, ctx.user));
     }
 
     let pool = ctx.pool.context("pool required")?;
@@ -104,17 +109,46 @@ fn run_validate(
 
     check_validate_access(ctx, &wh, vctx, &data, locale_ctx.as_ref())?;
 
+    let stored = stored_for_update_rules(ctx, vctx, &tx, locale_ctx.as_ref())?;
+    let vctx = ValidateContext {
+        stored_document: stored.as_ref(),
+        ..*vctx
+    };
+
     let input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
         .draft(draft)
         .ui_locale(ctx.ui_locale.clone())
         .build();
-    let out = as_outcome(validate_document(&tx, &wh, vctx, input, ctx.user));
+    let out = as_outcome(validate_document(&tx, &wh, &vctx, input, ctx.user));
 
     // Always roll back — this is validation only.
     drop(tx);
 
     out
+}
+
+/// The stored document update-mode field rules judge, read on the dry-run's
+/// own connection after its access gate. `None` in create mode.
+fn stored_for_update_rules(
+    ctx: &ServiceContext<'_>,
+    vctx: &ValidateContext<'_>,
+    conn: &dyn DbConnection,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<DocumentFields>, ServiceError> {
+    if vctx.operation != "update" {
+        return Ok(None);
+    }
+
+    if let Def::Global(def) = &ctx.def {
+        return stored_global_fields_for_update_rules(conn, ctx.slug, def, locale_ctx).map(Some);
+    }
+
+    let Some(id) = vctx.exclude_id else {
+        return Ok(None);
+    };
+
+    stored_fields_for_update_rules(conn, ctx.slug, ctx.collection_def()?, id, locale_ctx).map(Some)
 }
 
 /// Enforce the target operation's collection-level access rule on the
@@ -189,6 +223,8 @@ impl Operation for Validate {
             soft_delete: def.soft_delete,
             supports_drafts: def.has_drafts(),
             required_locales: def.required_locales.as_ref(),
+            // Loaded inside the body, on the dry-run's own connection.
+            stored_document: None,
         };
 
         run_validate(ctx, &vctx, args)
@@ -222,6 +258,7 @@ impl Operation for ValidateGlobal {
             supports_drafts: def.has_drafts(),
             // Globals have no collection-level `required_locales` default.
             required_locales: None,
+            stored_document: None,
         };
 
         run_validate(ctx, &vctx, args)

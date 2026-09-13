@@ -11,8 +11,8 @@ use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    FindByIdInput, RunnerReadHooks, ServiceContext, WriteInput, find_document_by_id,
-    restore_collection_version, update_document,
+    FindByIdInput, OpDeadline, RunnerReadHooks, ServiceContext, UpdateManyOptions, WriteInput,
+    find_document_by_id, restore_collection_version, update_document, update_many,
 };
 use serde_json::json;
 
@@ -270,4 +270,55 @@ fn a_draft_save_reports_the_draft_for_its_own_locale() {
 
     // The published row is untouched by a draft save.
     assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo"));
+}
+
+/// A BULK update on a localized collection snapshots every locale too. The
+/// bulk path built its snapshot without the locale config, so the version held
+/// one value per localized field and restoring it wiped every other
+/// translation.
+#[test]
+fn restoring_a_bulk_update_version_keeps_every_locale() {
+    let h = setup();
+    let id = seed(&h);
+
+    let en = ctx_for(&h, "en");
+    let ctx = ServiceContext::collection("pages", &h.def)
+        .pool(&h.pool)
+        .runner(&h.runner)
+        .locale_config(Some(&h.locale))
+        .override_access(true)
+        .build();
+
+    update_many(
+        &ctx,
+        &[],
+        &fields(&[("title", "Hello v2")]),
+        &h.locale,
+        &UpdateManyOptions {
+            locale_ctx: Some(&en),
+            run_hooks: false,
+            draft: false,
+            ui_locale: None,
+            max_documents: 0,
+            deadline: OpDeadline::none(),
+        },
+    )
+    .expect("bulk update");
+
+    assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Hello v2"));
+    assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo"));
+
+    let conn = h.pool.get().unwrap();
+    let versions = query::list_versions(&conn, "pages", &id, false, None, None).expect("versions");
+    let latest = versions.first().expect("the bulk update created a version");
+    drop(conn);
+
+    restore_collection_version(&ctx, &id, &latest.id, &h.locale).expect("restore");
+
+    assert_eq!(
+        title_in(&h, &id, "de").as_deref(),
+        Some("Hallo"),
+        "restoring a bulk-update version must not wipe the German title"
+    );
+    assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Hello v2"));
 }

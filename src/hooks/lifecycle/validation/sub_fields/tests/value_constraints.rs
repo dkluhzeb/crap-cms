@@ -354,3 +354,50 @@ fn test_nested_array_non_object_row_is_reported() {
         err.errors
     );
 }
+
+/// A local time skipped by a daylight-saving change is rejected wherever a
+/// timezone date lives in a row — directly in the row, or in a group inside it
+/// (stored as JSON, and converted to UTC on write all the same).
+#[test]
+fn test_dst_gap_rejected_in_rows_and_nested_groups() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let starts = || {
+        FieldDefinition::builder("starts", FieldType::Date)
+            .timezone(true)
+            .build()
+    };
+    let fields = vec![
+        FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                starts(),
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![starts()])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let gap = json!({"starts": "2024-03-31T02:30", "starts_tz": "Europe/Berlin"});
+    let validate = |row: serde_json::Value| {
+        let mut data = DocumentFields::new();
+        data.insert("events".to_string(), json!([row]));
+        validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        )
+    };
+
+    for row in [gap.clone(), json!({ "meta": gap })] {
+        let err = validate(row).expect_err("a nonexistent local time must be rejected");
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.nonexistent_local_time"))
+        );
+    }
+}

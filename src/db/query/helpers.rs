@@ -122,7 +122,7 @@ pub(crate) fn normalize_date_value(value: &str) -> String {
 /// Normalize a date value using a specific IANA timezone.
 /// The input is treated as local time in the given timezone, then converted to UTC.
 /// If the input already has a timezone offset (RFC 3339), it is converted directly.
-fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
+pub(crate) fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     let tz: Tz = tz_str
         .parse()
         .map_err(|_| anyhow!("Invalid timezone: {tz_str}"))?;
@@ -417,7 +417,7 @@ pub(crate) fn locale_column(field_name: &str, locale: &str) -> Result<String> {
 /// Current UTC timestamp in ISO 8601 format with milliseconds: `"2024-01-15T14:00:00.000Z"`.
 pub(crate) fn utc_now() -> String {
     chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string()
 }
 
@@ -1072,5 +1072,27 @@ mod tests {
             let read = parse_has_many_scalar(&FieldType::Number, &Value::String(stored));
             assert_eq!(read, json!([1, 2]), "input {input:?}");
         }
+    }
+
+    /// `utc_now` carries the real milliseconds: a hardcoded `.000` let two
+    /// writes in the same second store the same `updated_at`, and a later write
+    /// could sort before an earlier one written through a millisecond-accurate
+    /// path.
+    #[test]
+    fn utc_now_carries_real_milliseconds() {
+        let first = utc_now();
+        let parsed = chrono::DateTime::parse_from_rfc3339(&first).expect("RFC 3339");
+        assert_eq!(first.len(), "2024-01-15T14:00:00.000Z".len());
+
+        let millis = |s: &str| s[20..23].parse::<u32>().unwrap();
+        assert_eq!(millis(&first), parsed.timestamp_subsec_millis());
+
+        let later = (0..200)
+            .map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                utc_now()
+            })
+            .find(|s| millis(s) != 0);
+        assert!(later.is_some(), "milliseconds must not be pinned to .000");
     }
 }

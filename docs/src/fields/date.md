@@ -100,7 +100,7 @@ Two columns are created:
 | `start_date` | TEXT | `2026-05-02T12:00:00.000Z` (UTC) |
 | `start_date_tz` | TEXT | `America/Sao_Paulo` |
 
-The naming follows the pattern `{field_name}_tz`. Inside Groups, it becomes `{group}__{field}_tz`.
+The naming follows the pattern `{field_name}_tz`. Inside Groups, it becomes `{group}__{field}_tz`. Inside an array row, a blocks row, or a group within a row, the companion is the `{field}_tz` key next to the date in the same row — and the date there is stored as UTC as well, so a timezone date has the same shape wherever it lives.
 
 ### API Responses
 

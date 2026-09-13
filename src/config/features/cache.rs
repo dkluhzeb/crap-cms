@@ -111,7 +111,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             tmp.path().join("crap.toml"),
-            "[cache]\nbackend = \"redis\"\n",
+            // A Redis backend requires an explicit auth secret.
+            "[auth]\nsecret = \"0123456789abcdef0123456789abcdef01234567\"\n[cache]\nbackend = \"redis\"\n",
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();

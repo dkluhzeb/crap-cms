@@ -13,12 +13,15 @@ use crate::{
         handlers::{
             auth::{
                 ResendVerificationForm, client_ip, get_verifying_collections,
-                render_resend_verification, scoped_limiter, show_resend_verification,
+                render_resend_verification, show_resend_verification,
             },
             shared::paths,
         },
     },
-    core::normalize_email,
+    core::{
+        normalize_email,
+        rate_limit::{IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE},
+    },
     service::ResendTarget,
 };
 
@@ -55,18 +58,16 @@ pub async fn resend_verification_action(
     // on a block leaks nothing — the response is always the same. The
     // per-email key is normalized (trim + lowercase) because the account
     // lookup is case-insensitive, so casing variants must share a bucket.
-    let email_limiter = scoped_limiter(
-        &state,
-        "resend_verification",
-        state.config.auth.max_login_attempts,
-        state.config.auth.forgot_password_window_seconds,
-    );
-    let ip_limiter = scoped_limiter(
-        &state,
-        "ip_resend_verification",
-        state.config.auth.max_ip_login_attempts,
-        state.config.auth.forgot_password_window_seconds,
-    );
+    //
+    // Derived from the forgot-password limiters with `rescoped`, exactly as
+    // the gRPC twin does: the same thresholds and window, a separate budget.
+    // Both surfaces build these the one way, so they cannot drift apart.
+    let email_limiter = state
+        .forgot_password_limiter
+        .rescoped(RESEND_VERIFICATION_KEYSPACE);
+    let ip_limiter = state
+        .ip_forgot_password_limiter
+        .rescoped(IP_RESEND_VERIFICATION_KEYSPACE);
 
     let email_key = normalize_email(&form.email);
 

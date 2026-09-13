@@ -168,7 +168,8 @@ Access is snapshotted at subscribe time and re-resolved only on reconnect.
 
 | Field | Description | metadata | full |
 |-------|-------------|:---:|:---:|
-| `sequence` | Monotonic sequence number | ✅ | ✅ |
+| `sequence` | Sequence number, monotonic per `publisher` | ✅ | ✅ |
+| `publisher` | Id of the server process that published the event; detect gaps on `(publisher, sequence)` | ✅ | ✅ |
 | `timestamp` | ISO 8601 timestamp | ✅ | ✅ |
 | `target` | `"collection"` or `"global"` | ✅ | ✅ |
 | `operation` | `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` | ✅ | ✅ |

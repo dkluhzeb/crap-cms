@@ -106,6 +106,7 @@ most).
 | F15 | Untrusted content interpreted as markup/code (39 `innerHTML` writes, HTML-payload uploads served as text/html, SVG entity expansion) | `h()` DOM builder (one annotated parse site left), MIME/extension cross-check + SVG `<!DOCTYPE>`/`<!ENTITY>` rejection at upload, nonce CSP without `unsafe-inline` | GUARDED |
 | F16 | Sandbox capability denylist incomplete — removing A and B but not sibling C (`load` after `loadfile`; **`io.popen` after `os.execute`** — found live by building this guard) | `sandbox_globals_match_reviewed_allowlist` pins the complete surviving global + `os`/`io`/`string` capability sets; per-capability regression tests; sandbox contract recorded in frozen-contracts.md | GUARDED |
 | F17 | Sensitive/internal detail escapes via a secondary channel — error bodies, `Debug`, logs, serialization, timing | redacting newtypes (`JwtSecret`, `S3SecretKey`, `SmtpPassword`, `McpApiKey`, + new `RedisUrl`, `WebhookHeaders` — the partition test found all three missing ones on its first run), sentinel partition test `tests/secret_redaction.rs` over Debug AND Serialize, scrubbed responders, constant-time compares | GUARDED |
+| F18 | Cross-subsystem namespace collision in a shared external store — two subsystems write one Redis under overlapping key prefixes, so one's bulk operation (a wildcard cache clear) destroys the other's security state (every rate-limit lockout) | cache keys confined to `{prefix}cache:` (`core::cache::keys`, the one key builder), startup refusal of an overlapping `auth.rate_limit_prefix` on the same Redis (`validate_redis_namespaces`), tests `a_cache_clear_cannot_reach_rate_limit_keys_under_default_prefixes` + `validate_rejects_a_rate_limit_prefix_inside_the_cache_namespace` | GUARDED |
 
 ## P — Surface parity & chokepoints
 
@@ -294,6 +295,12 @@ memories; the load-bearing ones:
 - Client: `json` helper `</` escaping, CSP nonce on every inline script,
   richtext link protocol allowlist, SVG served as attachment + sandbox,
   server minting a fresh id for a duplicated row id — CLEAN (R12).
+
+- Day-only date fields with a timezone rendering the previous day in list
+  views — **unreachable** (R14): `parse_date_config` forces `timezone = false`
+  unless `picker_appearance = "dayAndTime"`, and a timezone field's list cell
+  renders as `dayAndTime`. The equality-filter corollary is the same
+  unreachable configuration.
 
 ## Maintenance
 
@@ -674,6 +681,83 @@ memories; the load-bearing ones:
   Convergence: no new class, and every item was already on the books from
   Round 13, so this does not count as a quiet round in its own right. The
   streak stays 0; Round 14 pending.
+- 2026-09-13 (24) — **CONVERGENCE ROUND 14** (5 fresh lenses: access-rule
+  engine, rate limiting, secondary-channel leakage, multi-node topology,
+  time/expiry/dates). **35 reported, 34 confirmed — 5 HIGH, 12 MED, 17 LOW —
+  NOT a quiet round**, and one finding is a NEW class, so the streak stays 0.
+  Most findings sit in GUARDED classes whose guards did not reach them:
+  - **F4 (guard failed) — HIGH: field `access.update` rules saw the incoming
+    patch as `ctx.document`.** An owner rule passed for a caller who rewrote
+    `owner` in the same write. The strip now has create/update entry points;
+    update requires the stored document (loaded only when a field configures
+    `access.update`) on update, bulk update, global update and the update
+    dry-run. Integration tests with a real Lua owner rule.
+  - **F18 (NEW) — HIGH: Redis cache clear deleted every rate-limit lockout**
+    (`crap:*` covers `crap:rl:*`). Cache keys moved to `{prefix}cache:`;
+    overlapping prefixes are refused at startup.
+  - **P11 (guard failed) — HIGH: empty `[auth] secret` generated a different
+    secret per node.** Refused when a Redis cache/transport/rate-limit backend
+    is configured; warned on Postgres. MED: periodic memory-cache clear only
+    ran on gRPC nodes — moved to process startup (serve + work).
+  - **P7 (guard failed) — HIGH: bulk-update snapshots lacked the locale
+    config**; **M4 — HIGH: default-locale tz restore used the bare column**;
+    MED: restore kept per-locale columns of a write-denied field.
+  - **F7 (guard failed) — eight rate-limit defects:** gRPC reset/verify
+    keyspaces (one missing entirely), MFA issuance flood via gRPC, OAuth and
+    admin-MFA clears instead of refunds, memory-backend sweep pruning by the
+    caller's window, Redis same-instant member collision, resend thresholds
+    diverging per surface. Keyspace names are now shared constants and every
+    surface derives its limiter with `rescoped`.
+  - **F17 (guard failed):** failed/stale email jobs kept rendered links, the
+    validation-marker nonce reached `JobRun.error`, `webhook_url` unredacted.
+    **F14:** client field name logged raw. **P2:** queued `delete_many` gate
+    ignored soft delete; draft-only global reader got published content.
+  - **L/S/D (time):** JWT 60 s leeway, refresh past `session_absolute_max_age`,
+    DST-gap local times stored as UTC, `utc_now` pinned `.000`, legacy
+    space-format timestamps on disk (versioned rewrite), `images purge` cutoff
+    in the future, retention purge racing a restore (locked re-check), PG
+    schema sync unserialized (advisory lock), event `sequence` per process
+    (publisher id added). CLI `-p` visibility → `--password-stdin`.
+  - Docs-only by decision: `heartbeat_interval` must match across nodes;
+    index drop during rolling deploys.
+  - Refuted: day-only+timezone list rendering (Appendix 2).
+  Convergence: a new class appeared; streak stays 0. Round 15 pending, and a
+  loadtest is still due before the tag.
+  - **Post-fix review (5 reviewers over the round's own diff).** One HIGH
+    regression came from this round's fix: the restore strip now removed a
+    denied localized field's per-locale columns, and restore then wrote NULL
+    into every locale of a field the snapshot no longer carried — worse than
+    the bug it fixed. Restore now leaves an uncarried field untouched, judges
+    field rules against the live row (it used the snapshot, letting a former
+    owner pass an owner rule) and drops a denied date's `_tz` companions.
+    Also fixed from the review: the MFA issuance throttle handed out a
+    challenge whose earlier code had already expired or been consumed (now
+    refused explicitly on both surfaces); gRPC MFA logins left the login
+    counters charged; a JWT was still accepted during its `exp` second; a
+    refresh at the exact session ceiling minted a dead token; version rows on
+    tables created by early releases still took the space-format default
+    (the insert binds timestamps now); the DST-gap check also ran on
+    JSON-stored rows whose dates are never converted; coalesced event bursts
+    were ordered by per-publisher `sequence`; the Redis overlap check compared
+    URL spelling; stdio MCP skipped the periodic clear while Redis nodes each
+    wiped the shared store; the dry-run read its stored row outside its
+    transaction. Docs: upgrade item 27 advised a fresh secret that would
+    destroy `crap.crypto` data re-encrypted under item 18, and omitted
+    rolling-upgrade behavior on a shared Redis. Refuted: an extra per-row read
+    in bulk updates (the match set is ids only). Lesson for the program: a
+    fix that removes data from a pipeline must be traced to every consumer of
+    that data, not only the one the finding named.
+  - **Decisions after the review.** Draft saves keep judging field
+    `access.update` rules against the published row (frozen). Timezone dates
+    nested in JSON rows — blocks rows, groups inside rows, nested array rows —
+    were stored as wall-clock digits while top-level and array-row dates were
+    UTC; by decision they are now converted on write, shown in their row's
+    zone, validated for DST gaps everywhere, and existing rows are migrated
+    once (versioned per slug). Mapping that path surfaced a live data bug the
+    audit had not: the admin form showed array-row timezone dates as their
+    UTC digits and saved them back as local time, shifting the date by its
+    offset on every save — the display side of M4 had never been wired for
+    rows.
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

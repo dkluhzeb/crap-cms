@@ -20,6 +20,9 @@ mod redis;
 pub use backend::{RateLimitBackend, SharedRateLimitBackend};
 pub use factory::{RateLimitFactoryConfig, create_rate_limit_backend};
 pub use grpc::GrpcRateLimiter;
-pub use login::LoginRateLimiter;
+pub use login::{
+    IP_RESEND_VERIFICATION_KEYSPACE, IP_RESET_PASSWORD_KEYSPACE, IP_VERIFY_EMAIL_KEYSPACE,
+    LoginRateLimiter, MFA_ISSUE_KEYSPACE, RESEND_VERIFICATION_KEYSPACE,
+};
 pub use memory::MemoryRateLimitBackend;
 pub use none::NoneRateLimitBackend;

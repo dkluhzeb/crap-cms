@@ -386,6 +386,7 @@ mod tests {
 
         let event = MutationEvent {
             sequence: 1,
+            publisher: String::new(),
             timestamp: "2026-08-11T00:00:00Z".to_string(),
             target: EventTarget::Collection,
             operation: EventOperation::Update,

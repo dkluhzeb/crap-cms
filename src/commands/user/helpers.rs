@@ -1,11 +1,13 @@
 //! Shared helpers for user management commands.
 
-use std::sync::Arc;
-
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{BufRead, stdin},
+    sync::Arc,
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use dialoguer::Select;
+use dialoguer::{Password, Select};
 use serde_json::Value;
 
 use crate::{
@@ -18,6 +20,57 @@ use crate::{
 use crate::core::collection::Auth;
 #[cfg(not(tarpaulin_include))]
 use dialoguer::Input;
+
+/// Read a password from the first line of `reader`, without its line ending.
+///
+/// # Errors
+///
+/// Returns an error if reading fails or the line is empty.
+pub(super) fn password_from_reader(mut reader: impl BufRead) -> Result<String> {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .context("Failed to read password from standard input")?;
+
+    let password = line.trim_end_matches(['\n', '\r']);
+    if password.is_empty() {
+        bail!("No password on standard input");
+    }
+
+    Ok(password.to_string())
+}
+
+/// Resolve a new password: standard input when `from_stdin`, else the
+/// `-p` value (with a visibility warning), else an interactive prompt with
+/// confirmation.
+///
+/// # Errors
+///
+/// Returns an error if standard input or the prompt cannot be read.
+#[cfg(not(tarpaulin_include))]
+pub(super) fn resolve_new_password(
+    password: Option<String>,
+    from_stdin: bool,
+    prompt: &str,
+) -> Result<String> {
+    if from_stdin {
+        return password_from_reader(stdin().lock());
+    }
+
+    if let Some(p) = password {
+        cli::warning(
+            "Password provided via command line — it is visible to other local users and kept \
+             in shell history; use --password-stdin instead",
+        );
+        return Ok(p);
+    }
+
+    Password::with_theme(&crap_theme())
+        .with_prompt(prompt)
+        .with_confirmation("Confirm password", "Passwords do not match")
+        .interact()
+        .context("Failed to read password")
+}
 
 /// Extract the email field from a user document, defaulting to "unknown".
 pub(super) fn get_user_email(doc: &Document) -> &str {
@@ -227,6 +280,8 @@ mod tests {
 
     use crate::core::document::DocumentBuilder;
 
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
@@ -246,5 +301,17 @@ mod tests {
         assert_eq!(default_value_string(&json!(42)), "42");
         assert_eq!(default_value_string(&json!(true)), "true");
         assert_eq!(default_value_string(&Value::Null), "null");
+    }
+
+    /// Only the first line is the password; its line ending is not part of it.
+    #[test]
+    fn password_from_reader_takes_the_first_line_without_its_ending() {
+        let read = |input: &str| password_from_reader(Cursor::new(input.as_bytes()));
+
+        assert_eq!(read("s3cret pass\n").unwrap(), "s3cret pass");
+        assert_eq!(read("s3cret\r\nignored\n").unwrap(), "s3cret");
+        assert_eq!(read("no-newline").unwrap(), "no-newline");
+        assert!(read("\n").is_err());
+        assert!(read("").is_err());
     }
 }

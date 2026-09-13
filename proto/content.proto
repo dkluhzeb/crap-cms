@@ -1424,8 +1424,10 @@ enum JobScheduledBy {
 
 // MutationEvent is a single real-time event delivered on the Subscribe stream.
 message MutationEvent {
-  // Monotonically increasing server-assigned sequence number.
-  // Use to detect gaps when a subscriber lags and events are dropped.
+  // Server-assigned sequence number, monotonically increasing per `publisher`.
+  // Use the (publisher, sequence) pair to detect gaps when a subscriber lags
+  // and events are dropped: on a shared event transport every node publishes
+  // and counts its own sequence from 1.
   uint64 sequence = 1;
 
   // ISO-8601 UTC timestamp of when the mutation occurred on the server.
@@ -1446,6 +1448,11 @@ message MutationEvent {
   // The document field values at the time of the event.
   // For delete events, this is an empty struct.
   DataMap data = 7;
+
+  // Opaque id of the server process that published the event; `sequence`
+  // is monotonic within it. Stable for the life of that process. Empty for
+  // an event relayed from a node that predates this field.
+  string publisher = 8;
 
   // NOTE: events deliberately do NOT identify the editing user — exposing
   // editor ids/emails to every subscriber would leak PII. Editor-based

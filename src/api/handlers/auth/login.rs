@@ -11,9 +11,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::error;
+use tracing::{error, warn};
 
-use crate::core::collection::{Auth, Surface};
 use crate::{
     api::{
         content,
@@ -23,8 +22,11 @@ use crate::{
         },
     },
     core::{
-        CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder,
+        CollectionDefinition, Document, SharedPasswordProvider, Slug,
+        auth::ClaimsBuilder,
+        collection::{Auth, MfaMode, Surface},
         normalize_email,
+        rate_limit::MFA_ISSUE_KEYSPACE,
     },
     service::{
         AppInfra,
@@ -167,12 +169,14 @@ impl ContentService {
             // token — and return it WITHOUT a session token. The client
             // completes the login via the VerifyMfa RPC.
             //
-            // The login limiters are deliberately NOT cleared here: each
-            // code-issuing Login costs one attempt, which caps how fast a
-            // password-holder can flood the victim's inbox with codes (the
-            // admin twin uses a dedicated issuance limiter because it clears
-            // the login limiter on password success; this surface doesn't).
+            // The password is proven, so settle the login limiters exactly as
+            // a completed login and the admin twin do: clear the per-email
+            // counter, refund the shared per-IP attempt. Code issuance has its
+            // own per-user limiter (see `issue_mfa_challenge`).
             LoginOutcome::MfaRequired(v) => {
+                self.login_limiter.clear(&email_key);
+                self.ip_login_limiter.refund(&ip);
+
                 return self
                     .issue_mfa_challenge(&req.collection, &req.email, &v)
                     .await;
@@ -232,6 +236,23 @@ impl ContentService {
         }))
     }
 
+    /// Record one MFA code issuance for `user` and report whether it is over
+    /// budget. Over budget, the caller refuses the login: codes are single-use
+    /// and expire with the pending token, so there is no earlier code a
+    /// challenge could fall back on.
+    fn mfa_issue_blocked(&self, user: &Document) -> bool {
+        let blocked = self
+            .forgot_password_limiter
+            .rescoped(MFA_ISSUE_KEYSPACE)
+            .check_and_block(user.id.as_ref());
+
+        if blocked {
+            warn!(user = %user.id, "MFA code issuance throttled");
+        }
+
+        blocked
+    }
+
     /// Issue the MFA challenge for a credential-verified but MFA-gated login:
     /// mint the pending token, store + email a fresh 6-digit code (background,
     /// best-effort), and encode the challenge response (no session token).
@@ -249,6 +270,19 @@ impl ContentService {
             .unwrap_or(fallback_email)
             .to_string();
 
+        let is_totp = self
+            .infra
+            .registry
+            .get_collection(collection)
+            .and_then(|d| d.auth.as_ref())
+            .is_some_and(|a| a.mfa() == MfaMode::Totp);
+
+        if !is_totp && self.mfa_issue_blocked(&verified.user) {
+            return Err(Status::resource_exhausted(
+                "Too many verification codes requested. Please try again later.",
+            ));
+        }
+
         let mfa_challenge = auth::mint_mfa_pending_token(
             &self.infra,
             collection,
@@ -258,13 +292,6 @@ impl ContentService {
         )
         .inspect_err(|e| error!("MFA pending token error: {e}"))
         .map_err(|_| Status::internal("Internal error"))?;
-
-        let is_totp = self
-            .infra
-            .registry
-            .get_collection(collection)
-            .and_then(|d| d.auth.as_ref())
-            .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp);
 
         let totp_provisioning_uri = if is_totp {
             // TOTP: nothing to deliver — resolve the enrollment state so an

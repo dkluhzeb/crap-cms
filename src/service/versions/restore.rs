@@ -18,7 +18,8 @@ use crate::{
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
         ServiceContext, ServiceError, helpers, hooks::WriteHooks, invalidate_user_streams_if_auth,
-        run_pool_write, versions::gate::versions_gate_decision,
+        run_pool_write, stored_fields_for_update_rules, stored_global_fields_for_update_rules,
+        versions::gate::versions_gate_decision,
     },
 };
 
@@ -312,7 +313,22 @@ pub(crate) fn restore_collection_version_core(
     // overwrite that field's live value. Drop write-denied fields from the
     // snapshot before validation and persistence (same input-stripping model
     // `update` uses), so the partial restore leaves their stored values intact.
-    write_hooks.strip_write_access_value(&def.fields, &mut snapshot, ctx.slug, ctx.user, None);
+    // Rules judge the live row, not the snapshot being restored.
+    let stored = stored_fields_for_update_rules(
+        conn,
+        ctx.slug,
+        def,
+        document_id,
+        restore_locale_ctx.as_ref(),
+    )?;
+    write_hooks.strip_write_access_value(
+        &def.fields,
+        &mut snapshot,
+        &stored,
+        ctx.slug,
+        ctx.user,
+        None,
+    );
 
     // Re-run schema validation against the restored data, so a snapshot
     // saved before a schema tightening (e.g. a field gained `required = true`
@@ -444,7 +460,20 @@ pub(crate) fn restore_global_version_core(
     // Field-level write access also gates restore — see the collection variant
     // above. Drop write-denied fields from the snapshot before validation and
     // persistence so a restore can't overwrite a write-locked field's value.
-    write_hooks.strip_write_access_value(&def.fields, &mut snapshot, ctx.slug, ctx.user, None);
+    // Rules judge the live global, not the snapshot being restored.
+    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
+        .ok()
+        .flatten();
+    let stored =
+        stored_global_fields_for_update_rules(conn, ctx.slug, def, restore_locale_ctx.as_ref())?;
+    write_hooks.strip_write_access_value(
+        &def.fields,
+        &mut snapshot,
+        &stored,
+        ctx.slug,
+        ctx.user,
+        None,
+    );
 
     // Re-run schema validation against the restored data — see the
     // collection variant above for the full rationale.
@@ -453,9 +482,6 @@ pub(crate) fn restore_global_version_core(
     // Mirror the global update path's validation strictness: draft-aware and
     // locale-scoped, so a published restore enforces localized completeness and
     // a draft restore is exempt (see the collection variant above).
-    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
-        .ok()
-        .flatten();
     let val_ctx = ValidationCtx::builder(conn, &gtable)
         .exclude_id(Some("default"))
         .draft(restored_status == "draft")

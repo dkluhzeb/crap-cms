@@ -27,7 +27,11 @@ use crate::{
         self, create_live_transports, load_and_validate_config, run_on_init_hooks,
         spawn_shutdown_signal,
     },
-    core::{email::create_email_provider_with_lease, upload::create_storage_with_lease},
+    core::{
+        cache::{periodic_clear_interval, spawn_periodic_clear},
+        email::create_email_provider_with_lease,
+        upload::create_storage_with_lease,
+    },
     db::{migrate, pool},
     hooks::{self, HookRunner},
     scheduler::{self, SchedulerParams},
@@ -289,6 +293,12 @@ pub async fn run(
         config: &cfg,
         config_dir,
     })?;
+
+    // Job handlers read through this process's own cache, so a worker clears
+    // it on the same cadence as the servers.
+    if let Some(every) = periodic_clear_interval(&infra.cache, cfg.cache.max_age_secs) {
+        spawn_periodic_clear(Arc::clone(&infra.cache), every, shutdown.clone());
+    }
 
     scheduler::start(SchedulerParams {
         infra,

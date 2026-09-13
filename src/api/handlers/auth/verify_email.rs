@@ -9,7 +9,7 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::CollectionDefinition,
+    core::{CollectionDefinition, rate_limit::IP_VERIFY_EMAIL_KEYSPACE},
     service::{AppInfra, ServiceContext, auth::consume_verification_token},
 };
 
@@ -60,6 +60,9 @@ impl ContentService {
         &self,
         request: Request<content::VerifyEmailRequest>,
     ) -> Result<Response<content::VerifyEmailResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -73,6 +76,20 @@ impl ContentService {
         if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
             return Err(Status::invalid_argument(
                 "Email verification is not enabled for this collection",
+            ));
+        }
+
+        // Rate-limit token attempts per IP in the keyspace the admin twin uses,
+        // so neither surface offers an unthrottled token-guessing endpoint and
+        // switching surfaces buys no fresh budget. Every attempt counts, as on
+        // the other token endpoints.
+        if self
+            .ip_forgot_password_limiter
+            .rescoped(IP_VERIFY_EMAIL_KEYSPACE)
+            .check_and_block(&ip)
+        {
+            return Err(Status::resource_exhausted(
+                "Too many attempts, try again later",
             ));
         }
 

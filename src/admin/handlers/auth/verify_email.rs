@@ -15,11 +15,11 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            auth::{VerifyEmailQuery, client_ip, scoped_limiter},
+            auth::{VerifyEmailQuery, client_ip},
             shared::paths,
         },
     },
-    core::Registry,
+    core::{Registry, rate_limit::IP_VERIFY_EMAIL_KEYSPACE},
     db::DbPool,
     service::{
         ServiceContext, auth::consume_verification_token as service_consume_verification_token,
@@ -81,12 +81,9 @@ pub async fn verify_email(
     // keyspace (not the shared forgot-password limiter) so a burst of
     // verification attempts can't exhaust the budget a legitimate password
     // reset from the same IP needs.
-    let ip_verify_limiter = scoped_limiter(
-        &state,
-        "ip_verify_email",
-        state.config.auth.max_ip_login_attempts,
-        state.config.auth.forgot_password_window_seconds,
-    );
+    let ip_verify_limiter = state
+        .ip_forgot_password_limiter
+        .rescoped(IP_VERIFY_EMAIL_KEYSPACE);
     if ip_verify_limiter.check_and_block(&ip) {
         return Redirect::to(paths::LOGIN);
     }

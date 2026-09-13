@@ -30,7 +30,7 @@ use crate::{
             builder::build_single_field_context,
             count_errors_in_field_contexts,
             enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
-            locale_locked_display, safe_template_id,
+            locale_locked_display, localize_date_display, safe_template_id,
         },
     },
     core::field::{FieldDefinition, FieldType},
@@ -226,12 +226,9 @@ fn apply_blocks_template(
 
 /// Apply Date enrichment with structured-row timezone lookup.
 ///
-/// Two-step: call `sub_date` with an empty `tz_value` (so the displayed
-/// value is the raw stored value, no UTC→local conversion), then override
-/// `timezone_value` from the parent row's `<short_name>_tz` companion key.
-/// The displayed value is intentionally NOT reconverted — the build-phase
-/// equivalent has the same gap, and unifying that conversion across both
-/// phases is out of scope here.
+/// Builds the date context from the stored value, then takes the zone from the
+/// parent row's `<short_name>_tz` companion key and shows the stored UTC value
+/// as local time in it (see [`localize_date_display`]).
 fn apply_date(
     df: &mut crate::admin::context::field::DateField,
     child: &FieldDefinition,
@@ -252,6 +249,7 @@ fn apply_date(
 
     if !tz_val.is_empty() {
         df.timezone_value = Some(tz_val.to_string());
+        localize_date_display(df, child_val, tz_val);
     }
 }
 

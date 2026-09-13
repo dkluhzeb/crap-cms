@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::core::event::{
     EventReceiver, EventTransport, InvalidationReceiver, InvalidationTransport, MutationEvent,
-    MutationEventInput, SequenceGen, stamp_event,
+    MutationEventInput, SequenceGen,
 };
 
 /// Capacity of the user-invalidation broadcast channel. Low-volume signalling
@@ -38,7 +38,7 @@ impl InProcessEventBus {
 
 impl EventTransport for InProcessEventBus {
     fn publish(&self, input: MutationEventInput) -> Option<MutationEvent> {
-        let event = stamp_event(input, self.sequence.next());
+        let event = self.sequence.stamp(input);
 
         match self.sender.send(event.clone()) {
             Ok(_) => Some(event),

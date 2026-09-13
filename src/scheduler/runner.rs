@@ -14,6 +14,7 @@ use crate::{
         CollectionDefinition, DocumentFields, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
         upload::{self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage},
+        validate::humanize_hook_message,
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::{HookRunner, LuaCrudInfra},
@@ -43,10 +44,16 @@ fn write_job_failure(w: JobFailureWrite<'_>) -> Result<()> {
         .get()
         .context("Failed to get DB connection to record job failure")?;
 
+    // The stored error is readable through `GetJobRun`. A hook that raised
+    // `crap.validation_error` leaves an encoded marker in the raw chain, and
+    // the marker's per-process nonce is what stops forgery — so render it as
+    // plain text before it reaches the row or the log.
+    let error_msg = humanize_hook_message(w.error_msg);
+
     job_query::fail_job(
         &c,
         &w.job_run.id,
-        w.error_msg,
+        &error_msg,
         w.should_retry,
         w.job_run.attempt,
     )?;
@@ -54,10 +61,10 @@ fn write_job_failure(w: JobFailureWrite<'_>) -> Result<()> {
     if w.should_retry {
         warn!(
             "{} failed (attempt {}/{}), will retry: {}",
-            w.label, w.job_run.attempt, w.job_run.max_attempts, w.error_msg
+            w.label, w.job_run.attempt, w.job_run.max_attempts, error_msg
         );
     } else {
-        error!("{} failed permanently: {}", w.label, w.error_msg);
+        error!("{} failed permanently: {}", w.label, error_msg);
     }
 
     Ok(())
@@ -611,10 +618,26 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
             _ => continue,
         };
 
+        // Lock the row and re-check that it is still trashed past retention: the
+        // candidates above were read without a lock, and a restore may have
+        // committed since. The same lock keeps a concurrent create from
+        // incrementing the ref count between this check and the DELETE
+        // (Postgres only; SQLite serializes via IMMEDIATE).
+        let Some(ref_count) = query::ref_count::get_purgeable_ref_count_locked(
+            p.conn,
+            p.slug,
+            &id,
+            p.retention_seconds,
+        )?
+        else {
+            debug!(
+                "Skipping purge of {}/{}: no longer trashed past retention",
+                p.slug, id
+            );
+            continue;
+        };
+
         // Skip documents that are still referenced -- protect referential integrity.
-        // Uses locked variant to prevent concurrent creates from incrementing ref count
-        // between this check and the DELETE (Postgres only; SQLite serializes via IMMEDIATE).
-        let ref_count = query::ref_count::get_ref_count_locked(p.conn, p.slug, &id)?.unwrap_or(0);
         if ref_count > 0 {
             debug!(
                 "Skipping purge of {}/{}: referenced by {} document(s)",

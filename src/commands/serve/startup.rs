@@ -21,7 +21,10 @@ use crate::{
     core::{
         Registry, SharedPasswordProvider, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
-        cache::{create_cache_with_lease, warn_if_custom_cache_multi_vm},
+        cache::{
+            create_cache_with_lease, periodic_clear_interval, spawn_periodic_clear,
+            warn_if_custom_cache_multi_vm,
+        },
         email::{EmailRenderer, create_email_provider_with_lease},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
@@ -576,6 +579,12 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone(), "");
+
+    // Once per process, whichever surfaces run: a memory cache is local to
+    // this process, so an admin-only node must clear its own.
+    if let Some(every) = periodic_clear_interval(&res.infra.cache, res.config.cache.max_age_secs) {
+        spawn_periodic_clear(Arc::clone(&res.infra.cache), every, shutdown.clone());
+    }
 
     let run_admin = only.is_none() || matches!(only, Some(ServeMode::Admin));
     let run_api = only.is_none() || matches!(only, Some(ServeMode::Grpc));

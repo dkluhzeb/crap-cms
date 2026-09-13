@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::{
     core::{
-        CollectionDefinition, Document, FieldDefinition, RequiredLocales, collection::Hooks,
-        nest_group_fields,
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, RequiredLocales,
+        collection::Hooks, nest_group_fields,
     },
     db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
@@ -99,6 +99,11 @@ pub struct ValidateContext<'a> {
     /// Collection-level `required_locales` default, so the dry-run mirrors the
     /// completeness check that `create`/`update` apply. `None` for globals.
     pub required_locales: Option<&'a RequiredLocales>,
+    /// The stored document field-level `access.update` rules judge as
+    /// `ctx.document`, exactly as the real update does. `None` in create mode;
+    /// an update without one judges an empty document, so stored-value rules
+    /// deny.
+    pub stored_document: Option<&'a DocumentFields>,
 }
 
 /// Validate a document without persisting — runs the full before-write pipeline
@@ -126,16 +131,24 @@ pub fn validate_document(
 
     let is_draft = input.draft && ctx.supports_drafts;
 
-    // Strip write-denied fields (data-aware: each `access.create`/`access.update`
-    // rule sees `ctx.data` = its level and `ctx.document` = the incoming document).
-    write_hooks.strip_write_access_data(
-        ctx.fields,
-        &mut input.data,
-        ctx.slug,
-        user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-        ctx.operation,
-    );
+    // Strip write-denied fields exactly as the real write does: on update each
+    // rule judges the stored document, on create the incoming one.
+    let locale = input.locale_ctx.map(LocaleContext::access_locale);
+    if ctx.operation == "update" {
+        let empty = DocumentFields::default();
+        let stored = ctx.stored_document.unwrap_or(&empty);
+
+        write_hooks.strip_write_access_update(
+            ctx.fields,
+            &mut input.data,
+            stored,
+            ctx.slug,
+            user,
+            locale,
+        );
+    } else {
+        write_hooks.strip_write_access_create(ctx.fields, &mut input.data, ctx.slug, user, locale);
+    }
 
     let hook_data = input.data.clone();
 

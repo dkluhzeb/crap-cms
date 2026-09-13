@@ -1,0 +1,1 @@
+-- field-write owner-rule test fixture: no init-time registrations needed.

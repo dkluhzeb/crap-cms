@@ -7,7 +7,10 @@ use tonic::{Request, Response};
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::normalize_email,
+    core::{
+        normalize_email,
+        rate_limit::{IP_RESEND_VERIFICATION_KEYSPACE, RESEND_VERIFICATION_KEYSPACE},
+    },
     service::ResendTarget,
 };
 
@@ -40,11 +43,11 @@ impl ContentService {
 
         let email_blocked = self
             .forgot_password_limiter
-            .rescoped("resend_verification")
+            .rescoped(RESEND_VERIFICATION_KEYSPACE)
             .check_and_block(&email_key);
         let ip_blocked = self
             .ip_forgot_password_limiter
-            .rescoped("ip_resend_verification")
+            .rescoped(IP_RESEND_VERIFICATION_KEYSPACE)
             .check_and_block(&ip);
         if email_blocked || ip_blocked {
             return ok_response;

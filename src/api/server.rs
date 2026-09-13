@@ -3,11 +3,9 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use tokio::{select, spawn, time::interval};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
-use tracing::warn;
 
 use crate::{
     api::{
@@ -17,7 +15,7 @@ use crate::{
     },
     config::CrapConfig,
     core::{
-        SharedCache, SharedPasswordProvider, SharedRateLimitBackend,
+        SharedPasswordProvider, SharedRateLimitBackend,
         rate_limit::{GrpcRateLimiter, LoginRateLimiter},
     },
     service::AppInfra,
@@ -204,7 +202,6 @@ impl GrpcStartParamsBuilder {
 pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationToken) -> Result<()> {
     let addr = addr.parse()?;
 
-    let cache_max_age = params.config.cache.max_age_secs;
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
@@ -230,14 +227,6 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .infra(params.infra);
 
     let content_service = ContentService::new(deps_builder.build());
-
-    if cache_max_age > 0 && content_service.cache_handle().kind() != "none" {
-        spawn_periodic_cache_clear(
-            content_service.cache_handle(),
-            cache_max_age,
-            shutdown.clone(),
-        );
-    }
 
     let grpc_limiter = Arc::new(GrpcRateLimiter::with_backend(
         params.rate_limit_backend,
@@ -286,25 +275,4 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .await?;
 
     Ok(())
-}
-
-/// Spawn a background task that periodically clears the cache.
-/// Handles external DB mutations that bypass the API's cache invalidation.
-fn spawn_periodic_cache_clear(cache: SharedCache, interval_secs: u64, shutdown: CancellationToken) {
-    spawn(async move {
-        let mut tick = interval(Duration::from_secs(interval_secs));
-
-        tick.tick().await; // skip first immediate tick
-
-        loop {
-            select! {
-                _ = tick.tick() => {
-                    if let Err(e) = cache.clear() {
-                        warn!("Periodic cache clear failed: {:#}", e);
-                    }
-                },
-                () = shutdown.cancelled() => break,
-            }
-        }
-    });
 }

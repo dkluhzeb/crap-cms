@@ -156,6 +156,7 @@
   "mfa_totp_manual_key": "Manueller Schl\u00fcssel",
   "error_mfa_invalid_code": "Ungültiger oder abgelaufener Code. Bitte versuchen Sie es erneut.",
   "error_mfa_too_many_attempts": "Zu viele Verifizierungsversuche. Bitte versuchen Sie es später erneut.",
+  "error_mfa_too_many_codes": "Zu viele Bestätigungscodes angefordert. Bitte später erneut versuchen.",
 
   "restore_has_missing_relations": "Diese Version referenziert Inhalte, die nicht mehr existieren:",
   "restore_missing_warning": "Beim Wiederherstellen werden veraltete Referenzen in das Dokument geschrieben.",
@@ -223,6 +224,7 @@
   "validation.invalid_option": "{{field}} hat eine ungültige Option",
   "validation.invalid_option_value": "{{field}} hat eine ungültige Option: {{value}}",
   "validation.invalid_date": "{{field}} hat kein gültiges Datumsformat",
+  "validation.nonexistent_local_time": "{{field}}: {{value}} existiert in {{timezone}} nicht (durch eine Zeitumstellung übersprungen)",
   "validation.date_min": "{{field}} muss am oder nach dem {{min}} liegen",
   "validation.date_max": "{{field}} muss am oder vor dem {{max}} liegen",
   "validation.min_rows": "{{field}} benötigt mindestens {{min}} Einträge",

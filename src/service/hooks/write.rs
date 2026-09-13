@@ -9,7 +9,7 @@ use crate::{
         Builder, Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
         nest_group_fields,
     },
-    db::{AccessResult, DbConnection, LocaleContext},
+    db::{AccessResult, DbConnection, LocaleContext, query::helpers::TZ_SUFFIX},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
@@ -27,6 +27,91 @@ use crate::{
 type ValidateResult = std::result::Result<(), ValidationError>;
 
 use super::richtext::apply_richtext_before_validate;
+
+/// Drop the columns that belong to every field a write strip removed from a
+/// version snapshot: its per-locale columns (`price__en`, `seo__title__de`) and
+/// a date's timezone companion (`starts_tz`, `starts_tz__de`).
+///
+/// Snapshots carry these beside a field's resolved value, and restore writes
+/// them. The strip removes only the resolved key, so without this a
+/// write-denied field would still be overwritten through its companions.
+/// Handles companions kept at the top level and inside nested group objects
+/// alike.
+fn drop_locale_columns_of_stripped(before: &Map<String, Value>, after: &mut Map<String, Value>) {
+    let mut removed = Vec::new();
+    collect_removed_paths(before, after, "", &mut removed);
+
+    if removed.is_empty() {
+        return;
+    }
+
+    drop_decorated(after, "", &removed);
+}
+
+/// Collect the `__`-joined path of every key present in `before` but missing
+/// from `after`, descending into objects present in both.
+fn collect_removed_paths(
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+    prefix: &str,
+    removed: &mut Vec<String>,
+) {
+    for (key, value) in before {
+        let path = format!("{prefix}{key}");
+
+        match (value, after.get(key)) {
+            (_, None) => removed.push(path),
+            (Value::Object(b), Some(Value::Object(a))) => {
+                collect_removed_paths(b, a, &format!("{path}__"), removed);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Remove every key whose `__`-joined path belongs to one of the `removed`
+/// field paths, at this level and in nested objects.
+fn drop_decorated(level: &mut Map<String, Value>, prefix: &str, removed: &[String]) {
+    level.retain(|key, _| {
+        let path = format!("{prefix}{key}");
+        !removed.iter().any(|field| belongs_to_field(&path, field))
+    });
+
+    for (key, value) in level.iter_mut() {
+        if let Value::Object(nested) = value {
+            drop_decorated(nested, &format!("{prefix}{key}__"), removed);
+        }
+    }
+}
+
+/// Whether `path` is a companion column of `field`: a per-locale column
+/// (`{field}__…`) or a timezone companion (`{field}_tz`, `{field}_tz__…`).
+/// Field names cannot contain `__` or end in `_tz`, so no sibling field matches.
+fn belongs_to_field(path: &str, field: &str) -> bool {
+    let Some(rest) = path.strip_prefix(field) else {
+        return false;
+    };
+
+    rest.starts_with("__")
+        || rest
+            .strip_prefix(TZ_SUFFIX)
+            .is_some_and(|tz_rest| tz_rest.is_empty() || tz_rest.starts_with("__"))
+}
+
+/// Shared body of the create/update strips: round-trip `data` through the
+/// map-level strip, with `input.document` as `ctx.document`.
+fn strip_in_place<H: WriteHooks + ?Sized>(
+    hooks: &H,
+    fields: &[FieldDefinition],
+    data: &mut DocumentFields,
+    input: &WriteStripInput<'_>,
+) {
+    let mut level: Map<String, Value> = std::mem::take(data).into_inner().into_iter().collect();
+
+    hooks.strip_write_access_map(fields, &mut level, input);
+
+    *data = level.into_iter().collect();
+}
 
 /// Trait for executing write hooks, abstracting over VM acquisition strategy.
 ///
@@ -141,11 +226,12 @@ pub trait WriteHooks {
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult>;
 
     /// Data-aware field-**write** strip: remove from `level` every field the user
-    /// may not write under `operation` (`"create"` | `"update"`), evaluating each
-    /// `access.create` / `access.update` rule with `ctx.data` = the field's own
-    /// immediate level and `ctx.document` = `document` (the full incoming
-    /// document). The write-path mirror of `strip_read_access_map`. Default no-op
-    /// so lightweight test/override impls keep their behavior.
+    /// may not write under `input.operation` (`"create"` | `"update"`),
+    /// evaluating each `access.create` / `access.update` rule with `ctx.data` =
+    /// the field's own immediate level and `ctx.document` = `input.document`
+    /// (the stored document on update, the incoming one on create). The
+    /// write-path mirror of `strip_read_access_map`. Default no-op so
+    /// lightweight test/override impls keep their behavior.
     fn strip_write_access_map(
         &self,
         fields: &[FieldDefinition],
@@ -155,43 +241,72 @@ pub trait WriteHooks {
         let _ = (fields, level, input);
     }
 
-    /// Convenience over [`strip_write_access_map`](Self::strip_write_access_map):
-    /// strip write-denied fields from incoming [`DocumentFields`] in place before
-    /// persistence, capturing the full pre-strip data as `ctx.document`.
-    fn strip_write_access_data(
+    /// Strip create-denied fields from incoming [`DocumentFields`] in place.
+    /// No row exists yet, so each `access.create` rule sees the full pre-strip
+    /// incoming data as `ctx.document`.
+    fn strip_write_access_create(
         &self,
         fields: &[FieldDefinition],
         data: &mut DocumentFields,
         collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
-        operation: &str,
     ) {
-        // Skip the clone + map round-trip when the operation isn't create/update,
-        // or no field configures the relevant write-access function.
-        let Some(extract) = FieldDefinition::write_access_extractor(operation) else {
-            return;
-        };
-        if !has_any_field_access(fields, extract) {
+        if !has_any_field_access(fields, |f| f.access.create.as_ref()) {
             return;
         }
 
         let document = data.clone();
-        let mut level: Map<String, Value> = std::mem::take(data).into_inner().into_iter().collect();
-
-        self.strip_write_access_map(
+        strip_in_place(
+            self,
             fields,
-            &mut level,
+            data,
             &WriteStripInput {
                 document: &document,
                 collection,
                 user,
                 locale,
-                operation,
+                operation: "create",
             },
         );
+    }
 
-        *data = level.into_iter().collect();
+    /// Strip update-denied fields from an incoming patch in place.
+    ///
+    /// Each `access.update` rule sees the STORED document as `ctx.document`.
+    /// The patch is what the rule is judging, so it cannot also be the
+    /// evidence: a rule gating a field on `ctx.document.owner` would otherwise
+    /// pass for any caller who puts their own id in `owner` in the same write.
+    /// Callers load `stored` with [`stored_fields_for_update_rules`] (or its
+    /// global twin); an empty document makes a stored-value rule deny.
+    ///
+    /// [`stored_fields_for_update_rules`]: crate::service::stored_fields_for_update_rules
+    fn strip_write_access_update(
+        &self,
+        fields: &[FieldDefinition],
+        data: &mut DocumentFields,
+        stored: &DocumentFields,
+        collection: &str,
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        if !has_any_field_access(fields, |f| f.access.update.as_ref()) {
+            return;
+        }
+
+        let document = nest_group_fields(stored, fields);
+        strip_in_place(
+            self,
+            fields,
+            data,
+            &WriteStripInput {
+                document: &document,
+                collection,
+                user,
+                locale,
+                operation: "update",
+            },
+        );
     }
 
     /// Strip **write**-denied fields from a version-snapshot `Value::Object` in
@@ -199,14 +314,19 @@ pub trait WriteHooks {
     /// `access.update` rule. Used by the version-restore path: a user who may
     /// `update` a document but is write-denied on a specific field must not be
     /// able to use a restore to overwrite that field's live value. The denied
-    /// field is dropped from the snapshot, so the partial restore leaves its
-    /// stored value untouched (the same input-stripping model `update` uses).
-    /// The snapshot is its own `ctx.document`. Mirrors
+    /// field is dropped from the snapshot — with its per-locale columns and a
+    /// date's timezone companion — so the partial restore leaves its stored
+    /// value untouched (the same input-stripping model `update` uses).
+    ///
+    /// Each rule judges `stored` — the live row — as `ctx.document`, exactly as
+    /// an update does: the snapshot is the value under judgment, so it cannot
+    /// also be the evidence. Mirrors
     /// [`ReadHooks::strip_read_access_value`](crate::service::hooks::ReadHooks::strip_read_access_value).
     fn strip_write_access_value(
         &self,
         fields: &[FieldDefinition],
         snapshot: &mut Value,
+        stored: &DocumentFields,
         collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
@@ -227,7 +347,8 @@ pub trait WriteHooks {
         let nested = nest_group_fields(&obj.clone().into_iter().collect(), fields);
         let mut level: Map<String, Value> = nested.into_inner().into_iter().collect();
 
-        let document: DocumentFields = level.clone().into_iter().collect();
+        let before = level.clone();
+        let document = nest_group_fields(stored, fields);
 
         self.strip_write_access_map(
             fields,
@@ -240,6 +361,8 @@ pub trait WriteHooks {
                 operation: "update",
             },
         );
+
+        drop_locale_columns_of_stripped(&before, &mut level);
 
         *snapshot = Value::Object(level);
     }
@@ -621,5 +744,48 @@ impl WriteHooks for LuaWriteHooks<'_> {
         ctx: &ValidationCtx,
     ) -> ValidateResult {
         validate_fields_inner(self.lua, fields, data, ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn object(value: Value) -> Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            _ => unreachable!("fixture is an object"),
+        }
+    }
+
+    /// A stripped localized field must lose its decorated columns too, or a
+    /// restore writes them back.
+    #[test]
+    fn stripped_fields_lose_their_locale_columns() {
+        let before = object(json!({
+            "price": 10, "price__en": 10, "price__de": 12,
+            "title": "t", "title__en": "t",
+            "starts": "2024-01-01T10:00", "starts_tz": "Europe/Berlin",
+            "starts_tz__de": "Europe/Berlin", "starts_at_home": "kept",
+            "seo": { "title": "x", "title__en": "x", "desc": "d" },
+            "seo__title__de": "y",
+        }));
+        let mut after = before.clone();
+        after.remove("price");
+        after.remove("starts");
+        after["seo"].as_object_mut().unwrap().remove("title");
+
+        drop_locale_columns_of_stripped(&before, &mut after);
+
+        assert_eq!(
+            Value::Object(after),
+            json!({
+                "title": "t", "title__en": "t",
+                "starts_at_home": "kept",
+                "seo": { "desc": "d" },
+            })
+        );
     }
 }

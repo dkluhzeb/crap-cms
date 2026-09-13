@@ -46,9 +46,12 @@ Login and forgot-password endpoints enforce dual rate limiting — per-email and
 Forgot-password requests are similarly limited per-email (`max_forgot_password_attempts`) and per-IP (`max_ip_login_attempts` with `forgot_password_window_seconds`).
 
 The **email-verification** (`/admin/verify-email`) and **password-reset**
-(`/admin/reset-password`) endpoints are rate-limited **per-IP only** (sharing the
-forgot-password IP limiter), because the account isn't known until the token
-resolves. Each token-consumption attempt counts toward the limit. On the reset
+(`/admin/reset-password`) endpoints — and their gRPC twins `VerifyEmail` and
+`ResetPassword` — are rate-limited **per-IP only**, because the account isn't
+known until the token resolves. Each has its own keyspace (`ip_verify_email`,
+`ip_reset_password`), shared by the admin and gRPC endpoints, using
+`max_ip_login_attempts` within `forgot_password_window_seconds`; neither drains
+the forgot-password budget. Each token-consumption attempt counts toward the limit. On the reset
 endpoint, the local checks (password-confirmation mismatch, password-policy
 violation) run *before* the limiter, so a user's typo never consumes budget —
 only genuine token attempts do. All limiters record atomically (a single
@@ -63,9 +66,11 @@ max_forgot_password_attempts = 3
 forgot_password_window_seconds = "15m"
 ```
 
-Rate limiting applies to the admin UI login, admin forgot-password, admin
-email-verification and password-reset, and the gRPC `Login` and `ForgotPassword`
-RPCs. Behind a reverse proxy, the admin UI reads the client IP from
+Rate limiting applies to login, forgot-password, email verification, password
+reset and verification-email resend, on the admin UI and gRPC alike. Two further
+budgets use the forgot-password window: **resend verification** allows
+`max_forgot_password_attempts` per email and `max_ip_login_attempts` per IP, and
+**MFA code issuance** allows `max_forgot_password_attempts` codes per user. Behind a reverse proxy, the admin UI reads the client IP from
 `X-Forwarded-For`.
 
 ### CSRF Protection

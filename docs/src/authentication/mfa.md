@@ -58,7 +58,9 @@ end
 `mfa = "custom"` without `mfa_deliver` (or the hook without the mode) is
 a startup error. Code **issuance** is throttled per user so a
 password-holder cannot flood the delivery channel by looping the login
-form.
+form: `max_forgot_password_attempts` codes within
+`forgot_password_window_seconds`, on the admin login and gRPC `Login` alike.
+Over budget, the login is refused until the window passes.
 
 ## TOTP (authenticator apps)
 

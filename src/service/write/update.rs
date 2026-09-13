@@ -5,8 +5,10 @@ use crate::core::{CollectionDefinition, DocumentFields, FieldDefinition, flatten
 use crate::db::LocaleMode;
 
 use crate::{
-    db::{AccessResult, LocaleContext, query},
-    hooks::{AccessCheckInput, HookContext, ValidationCtx},
+    db::{AccessResult, DbConnection, LocaleContext, query},
+    hooks::{
+        AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
+    },
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
@@ -37,7 +39,7 @@ pub(crate) fn check_update_access(
     write_hooks: &dyn WriteHooks,
     def: &CollectionDefinition,
     id: &str,
-    data: &crate::core::DocumentFields,
+    data: &DocumentFields,
     locale: Option<&str>,
     ui_locale: Option<&str>,
 ) -> Result<()> {
@@ -126,6 +128,33 @@ pub(crate) fn reject_locale_locked_fields(
     Err(ValidationError::new(errors).into())
 }
 
+/// Load the stored document that field-level `access.update` rules judge as
+/// `ctx.document`.
+///
+/// Those rules decide whether the caller may change a field, so they must see
+/// the row as it stands — never the incoming patch, which the caller controls.
+/// Skips the read when no field configures `access.update`. A missing row
+/// yields an empty document, so a rule keyed on stored values denies.
+///
+/// # Errors
+///
+/// Returns an error if the row cannot be read.
+pub(crate) fn stored_fields_for_update_rules(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<DocumentFields> {
+    if !has_any_field_access(&def.fields, |f| f.access.update.as_ref()) {
+        return Ok(DocumentFields::default());
+    }
+
+    let stored = query::find_by_id(conn, slug, def, id, locale_ctx)?;
+
+    Ok(stored.map(|doc| doc.fields).unwrap_or_default())
+}
+
 /// Update a document on an existing connection/transaction.
 ///
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
@@ -173,14 +202,15 @@ pub(crate) fn update_document_in_conn(
 
     // Strip write-denied fields before hook processing (data-aware: each
     // `access.update` rule sees `ctx.data` = its level and `ctx.document` = the
-    // full incoming document).
-    write_hooks.strip_write_access_data(
+    // stored document, never the patch it is judging).
+    let stored = stored_fields_for_update_rules(conn, ctx.slug, def, id, input.locale_ctx)?;
+    write_hooks.strip_write_access_update(
         &def.fields,
         &mut input.data,
+        &stored,
         ctx.slug,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
-        "update",
     );
 
     let hook_data = input.data.clone();

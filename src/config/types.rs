@@ -104,6 +104,8 @@ fn has_any_secret(config: &CrapConfig) -> bool {
         || config.cache.redis_url.masked() != config.cache.redis_url.as_str()
         || config.auth.rate_limit_redis_url.masked() != config.auth.rate_limit_redis_url.as_str()
         || !config.email.webhook_headers.is_empty()
+        // A webhook URL typically embeds its token, like a credentialed URL.
+        || config.email.webhook_url.as_ref().is_some_and(|u| !u.is_empty())
 }
 
 /// Pure check for whether a given Unix permissions mode is considered "loose"
@@ -243,6 +245,7 @@ impl CrapConfig {
         self.validate_logging()?;
         self.validate_mcp()?;
         self.validate_live()?;
+        self.validate_redis_namespaces()?;
         self.validate_cors()?;
         self.validate_cache();
 
@@ -551,6 +554,17 @@ secret = "this-is-a-very-long-auth-secret-value-xxxxx"
         // No secret = no warn.
         let empty = CrapConfig::default();
         assert!(!should_warn_loose_permissions(&empty, 0o644));
+    }
+
+    /// A webhook URL carries its token in the URL, so a world-readable config
+    /// holding only one still warns.
+    #[cfg(unix)]
+    #[test]
+    fn a_webhook_url_counts_as_a_secret() {
+        let mut config = CrapConfig::default();
+        config.email.webhook_url = Some("https://hooks.example.com/services/T0/B0/TOKEN".into());
+
+        assert!(should_warn_loose_permissions(&config, 0o644));
     }
 
     /// BUG-3 regression: a typo inside a nested section must also fail.

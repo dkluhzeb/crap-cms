@@ -256,6 +256,7 @@ fn prompt_first_user(config_dir: &Path, auth_collection: &str) -> Result<()> {
         collection: auth_collection,
         email: None,
         password: None,
+        password_stdin: false,
         fields: vec![],
         password_policy: &cfg.auth.password_policy,
         locale: &cfg.locale,

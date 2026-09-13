@@ -163,11 +163,12 @@ pub async fn verify_mfa_action(
         return Redirect::to(paths::LOGIN).into_response();
     }
 
-    // MFA verified — login is now fully complete, so clear the MFA limiters
-    // (per-user and per-IP), mirroring how a successful password clears the
-    // login limiters.
+    // MFA verified — login is now fully complete. Clear the per-user limiter
+    // (this user just proved the second factor) but only REFUND the shared
+    // per-IP one, mirroring the password login and the gRPC twin: a success
+    // must not wipe other users' failed codes from the same IP.
     state.mfa_limiter.clear(&user_id);
-    state.ip_mfa_limiter.clear(&ip);
+    state.ip_mfa_limiter.refund(&ip);
 
     build_mfa_session_response(&state, &pending_claims).await
 }

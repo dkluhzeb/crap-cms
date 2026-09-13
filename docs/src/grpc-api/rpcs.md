@@ -597,6 +597,8 @@ grpcurl -plaintext -d '{
 
 Tokens are single-use and expire after `reset_token_expiry` seconds (default: 3600 = 1 hour, configurable in `[auth]`).
 
+**Errors:** `RESOURCE_EXHAUSTED` when the caller's IP is over the reset-token rate limit (`max_ip_login_attempts` attempts within `forgot_password_window_seconds`). Every attempt with a valid-policy password counts.
+
 ## VerifyEmail
 
 Verify a user's email address using a token sent during account creation.
@@ -618,6 +620,8 @@ grpcurl -plaintext -d '{
 ```
 
 Only relevant for auth collections with `verify_email: true`.
+
+**Errors:** `RESOURCE_EXHAUSTED` when the caller's IP is over the verification rate limit (`max_ip_login_attempts` attempts within `forgot_password_window_seconds`).
 
 ## Validate
 
@@ -913,6 +917,7 @@ message MutationEvent {
   string collection = 5;
   string document_id = 6;
   DataMap data = 7;
+  string publisher = 8;
 }
 ```
 

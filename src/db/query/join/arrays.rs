@@ -2,14 +2,20 @@
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    slice,
+};
 
-use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
+use crate::core::{
+    FieldChildren, FieldDefinition, FieldType, field::flatten_array_sub_fields, field_children,
+};
 use crate::db::{
     DbConnection, DbRow, DbValue,
     query::{
         coerce_json_value,
         helpers::{coerce_date_value_json, join_table, tz_column},
+        join::convert_timezone_dates,
     },
     types::real_to_json_number,
 };
@@ -40,6 +46,20 @@ fn coerce_array_field(
             _ => DbValue::Null,
         };
         return (db_val, Some(tz_val));
+    }
+
+    // A group, nested array or blocks value is stored whole as JSON: convert
+    // the timezone dates inside it, as the direct date columns above are.
+    if matches!(
+        field_children(sf),
+        FieldChildren::Group(_) | FieldChildren::Array(_) | FieldChildren::Blocks(_)
+    ) {
+        let mut holder = Map::new();
+        holder.insert(sf.name.clone(), value);
+        convert_timezone_dates(slice::from_ref(sf), &mut holder);
+
+        let value = holder.remove(&sf.name).unwrap_or(Value::Null);
+        return (coerce_json_value(&sf.field_type, &value), None);
     }
 
     (coerce_json_value(&sf.field_type, &value), None)

@@ -9,7 +9,9 @@ pub(crate) mod collection;
 mod global;
 pub mod helpers;
 mod identifier_check;
+mod legacy_timestamps;
 mod meta;
+mod nested_timezone_dates;
 mod sync;
 mod tracking;
 

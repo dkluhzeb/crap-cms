@@ -89,6 +89,21 @@ freeze is unconditional.
   a missing column errors rather than silently reading as the literal string.
   Never emit an unquoted user-derived identifier, and never re-enable DQS.
 
+- **Redis key layout.** Cache keys live at `{cache.prefix}cache:{key}`, and a
+  cache clear deletes only `{cache.prefix}cache:*`; rate-limit counters live under
+  `auth.rate_limit_prefix`. Startup refuses a rate-limit prefix that overlaps the
+  cache namespace on the same Redis. The rate-limit keyspace names shared by
+  every surface (`ip_reset_password`, `ip_verify_email`, `mfa_issue`,
+  `resend_verification`, `ip_resend_verification`) are part of the layout:
+  renaming one resets its live counters.
+
+- **Every timezone date is stored as UTC.** A date with `timezone = true` holds
+  an ISO 8601 UTC value (`…Z`) and its IANA zone in the `{field}_tz` companion —
+  in its own column at the top level and in array rows, and inside the JSON of
+  blocks rows, groups within rows and nested rows. Writes convert local
+  wall-clock input with the zone; a value that already carries an offset is
+  stored as given, so re-saving never shifts a date.
+
 ## Client-visible shapes
 
 - **Returned document shape.** `id`, the field columns, `created_at`,
@@ -194,6 +209,12 @@ changing a representation is a breaking change to every consumer.
   shipped field means editing the pinned spec, which the wire-parity tests
   and the regenerated diff both surface. Everything outside those messages
   (responses, auth, jobs, subscribe, the service block) stays hand-written.
+
+- **`MutationEvent.publisher` (field 8)** identifies the publishing server
+  process, and `sequence` is monotonic *per publisher*, not globally. Gap
+  detection keys on the `(publisher, sequence)` pair; the admin SSE payload
+  carries the same `publisher`. Empty only on an event relayed from a node that
+  predates the field.
 
 ## MCP (Model Context Protocol)
 
@@ -594,6 +615,13 @@ changing a representation is a breaking change to every consumer.
   middleware passes — so a hook branching on `ctx.operation` behaves identically
   in the UI filter and the real gate.
 
+- **Field `access.update` rules judge the stored document.** `ctx.document` is
+  the stored row on update (the incoming document on create); `ctx.data` is
+  always the incoming level. The value under judgment is never the evidence.
+  A draft save judges the *published* row — a pending draft's values never
+  grant field write rights before publish — and a version restore judges the
+  live row, not the snapshot.
+
 ## Auth tokens
 
 - **Password policy is enforced at the service write chokepoint.** A `password`
@@ -654,6 +682,10 @@ changing a representation is a breaking change to every consumer.
   lock a caller out of the other. Same rule as verify-email and
   reset-password.
 
+- **No expiry leeway.** A JWT is invalid at `now >= exp` on every surface, like
+  every other expiring credential; a session refresh never issues an `exp` past
+  `auth.session_absolute_max_age`.
+
 ## Scheduler & jobs
 
 - **Per-slug / per-queue concurrency caps are exact per tick, cluster-wide.**
@@ -687,6 +719,14 @@ changing a representation is a breaking change to every consumer.
   frozen; `deny_unknown_fields` rejects typos. `auto_purge` defaults to 30 days;
   `auto_purge = false` disables it (an empty string is rejected, not a disable
   sentinel).
+
+- **`heartbeat_interval` must match across scheduler nodes.** A running job is
+  reclaimed once its heartbeat is older than 3× the *reclaiming* node's
+  interval.
+- **Schema sync is serialized and owns its indexes.** On Postgres it holds the
+  advisory lock `"crapsync"` for the whole sync, and it drops any
+  `idx_<collection>_*` index the starting node does not declare — a rollout that
+  changes indexes must finish before an older node restarts.
 
 ## Project layout / CLI
 

@@ -6,12 +6,16 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
     commands::helpers::create_live_transports,
     config::CrapConfig,
-    core::upload::create_storage_with_lease,
+    core::{
+        cache::{periodic_clear_interval, spawn_periodic_clear},
+        upload::create_storage_with_lease,
+    },
     db::{migrate, pool},
     hooks::{self, HookRunner},
     mcp,
@@ -75,6 +79,13 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         config_dir: &config_dir,
     })?;
 
+    // A long-lived stdio session reads through its own cache, so it clears it
+    // on the same cadence as the servers; the task ends with the session.
+    let shutdown = CancellationToken::new();
+    if let Some(every) = periodic_clear_interval(&infra.cache, cfg.cache.max_age_secs) {
+        spawn_periodic_clear(Arc::clone(&infra.cache), every, shutdown.clone());
+    }
+
     let server = mcp::McpServer {
         infra,
         config: cfg,
@@ -84,6 +95,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     };
 
     mcp::run_stdio(server).await;
+    shutdown.cancel();
 
     Ok(())
 }

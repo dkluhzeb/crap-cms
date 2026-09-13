@@ -15,11 +15,11 @@ use crate::{
         AdminState,
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{
-            auth::{ResetPasswordForm, client_ip, scoped_limiter},
+            auth::{ResetPasswordForm, client_ip},
             shared::{paths, render_auth_page},
         },
     },
-    core::{Registry, SharedInvalidationTransport},
+    core::{Registry, SharedInvalidationTransport, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
     db::DbPool,
     service::{
         ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
@@ -131,12 +131,9 @@ pub async fn reset_password_action(
     // and strictly safer than refunding. Uses its OWN per-IP keyspace (not the
     // shared forgot-password limiter) so reset-token attempts and the
     // forgot-password request flow don't drain each other's budget.
-    let ip_reset_limiter = scoped_limiter(
-        &state,
-        "ip_reset_password",
-        state.config.auth.max_ip_login_attempts,
-        state.config.auth.forgot_password_window_seconds,
-    );
+    let ip_reset_limiter = state
+        .ip_forgot_password_limiter
+        .rescoped(IP_RESET_PASSWORD_KEYSPACE);
     if ip_reset_limiter.check_and_block(&ip) {
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }

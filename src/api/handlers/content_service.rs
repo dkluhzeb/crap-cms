@@ -18,8 +18,8 @@ use crate::{
     },
     config::{LocaleConfig, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
-        SharedPasswordProvider, SharedTokenProvider, auth::TokenProvider, collection::Surface,
+        AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedPasswordProvider,
+        SharedTokenProvider, auth::TokenProvider, collection::Surface,
         rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool, query},
@@ -93,12 +93,6 @@ pub struct ContentService {
 
 /// Pure helper methods — testable without I/O dependencies.
 impl ContentService {
-    /// Get a clone of the shared cache handle (for periodic clearing).
-    #[must_use]
-    pub fn cache_handle(&self) -> SharedCache {
-        self.infra.cache.clone()
-    }
-
     pub(in crate::api::handlers) fn get_collection_def(
         &self,
         slug: &str,

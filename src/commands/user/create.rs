@@ -1,7 +1,7 @@
 //! `user create` — create a new user in an auth collection.
 
 use anyhow::{Context as _, Result, anyhow};
-use dialoguer::{Input, Password};
+use dialoguer::Input;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use crate::{
     hooks::lifecycle::is_valid_email_format,
 };
 
-use super::helpers::{load_auth_collection, prompt_required_fields};
+use super::helpers::{load_auth_collection, prompt_required_fields, resolve_new_password};
 
 /// Validate an email address string for CLI input.
 /// Returns a human-readable error referencing the offending email.
@@ -36,6 +36,7 @@ pub struct UserCreateParams<'a> {
     pub collection: &'a str,
     pub email: Option<String>,
     pub password: Option<String>,
+    pub password_stdin: bool,
     pub fields: Vec<(String, String)>,
     pub password_policy: &'a PasswordPolicy,
     pub locale: &'a LocaleConfig,
@@ -55,7 +56,7 @@ pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
     let email = resolve_email(p.email)?;
     validate_email_input(&email)?;
 
-    let password = resolve_password(p.password)?;
+    let password = resolve_new_password(p.password, p.password_stdin, "Password")?;
 
     p.password_policy.validate(&password)?;
 
@@ -103,22 +104,6 @@ fn resolve_email(email: Option<String>) -> Result<String> {
             .with_prompt("Email")
             .interact_text()
             .context("Failed to read email"),
-    }
-}
-
-/// Resolve password from CLI flag or interactive prompt.
-#[cfg(not(tarpaulin_include))]
-fn resolve_password(password: Option<String>) -> Result<String> {
-    match password {
-        Some(p) => {
-            cli::warning("Password provided via command line — it may be visible in shell history");
-            Ok(p)
-        }
-        None => Password::with_theme(&crap_theme())
-            .with_prompt("Password")
-            .with_confirmation("Confirm password", "Passwords do not match")
-            .interact()
-            .context("Failed to read password"),
     }
 }
 

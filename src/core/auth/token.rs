@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
+use chrono::Utc;
 
 use crate::core::Claims;
 use crate::core::auth::claims::TokenUse;
@@ -116,10 +117,20 @@ impl JwtTokenProvider {
         // token missing the expiration claim is rejected outright — previously
         // the field was cleared, which would have accepted tokens without an
         // `exp` if a caller ever produced one.
-        let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        // No grace period past `exp`: jsonwebtoken defaults to 60 seconds of
+        // leeway, and even at zero it rejects only `exp < now`.
+        validation.leeway = 0;
 
         let data = jsonwebtoken::decode::<Claims>(token, &key, &validation)
             .context("Invalid JWT token")?;
+
+        // A token is dead AT its expiry second, matching every other expiry
+        // check here (MFA codes, reset and verification tokens, signed URLs).
+        let now = Utc::now().timestamp().max(0).cast_unsigned();
+        if data.claims.exp <= now {
+            bail!("Invalid JWT token: expired");
+        }
 
         Ok(data.claims)
     }
@@ -172,12 +183,42 @@ mod tests {
         JwtTokenProvider::new("test-secret")
     }
 
+    /// A token is invalid the moment it expires — no library leeway.
+    #[test]
+    fn an_expired_token_is_rejected_without_leeway() {
+        let p = provider();
+        let claims = Claims::builder("user1", "users")
+            .email("test@example.com")
+            .exp((Utc::now().timestamp() as u64) - 5)
+            .build()
+            .unwrap();
+
+        let token = p.create_token(&claims).unwrap();
+
+        assert!(p.validate_token(&token).is_err());
+    }
+
+    /// A token whose `exp` is the current second is already expired.
+    #[test]
+    fn a_token_is_invalid_in_its_expiry_second() {
+        let p = provider();
+        let claims = Claims::builder("user1", "users")
+            .email("test@example.com")
+            .exp(Utc::now().timestamp() as u64)
+            .build()
+            .unwrap();
+
+        let token = p.create_token(&claims).unwrap();
+
+        assert!(p.validate_token(&token).is_err());
+    }
+
     #[test]
     fn token_roundtrip() {
         let p = provider();
         let claims = Claims::builder("user1", "users")
             .email("test@example.com")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .build()
             .unwrap();
 
@@ -193,7 +234,7 @@ mod tests {
         let p2 = JwtTokenProvider::new("wrong");
         let claims = Claims::builder("u", "c")
             .email("e")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .build()
             .unwrap();
 
@@ -225,7 +266,7 @@ mod tests {
     fn pending_claims() -> Claims {
         Claims::builder("u", "users")
             .email("a@b.com")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .token_use(TokenUse::MfaPending)
             .build()
             .unwrap()
@@ -257,7 +298,7 @@ mod tests {
         let p = provider();
         let session = Claims::builder("u", "users")
             .email("a@b.com")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .build()
             .unwrap();
         let token = p.create_token(&session).unwrap();
@@ -274,7 +315,7 @@ mod tests {
         let p = provider();
         let session = Claims::builder("u", "users")
             .email("a@b.com")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .build()
             .unwrap();
         let token = p.create_token(&session).unwrap();
@@ -299,7 +340,7 @@ mod tests {
 
         let claims = Claims::builder("u", "users")
             .email("a@b.com")
-            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .exp((Utc::now().timestamp() as u64) + 3600)
             .build()
             .unwrap();
 

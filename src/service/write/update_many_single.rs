@@ -16,7 +16,7 @@ use super::ServiceError;
 use super::update::reject_locale_locked_fields;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::collect_api_hidden_field_names;
-use crate::service::write::check_update_access;
+use crate::service::write::{check_update_access, stored_fields_for_update_rules};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -56,14 +56,15 @@ pub(crate) fn update_many_single_in_conn(
 
     let is_draft = input.draft && def.has_drafts();
 
-    // Data-aware write strip (per-row `ctx.data`, full-doc `ctx.document`).
-    write_hooks.strip_write_access_data(
+    // Data-aware write strip (per-row `ctx.data`, stored-doc `ctx.document`).
+    let stored = stored_fields_for_update_rules(conn, ctx.slug, def, id, input.locale_ctx)?;
+    write_hooks.strip_write_access_update(
         &def.fields,
         &mut input.data,
+        &stored,
         ctx.slug,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
-        "update",
     );
 
     let hook_data = input.data.clone();

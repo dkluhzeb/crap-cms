@@ -8,8 +8,12 @@ use anyhow::{Result, bail};
 use axum::http::{HeaderName, HeaderValue, Method};
 use ipnet::IpNet;
 use tracing::warn;
+use url::Url;
 
-use crate::config::{CacheBackend, CrapConfig};
+use crate::{
+    config::{CacheBackend, CrapConfig, DatabaseBackend, LiveTransport, RateLimitBackend},
+    core::cache::cache_namespace,
+};
 
 /// Minimum character length for `mcp.api_key` when `mcp.http` is enabled.
 /// 32 characters of the typical `base64`/`hex` alphabets give >= 128 bits of
@@ -21,6 +25,32 @@ const MIN_MCP_API_KEY_LEN: usize = 32;
 /// batching exists to save round trips, not to move bulk work — while still
 /// bounding how far one request can be multiplied.
 const MAX_MCP_BATCH_MEMBERS: usize = 500;
+
+/// Whether two Redis URLs address the same keyspace: same scheme, host, port
+/// (default 6379) and database index (default 0), ignoring credentials.
+/// `redis://h`, `redis://h:6379` and `redis://h:6379/0` are one keyspace.
+/// Unparseable URLs fall back to an exact string comparison.
+fn same_redis_instance(a: &str, b: &str) -> bool {
+    fn keyspace(raw: &str) -> Option<(String, String, u16, u32)> {
+        let url = Url::parse(raw).ok()?;
+        let db = match url.path().trim_matches('/') {
+            "" => 0,
+            index => index.parse().ok()?,
+        };
+
+        Some((
+            url.scheme().to_string(),
+            url.host_str()?.to_ascii_lowercase(),
+            url.port().unwrap_or(6379),
+            db,
+        ))
+    }
+
+    match (keyspace(a), keyspace(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a == b,
+    }
+}
 
 impl CrapConfig {
     /// Validate database pool settings.
@@ -336,6 +366,32 @@ impl CrapConfig {
             warn!("auth.secret is shorter than 32 characters -- consider using a stronger key");
         }
 
+        // An unset secret is generated per node and written to that node's
+        // local `data/.jwt_secret`. Across several nodes each would mint its
+        // own: a session issued by one is rejected by the next, and whatever
+        // one node wrote to the shared database under its key — MFA digests,
+        // sealed TOTP secrets, `crap.crypto` ciphertext — is unreadable on the
+        // rest. This runs before `resolve_secret`, so empty means unconfigured.
+        if self.auth.secret.is_empty() {
+            if self.has_multi_node_signal() {
+                bail!(
+                    "auth.secret must be set explicitly when more than one node can run -- \
+                     a Redis cache, event transport, or rate-limit backend is configured, and \
+                     each node would otherwise generate its own secret, rejecting the other \
+                     nodes' sessions and unable to read what they encrypted. Generate one with \
+                     `openssl rand -hex 32`."
+                );
+            }
+
+            if self.database.backend == DatabaseBackend::Postgres {
+                warn!(
+                    "auth.secret is unset on Postgres -- each node generates its own secret, so \
+                     running a second node will break sessions and encrypted data; set \
+                     auth.secret explicitly before scaling out"
+                );
+            }
+        }
+
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
                 "auth.password_policy.min_length ({}) must be <= auth.password_policy.max_length ({})",
@@ -433,6 +489,53 @@ impl CrapConfig {
         Ok(())
     }
 
+    /// Whether any setting implies more than one node shares state: a Redis
+    /// cache, event transport, or rate-limit backend.
+    fn has_multi_node_signal(&self) -> bool {
+        self.cache.backend == CacheBackend::Redis
+            || self.live.transport == LiveTransport::Redis
+            || self.auth.rate_limit_backend == RateLimitBackend::Redis
+    }
+
+    /// Reject a rate-limit prefix that overlaps the cache's key namespace on
+    /// the same Redis.
+    ///
+    /// A cache clear is a wildcard delete over `{cache.prefix}cache:*`. If
+    /// rate-limit keys could fall inside that namespace, every content write
+    /// would reset every lockout. The cache's own sub-namespace rules that out
+    /// under the defaults; this catches an operator-chosen prefix that brings
+    /// it back. An empty rate-limit prefix is exempt: its keys never start with
+    /// the cache namespace.
+    pub(super) fn validate_redis_namespaces(&self) -> Result<()> {
+        if self.cache.backend != CacheBackend::Redis
+            || self.auth.rate_limit_backend != RateLimitBackend::Redis
+        {
+            return Ok(());
+        }
+
+        let rl_url = if self.auth.rate_limit_redis_url.is_empty() {
+            &self.cache.redis_url
+        } else {
+            &self.auth.rate_limit_redis_url
+        };
+        if !same_redis_instance(rl_url.as_str(), self.cache.redis_url.as_str()) {
+            return Ok(());
+        }
+
+        let cache_ns = cache_namespace(&self.cache.prefix);
+        let rl_ns = self.auth.rate_limit_prefix.as_str();
+
+        if !rl_ns.is_empty() && (cache_ns.starts_with(rl_ns) || rl_ns.starts_with(&cache_ns)) {
+            bail!(
+                "auth.rate_limit_prefix ({rl_ns:?}) overlaps the cache namespace ({cache_ns:?}) \
+                 on the same Redis -- a cache clear would delete rate-limit counters and reset \
+                 every lockout. Choose a prefix that neither contains nor is contained by it."
+            );
+        }
+
+        Ok(())
+    }
+
     /// Validate cache settings.
     pub(super) fn validate_cache(&self) {
         if self.cache.backend == CacheBackend::Memory && self.cache.max_entries == 0 {
@@ -446,6 +549,7 @@ impl CrapConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::JwtSecret;
 
     #[test]
     fn validate_default_config_passes() {
@@ -922,5 +1026,96 @@ mod tests {
         config.depth.max_depth = -1;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("max_depth"));
+    }
+
+    const EXPLICIT_SECRET: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// An unset secret on a configuration that implies several nodes is a
+    /// hard error: each node would generate its own.
+    #[test]
+    fn validate_rejects_an_empty_secret_when_redis_implies_multiple_nodes() {
+        for set_signal in [
+            (|c: &mut CrapConfig| c.cache.backend = CacheBackend::Redis) as fn(&mut CrapConfig),
+            |c: &mut CrapConfig| c.live.transport = LiveTransport::Redis,
+            |c: &mut CrapConfig| c.auth.rate_limit_backend = RateLimitBackend::Redis,
+        ] {
+            let mut config = CrapConfig::default();
+            set_signal(&mut config);
+
+            let err = config
+                .validate()
+                .expect_err("an empty secret must be refused");
+            assert!(err.to_string().contains("auth.secret"), "{err}");
+        }
+    }
+
+    /// With the secret set explicitly, the same configuration is accepted.
+    #[test]
+    fn validate_accepts_redis_with_an_explicit_secret() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.live.transport = LiveTransport::Redis;
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+
+        config.validate().expect("defaults on one Redis are valid");
+    }
+
+    /// A rate-limit prefix inside the cache namespace would let a cache clear
+    /// wipe every lockout.
+    #[test]
+    fn validate_rejects_a_rate_limit_prefix_inside_the_cache_namespace() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.auth.rate_limit_prefix = "crap:cache:rl:".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("an overlapping prefix must be refused");
+        assert!(err.to_string().contains("rate_limit_prefix"), "{err}");
+    }
+
+    /// Separate Redis instances cannot collide, whatever the prefixes.
+    #[test]
+    fn validate_allows_overlapping_prefixes_on_different_redis_instances() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.auth.rate_limit_prefix = "crap:cache:rl:".to_string();
+        config.auth.rate_limit_redis_url = "redis://10.0.0.9:6379".into();
+
+        config
+            .validate()
+            .expect("different instances do not share a keyspace");
+    }
+
+    /// The same Redis written two ways is still one keyspace.
+    #[test]
+    fn same_redis_instance_normalizes_port_db_and_credentials() {
+        assert!(same_redis_instance("redis://h", "redis://h:6379/0"));
+        assert!(same_redis_instance(
+            "redis://u:pw@H:6379",
+            "redis://h:6379/"
+        ));
+        assert!(!same_redis_instance("redis://h:6379/0", "redis://h:6379/1"));
+        assert!(!same_redis_instance("redis://h", "redis://other"));
+    }
+
+    /// An overlapping prefix is refused even when the two URLs differ only in
+    /// spelling.
+    #[test]
+    fn validate_rejects_overlap_when_urls_differ_only_in_spelling() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.cache.redis_url = "redis://10.0.0.9".into();
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.auth.rate_limit_redis_url = "redis://10.0.0.9:6379/0".into();
+        config.auth.rate_limit_prefix = "crap:cache:rl:".to_string();
+
+        assert!(config.validate().is_err());
     }
 }

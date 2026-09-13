@@ -73,7 +73,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             tmp.path().join("crap.toml"),
-            "[live]\ntransport = \"redis\"\n",
+            // A Redis transport requires an explicit auth secret.
+            "[auth]\nsecret = \"0123456789abcdef0123456789abcdef01234567\"\n[live]\ntransport = \"redis\"\n",
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();

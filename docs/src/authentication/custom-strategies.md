@@ -299,7 +299,7 @@ auth = {
 
 When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns `mfa_required = true` plus an `mfa_challenge` token and the `VerifyMfa` RPC completes the login (see [gRPC Authentication](../grpc-api/authentication.md#email-mfa)).
 
-**Throttling.** Code *guesses* are limited per user and per IP on both surfaces (the admin MFA page and gRPC `VerifyMfa`), independently of the login limiter — knowing the password does not reset the guess budget. Code *issuance* is throttled on the admin login only: a user who re-submits the login form while over the forgot-password budget is not sent a new code — the previously issued (still valid) code is reused. gRPC `Login` has no issuance throttle beyond the login rate limits, since every `Login` call already costs an Argon2 verification.
+**Throttling.** Code *guesses* are limited per user and per IP on both surfaces (the admin MFA page and gRPC `VerifyMfa`), independently of the login limiter — knowing the password does not reset the guess budget. Code *issuance* is throttled per user on both surfaces: `max_forgot_password_attempts` codes within `forgot_password_window_seconds`. Codes are single-use and expire with the challenge, so there is no earlier code to reuse — over budget, the admin login shows an error and gRPC `Login` returns `RESOURCE_EXHAUSTED` until the window passes.
 
 ### Custom delivery (`mfa = "custom"`)
 

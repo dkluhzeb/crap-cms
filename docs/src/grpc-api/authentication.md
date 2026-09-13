@@ -83,7 +83,7 @@ Do not rely on the claims beyond identifying the user — they are validated ser
 
 - **Rate limiting** — per-email tracking. After `max_login_attempts` (default: 5) failures, the email is locked out for `login_lockout_seconds` (default: 300). Per-IP rate limiting (`max_ip_login_attempts` in `[auth]`) provides additional protection against credential stuffing across multiple accounts.
 - **Timing safety** — login always performs a full Argon2id hash comparison, even for non-existent users, preventing timing-based email enumeration.
-- **JWT persistence** — when no `secret` is set in `crap.toml`, an auto-generated secret is persisted to `data/.jwt_secret` so tokens survive server restarts.
+- **JWT persistence** — when no `secret` is set in `crap.toml`, an auto-generated secret is persisted to `data/.jwt_secret` so tokens survive server restarts. That is per node: with several nodes (a Redis cache, event transport, or rate-limit backend configured), loading the config fails unless `secret` is set.
 - **Account locking** — when a user's `_locked` field is truthy, all authenticated requests (including `Me`) are rejected with `unauthenticated` status. This takes effect immediately, even for valid unexpired tokens, and locking also bumps `session_version` and tears down the user's live event streams.
 - **Revocation** — a password change (or `LockAccount` / `UnverifyAccount`) bumps `session_version`; tokens minted before it are rejected.
 

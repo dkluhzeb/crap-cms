@@ -167,13 +167,14 @@ pub trait DbConnection {
 
     /// DDL fragment for a timestamp column with `DEFAULT = now()`.
     ///
-    /// `SQLite`: `"TEXT DEFAULT (datetime('now'))"`
-    /// Postgres: `"TIMESTAMPTZ DEFAULT NOW()"`
+    /// `SQLite`: `"TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"`
+    /// Postgres: `"TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')"`
+    /// Both store ISO 8601 text, so timestamps compare as strings.
     fn timestamp_column_default(&self) -> &'static str;
 
     /// DDL type for a nullable timestamp column (no default).
     ///
-    /// `SQLite`: `"TEXT"` · Postgres: `"TIMESTAMPTZ"`
+    /// `TEXT` on both backends (see [`timestamp_column_default`](Self::timestamp_column_default)).
     fn timestamp_column_type(&self) -> &'static str;
 
     /// SQL column type for a field type.

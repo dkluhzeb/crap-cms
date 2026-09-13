@@ -125,14 +125,13 @@ pub fn create_document_in_conn(
 
     // Strip write-denied fields before hook processing (data-aware: each
     // `access.create` rule sees `ctx.data` = its level and `ctx.document` = the
-    // full incoming document).
-    write_hooks.strip_write_access_data(
+    // full incoming document — no row exists yet).
+    write_hooks.strip_write_access_create(
         &def.fields,
         &mut input.data,
         ctx.slug,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
-        "create",
     );
 
     let hook_ctx = HookContext::builder(ctx.slug, "create")

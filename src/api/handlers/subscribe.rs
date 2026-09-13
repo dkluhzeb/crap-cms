@@ -118,6 +118,7 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
 
     Some(content::MutationEvent {
         sequence: event.sequence,
+        publisher: event.publisher.clone(),
         timestamp: event.timestamp.clone(),
         target: enum_mapping::mutation_target(&event.target).into(),
         operation: enum_mapping::mutation_operation(&event.operation).into(),

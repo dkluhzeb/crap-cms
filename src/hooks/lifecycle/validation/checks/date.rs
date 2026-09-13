@@ -1,4 +1,5 @@
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
+use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
@@ -57,6 +58,55 @@ pub(crate) fn check_date_field(
             )
             .with_param("field", field.name.clone())
             .with_param("max", max_date.clone()),
+        );
+    }
+}
+
+/// Reject a wall-clock time that does not exist in the field's timezone.
+///
+/// A timezone-enabled Date stores a local time plus its IANA zone. On a
+/// spring-forward day the skipped hour (02:30 in Europe/Berlin on the last
+/// Sunday of March) names no instant at all; without this check the write
+/// silently fell back to storing the wall-clock digits as UTC. Values that
+/// carry their own offset, and zones that do not parse, are left to the other
+/// checks.
+pub(crate) fn check_local_time_exists(
+    field: &FieldDefinition,
+    data_key: &str,
+    value: Option<&Value>,
+    tz: Option<&str>,
+    errors: &mut Vec<FieldError>,
+) {
+    if field.field_type != FieldType::Date || !field.timezone {
+        return;
+    }
+
+    let (Some(Value::String(s)), Some(tz_name)) = (value, tz.filter(|t| !t.is_empty())) else {
+        return;
+    };
+    let Ok(zone) = tz_name.parse::<Tz>() else {
+        return;
+    };
+    let Some(local) = ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"]
+        .iter()
+        .find_map(|fmt| NaiveDateTime::parse_from_str(s.trim(), fmt).ok())
+    else {
+        return;
+    };
+
+    if matches!(zone.from_local_datetime(&local), LocalResult::None) {
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "{} {s} does not exist in {tz_name} (skipped by a daylight-saving change)",
+                    field.name
+                ),
+                "validation.nonexistent_local_time",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", s.clone())
+            .with_param("timezone", tz_name.to_owned()),
         );
     }
 }
@@ -448,5 +498,36 @@ mod tests {
                 .message
                 .contains("on or before")
         );
+    }
+
+    /// 02:30 on 2024-03-31 was skipped in Europe/Berlin; 03:30 exists, and a
+    /// value with its own offset is not a local time at all.
+    #[test]
+    fn a_local_time_inside_a_dst_gap_is_rejected() {
+        let field = FieldDefinition::builder("starts", FieldType::Date)
+            .timezone(true)
+            .build();
+        let check = |raw: &str| {
+            let mut errors = Vec::new();
+            let value = Value::String(raw.to_string());
+            check_local_time_exists(
+                &field,
+                "starts",
+                Some(&value),
+                Some("Europe/Berlin"),
+                &mut errors,
+            );
+            errors
+        };
+
+        let gap = check("2024-03-31T02:30");
+        assert_eq!(gap.len(), 1);
+        assert_eq!(
+            gap[0].key.as_deref(),
+            Some("validation.nonexistent_local_time")
+        );
+
+        assert!(check("2024-03-31T03:30").is_empty());
+        assert!(check("2024-03-31T02:30:00+01:00").is_empty());
     }
 }

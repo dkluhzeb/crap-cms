@@ -40,6 +40,7 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             collection,
             email,
             password,
+            password_stdin,
             fields,
         } => user_create(UserCreateParams {
             pool: &pool,
@@ -47,6 +48,7 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             collection: &collection,
             email,
             password,
+            password_stdin,
             fields,
             password_policy: &cfg.auth.password_policy,
             locale: &cfg.locale,
@@ -71,6 +73,7 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             email,
             id,
             password,
+            password_stdin,
         } => user_change_password(UserChangePasswordParams {
             pool: &pool,
             registry: &registry,
@@ -78,6 +81,7 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             email,
             id,
             password,
+            password_stdin,
             password_policy: &cfg.auth.password_policy,
             locale: &cfg.locale,
         }),

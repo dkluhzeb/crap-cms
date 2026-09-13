@@ -14,7 +14,10 @@ use crate::{
     db::{DbConnection, DbPool, query::jobs as job_query},
 };
 
-use super::{backfill_ref_counts, checkbox_columns, collection, global, identifier_check};
+use super::{
+    backfill_ref_counts, checkbox_columns, collection, global, identifier_check, legacy_timestamps,
+    nested_timezone_dates,
+};
 
 /// Sync all collection tables with their Lua definitions.
 ///
@@ -32,6 +35,13 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     let tx = conn
         .transaction_immediate()
         .context("Failed to start migration transaction")?;
+
+    // Nodes booting together would otherwise race the same DDL on Postgres
+    // (duplicate CREATE TABLE / ALTER TABLE ADD COLUMN) and crash all but one.
+    // Released at commit; a no-op on SQLite, whose IMMEDIATE transaction
+    // already serializes writers.
+    tx.advisory_xact_lock(SCHEMA_SYNC_LOCK_KEY)
+        .context("Failed to acquire the schema-sync lock")?;
 
     create_system_tables(&tx)?;
 
@@ -56,12 +66,18 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
 
     backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
     checkbox_columns::migrate_if_needed(&tx, registry)?;
+    legacy_timestamps::normalize_if_needed(&tx, registry)?;
+    nested_timezone_dates::convert_if_needed(&tx, registry)?;
 
     tx.commit()
         .context("Failed to commit migration transaction")?;
 
     Ok(())
 }
+
+/// Advisory-lock key serializing schema sync across nodes: the ASCII bytes of
+/// `"crapsync"`, distinct from the job-claim key.
+const SCHEMA_SYNC_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapsync");
 
 /// Create all system tables (_`crap_meta`, _`crap_migrations`, _`crap_jobs`, etc.).
 fn create_system_tables(conn: &dyn DbConnection) -> Result<()> {

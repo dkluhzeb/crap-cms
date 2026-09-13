@@ -177,6 +177,20 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
+/// Render an error message for display or storage, with any encoded hook
+/// validation marker replaced by its readable form.
+///
+/// The marker carries a per-process nonce that must never leave the process:
+/// it is what stops user content from forging a validation failure. Anywhere a
+/// raw error chain is persisted or shown without passing through
+/// `ServiceError::classify` — a job run's stored error, for one — would
+/// otherwise disclose it. A message with no marker is returned unchanged.
+#[must_use]
+pub fn humanize_hook_message(message: &str) -> String {
+    ValidationError::from_hook_message(message)
+        .map_or_else(|| message.to_string(), |ve| ve.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +300,27 @@ mod tests {
         assert!(s.contains("title: required"));
         assert!(s.contains("email: invalid"));
         assert!(s.starts_with("Validation failed:"));
+    }
+
+    /// A raw error chain carrying a hook validation marker must render without
+    /// the marker, and so without its per-process nonce, before it is stored
+    /// or shown.
+    #[test]
+    fn humanize_hook_message_strips_the_marker() {
+        let ve = ValidationError::new(vec![FieldError::new("title", "title is required")]);
+        let raw = format!(
+            "job failed: runtime error: {}\nstack traceback:\n\t[C]: in ?",
+            ve.to_hook_message()
+        );
+
+        let shown = humanize_hook_message(&raw);
+
+        assert_eq!(shown, "Validation failed: title: title is required");
+        assert!(
+            !shown.contains(hook_validation_prefix()),
+            "the nonce must not survive"
+        );
+
+        assert_eq!(humanize_hook_message("plain failure"), "plain failure");
     }
 }

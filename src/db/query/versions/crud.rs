@@ -8,7 +8,9 @@ use crate::{
     core::document::VersionSnapshot,
     db::{
         DbConnection, DbRow, DbValue,
-        query::helpers::{SOFT_DELETE_ACTIVE, floor_optional_limit, quote_ident, versions_table},
+        query::helpers::{
+            SOFT_DELETE_ACTIVE, floor_optional_limit, quote_ident, utc_now, versions_table,
+        },
     },
 };
 
@@ -73,21 +75,29 @@ pub fn create_version(
     .context("Failed to clear previous latest flag")?;
 
     let snapshot_str = serde_json::to_string(snapshot).context("Failed to serialize snapshot")?;
-    let (p1, p2, p3, p4, p5) = (
+    // `created_at` is bound explicitly: a version table created by an early
+    // release keeps its `datetime('now')` column default (version tables are
+    // never altered), which stores the space-separated legacy format. Only
+    // `created_at` is bound because it is the one timestamp column every
+    // version table has always had.
+    let now = utc_now();
+    let (p1, p2, p3, p4, p5, p6) = (
         conn.placeholder(1),
         conn.placeholder(2),
         conn.placeholder(3),
         conn.placeholder(4),
         conn.placeholder(5),
+        conn.placeholder(6),
     );
     conn.execute(
-        &format!("INSERT INTO {table} (id, _parent, _version, _status, _latest, snapshot) VALUES ({p1}, {p2}, {p3}, {p4}, 1, {p5})"),
+        &format!("INSERT INTO {table} (id, _parent, _version, _status, _latest, snapshot, created_at) VALUES ({p1}, {p2}, {p3}, {p4}, 1, {p5}, {p6})"),
         &[
             DbValue::Text(id.clone()),
             DbValue::Text(parent_id.to_string()),
             DbValue::Integer(next_version),
             DbValue::Text(status.to_string()),
             DbValue::Text(snapshot_str),
+            DbValue::Text(now),
         ],
     )
     .context("Failed to insert version")?;
@@ -594,5 +604,27 @@ mod tests {
         let remaining = list_versions(&conn, "posts", "p1", false, None, None).unwrap();
         assert_eq!(remaining[0].version, 5);
         assert_eq!(remaining[2].version, 3);
+    }
+
+    /// A version table created with the legacy `datetime('now')` default still
+    /// gets an ISO 8601 `created_at`: the insert binds it itself.
+    #[test]
+    fn create_version_writes_iso_timestamps_on_a_legacy_default_table() {
+        let (_dir, conn) = setup_versions_db();
+
+        let version = create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT created_at FROM _versions_posts WHERE id = ?1",
+                &[DbValue::Text(version.id.clone())],
+            )
+            .unwrap()
+            .expect("version row");
+        let stamp = row.get_string("created_at").unwrap();
+        assert!(
+            stamp.contains('T') && stamp.ends_with('Z'),
+            "created_at must be ISO 8601, got {stamp}"
+        );
     }
 }

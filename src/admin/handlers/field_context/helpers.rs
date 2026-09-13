@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use crate::{
-    admin::context::field::{FieldContext, NonRepeatingChildren},
+    admin::context::field::{DateField, FieldContext, NonRepeatingChildren},
     core::{FieldDefinition, FieldType, HookRef},
-    db::query::helpers::{lang_column, tz_column},
+    db::query::helpers::{lang_column, tz_column, utc_to_local},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
 
@@ -113,8 +113,34 @@ pub fn inject_timezone_values_from_row(
             let tz_key = tz_column(&fd.name);
             if let Some(tz_val) = row_obj.get(&tz_key).and_then(|v| v.as_str()) {
                 df.timezone_value = Some(tz_val.to_string());
+
+                if let Some(stored) = row_obj.get(&fd.name).and_then(Value::as_str) {
+                    localize_date_display(df, stored, tz_val);
+                }
             }
         }
+    }
+}
+
+/// Show a row date in its own timezone: replace the input's value with the
+/// stored UTC value converted to local time in `tz`, as the top-level builder
+/// does with the document's `_tz` column. Without this the form shows the UTC
+/// digits, and saving them back as local time shifts the date by its offset.
+pub fn localize_date_display(df: &mut DateField, stored: &str, tz: &str) {
+    if stored.is_empty() || tz.is_empty() {
+        return;
+    }
+
+    let Some(local) = utc_to_local(stored, tz) else {
+        return;
+    };
+
+    match df.picker_appearance.as_str() {
+        "dayOnly" => df.date_only_value = Some(local.get(..10).unwrap_or(&local).to_string()),
+        "dayAndTime" => {
+            df.datetime_local_value = Some(local.get(..16).unwrap_or(&local).to_string());
+        }
+        _ => {}
     }
 }
 
@@ -641,5 +667,34 @@ mod tests {
         let errors = HashMap::new();
         let result = collect_node_attr_errors(&errors, "content");
         assert!(result.is_none());
+    }
+
+    /// A row date stored as UTC is shown as local time in its row's zone, so
+    /// saving the form unchanged keeps the same instant.
+    #[test]
+    fn inject_timezone_values_from_row_shows_local_time() {
+        let field_defs = vec![date_field_with_tz("starts_at")];
+        let mut ctxs = vec![FC::Date(DateField {
+            base: BaseFieldData {
+                name: "items[0][starts_at]".to_string(),
+                ..Default::default()
+            },
+            picker_appearance: "dayAndTime".to_string(),
+            datetime_local_value: Some("2026-01-15T14:00".to_string()),
+            ..Default::default()
+        })];
+
+        let row: Map<String, Value> = serde_json::from_value(json!({
+            "starts_at": "2026-01-15T14:00:00.000Z",
+            "starts_at_tz": "Asia/Tokyo",
+        }))
+        .unwrap();
+
+        inject_timezone_values_from_row(&mut ctxs, &field_defs, Some(&row));
+
+        let FC::Date(d) = &ctxs[0] else {
+            panic!("expected date")
+        };
+        assert_eq!(d.datetime_local_value.as_deref(), Some("2026-01-15T23:00"));
     }
 }

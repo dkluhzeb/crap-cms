@@ -11,7 +11,7 @@ use crate::db::{DbConnection, DbRow, DbValue};
 /// Advisory-lock key identifying the job-claim critical section, derived from
 /// the ASCII bytes of `"crapjobs"` so the value is stable and recognizable
 /// rather than an opaque constant. Any fixed value would do — it only needs to
-/// not collide with another advisory lock, and crap uses no others.
+/// not collide with another advisory lock (schema sync uses `"crapsync"`).
 const JOB_CLAIM_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapjobs");
 
 /// Atomically claim up to `limit` pending jobs by setting them to running.

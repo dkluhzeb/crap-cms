@@ -53,6 +53,42 @@ pub fn get_ref_count_locked(
     get_ref_count_inner(conn, collection, id, true)
 }
 
+/// Lock a trashed row for purging and return its reference count.
+///
+/// `None` when the row is gone, no longer trashed, or trashed less than
+/// `retention_seconds` ago. The retention purge picks its candidates before it
+/// holds any lock; on Postgres a restore can commit in between. Re-checking the
+/// trash state under the same `FOR UPDATE` that guards the reference count keeps
+/// a just-restored document from being hard-deleted.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn get_purgeable_ref_count_locked(
+    conn: &dyn DbConnection,
+    collection: &str,
+    id: &str,
+    retention_seconds: i64,
+) -> Result<Option<i64>> {
+    let p1 = conn.placeholder(1);
+    let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 2);
+    let for_update = if conn.is_postgres() {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT _ref_count FROM \"{collection}\" WHERE id = {p1} \
+         AND _deleted_at IS NOT NULL AND _deleted_at < {offset_sql}{for_update}"
+    );
+    let row = conn.query_one(&sql, &[DbValue::Text(id.to_string()), offset_param])?;
+
+    Ok(row.map(|r| match r.get_value(0) {
+        Some(DbValue::Integer(n)) => *n,
+        _ => 0,
+    }))
+}
+
 fn get_ref_count_inner(
     conn: &dyn DbConnection,
     collection: &str,
@@ -1107,5 +1143,50 @@ mod tests {
 
         after_create_from_data(&conn, &fields, &data, &no_locale())
             .expect_err("should fail when target doesn't exist");
+    }
+
+    // ── get_purgeable_ref_count_locked ───────────────────────────────────
+
+    /// Only a row still trashed past retention is purgeable; a restored (live)
+    /// or recently trashed row is skipped.
+    #[test]
+    fn purgeable_ref_count_requires_a_row_trashed_past_retention() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.soft_delete = true;
+        let (_tmp, pool, _) = setup_db(&[posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        for id in ["live", "old", "recent"] {
+            insert_doc(&conn, "posts", id);
+        }
+        conn.execute(
+            "UPDATE posts SET _deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days') \
+             WHERE id = 'old'",
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE posts SET _deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = 'recent'",
+            &[],
+        )
+        .unwrap();
+
+        let week = 7 * 86_400;
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "old", week).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "recent", week).unwrap(),
+            None
+        );
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "live", week).unwrap(),
+            None
+        );
+        assert_eq!(
+            get_purgeable_ref_count_locked(&conn, "posts", "gone", week).unwrap(),
+            None
+        );
     }
 }

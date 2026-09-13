@@ -8,12 +8,13 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, anyhow};
 use redis::{Client, Commands, Connection};
 
-use crate::core::cache::CacheBackend;
+use crate::core::cache::{CacheBackend, cache_clear_pattern, cache_key};
 
 /// Redis-backed cache with key prefixing and connection reuse.
 ///
-/// All keys are prefixed with `prefix` to namespace them within a shared Redis
-/// instance (e.g., `crap:populate:posts:123:en`).
+/// Every key lives under `{prefix}cache:` (e.g. `crap:cache:populate:posts:123:en`),
+/// so a clear can only ever reach cache keys — never another subsystem sharing
+/// the Redis, such as the rate limiter. See [`cache_key`].
 ///
 /// Holds a single reusable connection behind a `Mutex`. If the connection
 /// breaks (network error, Redis restart), it is automatically replaced on
@@ -52,9 +53,9 @@ impl RedisCache {
         })
     }
 
-    /// Build the full Redis key with prefix.
+    /// Build the full Redis key, inside the cache namespace.
     fn prefixed_key(&self, key: &str) -> String {
-        format!("{}{}", self.prefix, key)
+        cache_key(&self.prefix, key)
     }
 
     /// Get the shared connection, reconnecting if it's broken.
@@ -127,7 +128,7 @@ impl CacheBackend for RedisCache {
     }
 
     fn clear(&self) -> Result<()> {
-        let pattern = format!("{}*", self.prefix);
+        let pattern = cache_clear_pattern(&self.prefix);
 
         // SCAN + DEL in batches. Not atomic — keys written between iterations
         // may survive. Acceptable for cache invalidation: survivors are cleared

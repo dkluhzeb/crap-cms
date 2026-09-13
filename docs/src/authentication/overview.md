@@ -53,11 +53,11 @@ crap.collections.define("users", {
 crap-cms -C ./my-project user create -e admin@example.com
 ```
 
-3. (Optional) Set a JWT secret explicitly, or let it auto-generate and persist to `data/.jwt_secret`:
+3. Set a JWT secret explicitly, or — on a single node — let it auto-generate and persist to `data/.jwt_secret`. When several nodes can run (a Redis cache, event transport, or rate-limit backend is configured), the secret is required and loading the config fails without it:
 
 ```toml
 [auth]
-secret = "your-random-secret-here"  # omit to auto-generate (persisted across restarts)
+secret = "your-random-secret-here"  # omit only on a single node (auto-generated, persisted)
 ```
 
 4. (Optional) Configure email for password reset and verification:

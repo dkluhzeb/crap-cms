@@ -5,7 +5,11 @@ use serde_json::Value;
 
 use crate::{
     core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, validate::FieldError},
-    db::{LocaleContext, query::helpers::prefixed_name, query::locale_write_column},
+    db::{
+        LocaleContext,
+        query::helpers::{prefixed_name, tz_column},
+        query::locale_write_column,
+    },
     hooks::lifecycle::validation::{
         checks,
         custom::{ValidateCtxSource, run_required_condition_inner},
@@ -18,6 +22,26 @@ use crate::{
 use super::dispatch::ValidationWalker;
 
 impl ValidationWalker<'_> {
+    /// Date format and bounds, plus — for a timezone-enabled date — that the
+    /// local time exists in its zone.
+    fn check_date(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        value: Option<&Value>,
+        is_empty: bool,
+        errors: &mut Vec<FieldError>,
+    ) {
+        checks::check_date_field(field, data_key, value, is_empty, errors);
+        checks::check_local_time_exists(
+            field,
+            data_key,
+            value,
+            self.data.get(&tz_column(data_key)).and_then(Value::as_str),
+            errors,
+        );
+    }
+
     /// Validate a single scalar field (not Group/Row/Collapsible/Tabs).
     /// Dispatches to individual check functions in `checks` module.
     pub(super) fn scalar(
@@ -127,7 +151,7 @@ impl ValidationWalker<'_> {
             self.ctx.is_draft,
             errors,
         );
-        checks::check_date_field(field, &data_key, value, is_empty, errors);
+        self.check_date(field, &data_key, value, is_empty, errors);
         checks::check_custom_validate(
             self.lua,
             field,

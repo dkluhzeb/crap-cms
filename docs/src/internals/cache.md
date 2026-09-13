@@ -49,7 +49,7 @@ prefix = "crap:"
 max_age_secs = 60
 ```
 
-Keys are automatically prefixed with `prefix` for namespace isolation. When `max_age_secs > 0`, each key is set with a Redis TTL — expired keys are evicted by Redis automatically, and the periodic clear task also runs as a safety net.
+Keys are stored as `{prefix}cache:{key}`, and a clear deletes only `{prefix}cache:*`, so other data under the same prefix (rate-limit counters) is never touched. When `max_age_secs > 0`, each key is set with a Redis TTL and Redis evicts expired keys itself; unlike the memory backend, no periodic full clear runs, because every node shares the store and would otherwise wipe it once per node.
 
 **When to use:** Multi-server deployments where stale cache data across servers is unacceptable.
 

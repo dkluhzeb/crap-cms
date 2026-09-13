@@ -264,14 +264,15 @@ crap-cms bench create posts -d '{"title": "test", "slug": "bench-test"}'  # cust
 #### `user create`
 
 ```bash
-crap-cms user create [-c <COLLECTION>] [-e <EMAIL>] [-p <PASSWORD>] [-f <KEY=VALUE>]...
+crap-cms user create [-c <COLLECTION>] [-e <EMAIL>] [-p <PASSWORD> | --password-stdin] [-f <KEY=VALUE>]...
 ```
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--collection` | `-c` | `users` | Auth collection slug |
 | `--email` | `-e` | — | User email (prompted if omitted) |
-| `--password` | `-p` | — | User password (prompted if omitted) |
+| `--password` | `-p` | — | User password (prompted if omitted). Visible in the process list and shell history |
+| `--password-stdin` | — | — | Read the password from the first line of standard input |
 | `--field` | `-f` | — | Extra fields as key=value (repeatable) |
 
 ```bash
@@ -279,9 +280,9 @@ crap-cms user create [-c <COLLECTION>] [-e <EMAIL>] [-p <PASSWORD>] [-f <KEY=VAL
 crap-cms user create -e admin@example.com
 
 # Non-interactive
-crap-cms user create \
+printf '%s\n' "$ADMIN_PASSWORD" | crap-cms user create \
     -e admin@example.com \
-    -p secret123 \
+    --password-stdin \
     -f role=admin \
     -f name="Admin User"
 ```
@@ -356,10 +357,11 @@ Manually mark a user's email as verified or unverified. Only works on collection
 
 #### `user change-password`
 
-Change a user's password. Prompts for the new password if `-p` is omitted.
+Change a user's password. Prompts for the new password unless `-p` or
+`--password-stdin` is given.
 
 ```bash
-crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PASSWORD>]
+crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PASSWORD> | --password-stdin]
 ```
 
 ### `init` — Scaffold a new config directory
@@ -1086,7 +1088,7 @@ crap-cms images purge [--older-than <DURATION>]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--older-than` | `7d` | Delete completed/failed entries older than this. Supports `Nd`, `Nh`, `Nm`, `Ns` formats. |
+| `--older-than` | `7d` | Delete completed, failed and stale entries that finished longer ago than this (age counts from completion, or creation for a stale run without one). Supports `Nd`, `Nh`, `Nm`, `Ns` formats. |
 
 ```bash
 crap-cms images list

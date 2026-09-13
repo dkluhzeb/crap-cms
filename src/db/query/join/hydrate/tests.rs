@@ -555,3 +555,49 @@ fn hydrate_documents_empty_input_is_noop() {
     hydrate_documents(&conn, "posts", &def.fields, &mut docs, None, None).unwrap();
     assert!(docs.is_empty());
 }
+
+/// Timezone dates stored inside row JSON — a group in an array row, a blocks
+/// row — are converted to UTC on save, like column-stored dates.
+#[test]
+fn save_converts_timezone_dates_nested_in_row_json() {
+    let (_dir, conn) = setup_conn(
+        "CREATE TABLE posts (id TEXT PRIMARY KEY);
+         CREATE TABLE posts_slots (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, meta TEXT);
+         CREATE TABLE posts_content (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, _block_type TEXT, data TEXT);",
+    );
+    let starts = || {
+        FieldDefinition::builder("starts", FieldType::Date)
+            .timezone(true)
+            .build()
+    };
+    let fields = vec![
+        FieldDefinition::builder("slots", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![starts()])
+                    .build(),
+            ])
+            .build(),
+        FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new("event", vec![starts()])])
+            .build(),
+    ];
+    let local = json!({ "starts": "2024-01-15T09:00", "starts_tz": "Europe/Berlin" });
+    let mut data = DocumentFields::new();
+    data.insert("slots".to_string(), json!([{ "meta": local }]));
+    data.insert(
+        "content".to_string(),
+        json!([{ "_block_type": "event", "starts": "2024-01-15T09:00", "starts_tz": "Europe/Berlin" }]),
+    );
+
+    save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
+
+    for sql in [
+        "SELECT meta FROM posts_slots",
+        "SELECT data FROM posts_content",
+    ] {
+        let row = conn.query_one(sql, &[]).unwrap().expect("row");
+        let stored: serde_json::Value = serde_json::from_str(row.text_at(0).unwrap()).unwrap();
+        assert_eq!(stored["starts"], "2024-01-15T08:00:00.000Z", "{sql}");
+    }
+}

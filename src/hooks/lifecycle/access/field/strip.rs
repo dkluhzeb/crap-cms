@@ -128,8 +128,9 @@ pub(crate) fn strip_read_access_with_lua(
     }
 }
 
-/// Context for a data-aware field-**write** strip: the full incoming document
-/// (`ctx.document`), the requester, the target locale, and the write operation.
+/// Context for a data-aware field-**write** strip: the document the rules
+/// judge as `ctx.document` (the stored document on update, the incoming one on
+/// create), the requester, the target locale, and the write operation.
 /// Grouped into a struct so the strip entry points stay within a sane argument
 /// count and read/write callers thread one value.
 pub struct WriteStripInput<'a> {
@@ -147,7 +148,7 @@ pub struct WriteStripInput<'a> {
 /// `&Lua`. Removes from `level` every field the user may not write for
 /// `input.operation`, evaluating each field's `access.create` / `access.update`
 /// rule with `ctx.data` = the field's own immediate level and `ctx.document` =
-/// the full incoming `input.document`. The write-path mirror of
+/// `input.document` (stored on update, incoming on create). The write-path mirror of
 /// [`strip_read_access_with_lua`], so a field-access rule reading `ctx.data` /
 /// `ctx.document` behaves identically on read and write.
 ///

@@ -108,6 +108,7 @@ fn build_event_payload(
 
     Some(json!({
         "sequence": event.sequence,
+        "publisher": event.publisher,
         "timestamp": event.timestamp,
         "target": target_str,
         "operation": op_str,
@@ -200,6 +201,7 @@ mod tests {
     fn make_event(slug: &str, data: DocumentFields) -> MutationEvent {
         MutationEvent {
             sequence: 1,
+            publisher: String::new(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             target: EventTarget::Collection,
             operation: EventOperation::Create,

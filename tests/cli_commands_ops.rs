@@ -379,6 +379,7 @@ fn cmd_user_change_password_by_email() {
         email: Some("chpw@example.com".to_string()),
         id: None,
         password: Some("newpw123".to_string()),
+        password_stdin: false,
         password_policy: &PASSWORD_POLICY,
         locale: &LOCALE,
     })
@@ -413,6 +414,7 @@ fn cmd_user_change_password_by_id() {
         email: None,
         id: Some(doc.id.to_string()),
         password: Some("newpw456".to_string()),
+        password_stdin: false,
         password_policy: &PASSWORD_POLICY,
         locale: &LOCALE,
     })
@@ -436,6 +438,7 @@ fn cmd_user_change_password_nonexistent_errors() {
         email: Some("noone@example.com".to_string()),
         id: None,
         password: Some("newpw".to_string()),
+        password_stdin: false,
         password_policy: &PASSWORD_POLICY,
         locale: &LOCALE,
     });
@@ -503,6 +506,7 @@ fn cmd_user_change_password_non_auth_errors() {
         email: Some("anyone@example.com".to_string()),
         id: None,
         password: Some("newpw".to_string()),
+        password_stdin: false,
         password_policy: &PASSWORD_POLICY,
         locale: &LOCALE,
     });
@@ -521,6 +525,7 @@ fn cmd_user_create_missing_collection_errors() {
         collection: "nonexistent",
         email: Some("test@example.com".to_string()),
         password: Some("pw".to_string()),
+        password_stdin: false,
         fields: vec![],
         password_policy: &PASSWORD_POLICY,
         locale: &LOCALE,

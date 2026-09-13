@@ -267,6 +267,20 @@ fn collect_locale_restore_fields(
                 }
             };
 
+            // A field the snapshot carries no value for at all — no bare key and
+            // no locale column — was either removed from the restore (the
+            // caller is write-denied on it) or did not exist when the snapshot
+            // was taken. Leave its stored columns alone, exactly as a missing
+            // non-localized field is left alone, instead of NULLing every
+            // translation.
+            let carried = locale_config
+                .locales
+                .iter()
+                .any(|locale| value_for(locale).is_some());
+            if !carried {
+                return Ok(());
+            }
+
             restore_locale_columns(
                 conn,
                 &base,
@@ -291,17 +305,25 @@ fn collect_locale_restore_fields(
                     resolve_snapshot_value(obj, &tz_base, prefix, &tz_field)
                 };
 
+                // Same lookup order as the value above: EVERY locale prefers its
+                // decorated `_tz__xx` column. The bare `_tz` key holds whichever
+                // locale the snapshotted write was made under, so returning it
+                // first for the default locale copied (say) a German edit's
+                // timezone onto the English date. It survives only as the default
+                // locale's fallback, for snapshots older than per-locale timezones.
                 let tz_value_for = |locale: &str| {
-                    if *locale == locale_config.default_locale {
-                        return tz_val;
-                    }
-
                     let decorated_base = format!("{tz_base}__{locale}");
-                    if prefix.is_empty() {
+                    let decorated = if prefix.is_empty() {
                         obj.get(&decorated_base)
                     } else {
                         let decorated_field = format!("{tz_field}__{locale}");
                         resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
+                    };
+
+                    match decorated {
+                        Some(v) => Some(v),
+                        None if *locale == locale_config.default_locale => tz_val,
+                        None => None,
                     }
                 };
 
@@ -761,6 +783,87 @@ mod tests {
             row.get_string("start_date_tz__de").unwrap(),
             "Europe/Berlin",
             "the non-default-locale _tz companion must be restored"
+        );
+    }
+
+    /// The default locale's timezone comes from its OWN per-locale column. The
+    /// bare `_tz` key holds whichever locale the snapshotted write was made
+    /// under — German here — so preferring it put Berlin on the English date.
+    #[test]
+    fn restore_prefers_the_default_locales_own_timezone_column() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date__en TEXT,
+                start_date__de TEXT,
+                start_date_tz__en TEXT,
+                start_date_tz__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_events (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO events
+                (id, start_date__en, start_date__de, start_date_tz__en, start_date_tz__de, _status)
+                VALUES ('e1', '2024-06-15T14:00:00.000Z', '2024-06-15T14:00:00.000Z',
+                        'Europe/London', 'Europe/London', 'published');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // A version written under `de`: the bare key carries German's timezone,
+        // while each locale's own column carries its real value.
+        let snapshot = json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date__en": "2024-06-15T14:00:00.000Z",
+            "start_date__de": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "Europe/Berlin",
+            "start_date_tz__en": "America/New_York",
+            "start_date_tz__de": "Europe/Berlin",
+        });
+        create_version(&conn, "events", "e1", "published", &snapshot).unwrap();
+
+        restore_version(&conn, "events", &def, "e1", &snapshot, "published", &locale).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT start_date_tz__en, start_date_tz__de FROM events WHERE id = 'e1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("start_date_tz__en").unwrap(),
+            "America/New_York",
+            "the English date must keep its own timezone, not the German write's"
+        );
+        assert_eq!(
+            row.get_string("start_date_tz__de").unwrap(),
+            "Europe/Berlin"
         );
     }
 }

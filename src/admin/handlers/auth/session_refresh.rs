@@ -48,7 +48,9 @@ fn resolve_original_auth_time(claims: &Claims, max_age: u64, now: u64) -> Refres
         return RefreshDecision::Refuse;
     };
 
-    if max_age > 0 && now.saturating_sub(original) > max_age {
+    // At exactly `max_age` the capped expiry would be `now`: a token dead on
+    // arrival. Refuse instead.
+    if max_age > 0 && now.saturating_sub(original) >= max_age {
         return RefreshDecision::Refuse;
     }
 
@@ -210,6 +212,16 @@ mod tests {
 
         // 1 day elapsed, cap is 1 hour.
         let decision = resolve_original_auth_time(&claims, 3600, 1_086_400);
+        assert_eq!(decision, RefreshDecision::Refuse);
+    }
+
+    /// At exactly the ceiling there is no lifetime left to issue.
+    #[test]
+    fn resolve_refuses_at_exactly_max_age() {
+        let mut claims = base_claims();
+        claims.auth_time = Some(1_000_000);
+
+        let decision = resolve_original_auth_time(&claims, 3600, 1_003_600);
         assert_eq!(decision, RefreshDecision::Refuse);
     }
 

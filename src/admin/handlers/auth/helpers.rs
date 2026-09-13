@@ -29,30 +29,8 @@ use crate::{
         server::extract_cookie,
     },
     config::ServerConfig,
-    core::{
-        CollectionDefinition, Document, Registry, Slug, auth::ClaimsBuilder, email,
-        rate_limit::LoginRateLimiter,
-    },
+    core::{CollectionDefinition, Document, Registry, Slug, auth::ClaimsBuilder, email},
 };
-
-/// Build an ad-hoc rate limiter that reuses the global rate-limit backend under
-/// a distinct keyspace `prefix`. Sharing the backend keeps cross-instance state
-/// consistent on Redis-backed deployments (the same pattern the per-route rate
-/// limits use), so a limiter that isn't worth its own `AdminState` field can
-/// still be scoped correctly without wiping unrelated buckets.
-pub(in crate::admin) fn scoped_limiter(
-    state: &AdminState,
-    prefix: &str,
-    max_attempts: u32,
-    window_seconds: u64,
-) -> LoginRateLimiter {
-    LoginRateLimiter::with_backend(
-        state.login_limiter.backend(),
-        prefix,
-        max_attempts,
-        window_seconds,
-    )
-}
 
 /// Extract the client IP from the request, honoring `X-Forwarded-For`
 /// only when the peer address is a configured trusted proxy.
@@ -320,6 +298,19 @@ pub(in crate::admin::handlers) struct SessionToken {
     pub exp: u64,
 }
 
+/// Expiry for a session token issued at `now`: `now + expiry`, capped at
+/// `auth_time + max_age` so a refreshed token never outlives the session's
+/// absolute ceiling. `max_age = 0` disables the cap.
+fn session_exp(now: u64, expiry: u64, auth_time: u64, max_age: u64) -> u64 {
+    let exp = now.saturating_add(expiry);
+
+    if max_age == 0 {
+        return exp;
+    }
+
+    exp.min(auth_time.saturating_add(max_age))
+}
+
 /// Build a JWT session token for a user, resolving expiry from collection config or global default.
 ///
 /// `auth_time` is the Unix timestamp of the **original** authentication —
@@ -342,9 +333,17 @@ pub(in crate::admin::handlers) fn create_session_token(
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 
+    let now = Utc::now().timestamp().max(0).cast_unsigned();
+    let exp = session_exp(
+        now,
+        expiry,
+        auth_time,
+        state.config.auth.session_absolute_max_age,
+    );
+
     let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
         .email(email)
-        .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(expiry))
+        .exp(exp)
         .auth_time(auth_time)
         .session_version(session_version)
         .build()
@@ -356,9 +355,10 @@ pub(in crate::admin::handlers) fn create_session_token(
         .create_token(&claims)
         .map_err(|e| format!("Token creation error: {e}"))?;
 
+    // The cookie lives exactly as long as the (possibly capped) token.
     Ok(SessionToken {
         token,
-        expiry,
+        expiry: exp.saturating_sub(now),
         exp: claims.exp,
     })
 }
@@ -639,5 +639,17 @@ mod tests {
         let addr: SocketAddr = "1.2.3.4:80".parse().unwrap();
         let cfg = trust_proxies(&["*"]);
         assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
+    }
+
+    /// A refresh near the end of the absolute session lifetime must not mint
+    /// a token that outlives it.
+    #[test]
+    fn session_exp_is_capped_by_the_absolute_max_age() {
+        // Logged in at 0, refreshing at 3000 with a 2h token and a 1h ceiling.
+        assert_eq!(session_exp(3000, 7200, 0, 3600), 3600);
+        // Far from the ceiling the normal expiry applies.
+        assert_eq!(session_exp(1000, 100, 0, 3600), 1100);
+        // No ceiling configured.
+        assert_eq!(session_exp(3000, 7200, 0, 0), 10_200);
     }
 }

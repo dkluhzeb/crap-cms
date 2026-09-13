@@ -268,9 +268,14 @@ pub enum UserAction {
         #[arg(short, long)]
         email: Option<String>,
 
-        /// User password (omit for interactive prompt)
+        /// User password (omit for interactive prompt). Visible to other local
+        /// users and kept in shell history — prefer `--password-stdin`.
         #[arg(short, long)]
         password: Option<String>,
+
+        /// Read the password from standard input (first line)
+        #[arg(long, conflicts_with = "password")]
+        password_stdin: bool,
 
         /// Extra fields as key=value pairs (repeatable)
         #[arg(short, long = "field", value_parser = parse_key_val)]
@@ -411,9 +416,14 @@ pub enum UserAction {
         #[arg(long)]
         id: Option<String>,
 
-        /// New password (omit for interactive prompt)
+        /// New password (omit for interactive prompt). Visible to other local
+        /// users and kept in shell history — prefer `--password-stdin`.
         #[arg(short, long)]
         password: Option<String>,
+
+        /// Read the new password from standard input (first line)
+        #[arg(long, conflicts_with = "password")]
+        password_stdin: bool,
     },
 }
 

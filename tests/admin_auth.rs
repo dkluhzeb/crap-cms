@@ -35,7 +35,12 @@ use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::{
     admin::{AdminState, server::build_router, templates},
     config::CrapConfig,
-    core::{JwtSecret, Registry, auth, collection::*, field::*, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, Registry, auth,
+        collection::*,
+        field::*,
+        rate_limit::{IP_RESET_PASSWORD_KEYSPACE, IP_VERIFY_EMAIL_KEYSPACE, LoginRateLimiter},
+    },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -86,10 +91,6 @@ struct TestApp {
     /// The per-user and per-IP MFA limiters, exposed for the same reason.
     mfa_limiter: Arc<LoginRateLimiter>,
     ip_mfa_limiter: Arc<LoginRateLimiter>,
-    /// The login limiter, whose backend the per-flow `scoped_limiter`s
-    /// (verify-email, reset-password) share — exposed so those tests can build
-    /// the same scoped limiter and observe the attempts the handlers record.
-    login_limiter: Arc<LoginRateLimiter>,
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
@@ -214,7 +215,6 @@ fn setup_app_in_dir(
         ip_forgot_password_limiter,
         mfa_limiter,
         ip_mfa_limiter,
-        login_limiter,
     }
 }
 
@@ -1481,10 +1481,10 @@ async fn reset_password_mismatch() {
 }
 
 /// Regression: the verify-email handler counts every attempt against its OWN
-/// per-IP `scoped_limiter` (`"ip_verify_email"` keyspace, sharing the login
-/// limiter's backend) via the atomic `check_and_block` — deliberately NOT the
-/// shared forgot-password limiter, so a burst of verification attempts can't
-/// exhaust a legitimate reset's budget. Seeding that scoped limiter to one below
+/// per-IP keyspace (`IP_VERIFY_EMAIL_KEYSPACE`, derived from the forgot-password
+/// IP limiter with `rescoped`) via the atomic `check_and_block` — deliberately
+/// NOT the forgot-password counter itself, so a burst of verification attempts
+/// can't exhaust a legitimate reset's budget. Seeding that scoped limiter to one below
 /// the threshold and making a single verify request must tip it over. Blocked
 /// and invalid-token both redirect to login, so the limiter state — not the HTTP
 /// response — is the observable proof.
@@ -1493,10 +1493,11 @@ async fn verify_email_attempt_counts_against_ip_limiter() {
     let app = setup_app(vec![make_verify_users_def()], vec![]);
     let ip = "127.0.0.1"; // ConnectInfo below + trust_proxy=off → this key
 
-    // Reconstruct the handler's scoped limiter over the shared backend
-    // (max_ip_login_attempts=20 / forgot_password_window_seconds=900 defaults).
-    let verify_limiter =
-        LoginRateLimiter::with_backend(app.login_limiter.backend(), "ip_verify_email", 20, 900);
+    // Derive the handler's limiter exactly as it does: same backend and
+    // thresholds as the forgot-password IP limiter, its own keyspace.
+    let verify_limiter = app
+        .ip_forgot_password_limiter
+        .rescoped(IP_VERIFY_EMAIL_KEYSPACE);
 
     // Seed to 19 so one more trips it.
     for _ in 0..19 {
@@ -1572,8 +1573,9 @@ async fn reset_password_mismatch_does_not_count_against_ip_limiter() {
 
 /// Regression: a genuine reset attempt (matching passwords, valid policy) with a
 /// wrong token IS a token guess and counts against the handler's OWN per-IP
-/// `scoped_limiter` (`"ip_reset_password"` keyspace, sharing the login limiter's
-/// backend) atomically — deliberately NOT the shared forgot-password limiter, so
+/// keyspace (`IP_RESET_PASSWORD_KEYSPACE`, derived from the forgot-password IP
+/// limiter with `rescoped`) atomically — deliberately NOT the forgot-password
+/// counter itself, so
 /// reset-token guesses and the forgot-password request flow don't drain each
 /// other's budget. Seeded to one-below-threshold, one such attempt must trip it.
 #[tokio::test]
@@ -1581,10 +1583,11 @@ async fn reset_password_wrong_token_counts_against_ip_limiter() {
     let app = setup_app(vec![make_users_def()], vec![]);
     let ip = "127.0.0.1";
 
-    // Reconstruct the handler's scoped limiter over the shared backend
-    // (max_ip_login_attempts=20 / forgot_password_window_seconds=900 defaults).
-    let reset_limiter =
-        LoginRateLimiter::with_backend(app.login_limiter.backend(), "ip_reset_password", 20, 900);
+    // Derive the handler's limiter exactly as it does: same backend and
+    // thresholds as the forgot-password IP limiter, its own keyspace.
+    let reset_limiter = app
+        .ip_forgot_password_limiter
+        .rescoped(IP_RESET_PASSWORD_KEYSPACE);
 
     for _ in 0..19 {
         let _ = reset_limiter.check_and_block(ip);
@@ -1940,7 +1943,6 @@ end"#,
         ip_forgot_password_limiter,
         mfa_limiter,
         ip_mfa_limiter,
-        login_limiter,
     }
 }
 

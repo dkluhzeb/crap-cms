@@ -156,6 +156,7 @@
   "mfa_totp_manual_key": "Manual key",
   "error_mfa_invalid_code": "Invalid or expired code. Please try again.",
   "error_mfa_too_many_attempts": "Too many verification attempts. Please try again later.",
+  "error_mfa_too_many_codes": "Too many verification codes requested. Please try again later.",
 
   "restore_has_missing_relations": "This version references content that no longer exists:",
   "restore_missing_warning": "Restoring will write stale references back into the document.",
@@ -223,6 +224,7 @@
   "validation.invalid_option": "{{field}} has an invalid option",
   "validation.invalid_option_value": "{{field}} has an invalid option: {{value}}",
   "validation.invalid_date": "{{field}} is not a valid date format",
+  "validation.nonexistent_local_time": "{{field}}: {{value}} does not exist in {{timezone}} (skipped by a daylight-saving change)",
   "validation.date_min": "{{field}} must be on or after {{min}}",
   "validation.date_max": "{{field}} must be on or before {{max}}",
   "validation.min_rows": "{{field}} requires at least {{min}} item(s)",

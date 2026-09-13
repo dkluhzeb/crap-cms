@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::event::{
     EventReceiver, EventTransport, InvalidationReceiver, InvalidationTransport, MutationEvent,
-    MutationEventInput, RemoteMessage, SequenceGen, stamp_event,
+    MutationEventInput, RemoteMessage, SequenceGen,
 };
 
 /// Redis pub/sub channel name for mutation events.
@@ -80,7 +80,7 @@ impl RedisEventTransport {
 
 impl EventTransport for RedisEventTransport {
     fn publish(&self, input: MutationEventInput) -> Option<MutationEvent> {
-        let event = stamp_event(input, self.sequence.next());
+        let event = self.sequence.stamp(input);
 
         if let Err(e) = publish_blocking(&self.client, EVENT_CHANNEL, &event) {
             error!("Redis event publish failed: {:#}", e);
@@ -342,6 +342,7 @@ mod tests {
     use crate::core::{DocumentFields, DocumentId, Slug};
 
     use super::*;
+    use crate::core::event::sequence::stamp_event;
 
     #[test]
     fn mutation_event_json_wire_format_is_stable() {
@@ -358,11 +359,13 @@ mod tests {
                 view: crate::core::EventViewMeta::default(),
             },
             1,
+            "node-a",
         );
 
         let json = serde_json::to_string(&event).expect("encode");
         let back: MutationEvent = serde_json::from_str(&json).expect("decode");
         assert_eq!(back.sequence, event.sequence);
+        assert_eq!(back.publisher, "node-a");
         assert_eq!(back.target, EventTarget::Collection);
         assert_eq!(back.operation, EventOperation::Create);
     }

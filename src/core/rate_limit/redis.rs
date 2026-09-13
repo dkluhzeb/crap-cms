@@ -5,9 +5,21 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use nanoid::nanoid;
 use redis::Commands;
 
 use super::RateLimitBackend;
+
+/// Sorted-set member for one recorded event.
+///
+/// The timestamp alone is not unique: two events recorded in the same instant
+/// — concurrent attempts from different nodes, or a coarse clock — would
+/// `ZADD` the same member, which updates it instead of adding a second one, and
+/// the burst would count as a single attempt. A random suffix keeps every event
+/// its own member; the score still carries the time.
+fn event_member(now_ms: f64) -> String {
+    format!("{now_ms:.6}-{}", nanoid!(10))
+}
 
 /// Redis-backed rate limiter using sorted sets for accurate sliding windows.
 ///
@@ -138,7 +150,7 @@ impl RateLimitBackend for RedisRateLimitBackend {
     fn record(&self, key: &str, window_secs: u64) -> Result<()> {
         let pkey = self.prefixed_key(key);
         let now = Self::now_ms();
-        let member = format!("{now:.6}");
+        let member = event_member(now);
         let expire = ttl_secs(window_secs);
 
         self.with_conn(|conn| {
@@ -156,7 +168,7 @@ impl RateLimitBackend for RedisRateLimitBackend {
         let pkey = self.prefixed_key(key);
         let now = Self::now_ms();
         let cutoff = now - window_secs_to_ms(window_secs);
-        let member = format!("{now:.6}");
+        let member = event_member(now);
         let expire = ttl_secs(window_secs);
 
         // Atomic Lua script: prune expired, check count, conditionally add.
@@ -255,5 +267,14 @@ mod tests {
     fn window_secs_to_ms_is_correct_for_typical_values() {
         assert!((window_secs_to_ms(1) - 1000.0).abs() < f64::EPSILON);
         assert!((window_secs_to_ms(60) - 60_000.0).abs() < f64::EPSILON);
+    }
+
+    /// Events recorded in the same instant stay separate members.
+    #[test]
+    fn simultaneous_events_get_distinct_members() {
+        assert_ne!(
+            event_member(1_700_000_000_000.0),
+            event_member(1_700_000_000_000.0)
+        );
     }
 }

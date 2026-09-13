@@ -9,6 +9,7 @@ use crate::{
         BLOCK_TYPE_KEY, FieldChildren, FieldDefinition, FieldType, Registry, field_children,
         validate::FieldError,
     },
+    db::query::helpers::tz_column,
     hooks::lifecycle::validation::{
         checks,
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
@@ -358,6 +359,16 @@ fn validate_leaf_sub_field(
     //    like a top-level one (inlining only the format check here silently
     //    dropped `min_date`/`max_date` for fields inside array/blocks rows).
     checks::check_date_field(sf, qualified, value, is_empty, errors);
+
+    checks::check_local_time_exists(
+        sf,
+        qualified,
+        value,
+        ctx.row_data
+            .get(&tz_column(&sf.name))
+            .and_then(Value::as_str),
+        errors,
+    );
 
     // 3. Custom Lua validate function
     if let Some(ref validate) = sf.validate

@@ -78,6 +78,12 @@ redis_url = "redis://redis.example.com:6379"
 prefix = "crap:"
 ```
 
+Cache keys are stored under `{prefix}cache:` (`crap:cache:…` with the default
+prefix), and a cache clear deletes only that namespace. Loading the config fails
+when `auth.rate_limit_prefix` overlaps it on the same Redis instance: a clear
+would otherwise reset every login lockout in the cluster. With `max_age_secs > 0`,
+Redis entries expire after that many seconds on their own.
+
 Alternatively, use `max_age_secs` with the memory backend to limit staleness:
 
 ```toml
@@ -85,6 +91,9 @@ Alternatively, use `max_age_secs` with the memory backend to limit staleness:
 backend = "memory"
 max_age_secs = 10
 ```
+
+Every process clears its own memory cache on this interval — app servers in any
+`--only` mode, `crap-cms work` and `crap-cms mcp` alike.
 
 ### 4. Rate Limits (required)
 
@@ -95,6 +104,9 @@ Without shared rate limits, each server tracks login attempts independently — 
 rate_limit_backend = "redis"
 # rate_limit_redis_url defaults to cache.redis_url if empty
 ```
+
+Keep `rate_limit_prefix` (default `crap:rl:`) outside the cache namespace
+described above; the defaults already are.
 
 **Failure mode: fail-closed.** When the Redis rate-limit backend is
 unreachable, rate-limited requests (logins, per-IP-limited gRPC calls)
@@ -118,6 +130,10 @@ transport = "redis"
 Both transports use the same Redis URL configured under `[cache] redis_url` (single source of truth — no separate `[live] redis_url` key). `transport = "redis"` requires `--features redis` at build time; if the feature is missing, startup aborts with an explicit error.
 
 Events are JSON-encoded and published to the `crap:events` / `crap:invalidations` channels. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can't keep up is force-dropped with `RecvError::Lagged`.
+
+Each node numbers the events it publishes independently. An event's `publisher`
+identifies the node and `sequence` increases per publisher, so detect gaps on the
+`(publisher, sequence)` pair, never on `sequence` alone.
 
 Sticky load balancing is still recommended for SSE and gRPC Subscribe streams even with `transport = "redis"`: reconnects to a different node lose the in-flight subscription context (sequence position, filter state) and the client has to re-subscribe. See the [Load Balancer Stickiness](#load-balancer-stickiness) section below.
 
@@ -170,7 +186,10 @@ Multiple workers can safely run `crap-cms work` against the same database.
 ## Configuration Notes
 
 - All servers and workers share the same `crap.toml` and config directory
-- Schema sync (`migrate up`) only needs to run once — any server that starts first handles it
+- **Set `[auth] secret` explicitly, to the same value on every node.** Left empty, each node generates its own, so sessions and anything derived from the secret (MFA codes, TOTP secrets, `crap.crypto` values, signed URLs) would not work across nodes. Loading the config fails with an empty secret when a Redis cache, event transport, or rate-limit backend is configured.
+- Schema sync (`migrate up`) only needs to run once — any server that starts first handles it. Nodes starting at the same moment take turns: on Postgres, schema sync holds a database lock.
+- **Use the same `[jobs] heartbeat_interval` on every node that runs the scheduler.** A node treats a running job as dead once its heartbeat is older than three times *that node's own* interval, so a node with a shorter interval reclaims — and runs again — jobs a node with a longer interval is still executing.
+- **Finish a rollout that changes indexes before an older node restarts.** Schema sync removes the crap-managed indexes (`idx_<collection>_…`) that the starting node's definitions do not declare. An old-version node that restarts mid-rollout drops the indexes the new version created; they come back the next time a new-version node starts.
 - `on_init` hooks run on every server/worker startup
 - Email uses the job queue automatically — password resets and verification emails are processed by workers with retries
 

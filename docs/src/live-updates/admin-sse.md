@@ -17,7 +17,7 @@ Events are sent with event type `mutation`:
 ```
 event: mutation
 id: 42
-data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","self":false}
+data: {"sequence":42,"publisher":"V1StGXR8_Z5j","timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","self":false}
 ```
 
 The `data` payload is JSON with the same fields as the gRPC `MutationEvent`, plus a `self` boolean: `true` when the authenticated subscriber is the user who made the change (the admin UI uses it to suppress stale-content warnings for your own saves). The payload deliberately does **not** identify the editing user — exposing editor ids/emails to every subscriber would leak PII; editor-based logic belongs in the server-side `live` filter and `before_broadcast` hooks, whose contexts carry `edited_by`. The payload's own `data` field is always present:

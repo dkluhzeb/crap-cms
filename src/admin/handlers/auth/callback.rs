@@ -193,10 +193,11 @@ pub(super) async fn complete_auth_callback(
         return Redirect::to(paths::LOGIN).into_response();
     };
 
-    // Authentication succeeded — clear the IP limiter (mirror the password login
-    // path, which clears before the gate check so a denied user doesn't count
-    // toward the threshold).
-    state.ip_login_limiter.clear(&ip);
+    // Authentication succeeded — REFUND this attempt on the shared per-IP
+    // limiter, exactly as the password login does. Clearing it would wipe every
+    // other account's failures from the same IP, letting one working OAuth
+    // account mask a password brute-force from behind it.
+    state.ip_login_limiter.refund(&ip);
 
     // Enforce the `admin.access` gate BEFORE minting a session — parity with the
     // password login path. Without this a denied user still gets a valid session

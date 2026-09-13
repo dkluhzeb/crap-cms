@@ -8,6 +8,7 @@ use super::{
     super::{
         arrays::set_array_rows,
         blocks::set_block_rows,
+        nested_dates::convert_block_rows,
         relationships::{set_polymorphic_related, set_related_ids},
     },
     locale::resolve_join_locale,
@@ -123,12 +124,15 @@ fn save_join_data_inner(
                     set_array_rows(conn, slug, &field_key, parent_id, &rows, sub, locale_ref)?;
                 }
             }
-            FieldChildren::Blocks(_) => {
+            FieldChildren::Blocks(defs) => {
                 if !join_locked && let Some(val) = data.get(&field_key) {
-                    let rows = match val {
+                    let mut rows = match val {
                         Value::Array(arr) => arr.clone(),
                         _ => Vec::new(),
                     };
+                    // Block rows are stored as JSON: convert their timezone
+                    // dates to UTC like every column-stored date.
+                    convert_block_rows(defs, &mut rows);
                     set_block_rows(conn, slug, &field_key, parent_id, &rows, locale_ref)?;
                 }
             }

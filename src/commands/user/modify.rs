@@ -1,7 +1,7 @@
 //! User modification commands — delete, lock, unlock, verify, unverify, change password.
 
 use anyhow::{Context as _, Result, anyhow};
-use dialoguer::{Confirm, Password};
+use dialoguer::Confirm;
 
 use crate::{
     cli::{self, crap_theme},
@@ -11,7 +11,9 @@ use crate::{
     service::{self, ServiceContext, ServiceError},
 };
 
-use super::helpers::{UserLookup, get_user_email, require_verify_email, resolve_user};
+use super::helpers::{
+    UserLookup, get_user_email, require_verify_email, resolve_new_password, resolve_user,
+};
 
 /// Args for [`user_delete`].
 pub struct UserDeleteParams<'a> {
@@ -258,6 +260,7 @@ pub struct UserChangePasswordParams<'a> {
     pub email: Option<String>,
     pub id: Option<String>,
     pub password: Option<String>,
+    pub password_stdin: bool,
     pub password_policy: &'a PasswordPolicy,
     pub locale: &'a LocaleConfig,
 }
@@ -279,17 +282,7 @@ pub fn user_change_password(p: UserChangePasswordParams<'_>) -> Result<()> {
         locale: p.locale,
     })?;
 
-    let password = match p.password {
-        Some(pw) => {
-            cli::warning("Password provided via command line — it may be visible in shell history");
-            pw
-        }
-        None => Password::with_theme(&crap_theme())
-            .with_prompt("New password")
-            .with_confirmation("Confirm password", "Passwords do not match")
-            .interact()
-            .context("Failed to read password")?,
-    };
+    let password = resolve_new_password(p.password, p.password_stdin, "New password")?;
 
     p.password_policy.validate(&password)?;
 

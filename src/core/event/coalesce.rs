@@ -101,17 +101,20 @@ pub fn drain_and_coalesce(
 
 /// Collapse a batch latest-wins per `(target, collection, document)`; the
 /// survivors keep their own sequence/timestamp/operation and are returned in
-/// ascending sequence order. A collection and a global sharing a slug stay
-/// distinct (targets are namespaced, like their tables).
+/// the order their final state arrived. Arrival order is the only order that
+/// spans publishers: on a shared transport every node counts its own
+/// `sequence` from 1, so sequence numbers from different nodes don't compare.
+/// A collection and a global sharing a slug stay distinct (targets are
+/// namespaced, like their tables).
 #[must_use]
 pub fn coalesce_events(events: Vec<MutationEvent>) -> Vec<MutationEvent> {
     if events.len() <= 1 {
         return events;
     }
 
-    let mut latest: HashMap<(bool, String, String), MutationEvent> = HashMap::new();
+    let mut latest: HashMap<(bool, String, String), (usize, MutationEvent)> = HashMap::new();
 
-    for event in events {
+    for (arrival, event) in events.into_iter().enumerate() {
         let key = (
             matches!(event.target, EventTarget::Global),
             event.collection.to_string(),
@@ -119,13 +122,13 @@ pub fn coalesce_events(events: Vec<MutationEvent>) -> Vec<MutationEvent> {
         );
         // Receivers deliver in publish order, so a later entry is the newer
         // state for its document.
-        latest.insert(key, event);
+        latest.insert(key, (arrival, event));
     }
 
-    let mut out: Vec<MutationEvent> = latest.into_values().collect();
-    out.sort_by_key(|e| e.sequence);
+    let mut out: Vec<(usize, MutationEvent)> = latest.into_values().collect();
+    out.sort_by_key(|(arrival, _)| *arrival);
 
-    out
+    out.into_iter().map(|(_, event)| event).collect()
 }
 
 #[cfg(test)]
@@ -141,6 +144,7 @@ mod tests {
     fn mk(sequence: u64, target: EventTarget, collection: &str, id: &str) -> MutationEvent {
         MutationEvent {
             sequence,
+            publisher: String::new(),
             timestamp: String::new(),
             target,
             operation: EventOperation::Update,
@@ -150,6 +154,21 @@ mod tests {
             edited_by: None,
             view: Some(EventViewMeta::default()),
         }
+    }
+
+    /// Survivors keep arrival order: a high sequence from one node and a low one
+    /// from another say nothing about which came first.
+    #[test]
+    fn survivors_keep_arrival_order_across_publishers() {
+        let mut from_a = mk(900, EventTarget::Collection, "posts", "x");
+        from_a.publisher = "node-a".into();
+        let mut from_b = mk(3, EventTarget::Collection, "posts", "y");
+        from_b.publisher = "node-b".into();
+
+        let out = coalesce_events(vec![from_a, from_b]);
+
+        let ids: Vec<String> = out.iter().map(|e| e.document_id.to_string()).collect();
+        assert_eq!(ids, ["x", "y"]);
     }
 
     #[test]
@@ -165,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_documents_survive_in_sequence_order() {
+    fn distinct_documents_survive_in_arrival_order() {
         let out = coalesce_events(vec![
             mk(5, EventTarget::Collection, "posts", "b"),
             mk(3, EventTarget::Collection, "posts", "a"),
@@ -173,7 +192,7 @@ mod tests {
         ]);
 
         let seqs: Vec<u64> = out.iter().map(|e| e.sequence).collect();
-        assert_eq!(seqs, vec![3, 5, 7]);
+        assert_eq!(seqs, vec![5, 3, 7]);
     }
 
     #[test]

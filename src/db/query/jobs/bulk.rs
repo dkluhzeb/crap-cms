@@ -59,9 +59,40 @@ pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Resul
 ///
 /// Returns a backend error if the DELETE fails.
 pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
+    purge_finished_runs(conn, older_than_secs, None)
+}
+
+/// [`purge_old_jobs`] restricted to the runs of one job `slug`.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
+pub fn purge_old_jobs_for_slug(
+    conn: &dyn DbConnection,
+    slug: &str,
+    older_than_secs: u64,
+) -> Result<i64> {
+    purge_finished_runs(conn, older_than_secs, Some(slug))
+}
+
+fn purge_finished_runs(
+    conn: &dyn DbConnection,
+    older_than_secs: u64,
+    slug: Option<&str>,
+) -> Result<i64> {
     let older = i64::try_from(older_than_secs)
         .context("older_than_secs exceeds the SQL TIMESTAMP arithmetic range")?;
     let (offset_sql, offset_param) = conn.date_offset_expr(older, 1);
+    let mut params = vec![offset_param];
+
+    let slug_clause = match slug {
+        Some(slug) => {
+            params.push(DbValue::Text(slug.to_string()));
+            format!(" AND slug = {}", conn.placeholder(2))
+        }
+        None => String::new(),
+    };
+
     let deleted = i64::try_from(conn.execute(
         &format!(
             // Retention is measured from when the run FINISHED, not when it was
@@ -71,9 +102,9 @@ pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i
             // `stale` rows without a `completed_at` fall back to `created_at`.
             "DELETE FROM _crap_jobs
              WHERE status IN ('completed', 'failed', 'stale')
-               AND COALESCE(completed_at, created_at) < {offset_sql}"
+               AND COALESCE(completed_at, created_at) < {offset_sql}{slug_clause}"
         ),
-        &[offset_param],
+        &params,
     )?)
     .context("delete count exceeds i64::MAX")?;
 
@@ -270,5 +301,40 @@ mod tests {
             "the surviving job must be the sibling `abcXdef`, got: {}",
             remaining[0].data
         );
+    }
+
+    /// The slug-scoped purge measures age from completion and leaves other
+    /// job types alone.
+    #[test]
+    fn purge_old_jobs_for_slug_measures_from_completion_and_keeps_other_slugs() {
+        let (_dir, conn) = setup_db();
+        let old = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')";
+        let now = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+
+        for (id, slug, created, completed) in [
+            ("finished-long-ago", "img", old, old),
+            ("finished-just-now", "img", old, now),
+            ("other-type", "other", old, old),
+        ] {
+            conn.execute(
+                &format!(
+                    "INSERT INTO _crap_jobs (id, slug, status, created_at, completed_at) \
+                     VALUES ('{id}', '{slug}', 'completed', {created}, {completed})"
+                ),
+                &[],
+            )
+            .unwrap();
+        }
+
+        let deleted = purge_old_jobs_for_slug(&conn, "img", 86_400 * 7).unwrap();
+        assert_eq!(deleted, 1);
+
+        let mut remaining: Vec<String> = list_job_runs(&conn, None, None, 100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining, ["finished-just-now", "other-type"]);
     }
 }

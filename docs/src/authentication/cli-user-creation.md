@@ -22,17 +22,20 @@ If required fields have no default value, you'll be prompted for those too.
 
 ## Non-Interactive Mode
 
-For CI/scripting. The `-p` flag skips the prompt:
+For CI/scripting, pass the password on standard input with `--password-stdin`
+(the first line is the password):
 
 ```bash
-crap-cms user create \
+printf '%s\n' "$ADMIN_PASSWORD" | crap-cms user create \
     -e admin@example.com \
-    -p secret123 \
+    --password-stdin \
     -f role=admin \
     -f name="Admin User"
 ```
 
-> **Warning:** The password may be visible in shell history. Use interactive mode for production bootstrapping.
+`-p <PASSWORD>` also skips the prompt, but a command-line argument is visible to
+other local users (in the process list) and is kept in shell history; the command
+prints a warning when you use it.
 
 ## Flags
 
@@ -40,7 +43,8 @@ crap-cms user create \
 |------|-------|-------------|
 | `--collection` | `-c` | Auth collection to create the user in (default: `users`) |
 | `--email` | `-e` | User email (prompted if omitted) |
-| `--password` | `-p` | User password (prompted if omitted) |
+| `--password` | `-p` | User password (prompted if omitted). Visible in the process list and shell history |
+| `--password-stdin` | — | Read the password from the first line of standard input. Conflicts with `-p` |
 | `--field` | `-f` | Extra field values as key=value (repeatable) |
 
 ## Behavior

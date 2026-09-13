@@ -17,6 +17,35 @@ pub struct LoginRateLimiter {
     window_secs: u64,
 }
 
+/// Keyspace for the per-email resend-verification budget.
+///
+/// Both the admin route and the gRPC handler derive their limiter with
+/// [`LoginRateLimiter::rescoped`] from the forgot-password limiter under this
+/// one name, so the two surfaces share thresholds by construction and never a
+/// budget with the flow they were split from.
+pub const RESEND_VERIFICATION_KEYSPACE: &str = "resend_verification";
+
+/// Keyspace for the per-IP resend-verification budget. See
+/// [`RESEND_VERIFICATION_KEYSPACE`].
+pub const IP_RESEND_VERIFICATION_KEYSPACE: &str = "ip_resend_verification";
+
+/// Keyspace for per-IP password-reset TOKEN attempts. Separate from the
+/// forgot-password request budget so the two flows cannot drain each other,
+/// and shared by every surface so an attacker cannot switch surfaces for a
+/// fresh budget.
+pub const IP_RESET_PASSWORD_KEYSPACE: &str = "ip_reset_password";
+
+/// Keyspace for per-IP email-verification TOKEN attempts, shared by every
+/// surface. Separate from the forgot-password budget so a burst of
+/// verification attempts cannot exhaust what a password reset from the same IP
+/// needs.
+pub const IP_VERIFY_EMAIL_KEYSPACE: &str = "ip_verify_email";
+
+/// Keyspace for per-user MFA code ISSUANCE (email/custom delivery). Shared by
+/// every surface: the login limiter cannot cap issuance because a successful
+/// password clears it.
+pub const MFA_ISSUE_KEYSPACE: &str = "mfa_issue";
+
 impl LoginRateLimiter {
     /// Create a rate limiter with an explicit backend and prefix.
     ///
@@ -218,6 +247,25 @@ mod tests {
         login.record_failure("a@b.com");
         assert!(login.is_blocked("a@b.com"));
         assert!(!forgot.is_blocked("a@b.com"));
+    }
+
+    /// `rescoped` keeps a budget's size but not the budget: a limiter derived
+    /// from a base shares its threshold and window, yet exhausting it never
+    /// blocks the base. Both resend-verification surfaces derive their
+    /// limiters this way, so their thresholds cannot drift apart again.
+    #[test]
+    fn rescoped_shares_thresholds_but_not_counters() {
+        let base = LoginRateLimiter::with_backend(memory_backend(), "forgot", 2, 60);
+        let resend = base.rescoped(RESEND_VERIFICATION_KEYSPACE);
+
+        assert!(!resend.check_and_block("a@b.com"));
+        assert!(!resend.check_and_block("a@b.com"));
+        assert!(
+            resend.check_and_block("a@b.com"),
+            "the inherited threshold of 2 applies"
+        );
+
+        assert!(!base.is_blocked("a@b.com"), "the base budget is untouched");
     }
 
     #[test]

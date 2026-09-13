@@ -220,7 +220,7 @@ fn retry_entries(
     Ok(())
 }
 
-/// Purge old completed/failed image-convert jobs older than the
+/// Purge finished image-convert jobs whose run ended longer ago than the
 /// specified duration.
 fn purge_entries(conn: &BoxedConnection, older_than: &str) -> Result<()> {
     let secs = parse_duration_string(older_than).ok_or_else(|| {
@@ -229,22 +229,7 @@ fn purge_entries(conn: &BoxedConnection, older_than: &str) -> Result<()> {
         )
     })?;
 
-    let secs_i64 = i64::try_from(secs).context("Duration overflows i64 seconds")?;
-
-    let (offset_sql, offset_param) = conn.date_offset_expr(-secs_i64, 2);
-    let deleted = conn.execute(
-        &format!(
-            "DELETE FROM _crap_jobs \
-             WHERE slug = {} AND status IN ('completed', 'failed') \
-                AND created_at < {}",
-            conn.placeholder(1),
-            offset_sql,
-        ),
-        &[
-            DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
-            offset_param,
-        ],
-    )?;
+    let deleted = job_query::purge_old_jobs_for_slug(conn, SYSTEM_IMAGE_CONVERT_JOB, secs)?;
 
     cli::success(&format!("Purged {deleted} old queue entry/entries"));
 

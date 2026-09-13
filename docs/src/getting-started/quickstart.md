@@ -69,10 +69,10 @@ If you skipped user creation during init, bootstrap one now:
 # Interactive (prompts for password)
 crap-cms user create -e admin@example.com
 
-# Non-interactive
-crap-cms user create \
+# Non-interactive (password on standard input)
+printf '%s\n' "$ADMIN_PASSWORD" | crap-cms user create \
     -e admin@example.com \
-    -p secret123 \
+    --password-stdin \
     -f role=admin \
     -f name="Admin User"
 ```

@@ -115,8 +115,14 @@ impl EventViewMeta {
 /// A mutation event broadcast to all subscribers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutationEvent {
-    /// A monotonic sequence number for ordering events.
+    /// A sequence number, monotonic per [`publisher`](Self::publisher).
     pub sequence: u64,
+    /// Identifies the process that published the event. Every node on a
+    /// shared transport counts its own sequence from 1, so ordering and gap
+    /// detection key on the `(publisher, sequence)` pair. Empty on an event
+    /// from a node that predates the field.
+    #[serde(default)]
+    pub publisher: String,
     /// The ISO 8601 timestamp when the event occurred.
     pub timestamp: String,
     /// The type of target that was mutated.
@@ -203,6 +209,7 @@ mod tests {
         // Required for the Redis transport's JSON wire format.
         let event = MutationEvent {
             sequence: 5,
+            publisher: "node-a".into(),
             timestamp: "2024-01-01T00:00:00Z".into(),
             target: EventTarget::Collection,
             operation: EventOperation::Update,
@@ -215,6 +222,7 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.sequence, 5);
+        assert_eq!(decoded.publisher, "node-a");
         assert_eq!(decoded.operation, EventOperation::Update);
         assert_eq!(decoded.target, EventTarget::Collection);
         assert_eq!(decoded.document_id, "abc");

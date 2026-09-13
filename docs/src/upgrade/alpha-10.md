@@ -107,6 +107,20 @@ of the API.
 - **MCP clients: an unknown tool is a `-32602` protocol error**, and a
   collection you can't see is indistinguishable from one that doesn't exist
   (item 25).
+- **Access-rule authors: field `update` rules now see the stored document**
+  in `ctx.document`. Read incoming values from `ctx.data` (item 26).
+- **Multi-node operators: set `[auth] secret` explicitly and upgrade all nodes
+  together.** With Redis in the config, loading the config fails without a
+  secret; keep `rate_limit_prefix` outside the cache namespace (item 27).
+- **Event subscribers: detect gaps per `publisher`**, not on `sequence` alone
+  (item 28).
+- **API clients: refresh tokens before they expire** — the 60-second grace
+  period is gone (item 29).
+- **Date writers: a local time skipped by a daylight-saving change is
+  rejected** instead of being stored hours off (item 30).
+- **API clients: timezone dates inside blocks and nested rows come back as
+  UTC**, like every other timezone date; existing rows are converted at
+  startup (item 32).
 
 ## Required action items
 
@@ -758,6 +772,160 @@ not run:
 stop. A client that checked `isError` on the result now has to handle a
 protocol-level error for the unknown-tool case as well.
 
+### 26. Access-rule authors: field `update` rules see the stored document
+
+A field-level `access.update` rule used to receive the *incoming* write as
+`ctx.document`. It now receives the stored document, as the documentation
+always said — on single updates, bulk updates, global updates, and validation
+dry-runs. `ctx.data` is still the incoming value's level. `access.create` rules
+are unchanged: there is no stored document yet, so `ctx.document` is the
+incoming one.
+
+This closes a hole: a rule like the one below passed for any caller who put
+their own id into `owner` in the same request.
+
+```lua
+-- Only the document's owner may change the salary.
+return crap.any.access(function(ctx)
+  return ctx.user ~= nil and ctx.document ~= nil
+    and ctx.document.owner == ctx.user.id
+end)
+```
+
+**Action:** find field `access.update` rules that read `ctx.document`. A rule
+that meant "the stored value" needs no change. A rule that meant "the value
+being written" must read `ctx.data` instead.
+
+### 27. Multi-node operators: explicit secret, separate Redis namespaces
+
+Two configurations that used to load now fail — in the server and in every CLI
+command that reads `crap.toml`:
+
+- **An empty `[auth] secret` while a Redis cache, event transport, or
+  rate-limit backend is configured.** Each node would generate its own secret,
+  so a session from one node fails on the next, and MFA codes, TOTP secrets,
+  `crap.crypto` values and signed URLs made on one node fail on the others.
+  On Postgres without Redis the config loads, but a warning is logged.
+- **An `auth.rate_limit_prefix` that overlaps the cache namespace on the same
+  Redis.** Cache keys now live under `{cache.prefix}cache:`, and a cache clear
+  deletes only that namespace. Previously a clear deleted every key under the
+  cache prefix — with the defaults, including every login lockout.
+
+**Action:**
+
+1. **Set `[auth] secret`, identically on every node.** Which value depends on
+   what you already have:
+   - If a node already runs with a generated `data/.jwt_secret`, copy *that*
+     file's contents into `secret` (for example via
+     `secret = "${JWT_SECRET}"`) on every node. Existing sessions, MFA codes,
+     TOTP secrets and `crap.crypto` values made on that node keep working.
+     Nodes that had generated a different file lose their sessions once.
+   - Only on a fresh deployment, generate a new value
+     (`openssl rand -hex 32`).
+   - If you follow item 18 (re-encrypting `crap.crypto` data), set the final
+     secret **first** and re-encrypt under it. Data re-encrypted under a
+     secret you later replace is unrecoverable again.
+2. If you changed `rate_limit_prefix` or `[cache] prefix`, make sure neither
+   is a prefix of the other's namespace. The defaults (`crap:rl:` and
+   `crap:cache:`) are fine.
+3. **Upgrade all nodes that share a Redis together** (stop the old version on
+   every node, then start the new one). During a mixed rollout, old nodes still
+   clear every key under the cache prefix — wiping login lockouts and the new
+   nodes' cache — while new nodes no longer clear the old nodes' cache keys, so
+   old nodes can serve stale related documents until they are upgraded.
+4. Optional, once every node runs the new version: delete the cache entries the
+   previous version wrote. They are only ever read by old nodes, and without
+   `max_age_secs` they never expire:
+
+   ```bash
+   redis-cli --scan --pattern 'crap:populate:*' | xargs -r redis-cli del
+   ```
+
+   Replace `crap:` with your `[cache] prefix`. This pattern matches only the
+   old cache entries — not rate-limit counters, and not the live-update
+   channels (those are not keys).
+
+While you are editing the config of a multi-node deployment, also check the
+two constraints now spelled out in
+[Multi-Server Deployment](../deployment/multi-server.md#configuration-notes):
+every scheduler node needs the same `[jobs] heartbeat_interval`, and a rollout
+that changes indexes must finish before an older node restarts.
+
+### 28. Event subscribers: detect gaps per publisher
+
+Every server process numbers the events it publishes from 1. On a shared
+Redis event transport, events from several nodes arrive on one stream, so
+`sequence` alone is neither unique nor gap-free. Events now carry a
+`publisher` id — gRPC `MutationEvent.publisher` (field 8) and `publisher` in
+the admin SSE payload — and `sequence` is monotonic within each publisher.
+
+**Action:** if you detect dropped events, track the last `sequence` per
+`publisher` and compare within it. gRPC clients: regenerate from
+`proto/content.proto` to get the field. A single-node deployment sees one
+`publisher` per process start; the logic above covers restarts too. While a
+multi-node rollout is in progress, events from nodes still on the previous
+version arrive with an empty `publisher` — treat those as one unordered source
+until every node is upgraded.
+
+### 29. API clients: no grace period after a token expires
+
+Bearer tokens, gRPC session tokens and MFA-pending tokens were accepted for up
+to 60 seconds after their `exp`. They are now rejected at `exp`, like reset
+links, MFA codes and signed URLs. Admin sessions refreshed near
+`auth.session_absolute_max_age` also get a shorter token, so the refresh never
+extends a session past that ceiling.
+
+**Action:** refresh a token before its `exp`, not after a request fails. If a
+client's clock drifts, refresh a little earlier.
+
+### 30. Date writers: nonexistent local times are rejected
+
+For a date field with `timezone = true`, a local time inside a daylight-saving
+gap — `2024-03-31T02:30` in `Europe/Berlin` — does not exist. It used to be
+stored as if it were UTC, hours off, without an error. It is now a validation
+error with the key `validation.nonexistent_local_time`.
+
+**Action:** if you import dates in bulk, handle the new error (for example by
+moving the time past the gap). The message ships in English and German; to
+show it in another language, add `validation.nonexistent_local_time` to that
+language's translation file (it receives `field`, `value` and `timezone`).
+Without it, the English text is shown.
+
+### 31. CLI scripts: pass passwords on standard input
+
+`crap-cms user create` and `crap-cms user change-password` accept
+`--password-stdin`, which reads the password from the first line of standard
+input. `-p <PASSWORD>` still works but now warns: an argument is visible to
+other local users in the process list.
+
+**Action:** none required. In provisioning scripts, prefer:
+
+```bash
+printf '%s\n' "$ADMIN_PASSWORD" | crap-cms user create -e admin@example.com --password-stdin
+```
+
+### 32. API clients: nested timezone dates are UTC
+
+A date field with `timezone = true` stores its value as UTC plus the IANA zone
+in a `{field}_tz` companion. That was true for top-level fields and for the
+direct fields of an array row — but a date inside a **blocks row**, inside a
+**group within an array or blocks row**, or inside a **nested array row** was
+stored as the wall-clock digits entered (`2024-01-15T09:00`). Those are now
+converted to UTC on write (`2024-01-15T08:00:00.000Z` for `Europe/Berlin`), and
+existing rows are converted once at the first startup.
+
+**Action:**
+
+- If a client reads such nested dates, treat them like top-level timezone
+  dates: the value is UTC; use the `_tz` companion next to it to display local
+  time.
+- If a client *writes* them, nothing changes: send local wall-clock time plus
+  the `_tz` value, or a value with an explicit offset.
+- Filters on nested dates now compare UTC with UTC. A filter written against
+  the old local digits needs the UTC value instead.
+- Large databases: the first startup walks every blocks and array join table
+  once.
+
 ## Admin UI behavior
 
 ### Navigation now partial-swaps `#main`
@@ -952,6 +1120,11 @@ continue to work.
   included) on first startup — expect it once; no manual action. The
   `ALTER` takes an exclusive lock per table, so very large tables make
   that first startup correspondingly slower. SQLite is unaffected.
+- **Old SQLite timestamps are rewritten once.** Databases created by early
+  versions stored some timestamps as `YYYY-MM-DD HH:MM:SS`, which sorted and
+  filtered incorrectly against current ISO 8601 values. The first startup
+  rewrites them in place (every collection, global, version and job table) —
+  expect that startup to take longer on large databases; no action needed.
 - **Login rate limiting fails closed on backend errors.** With the
   Redis rate-limit backend, an outage used to silently disable
   login/forgot-password brute-force protection. A backend error now

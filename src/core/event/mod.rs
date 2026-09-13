@@ -32,7 +32,7 @@ pub use types::{
     EventOperation, EventTarget, EventUser, EventViewMeta, MutationEvent, MutationEventInput,
 };
 
-pub(crate) use sequence::{SequenceGen, stamp_event};
+pub(crate) use sequence::SequenceGen;
 
 #[cfg(feature = "redis")]
 pub(crate) use receiver::RemoteMessage;

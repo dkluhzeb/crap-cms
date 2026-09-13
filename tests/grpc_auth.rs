@@ -30,6 +30,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
+use crap_cms::core::rate_limit::IP_RESET_PASSWORD_KEYSPACE;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
@@ -664,13 +665,17 @@ async fn reset_password_ip_limiter_is_atomic_under_concurrency() {
     let ts = setup_service(vec![make_users_def()], vec![]);
 
     // Direct service calls carry no remote_addr, so the handler keys the
-    // limiter under "unknown" — seed that key. Harness IP limiter is 20/window.
+    // limiter under "unknown" — seed that key in the reset-token keyspace the
+    // handler derives from the forgot-password IP limiter (20/window).
     let key = "unknown";
+    let reset_limiter = ts
+        .ip_forgot_password_limiter
+        .rescoped(IP_RESET_PASSWORD_KEYSPACE);
     for _ in 0..19 {
-        let _ = ts.ip_forgot_password_limiter.check_and_block(key);
+        let _ = reset_limiter.check_and_block(key);
     }
     assert!(
-        !ts.ip_forgot_password_limiter.is_blocked(key),
+        !reset_limiter.is_blocked(key),
         "precondition: not yet blocked at 19/20"
     );
 
@@ -700,7 +705,7 @@ async fn reset_password_ip_limiter_is_atomic_under_concurrency() {
          attempt (got {rejected}); a non-atomic gate lets all four through"
     );
     assert!(
-        ts.ip_forgot_password_limiter.is_blocked(key),
+        reset_limiter.is_blocked(key),
         "a genuine wrong-token reset attempt must advance the IP limiter to its threshold"
     );
 }

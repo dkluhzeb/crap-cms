@@ -158,7 +158,7 @@ require_auth = true      # Block admin when no auth collection exists (default: 
 # base_uri = ["'self'"]
 
 [auth]
-secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
+secret = ""              # JWT signing key. Empty = generated per node into data/.jwt_secret (single node only)
 token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h", "30m", etc.)
 max_login_attempts = 5   # Failed attempts per email before temporary lockout
 max_ip_login_attempts = 20  # Failed attempts per IP before lockout (higher for shared IPs)
@@ -379,7 +379,7 @@ nonce applies to `script-src` only).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `secret` | string | `""` (empty) | JWT signing secret. If empty, a random secret is auto-generated and **persisted to `data/.jwt_secret`** so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself. |
+| `secret` | string | `""` (empty) | JWT signing secret, also keying MFA code digests, sealed TOTP secrets, `crap.crypto` and signed URLs. If empty, a random secret is generated and **persisted to `data/.jwt_secret`** so tokens survive restarts — per node. **Required when more than one node can run:** loading the config fails with an empty secret if a Redis cache, event transport, or rate-limit backend is configured (the server and every CLI command), and a warning is logged on Postgres. |
 | `token_expiry` | integer/string | `7200` (`"2h"`) | Default JWT token lifetime. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`). Can be overridden per auth collection. |
 | `password_policy` | table | *(see below)* | Password strength requirements. See `[auth.password_policy]`. |
 | `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
@@ -389,10 +389,10 @@ nonce applies to `script-src` only).
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
 | `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
 | `session_cookie_samesite` | string | `"lax"` | `SameSite` attribute for the `crap_session` admin cookie. Accepts `"lax"` (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), `"strict"` (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or `"none"` (reserved; currently falls back to `"lax"` at runtime). |
-| `session_absolute_max_age` | duration | `2592000` (`"30d"`) | Hard ceiling on an admin session measured from the original login, regardless of sliding refreshes via `/admin/api/session-refresh`. `0` disables the cap (a session then lives until `token_expiry` passes without a refresh). Values above 30 days log a startup warning. |
+| `session_absolute_max_age` | duration | `2592000` (`"30d"`) | Hard ceiling on an admin session measured from the original login, regardless of sliding refreshes via `/admin/api/session-refresh`. `0` disables the cap (a session then lives until `token_expiry` passes without a refresh). A refresh never issues a token that outlives the ceiling. Values above 30 days log a startup warning. |
 | `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
 | `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
-| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
+| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. When cache and rate limits share a Redis instance, it must not overlap the cache namespace (`{cache.prefix}cache:`) — loading the config fails otherwise, because a cache clear would reset the rate-limit counters. |
 
 ### `[auth.password_policy]`
 
@@ -421,9 +421,9 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated — requires a [`crap.cache.register`](../lua-api/cache.md) call in `init.lua`, otherwise the server refuses to start; the other `[cache]` keys don't apply to it). |
 | `max_entries` | integer | `10000` | Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear. |
-| `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. |
+| `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. With the memory or custom backend, every process clears its own cache on this interval — each app server (any `--only` mode), `crap-cms work` and `crap-cms mcp`. With Redis it is each entry's TTL instead, and no full clear runs. |
 | `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL. Only used when `backend = "redis"`. |
-| `prefix` | string | `"crap:"` | Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`. |
+| `prefix` | string | `"crap:"` | Key prefix for the Redis backend. Keys are stored as `{prefix}cache:{key}`, and a clear deletes only `{prefix}cache:*`. |
 
 ### `[pagination]`
 
@@ -520,7 +520,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `max_concurrent` | integer | `10` | Maximum concurrent job executions across all queues, **cluster-wide** (counted via the shared DB — not per server). |
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
-| `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
+| `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. Must be identical on every node that runs the scheduler — see [Multi-Server Deployment](../deployment/multi-server.md#configuration-notes). |
 | `auto_purge` | integer/string/bool | `2592000` (`"30d"`) | Auto-purge completed/failed/stale runs older than this duration. Accepts seconds or human-readable (`"30d"`, `"24h"`, `"30m"`, `"3600"`). Set to `false` to disable auto-purge. Absent = 30 days default. |
 | `queues` | table | *(see below)* | Per-queue concurrency/timeout/retries overrides, keyed by queue name. See `[jobs.queues]`. |
 | `priority_decay` | integer/string | `0` | Priority aging period: wait time required for a job's effective scheduling priority to bump by `+1`. `0` disables decay (pure static `priority DESC, created_at ASC` ordering — index-friendly fast path). Positive durations (`"1m"`, `"30s"`, `"1h"`) enable aging-based promotion so older lower-priority jobs eventually get claimed instead of starving forever. |

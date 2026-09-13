@@ -9,7 +9,7 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::CollectionDefinition,
+    core::{CollectionDefinition, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
     service::{AppInfra, ServiceContext, auth::consume_reset_token},
 };
 
@@ -105,9 +105,14 @@ impl ContentService {
         // recorded). The gate sits AFTER the local validation above so only
         // genuine token-consumption attempts count, and every such attempt
         // counts (the same idiom as login / forgot-password / the admin reset
-        // twin). Uses the dedicated forgot-password IP limiter so reset failures
-        // don't block legitimate logins from the same IP.
-        if self.ip_forgot_password_limiter.check_and_block(&ip) {
+        // twin). Uses the reset-token keyspace the admin twin uses, so reset
+        // attempts neither block logins nor drain the forgot-password request
+        // budget, and switching surfaces buys no fresh budget.
+        if self
+            .ip_forgot_password_limiter
+            .rescoped(IP_RESET_PASSWORD_KEYSPACE)
+            .check_and_block(&ip)
+        {
             return Err(Status::resource_exhausted(
                 "Too many attempts, try again later",
             ));

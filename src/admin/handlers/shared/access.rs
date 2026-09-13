@@ -194,7 +194,9 @@ pub fn evaluate_condition_results(
     // string (the map value) is not trusted, so only the keys matter.
     for field_name in req.conditions.keys() {
         let Some(hook) = by_field.get(field_name.as_str()) else {
-            warn!("evaluate_conditions: rejecting unknown condition field '{field_name}'");
+            // Debug-quoted: the name is client-sent, and a raw newline in it
+            // would forge a log line.
+            warn!("evaluate_conditions: rejecting unknown condition field {field_name:?}");
             results.insert(field_name.clone(), json!(true));
             continue;
         };

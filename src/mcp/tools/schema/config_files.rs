@@ -92,6 +92,9 @@ const SECRET_TOML_KEYS: &[&str] = &[
     "redis_url",
     "rate_limit_redis_url",
     "url",
+    // Webhook URLs routinely carry their credential in the path or query
+    // (Slack, Discord, and most "incoming webhook" providers).
+    "webhook_url",
 ];
 
 /// Section headers whose EVERY key/value pair is secret-bearing
@@ -250,6 +253,7 @@ redis_url = "redis://u:CPW@h"
 
 [email]
 smtp_pass = "SMTPPW"
+webhook_url = "https://hooks.example.com/services/WHURLTOKEN"
 
 [email.webhook_headers]
 Authorization = "Bearer WHTOKEN"
@@ -268,6 +272,7 @@ secret_key = "S3SECRET"
             "RLPW",
             "CPW",
             "SMTPPW",
+            "WHURLTOKEN",
             "WHTOKEN",
             "WHKEY",
             "MCPKEY0123",
