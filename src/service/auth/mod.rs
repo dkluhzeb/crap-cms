@@ -43,7 +43,8 @@ pub use mfa::{
     verify_mfa_code,
 };
 pub use tokens::{
-    ResetTokenResult, consume_reset_token, consume_verification_token, find_by_reset_token,
-    generate_reset_token, generate_security_token,
+    ResetTokenResult, VERIFICATION_TOKEN_EXPIRY, VerificationTokenResult, consume_reset_token,
+    consume_verification_token, find_by_reset_token, generate_reset_token, generate_security_token,
+    generate_verification_token, issue_verification_token,
 };
 pub use totp_flow::{TotpProvisioning, totp_challenge, verify_second_factor};

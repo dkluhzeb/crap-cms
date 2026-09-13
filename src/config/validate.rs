@@ -17,6 +17,11 @@ use crate::config::{CacheBackend, CrapConfig};
 /// reach against a key that an attacker cannot guess from context.
 const MIN_MCP_API_KEY_LEN: usize = 32;
 
+/// Ceiling for `[mcp] max_batch_members`. Generous for any real client —
+/// batching exists to save round trips, not to move bulk work — while still
+/// bounding how far one request can be multiplied.
+const MAX_MCP_BATCH_MEMBERS: usize = 500;
+
 impl CrapConfig {
     /// Validate database pool settings.
     pub(super) fn validate_database(&self) -> Result<()> {
@@ -382,6 +387,18 @@ impl CrapConfig {
     /// key exposes the entire dataset -- a 32-byte floor keeps brute-force
     /// infeasible for realistic attacker budgets.
     pub(super) fn validate_mcp(&self) -> Result<()> {
+        // Checked before the HTTP-only gate: batching works on stdio too.
+        if self.mcp.max_batch_members > MAX_MCP_BATCH_MEMBERS {
+            bail!(
+                "mcp.max_batch_members is {} -- the ceiling is {}. A batch \
+                 multiplies what one request can cost (each member can be a \
+                 whole-collection `delete_many`), so an unbounded value \
+                 undoes the cap's purpose. Use 0 to refuse batches entirely.",
+                self.mcp.max_batch_members,
+                MAX_MCP_BATCH_MEMBERS,
+            );
+        }
+
         if !(self.mcp.enabled && self.mcp.http) {
             return Ok(());
         }

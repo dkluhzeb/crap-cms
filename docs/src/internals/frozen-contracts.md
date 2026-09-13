@@ -210,8 +210,20 @@ changing a representation is a breaking change to every consumer.
 - **JSON-RPC 2.0 conformance:** the `jsonrpc` member must be `"2.0"`; a request
   with no `id` is a notification and receives no response; error responses carry
   `id: null` when it can't be determined. Error codes are the standard set
-  (`-32700` … `-32603`). Tool errors are returned in-band as a successful result
-  with `isError: true`, not as a JSON-RPC error.
+  (`-32700` … `-32603`) plus MCP's `-32002` for an unknown resource URI. A tool
+  that ran and failed is reported in-band as a successful result with
+  `isError: true`; a tool name the server does not expose never ran, so it is a
+  `-32602` protocol error carrying `Unknown tool: {name}`.
+- **A hidden collection is indistinguishable from a missing one**, in message
+  and in latency. A collection filtered out by the `[mcp]` include/exclude
+  lists or hidden by its `access.mcp` rule answers a direct tool call with
+  exactly the `Unknown tool` error a never-generated name gets, and
+  `describe_collection` answers `Unknown collection or global: {slug}` for
+  both. The `access.mcp` rules are evaluated for the whole gated set before
+  the tool name is parsed, so the two cases cost the same; a per-slug
+  evaluation would time-stamp which names are real. Unresolvable rules hide
+  every gated slug (fail closed) on listing and on execution alike. MCP is not
+  a collection enumeration oracle.
 - **`read_config_file` redacts `crap.toml` secrets** (`auth.secret`,
   `email.smtp_pass`, `mcp.api_key`, S3 `secret_key`), matching the redacted
   `crap://config` resource. Secrets never leave the server through MCP.
@@ -257,6 +269,17 @@ changing a representation is a breaking change to every consumer.
 
 ## Hooks
 
+- **A hook rejects a write by raising, and there are exactly two kinds.** A
+  plain `error("…")` is an opaque hook failure; `crap.validation_error({field
+  = "message"})` is a per-field validation failure that every surface renders
+  where a built-in validator's would go. The second travels as a string,
+  because that is all Lua can raise: the field errors are JSON after the
+  `crap:validation-error:` prefix, written by `ValidationError::
+  to_hook_message` and read by `from_hook_message` — one encoder, one decoder,
+  both in `core::validate`, so the two ends of the channel cannot drift.
+  A hook's message carries no translation key: the hook author wrote it, and
+  an unknown key would render as the key. An empty error table is refused, so
+  a mistake in the hook can never let the write through.
 - **The Lua sandbox capability contract.** Hook code can never execute
   processes (`os.execute` and `io.popen` both removed), load code
   dynamically (`load`/`loadstring`/`loadfile`/`dofile` removed), or load
@@ -360,6 +383,17 @@ changing a representation is a breaking change to every consumer.
   API-hidden-stripped, like every other document on the wire.
 - **Changing an email address clears the verified flag** on a collection that
   requires verification.
+
+- **A draft save reports the draft.** The return value, the `after_change`
+  context and the emitted event all carry the stored draft snapshot stamped
+  `_status = "draft"`; the published row is untouched. A published-only
+  subscriber therefore sees nothing for a draft save.
+- **The draft overlay obeys the lifecycle.** A soft-deleted document's draft
+  snapshot is never returned by a live read.
+- **The newest published version survives pruning**, whatever `max_versions`
+  says — it is what an unpublished document serves.
+- **A password change clears any pending reset token**, in the same statement
+  that writes the hash.
 
 ## Read-surface invariants
 
@@ -572,7 +606,12 @@ changing a representation is a breaking change to every consumer.
   per document); `update_many` **rejects** a password, because it applies one
   value to many rows and must not broadcast a single credential. A violation
   surfaces as a structured `password` field validation error, rendered uniformly
-  by every surface.
+  by every surface. An **absent** password is always legal (an external auth
+  method may own the credential); a **present but empty** one means "leave the
+  stored password alone" on update and is an error on create, where there is
+  nothing to leave alone. No surface applies the policy before its access
+  check, so a rejection can never be read as a policy oracle by a caller who
+  isn't allowed to write.
 - **Email is matched case-insensitively everywhere it is an identity.** Account
   lookup (`find_by_email` = `LOWER(email) = LOWER(?)`), the per-account login and
   forgot-password rate-limit keys, and uniqueness on an `Email`-typed field all
@@ -595,6 +634,25 @@ changing a representation is a breaking change to every consumer.
   32-character nanoid. Any new single-use-token flow uses the same helper so the
   entropy length can't drift between flows. (Tokens are opaque; the length may
   only grow, never shrink.)
+- **Nothing spendable is stored in the clear.** Reset and verification tokens
+  are written as their SHA-256 digest (lowercase hex). An MFA code is written
+  as an HMAC-SHA256 keyed with `[auth] secret` — six digits is a 10^6 preimage
+  space, so a bare digest of one would still be the credential. Every lookup
+  hashes what the caller presented and compares in constant time. The rendered
+  mail carrying the value is dropped from `_crap_jobs` once the send completes,
+  so the link does not outlive delivery there either. A new single-use-secret
+  flow hashes at the same DB edge, keyed if its value is guessable.
+- **A verification link is single-live.** Issuing one — at sign-up or on a
+  resend — overwrites any outstanding token for that account, so an older link
+  in an older inbox is dead. Lifetime is 24 hours for both paths.
+- **Token-issuing endpoints never confirm an account.** Forgot-password and
+  resend-verification answer identically for an address that exists, one that
+  is already verified, one that is locked, and one that was never registered
+  — on every surface, and on a rate-limit block too. Each keeps its OWN
+  rate-limit keyspace, keyed on the normalized (trimmed, lowercased) address:
+  budgets are sized alike but never shared, so a burst on one endpoint cannot
+  lock a caller out of the other. Same rule as verify-email and
+  reset-password.
 
 ## Scheduler & jobs
 

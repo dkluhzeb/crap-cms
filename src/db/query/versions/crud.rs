@@ -8,7 +8,7 @@ use crate::{
     core::document::VersionSnapshot,
     db::{
         DbConnection, DbRow, DbValue,
-        query::helpers::{floor_optional_limit, quote_ident, versions_table},
+        query::helpers::{SOFT_DELETE_ACTIVE, floor_optional_limit, quote_ident, versions_table},
     },
 };
 
@@ -282,10 +282,17 @@ pub fn prune_versions(
 
     let table = version_table(slug);
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    // The newest PUBLISHED snapshot is exempt from the cap: an unpublished
+    // document serves it to published readers (`find_latest_published_version`),
+    // so pruning it would silently empty that view while the row still holds
+    // the content. Everything else falls off by version, newest kept.
     conn.execute(
         &format!(
             "DELETE FROM {table} WHERE _parent = {p1} AND id NOT IN (\
                 SELECT id FROM {table} WHERE _parent = {p1} ORDER BY _version DESC LIMIT {p2}\
+            ) AND id NOT IN (\
+                SELECT id FROM {table} WHERE _parent = {p1} AND _status = 'published' \
+                ORDER BY _version DESC LIMIT 1\
             )"
         ),
         &[
@@ -322,6 +329,23 @@ pub fn set_document_status(
     )
     .with_context(|| format!("Failed to set _status on {slug}.{id}"))?;
     Ok(())
+}
+
+/// Whether the document row is visible under the LIVE lifecycle — i.e. it
+/// exists and is not soft-deleted. Used by the draft overlay, which bypasses
+/// the SQL `WHERE` path and would otherwise serve a trashed document's draft
+/// snapshot as a live document.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn document_is_live(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
+    let p1 = conn.placeholder(1);
+    let sql = format!("SELECT 1 FROM \"{slug}\" WHERE id = {p1} AND {SOFT_DELETE_ACTIVE}");
+
+    Ok(conn
+        .query_one(&sql, &[DbValue::Text(id.to_string())])?
+        .is_some())
 }
 
 /// Get the `_status` column from a document in the main table.

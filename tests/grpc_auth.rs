@@ -811,6 +811,66 @@ async fn forgot_password_not_enabled() {
         .unwrap();
 }
 
+// ── Resend Verification Tests ─────────────────────────────────────────────
+
+/// Every shape answers the same way: a collection that isn't an auth
+/// collection, one that doesn't require verification, and an address nobody
+/// owns. A caller learns nothing about which case it hit.
+#[tokio::test]
+async fn resend_verification_always_returns_success() {
+    let ts = setup_service(
+        vec![make_posts_def(), make_users_def(), make_verify_users_def()],
+        vec![],
+    );
+
+    for (collection, email) in [
+        ("posts", "a@b.com"),
+        ("users", "a@b.com"),
+        ("members", "nobody@example.com"),
+        ("not-a-collection", "a@b.com"),
+    ] {
+        ts.service
+            .resend_verification(Request::new(content::ResendVerificationRequest {
+                collection: collection.to_string(),
+                email: email.to_string(),
+            }))
+            .await
+            .unwrap_or_else(|e| panic!("resend on '{collection}' must succeed, got: {e}"));
+    }
+}
+
+/// The resend keeps its OWN per-IP budget. Sharing the forgot-password one
+/// would let a burst of resends lock a caller out of their own password
+/// reset — the same reasoning the verify-email and reset-password routes
+/// already carry.
+#[tokio::test]
+async fn resend_verification_does_not_drain_the_forgot_password_budget() {
+    let ts = setup_service(vec![make_verify_users_def()], vec![]);
+
+    for _ in 0..64 {
+        ts.service
+            .resend_verification(Request::new(content::ResendVerificationRequest {
+                collection: "members".to_string(),
+                email: "someone@example.com".to_string(),
+            }))
+            .await
+            .unwrap();
+    }
+
+    assert!(
+        !ts.ip_forgot_password_limiter.is_blocked("unknown"),
+        "a resend burst must leave the password-reset budget intact"
+    );
+
+    // And it does exhaust its own, so it is still rate limited.
+    assert!(
+        ts.ip_forgot_password_limiter
+            .rescoped("ip_resend_verification")
+            .is_blocked("unknown"),
+        "the resend's own per-IP budget must be spent"
+    );
+}
+
 // ── Subscribe Tests ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1494,6 +1554,9 @@ async fn login_mfa_challenge_and_verify_round_trip() {
             &user_id,
             "123456",
             chrono::Utc::now().timestamp() + 300,
+            // Must match the secret the service was built with, or the
+            // keyed digest won't verify.
+            "test-jwt-secret",
         )
         .unwrap();
     }

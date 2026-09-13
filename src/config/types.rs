@@ -23,6 +23,7 @@ use crate::config::{
     routes::RoutesConfig,
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
+use crate::core::JwtSecret;
 
 /// Enumerate a config struct's serde keys — implemented by
 /// `#[derive(ConfigKeys)]` (`crap-cms-macros`).
@@ -216,7 +217,7 @@ impl CrapConfig {
     pub fn test_default() -> Self {
         let mut config = Self::default();
         config.access.default_deny = false;
-        config.auth.secret = crate::core::JwtSecret::new("test-secret-0123456789abcdef0123456789");
+        config.auth.secret = JwtSecret::new("test-secret-0123456789abcdef0123456789");
         config.jobs.apply_queue_defaults();
         config
     }

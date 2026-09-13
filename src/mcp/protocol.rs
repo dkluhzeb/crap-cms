@@ -44,6 +44,10 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 pub const INTERNAL_ERROR: i64 = -32603;
 
+// MCP-defined error codes (server-error range)
+/// The requested resource URI is not exposed by this server.
+pub const RESOURCE_NOT_FOUND: i64 = -32002;
+
 impl JsonRpcResponse {
     #[must_use]
     pub fn success(id: Option<Value>, result: Value) -> Self {

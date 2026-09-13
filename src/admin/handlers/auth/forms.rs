@@ -41,6 +41,15 @@ pub struct ForgotPasswordForm {
     pub email: String,
 }
 
+/// Form data for the resend-verification page.
+#[derive(Debug, Deserialize)]
+pub struct ResendVerificationForm {
+    /// The slug of the collection the user belongs to.
+    pub collection: String,
+    /// The user's email address.
+    pub email: String,
+}
+
 /// Query parameters for the reset password page.
 #[derive(Debug, Deserialize)]
 pub struct ResetPasswordQuery {

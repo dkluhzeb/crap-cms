@@ -8,6 +8,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Password-reset, email-verification and MFA codes are stored hashed.**
+  They were kept in the clear, so anyone who could read a row — a DB backup,
+  a replica, a log of a stray query — held a live credential. Tokens are
+  stored as a SHA-256 digest; an MFA code, whose six digits are a small
+  enough space to invert a bare digest by table lookup, is stored as an
+  HMAC keyed with `[auth] secret`. Every lookup hashes what the caller
+  presented and compares in constant time. A completed `_system_email` job
+  also has its payload emptied, so the rendered link does not outlive the
+  send in `_crap_jobs`. **Migration:** none is provided. Outstanding reset
+  links, verification links and MFA codes stop working on upgrade; users
+  request a new one. The columns keep their names and widths, so no schema
+  change is needed.
+
+- **An unknown MCP tool is a protocol error, not a tool result.** `tools/call`
+  with a name the server does not expose used to answer `isError: true`; it now
+  answers JSON-RPC `-32602` with `Unknown tool: <name>`, as the MCP
+  specification requires. A tool that ran and failed still reports in-band.
+  `resources/read` on an unknown URI answers MCP's `-32002` instead of
+  `-32603`.
+
+- **A draft edit on a localized collection was invisible after saving.** The
+  snapshot recorded every locale's decorated column by reading them from the
+  main table — which a draft save never writes — so the edit lived only under
+  the bare key while `title__<write locale>` still held the published text.
+  Reading the draft back resolved from the decorated column and returned the
+  published value, and restoring that snapshot wrote the published value over
+  the edit. The writing locale's column now carries the draft.
+
+- **A draft save now reports the draft.** `update(..., draft = true)` returned
+  the untouched published row, so `after_change` hooks, the operation's return
+  value and the emitted event all carried the PRE-EDIT document: a
+  published-only subscriber received an Update event for content that had not
+  changed, while a draft subscriber received nothing. All three now carry the
+  stored draft, stamped `_status = "draft"`. The published row is still
+  untouched, as before.
+
 - **MCP write tools no longer drop `null`.** `update_posts {"id":…,
   "subtitle":null}` silently kept the old value; a present null now clears the
   field, the contract gRPC and Lua already had. (Removing a translation —
@@ -711,6 +747,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **MCP no longer confirms which collections exist.** A direct tool call
+  against a collection filtered out by the `[mcp]` include/exclude lists, or
+  hidden by its `access.mcp` rule, answered `Tool not available: <slug>` while
+  a name that was never generated answered `Unknown tool`. The two messages let
+  a client walk a slug list and learn which collections it was being kept away
+  from. Both now answer identically, matching what `describe_collection`
+  already did — and identically in latency too: the `access.mcp` rules are
+  evaluated for the whole gated set before the tool name is parsed, because
+  evaluating only the named slug meant a real hidden collection cost a
+  connection and a Lua call that a nonexistent name did not. Tool listing and
+  the schema resource also fail CLOSED when the rules cannot be evaluated;
+  they previously fell back to exposing everything, so a pool outage published
+  the names and full field schemas of exactly the hidden set.
+
+- **The gRPC create/update codec no longer validates the password.** The wire
+  decoder ran the password-policy check while unpacking the request, before the
+  access rule was consulted, so an unauthenticated caller could probe the
+  configured minimum length and character classes. The check now runs only in
+  the write path, after the access check — where it always also ran, so nothing
+  is now unvalidated. The codec keeps one shape check that reveals nothing
+  about the policy: a `password` that is not a string is `INVALID_ARGUMENT`
+  rather than coerced to `""`. And a present-but-empty password on a **create**
+  is now rejected at the service chokepoint on every surface; empty still means
+  "leave it alone" on update. Either would previously have produced a
+  passwordless auth document.
+
+- **A password change now invalidates an outstanding reset link.** The reset
+  flow cleared the token, but a logged-in password change (or the CLI) left it
+  live for the remainder of its window. There is now one password-update
+  statement that always clears it.
+
+- **An expired reset link is refused before the form is shown.** The page
+  validated the token without checking its expiry, so a dead link rendered the
+  form and only failed on submit — and then always as "invalid", because the
+  expired branch matched a type the service never returns.
 
 - **`crap.crypto` no longer encrypts under a publicly known key.** With no
   `[auth] secret` configured — the default, where the server generates and
@@ -1724,6 +1796,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **A trashed document's pending draft was served as a live document.** The
+  draft overlay bypasses the SQL lifecycle filter, so a soft-deleted document
+  came back from a live draft read and the admin form opened it as editable,
+  failing only on save.
+
+- **Version pruning could delete the last published snapshot**, emptying what
+  an unpublished document serves to published readers while the row still held
+  the content. The newest published snapshot is now exempt from `max_versions`.
+
+- **`VerifyMfa` reported every failure as INTERNAL**, so a busy pool was not
+  retryable; it is classified like every other RPC now.
+
+- **A field whose name is a reserved MCP tool argument** (`locale`, `draft`,
+  `where`, …) is now reported at startup. Over MCP that name is the option and
+  the field's value is dropped; the collection works normally everywhere else,
+  so this is a warning, not a refusal.
 
 - **Versions lost every other locale's content.** A snapshot was built from
   the row as resolved under the *writing* locale, so it held one value per
@@ -3769,6 +3858,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`crap.validation_error` exists.** The structured way for a hook to reject
+  a write was documented and covered by a test, but the function was never
+  registered — calling it raised "attempt to call a nil value". A hook can now
+  pass a table of field name to message, and every surface reports it the way
+  it reports a built-in validation failure: `INVALID_ARGUMENT` over gRPC, and
+  an error on the named input on an admin form, instead of an opaque hook
+  error. An empty table is refused, so a mistake in the hook cannot let the
+  write through.
+
+- **Self-service resend of a verification link.** A user whose verification
+  email was lost or has expired had no way to ask for another; only an
+  administrator could act, from the CLI. There is now a
+  `/admin/resend-verification` page — linked from the login page whenever email
+  is configured and some collection requires verification — and a matching
+  `ResendVerification` RPC. Issuing a new link retires the previous one, so
+  only the newest email works. Like forgot-password, the call always reports
+  success: an unverified account, a verified one, a locked one, and an address
+  that was never registered are indistinguishable in the response. It gets its
+  own rate-limit keyspace, sized like the forgot-password one but separate, so
+  a burst of resends cannot lock a caller out of their own password reset.
+
+- **JSON-RPC batches on both MCP transports.** An array of request objects is
+  dispatched member by member and answered with an array of the members that
+  carried an `id`, in order. A batch of nothing but notifications gets no reply
+  (HTTP `204`). An empty array is refused, as is one over the new
+  `[mcp] max_batch_members` (default 50, `0` refuses batches entirely) — both
+  with a single `-32600` error, checked before any member runs. The cap counts
+  requests rather than bytes on purpose: a few kilobytes of `delete_many`
+  calls is otherwise that many whole-collection deletes under one request, so
+  set `[server] bulk_max_documents` too when MCP is broadly reachable. The
+  `initialize` handshake may not appear in a batch.
 
 - **Access-constraint tables speak the full canonical `where` grammar,
   including `["or"]` groups.** A read-access function returning a filter

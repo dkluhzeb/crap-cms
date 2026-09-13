@@ -176,6 +176,13 @@ impl ServiceError {
             return Self::UniqueViolation(String::new());
         }
 
+        // A hook that called `crap.validation_error` encoded its field errors
+        // into the message; decode them back so the failure lands on the
+        // offending input instead of in a generic hook-error banner.
+        if let Some(ve) = ValidationError::from_hook_message(&msg) {
+            return Self::Validation(ve);
+        }
+
         // Hook/runtime errors — user-facing messages. A reference to a
         // vanished target is the caller's mistake (a stale or mistyped id),
         // reported as such rather than as a server fault.

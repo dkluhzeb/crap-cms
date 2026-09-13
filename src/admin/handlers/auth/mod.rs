@@ -1,4 +1,5 @@
-//! Login/logout/forgot-password/reset-password/verify-email/MFA/callback handlers for the admin UI.
+//! Login/logout/forgot-password/reset-password/verify-email/resend-verification/MFA/callback
+//! handlers for the admin UI.
 
 /// Auth callback handler for external auth (OAuth, SSO).
 pub mod callback;
@@ -17,6 +18,10 @@ pub mod logout_action;
 /// Handlers for MFA code entry and verification.
 pub mod mfa_action;
 pub mod mfa_page;
+/// Handler for the resend-verification form submission.
+pub mod resend_verification_action;
+/// Handler for the resend-verification request page.
+pub mod resend_verification_page;
 /// Handler for the reset password form submission.
 pub mod reset_password_action;
 /// Handler for the reset password page.
@@ -41,6 +46,8 @@ pub use login_page::login_page;
 pub use logout_action::logout_action;
 pub use mfa_action::verify_mfa_action;
 pub use mfa_page::mfa_page;
+pub use resend_verification_action::resend_verification_action;
+pub use resend_verification_page::resend_verification_page;
 pub use reset_password_action::reset_password_action;
 pub use reset_password_page::reset_password_page;
 pub use save_locale::save_locale;
@@ -48,13 +55,14 @@ pub use session_refresh::session_refresh;
 pub use verify_email::verify_email;
 
 pub use forms::{
-    ForgotPasswordForm, LocaleForm, LoginForm, LoginPageQuery, MfaForm, ResetPasswordForm,
-    ResetPasswordQuery, VerifyEmailQuery,
+    ForgotPasswordForm, LocaleForm, LoginForm, LoginPageQuery, MfaForm, ResendVerificationForm,
+    ResetPasswordForm, ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
     all_disable_local, client_ip, create_session_token, extract_mfa_token, extract_user_email,
-    get_auth_collections, headers_to_map, is_totp_collection, login_error, render_forgot_success,
-    render_mfa, scoped_limiter, session_redirect, show_forgot_password, sole_auth_collection,
+    get_auth_collections, get_verifying_collections, headers_to_map, is_totp_collection,
+    login_error, render_forgot_success, render_mfa, render_resend_verification, scoped_limiter,
+    session_redirect, show_forgot_password, show_resend_verification, sole_auth_collection,
 };
 pub(in crate::admin) use session::{
     CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE, append_cookies,

@@ -77,6 +77,27 @@ After-read hooks (`after_read`) do NOT have CRUD access.
 
 See [Transaction Access](transaction-access.md) for details.
 
+## Rejecting a Write
+
+A hook aborts the operation by raising. Which kind of error you raise decides
+how the caller sees it:
+
+```lua
+-- Opaque failure: the message reaches the caller as a hook error.
+error("posts are frozen during the migration")
+
+-- Structured failure: the message lands on the named field, exactly like a
+-- built-in validator. Takes a table of field name to message.
+crap.validation_error({ title = "title is required" })
+```
+
+`crap.validation_error` never returns — it raises. Over gRPC both forms are
+`INVALID_ARGUMENT`; on an admin form the structured one renders under the
+`title` input while a plain `error` shows as a general message. Prefer it
+whenever you can name the field at fault. Pass at least one field: an empty
+table is itself an error, so a mistake in the hook can never let the write
+through.
+
 ## Concurrency
 
 Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:

@@ -14,6 +14,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::{
     config::McpConfig,
@@ -26,7 +27,7 @@ use crate::{
 };
 
 use super::{
-    ToolExecCtx,
+    ToolExecCtx, UnknownTool,
     collection::{
         read::{exec_count, exec_find, exec_find_by_id},
         versions::{exec_list_versions, exec_restore_version},
@@ -122,6 +123,32 @@ fn mcp_exposure(ctx: &ToolExecCtx<'_>) -> Result<McpExposure> {
         &ctx.infra.hook_runner,
         &conn,
     ))
+}
+
+/// Resolve `access.mcp` exposure for a tool call, taking the SAME work
+/// whatever name was called.
+///
+/// Evaluating the rules only for the named slug made the surface a timing
+/// oracle: a name that never existed bailed after a string scan, while a real
+/// collection with an `access.mcp` rule cost a connection checkout and a Lua
+/// call first. The messages were already identical; the clock was not. The
+/// whole gated set is therefore resolved up front, before the name is even
+/// parsed, so the two cases are indistinguishable in latency as well.
+///
+/// A deployment with no `access.mcp` rule anywhere skips this entirely —
+/// nothing is hidden, so there is no timing to hide either.
+///
+/// Fails CLOSED: without a connection the rules cannot be evaluated, so every
+/// gated slug stays hidden rather than becoming reachable during an outage.
+fn exposure_for_call(ctx: &ToolExecCtx<'_>) -> McpExposure {
+    if !McpExposure::any_gated(&ctx.infra.registry) {
+        return McpExposure::default();
+    }
+
+    mcp_exposure(ctx).unwrap_or_else(|e| {
+        warn!("access.mcp exposure unresolved ({e}); hiding every gated collection");
+        McpExposure::hide_all_gated(&ctx.infra.registry)
+    })
 }
 
 /// Generate all MCP tool definitions from the registry, skipping collections
@@ -532,12 +559,16 @@ pub(in crate::mcp) fn execute_tool(
         return exec_job_tool(name, args, ctx);
     }
 
+    // Resolved BEFORE the name is parsed, so an unknown name costs exactly
+    // what a hidden one costs. See `exposure_for_call`.
+    let exposure = exposure_for_call(ctx);
+
     // Dynamic CRUD tools
     let Some(parsed) = parse_tool_name(name, &ctx.infra.registry) else {
-        bail!("Unknown tool: {name}");
+        bail!(UnknownTool::new(name));
     };
 
-    execute_crud_tool(&parsed, args, ctx)
+    execute_crud_tool(name, &parsed, args, ctx, &exposure)
 }
 
 /// Handle the non-CRUD, non-job tools. `None` when `name` is not one.
@@ -600,43 +631,31 @@ fn exec_config_tool(
 }
 
 /// Route a parsed CRUD tool, applying the MCP exposure filters first.
-fn execute_crud_tool(parsed: &ParsedTool, args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
+///
+/// A collection hidden by either filter is reported as an unknown tool, the
+/// same answer a name that was never generated gets, so the caller can't tell
+/// a hidden collection from one that doesn't exist.
+fn execute_crud_tool(
+    name: &str,
+    parsed: &ParsedTool,
+    args: &Value,
+    ctx: &ToolExecCtx<'_>,
+    exposure: &McpExposure,
+) -> Result<String> {
     // Enforce include/exclude at execution time — not just in tools/list.
     // Without this, an attacker who knows a collection slug could directly call
     // e.g. find_<slug> even if the collection was excluded from tool listing.
     if !should_include(&parsed.slug, &ctx.config.mcp) {
-        bail!("Tool not available: {}", parsed.slug);
+        bail!(UnknownTool::new(name));
     }
 
     // Enforce `access.mcp` at execution — the MCP boundary's access gate (the
-    // service layer runs with override_access, so it can't gate MCP). Only
-    // fetches a connection when the collection actually sets `access.mcp`.
-    let access_mcp = ctx
-        .infra
-        .registry
-        .get_collection(&parsed.slug)
-        .map(|d| &d.access)
-        .or_else(|| {
-            ctx.infra
-                .registry
-                .get_global(&parsed.slug)
-                .map(|d| &d.access)
-        })
-        .and_then(|a| a.mcp.as_ref());
-    if access_mcp.is_some() {
-        let conn = ctx
-            .infra
-            .pool
-            .get()
-            .context("DB connection for access.mcp check")?;
-        if !crate::mcp::access::slug_exposed(
-            access_mcp,
-            &ctx.infra.hook_runner,
-            &conn,
-            &parsed.slug,
-        ) {
-            bail!("Tool not available: {}", parsed.slug);
-        }
+    // service layer runs with override_access, so it can't gate MCP). The
+    // rules were evaluated for the whole gated set before the name was
+    // parsed, so consulting the result here costs nothing and reveals
+    // nothing about which slugs are real.
+    if !exposure.allows(&parsed.slug) {
+        bail!(UnknownTool::new(name));
     }
 
     let slug = parsed.slug.as_str();
@@ -1047,7 +1066,11 @@ mod tests {
 
         let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err = execute_tool("completely_unknown", &json!({}), tmp.path(), &ctx).unwrap_err();
-        assert!(err.to_string().contains("Unknown tool"));
+        assert_eq!(err.to_string(), "Unknown tool: completely_unknown");
+        assert!(
+            err.downcast_ref::<UnknownTool>().is_some(),
+            "the JSON-RPC layer answers this as an Invalid params protocol error"
+        );
     }
 
     #[test]
@@ -1077,10 +1100,12 @@ mod tests {
         let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err =
             execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
-        assert!(
-            err.to_string().contains("Tool not available"),
-            "Expected 'Tool not available' error, got: {err}"
+        assert_eq!(
+            err.to_string(),
+            "Unknown tool: find_posts",
+            "an excluded collection is indistinguishable from a missing tool"
         );
+        assert!(err.downcast_ref::<UnknownTool>().is_some());
     }
 
     /// A collection hidden by `access.mcp` rejects direct tool execution — the
@@ -1114,10 +1139,12 @@ mod tests {
         let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config, tmp.path());
         let err =
             execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
-        assert!(
-            err.to_string().contains("Tool not available"),
-            "an access.mcp-hidden collection must reject execution, got: {err}"
+        assert_eq!(
+            err.to_string(),
+            "Unknown tool: find_posts",
+            "an access.mcp-hidden collection must reject execution opaquely"
         );
+        assert!(err.downcast_ref::<UnknownTool>().is_some());
     }
 
     #[test]
@@ -1153,10 +1180,12 @@ mod tests {
 
         // find_users should be blocked (not in include list)
         let err = execute_tool("find_users", &json!({}), tmp.path(), &ctx).unwrap_err();
-        assert!(
-            err.to_string().contains("Tool not available"),
-            "Expected 'Tool not available' error for users, got: {err}"
-        );
+        assert_eq!(err.to_string(), "Unknown tool: find_users");
+        assert!(err.downcast_ref::<UnknownTool>().is_some());
+
+        // The same answer a name that was never generated gets.
+        let missing = execute_tool("find_nosuchthing", &json!({}), tmp.path(), &ctx).unwrap_err();
+        assert_eq!(missing.to_string(), "Unknown tool: find_nosuchthing");
     }
 
     #[test]

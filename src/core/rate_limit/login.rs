@@ -49,6 +49,16 @@ impl LoginRateLimiter {
         )
     }
 
+    /// The same thresholds and backing store, under a different keyspace.
+    ///
+    /// Lets a second endpoint reuse a configured budget's *size* without
+    /// sharing the budget itself, so a burst on one cannot lock a caller out
+    /// of the other. Cheap — an `Arc` clone and two copies.
+    #[must_use]
+    pub fn rescoped(&self, prefix: &str) -> Self {
+        Self::with_backend(self.backend(), prefix, self.max_attempts, self.window_secs)
+    }
+
     /// The shared backend this limiter records into. Lets other limiters
     /// (e.g. per-route rate limits) reuse the same backing store — and thus the
     /// same cross-instance state when a Redis backend is configured — instead of

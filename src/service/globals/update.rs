@@ -9,7 +9,9 @@ use crate::{
     hooks::{AccessCheckInput, HookContext, ValidationCtx},
     service::{
         AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
-        helpers as svc_helpers, run_after_change_hooks, run_pool_write,
+        helpers as svc_helpers,
+        persist::{DraftDocumentArgs, draft_document},
+        run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
         write::reject_locale_locked_fields,
     },
@@ -221,7 +223,7 @@ fn persist_global_update(
 ) -> Result<Document> {
     if is_draft && def.has_versions() {
         let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
-        versions::save_draft_version(&versions::SaveDraftArgs {
+        let snapshot = versions::save_draft_version(&versions::SaveDraftArgs {
             conn,
             table: gtable,
             parent_id: "default",
@@ -231,7 +233,15 @@ fn persist_global_update(
             data: &final_ctx.data,
             locale_ctx: input.locale_ctx,
         })?;
-        return Ok(existing_doc);
+        // The draft content, not the untouched published row (see
+        // `persist::draft_document`).
+        return Ok(draft_document(&DraftDocumentArgs {
+            id: "default",
+            snapshot: &snapshot,
+            existing: &existing_doc,
+            fields: &def.fields,
+            locale_ctx: input.locale_ctx,
+        }));
     }
     persist_global_published_update(conn, ctx, def, gtable, final_ctx, input)
 }

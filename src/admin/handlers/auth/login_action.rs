@@ -125,9 +125,17 @@ fn handle_mfa_challenge(
             let infra = Arc::clone(&state.infra);
             let slug = form.collection.clone();
             let user_owned = user.clone();
+            let auth_secret = AsRef::<str>::as_ref(&state.config.auth.secret).to_string();
 
             task::spawn_blocking(move || {
-                auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
+                auth::deliver_mfa_code(
+                    &infra,
+                    &auth_secret,
+                    &slug,
+                    &user_owned,
+                    &user_email,
+                    &code,
+                );
             });
         }
     }

@@ -12,7 +12,7 @@ use tracing::error;
 
 use crate::{
     core::DocumentId,
-    db::query,
+    db::{DbConnection, query},
     service::{ServiceContext, ServiceError},
 };
 
@@ -77,6 +77,91 @@ pub fn generate_reset_token(
     }))
 }
 
+/// How long an email-verification link stays valid: 24 hours.
+///
+/// One constant for the sign-up email and every resend, so a resent link
+/// never outlives or undercuts the original.
+pub const VERIFICATION_TOKEN_EXPIRY: u64 = 86_400;
+
+/// Mint a verification token for a known account and store it.
+///
+/// Replaces any outstanding token, so the newest link is the only live one
+/// and a resend can't leave a second valid token in circulation. Returns the
+/// token to put in the link.
+///
+/// # Errors
+///
+/// Returns an error if the expiry overflows or persistence fails.
+pub fn issue_verification_token(
+    conn: &dyn DbConnection,
+    slug: &str,
+    user_id: &str,
+    expiry_secs: u64,
+) -> Result<String, ServiceError> {
+    let token = generate_security_token();
+    let expiry_i64 = i64::try_from(expiry_secs)
+        .map_err(|_| ServiceError::Internal(anyhow!("expiry_secs exceeds i64::MAX")))?;
+    let exp = Utc::now().timestamp() + expiry_i64;
+
+    query::set_verification_token(conn, slug, user_id, &token, exp)?;
+
+    Ok(token)
+}
+
+/// Result of issuing an email-verification token.
+pub struct VerificationTokenResult {
+    pub user_id: DocumentId,
+    /// The address stored on the account, not the one the caller typed —
+    /// the email goes to the account, never to whatever the request supplied.
+    pub email: String,
+    pub token: String,
+}
+
+/// Issue a fresh email-verification token for the account with `email`.
+///
+/// `Ok(None)` when there is nothing to send: no such account, it is already
+/// verified, it is locked, or it has no address to send to. Callers must
+/// answer identically in every case so the endpoint never confirms which
+/// addresses are registered.
+///
+/// # Errors
+///
+/// Returns an error if the DB connection, collection lookup, or token
+/// persistence fails.
+pub fn generate_verification_token(
+    ctx: &ServiceContext,
+    email: &str,
+    expiry_secs: u64,
+) -> Result<Option<VerificationTokenResult>, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def()?;
+
+    // A soft-deleted account is disabled — same rule as the reset flow.
+    let locale_ctx = ctx.default_locale_ctx();
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false, locale_ctx.as_ref())?
+    else {
+        return Ok(None);
+    };
+
+    if query::is_locked(conn, ctx.slug, &user.id)? || query::is_verified(conn, ctx.slug, &user.id)?
+    {
+        return Ok(None);
+    }
+
+    let Some(stored_email) = user.get_str("email").map(str::to_string) else {
+        return Ok(None);
+    };
+
+    let token = issue_verification_token(conn, ctx.slug, &user.id, expiry_secs)?;
+
+    Ok(Some(VerificationTokenResult {
+        user_id: user.id,
+        email: stored_email,
+        token,
+    }))
+}
+
 /// Validate a reset token and update the user's password.
 ///
 /// Clears the token on success or if it's expired/locked. Caller
@@ -128,7 +213,7 @@ pub fn consume_reset_token(
     // One statement: password change + token clear must be atomic so a
     // mid-flow failure can never leave the consumed token alive after the
     // password actually changed.
-    query::update_password_clearing_reset_token(conn, ctx.slug, &user.id, new_password)?;
+    query::update_password(conn, ctx.slug, &user.id, new_password)?;
 
     // A password reset bumps `_session_version` (killing old JWTs on their next
     // request). Tearing down the user's open live-update streams (which never
@@ -186,7 +271,11 @@ pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, Se
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    Ok(query::find_by_reset_token(conn, ctx.slug, def, token)?.is_some())
+    // Expiry counts here too: the reset PAGE uses this to decide whether to
+    // render the form. Ignoring it showed the form for a dead link and only
+    // failed on submit, after the user had typed a new password.
+    Ok(query::find_by_reset_token(conn, ctx.slug, def, token)?
+        .is_some_and(|(_, exp)| Utc::now().timestamp() < exp))
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -215,6 +304,65 @@ mod tests {
         assert!(!r.token.is_empty());
     }
 
+    /// The reset PAGE asks this before rendering the form, so an expired
+    /// token must read as invalid here — otherwise the user types a new
+    /// password into a form that can only fail.
+    #[test]
+    fn find_by_reset_token_rejects_an_expired_token() {
+        let (conn, def, _) = setup();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        query::set_reset_token(
+            &conn,
+            "users",
+            "u1",
+            "live-token",
+            Utc::now().timestamp() + 600,
+        )
+        .unwrap();
+        assert!(find_by_reset_token(&ctx, "live-token").unwrap());
+
+        query::set_reset_token(
+            &conn,
+            "users",
+            "u1",
+            "dead-token",
+            Utc::now().timestamp() - 1,
+        )
+        .unwrap();
+        assert!(
+            !find_by_reset_token(&ctx, "dead-token").unwrap(),
+            "an expired token is not a valid reset token"
+        );
+    }
+
+    /// A password change invalidates an outstanding reset link: the token is
+    /// cleared by the same statement that writes the hash.
+    #[test]
+    fn changing_the_password_clears_a_pending_reset_token() {
+        let (conn, def, _) = setup();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        query::set_reset_token(
+            &conn,
+            "users",
+            "u1",
+            "pending",
+            Utc::now().timestamp() + 600,
+        )
+        .unwrap();
+        query::update_password(&conn, "users", "u1", "brand-new-password").unwrap();
+
+        assert!(
+            !find_by_reset_token(&ctx, "pending").unwrap(),
+            "the emailed reset link must not survive a password change"
+        );
+    }
+
     #[test]
     fn generate_reset_token_user_not_found() {
         let (conn, def, _) = setup();
@@ -229,11 +377,7 @@ mod tests {
     fn consume_reset_token_success() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        conn.execute(
-            "UPDATE users SET _reset_token = 'tok123', _reset_token_exp = ?1 WHERE id = 'u1'",
-            [exp],
-        )
-        .unwrap();
+        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -253,11 +397,7 @@ mod tests {
     fn consume_reset_token_is_single_use() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        conn.execute(
-            "UPDATE users SET _reset_token = 'tok-once', _reset_token_exp = ?1 WHERE id = 'u1'",
-            [exp],
-        )
-        .unwrap();
+        query::set_reset_token(&conn, "users", "u1", "tok-once", exp).unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -292,11 +432,7 @@ mod tests {
     fn consume_reset_token_expired() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() - 100;
-        conn.execute(
-            "UPDATE users SET _reset_token = 'tok123', _reset_token_exp = ?1 WHERE id = 'u1'",
-            [exp],
-        )
-        .unwrap();
+        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -315,10 +451,9 @@ mod tests {
     fn consume_reset_token_locked() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        conn.execute(
-            "UPDATE users SET _reset_token = 'tok123', _reset_token_exp = ?1, _locked = 1 WHERE id = 'u1'",
-            [exp],
-        ).unwrap();
+        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
+        conn.execute("UPDATE users SET _locked = 1 WHERE id = 'u1'", [])
+            .unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -334,10 +469,9 @@ mod tests {
     fn consume_verification_token_success() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        conn.execute(
-            "UPDATE users SET _verification_token = 'vtok', _verification_token_exp = ?1, _verified = 0 WHERE id = 'u1'",
-            [exp],
-        ).unwrap();
+        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
+            .unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -360,10 +494,7 @@ mod tests {
     fn consume_verification_token_expired() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() - 100;
-        conn.execute(
-            "UPDATE users SET _verification_token = 'vtok', _verification_token_exp = ?1 WHERE id = 'u1'",
-            [exp],
-        ).unwrap();
+        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
@@ -376,15 +507,137 @@ mod tests {
     fn consume_verification_token_locked() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        conn.execute(
-            "UPDATE users SET _verification_token = 'vtok', _verification_token_exp = ?1, _locked = 1 WHERE id = 'u1'",
-            [exp],
-        ).unwrap();
+        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        conn.execute("UPDATE users SET _locked = 1 WHERE id = 'u1'", [])
+            .unwrap();
 
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
             .build();
         let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
+    }
+
+    /// The happy path: an unverified account gets a token it can then spend,
+    /// and the email goes to the address on record.
+    #[test]
+    fn generate_verification_token_issues_a_spendable_token() {
+        let (conn, def, _) = setup();
+        conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
+            .unwrap();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let issued = generate_verification_token(&ctx, "test@example.com", 3600)
+            .unwrap()
+            .expect("an unverified account gets a token");
+
+        assert_eq!(issued.user_id.to_string(), "u1");
+        assert_eq!(issued.email, "test@example.com");
+        assert_eq!(issued.token.chars().count(), 32);
+
+        assert!(consume_verification_token(&ctx, &issued.token).unwrap());
+    }
+
+    /// The address on the account is what gets mailed, not the spelling the
+    /// caller typed — a lookup is case-insensitive, delivery is not.
+    #[test]
+    fn generate_verification_token_returns_the_stored_address() {
+        let (conn, def, _) = setup();
+        conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
+            .unwrap();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let issued = generate_verification_token(&ctx, "TEST@Example.COM", 3600)
+            .unwrap()
+            .expect("the lookup is case-insensitive");
+
+        assert_eq!(issued.email, "test@example.com");
+    }
+
+    /// A resend replaces the outstanding token rather than adding a second
+    /// live one, so an old link in an old inbox stops working.
+    #[test]
+    fn a_reissued_token_retires_the_previous_one() {
+        let (conn, def, _) = setup();
+        conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
+            .unwrap();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let first = generate_verification_token(&ctx, "test@example.com", 3600)
+            .unwrap()
+            .unwrap();
+        let second = generate_verification_token(&ctx, "test@example.com", 3600)
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(first.token, second.token);
+        assert!(
+            !consume_verification_token(&ctx, &first.token).unwrap(),
+            "the superseded link must be dead"
+        );
+        assert!(consume_verification_token(&ctx, &second.token).unwrap());
+    }
+
+    /// Nothing to send: no such address, already verified, or locked. All
+    /// three answer `None` so the caller's response cannot tell them apart.
+    #[test]
+    fn generate_verification_token_declines_silently() {
+        let (conn, def, _) = setup();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        // Seeded as verified.
+        assert!(
+            generate_verification_token(&ctx, "test@example.com", 3600)
+                .unwrap()
+                .is_none()
+        );
+
+        assert!(
+            generate_verification_token(&ctx, "nobody@example.com", 3600)
+                .unwrap()
+                .is_none()
+        );
+
+        conn.execute(
+            "UPDATE users SET _verified = 0, _locked = 1 WHERE id = 'u1'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            generate_verification_token(&ctx, "test@example.com", 3600)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A declined resend leaves any existing token untouched — it must not
+    /// clear the link a legitimate sign-up email already carried.
+    #[test]
+    fn a_declined_resend_does_not_disturb_an_existing_token() {
+        let (conn, def, _) = setup();
+        let exp = Utc::now().timestamp() + 3600;
+        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        // The seeded user is verified, so the resend declines.
+        assert!(
+            generate_verification_token(&ctx, "test@example.com", 3600)
+                .unwrap()
+                .is_none()
+        );
+
+        conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
+            .unwrap();
+        assert!(consume_verification_token(&ctx, "vtok").unwrap());
     }
 }

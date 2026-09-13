@@ -49,6 +49,7 @@ pub(crate) mod transaction;
 pub(crate) mod tx_hooks;
 pub(crate) mod uploads;
 pub(crate) mod utils;
+pub(crate) mod validation;
 mod vm_label;
 
 pub use register::{register_api, register_api_pool_init};

@@ -51,12 +51,7 @@ impl ContentService {
             .unwrap_or_default()
             .into();
 
-        let password = extract_auth_password(
-            &mut data,
-            def.is_auth_collection(),
-            &self.infra.password_policy,
-            true,
-        )?;
+        let password = extract_auth_password(&mut data, def.is_auth_collection(), true)?;
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.infra.locale_config)

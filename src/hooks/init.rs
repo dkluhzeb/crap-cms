@@ -118,6 +118,10 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     // collection's draft/trash view with no gating rule is world-readable.
     super::startup_checks::warn_public_lifecycle_views(&snapshot, config.access.default_deny);
 
+    // Advisory warning: a field whose name is a reserved MCP tool argument is
+    // shadowed on that surface (its value is dropped there).
+    super::startup_checks::warn_mcp_reserved_field_shadowing(&snapshot, config.mcp.enabled);
+
     // The init VM and `registry` (SharedRegistry) drop here. The
     // closures inside the VM that captured SharedRegistry clones are
     // also dropped; no writeable handle survives this function.

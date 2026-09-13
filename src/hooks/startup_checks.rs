@@ -32,6 +32,7 @@ use crate::core::{
 use crate::db::query::helpers::{global_table, join_table, prefixed_name, walk_leaf_fields};
 use crate::hooks::lifecycle::resolve_hook_function;
 use crate::hooks::lua_api::routes::ROUTES_KEY;
+use crate::service::op::wire::{self, WireSurfaces};
 
 /// Validate every statically-known hook and access reference in the registry.
 ///
@@ -483,6 +484,45 @@ pub fn warn_public_lifecycle_views(registry: &Registry, default_deny: bool) {
                  to EVERYONE, including unauthenticated callers. Add an access.draft (or \
                  access.update) rule, or set access.default_deny = true."
             );
+        }
+    }
+}
+
+/// Warn when a field name collides with a reserved MCP tool argument.
+///
+/// The write tools carry their meta-options as top-level arguments
+/// (`locale`, `draft`, `events`, `id`, `password`, `queue`, …), so a field of
+/// the same name is shadowed: its schema property is overwritten by the
+/// option and the write path skips it as a reserved key. The collection still
+/// works on every other surface, hence a warning rather than a refusal — but
+/// silently dropping one field's data on one surface is exactly the kind of
+/// thing an operator should hear about at boot.
+pub fn warn_mcp_reserved_field_shadowing(registry: &Registry, mcp_enabled: bool) {
+    if !mcp_enabled {
+        return;
+    }
+
+    // The union of every meta-argument the MCP surface spells, plus the two
+    // that are added per-op rather than declared in the wire model.
+    let reserved: HashSet<&str> = wire::COLLECTION_OPS
+        .iter()
+        .chain(wire::GLOBAL_OPS)
+        .flat_map(|op| op.fields)
+        .filter(|f| f.surfaces.contains(WireSurfaces::MCP))
+        .map(|f| f.name)
+        .chain(["id", "password"])
+        .collect();
+
+    for (slug, def) in &registry.collections {
+        for field in &def.fields {
+            if reserved.contains(field.name.as_str()) {
+                warn!(
+                    "Collection '{slug}': field '{}' shadows a reserved MCP tool argument — \
+                     over MCP that name is the option, and the field's value is dropped. \
+                     Rename the field, or exclude the collection from MCP.",
+                    field.name
+                );
+            }
         }
     }
 }
@@ -966,8 +1006,8 @@ mod tests {
     use mlua::{Lua, LuaOptions, StdLib};
 
     use crate::core::{
-        Access, CollectionDefinition, FieldDefinition, FieldType, Hooks, Registry,
-        job::JobDefinition,
+        Access, CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition, Hooks,
+        Registry, job::JobDefinition,
     };
 
     use super::*;
@@ -1226,6 +1266,30 @@ mod tests {
         );
     }
 
+    /// The reserved-argument set the shadowing warning uses must be derived
+    /// from the wire model, so a new MCP option is covered automatically.
+    #[test]
+    fn mcp_reserved_arguments_come_from_the_wire_model() {
+        let reserved: HashSet<&str> = wire::COLLECTION_OPS
+            .iter()
+            .chain(wire::GLOBAL_OPS)
+            .flat_map(|op| op.fields)
+            .filter(|f| f.surfaces.contains(WireSurfaces::MCP))
+            .map(|f| f.name)
+            .collect();
+
+        for expected in ["locale", "draft", "where", "depth"] {
+            assert!(
+                reserved.contains(expected),
+                "'{expected}' is an MCP tool argument and must be in the reserved set"
+            );
+        }
+        assert!(
+            !reserved.contains("title"),
+            "an ordinary field name is not reserved"
+        );
+    }
+
     /// A global and a collection never share a table, but they must not share
     /// a slug: the MCP surface keys exposure and gating by slug alone.
     #[test]
@@ -1238,7 +1302,7 @@ mod tests {
         registry
             .write()
             .unwrap()
-            .register_global(crate::core::GlobalDefinition::new("settings"));
+            .register_global(GlobalDefinition::new("settings"));
 
         let err = validate_table_name_collisions(&registry.read().unwrap()).unwrap_err();
         let msg = format!("{err:#}");

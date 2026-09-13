@@ -17,6 +17,7 @@
 //! string in the signed message — no extra configuration. Stored `url`
 //! values never change (frozen contract): signing is read-time only.
 
+use crate::core::hex::hex_encode;
 use ring::hmac;
 
 /// Domain-separation context, versioned so a future scheme change can't
@@ -26,15 +27,6 @@ const SIGN_CONTEXT: &str = "crap-cms:upload-url:v1";
 /// The exact byte string the HMAC covers.
 fn sig_message(path: &str, exp: i64) -> String {
     format!("{SIGN_CONTEXT}\n{path}\n{exp}")
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {

@@ -467,6 +467,11 @@ fn assemble_base_router(
             get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action),
         )
         .route(
+            "/admin/resend-verification",
+            get(auth_handlers::resend_verification_page)
+                .post(auth_handlers::resend_verification_action),
+        )
+        .route(
             "/admin/reset-password",
             get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action),
         )

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::{
     core::{
         Document, DocumentFields, FieldChildren, FieldDefinition, FieldType,
-        collection::VersionsConfig, field_children, flatten_group_fields,
+        collection::VersionsConfig, field_children, flatten_group_fields, walk_leaf_fields,
     },
     db::{
         DbConnection, LocaleContext, query,
@@ -31,7 +31,11 @@ pub(crate) struct SaveDraftArgs<'a> {
 
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
 /// create a version snapshot, and prune.
-pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<()> {
+///
+/// Returns the stored snapshot — the DRAFT content. Callers hand that back to
+/// hooks, the response, and the event, so a draft save reports what was
+/// written rather than the untouched published row.
+pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     let SaveDraftArgs {
         conn,
         table,
@@ -87,13 +91,48 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<()> {
     // `group__child`, which the merge resolves into the nested group object.
     if let Some(obj) = snapshot.as_object_mut() {
         merge_join_data_into_snapshot(obj, fields, &flattened);
+        stamp_write_locale_columns(obj, fields, locale_ctx);
     }
 
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
 
     prune_versions(conn, table, parent_id, versions)?;
 
-    Ok(())
+    Ok(snapshot)
+}
+
+/// Write the draft's own value into the per-locale column for the locale the
+/// draft was saved under.
+///
+/// Same reason the join data is re-overlaid above: `build_snapshot` reads the
+/// decorated `title__xx` columns straight from the main table, which a draft
+/// save never touches. Left alone, the snapshot would hold the draft edit
+/// under the bare key and the PUBLISHED text under `title__<write locale>` —
+/// and since restore writes the decorated columns, and a draft read resolves
+/// from them, both would quietly serve the published text back. The other
+/// locales' columns stay as read: the draft did not touch them.
+fn stamp_write_locale_columns(
+    snapshot: &mut Map<String, Value>,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) {
+    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
+        return;
+    };
+    let locale = ctx.access_locale();
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
+        if !(field.localized || inherited) {
+            return Ok(());
+        }
+
+        let name = prefixed_name(prefix, &field.name);
+        if let Some(value) = snapshot.get(&name).cloned() {
+            snapshot.insert(format!("{name}__{locale}"), value);
+        }
+
+        Ok(())
+    });
 }
 
 /// Overlay join-table data (arrays, blocks, has-many relationships) from the

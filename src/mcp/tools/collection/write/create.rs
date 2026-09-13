@@ -34,7 +34,7 @@ pub(in crate::mcp::tools) fn exec_create(
         .get(slug)
         .context("Collection not found")?;
 
-    let password = extract_auth_password(def, args, false);
+    let password = extract_auth_password(def, args, false)?;
 
     if let Some(ref pw) = password {
         ctx.config.auth.password_policy.validate(pw)?;

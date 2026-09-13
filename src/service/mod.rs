@@ -77,6 +77,7 @@ pub use app_infra::{AppInfra, AppInfraBuilder, StandaloneInfra};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
+pub(crate) use types::ResendTarget;
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
     FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, OpDeadline,
@@ -92,7 +93,10 @@ pub use collections::{
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
     delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
-pub(crate) use email::{VerificationEmailInput, send_verification_email};
+pub(crate) use email::{
+    ResendVerificationInput, VerificationEmailInput, VerificationMailer, resend_verification_email,
+    send_verification_email,
+};
 pub(crate) use events::{EventAccessInput, EventAccessMap, EventGate, event_op_str};
 pub(crate) use globals::check_global_update_access;
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};

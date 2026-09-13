@@ -84,6 +84,12 @@
           <a href="/admin/forgot-password">{{t "forgot_password"}}</a>
         </p>
       {{/if}}
+
+      {{#if show_resend_verification}}
+        <p class="auth-card__link">
+          <a href="/admin/resend-verification">{{t "resend_verification"}}</a>
+        </p>
+      {{/if}}
     </form>
   {{/if}}
 

@@ -35,6 +35,7 @@ use super::{
     tx_hooks::register_tx_hooks,
     uploads::register_uploads,
     utils::{REGISTRY_LOCK_POISONED, load_lua_helpers, register_util},
+    validation::register_validation,
 };
 
 /// Register the `crap` global table for the **`init_lua`** VM — the single
@@ -411,6 +412,7 @@ fn build_slug_accessor(
 fn register_common(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -> Result<()> {
     register_log(lua)?;
     register_util(lua)?;
+    register_validation(lua)?;
     register_crypto(lua, config.auth.secret.as_ref())?;
     register_uploads(lua, config.auth.secret.as_ref())?;
     register_schema_init(lua, Arc::clone(registry))?;
@@ -441,6 +443,7 @@ fn register_common_with_arc(
 ) -> Result<()> {
     register_log(lua)?;
     register_util(lua)?;
+    register_validation(lua)?;
     register_crypto(lua, config.auth.secret.as_ref())?;
     register_uploads(lua, config.auth.secret.as_ref())?;
     register_schema_pool(lua, Arc::clone(registry))?;

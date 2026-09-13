@@ -290,9 +290,17 @@ impl ContentService {
             let infra = Arc::clone(&self.infra);
             let slug = collection.to_string();
             let user_owned = verified.user.clone();
+            let auth_secret = self.auth_secret.clone();
 
             task::spawn_blocking(move || {
-                auth::deliver_mfa_code(&infra, &slug, &user_owned, &user_email, &code);
+                auth::deliver_mfa_code(
+                    &infra,
+                    &auth_secret,
+                    &slug,
+                    &user_owned,
+                    &user_email,
+                    &code,
+                );
             });
 
             None

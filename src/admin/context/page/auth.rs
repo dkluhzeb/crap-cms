@@ -33,6 +33,8 @@ pub struct LoginPage {
     pub show_collection_picker: bool,
     pub disable_local: bool,
     pub show_forgot_password: bool,
+    /// Whether to offer the self-service "resend verification link" page.
+    pub show_resend_verification: bool,
 
     /// Whitelisted success-message key shown after redirect from logout /
     /// email verification / password reset. Always emitted (as `null` when
@@ -81,6 +83,20 @@ pub struct ResetPasswordPage {
 /// Renders the success state once the email has been queued.
 #[derive(Serialize, JsonSchema)]
 pub struct ForgotPasswordPage {
+    #[serde(flatten)]
+    pub base: AuthBasePageContext,
+
+    pub success: bool,
+    pub collections: Vec<AuthCollection>,
+    pub show_collection_picker: bool,
+}
+
+/// Resend-verification page (the form where a user asks for a fresh
+/// email-verification link). Renders the success state once the email has
+/// been queued. `collections` lists only the auth collections that actually
+/// require email verification.
+#[derive(Serialize, JsonSchema)]
+pub struct ResendVerificationPage {
     #[serde(flatten)]
     pub base: AuthBasePageContext,
 

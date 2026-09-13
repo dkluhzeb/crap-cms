@@ -12,13 +12,13 @@ use tracing::info;
 use crate::{config::CrapConfig, service::AppInfra};
 
 use super::protocol::{
-    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, InitializeParams, JsonRpcRequest,
-    JsonRpcResponse, METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
+    INVALID_PARAMS, INVALID_REQUEST, InitializeParams, JsonRpcRequest, JsonRpcResponse,
+    METHOD_NOT_FOUND, PROTOCOL_VERSION, RESOURCE_NOT_FOUND, ResourceReadParams, ToolCallParams,
 };
 use super::{
     access::McpExposure,
     resources,
-    tools::{self, ToolExecCtx},
+    tools::{self, ToolExecCtx, UnknownTool},
 };
 
 /// Shared state for the MCP server.
@@ -99,20 +99,17 @@ impl McpServer {
 
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req.id, req.params),
-            "notifications/initialized" => {
-                // Client acknowledgement — no response needed
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: None,
-                    result: None,
-                    error: None,
-                }
-            }
+            // `notifications/initialized` is a client acknowledgement. As a
+            // notification (no `id`) the transport drops the response; sent
+            // WITH an id — a protocol violation, but one a client can make —
+            // it still has to be a valid response object echoing that id, or
+            // the caller waits on it forever. Same empty-object answer as
+            // `ping`, deliberately.
+            "notifications/initialized" | "ping" => JsonRpcResponse::success(req.id, json!({})),
             "tools/list" => self.handle_tools_list(req.id),
             "tools/call" => self.handle_tools_call(req.id, req.params),
             "resources/list" => Self::handle_resources_list(req.id),
             "resources/read" => self.handle_resources_read(req.id, req.params),
-            "ping" => JsonRpcResponse::success(req.id, json!({})),
             _ => JsonRpcResponse::error(
                 req.id,
                 METHOD_NOT_FOUND,
@@ -167,17 +164,21 @@ impl McpServer {
         )
     }
 
-    /// Resolve `access.mcp` exposure for the current registry. Best-effort: if a
-    /// connection can't be obtained, falls back to "expose all" — advertising
-    /// only; the execution path (`execute_tool`) re-checks `access.mcp` against
-    /// its own connection, so a hidden collection's data is never reachable even
-    /// if it briefly remains advertised.
+    /// Resolve `access.mcp` exposure for the current registry.
+    ///
+    /// Fails CLOSED: without a connection the rules cannot be evaluated, so
+    /// every collection that sets `access.mcp` is hidden. Exposing them
+    /// instead would turn a pool outage — which a caller can provoke by
+    /// holding connections — into a listing of exactly the collections the
+    /// operator meant to hide, names and full field schemas included.
     fn mcp_exposure(&self) -> McpExposure {
         match self.infra.pool.get() {
             Ok(conn) => McpExposure::resolve(&self.infra.registry, &self.infra.hook_runner, &conn),
             Err(e) => {
-                tracing::warn!("access.mcp exposure unresolved ({e}); advertising all collections");
-                McpExposure::default()
+                tracing::warn!(
+                    "access.mcp exposure unresolved ({e}); hiding every gated collection"
+                );
+                McpExposure::hide_all_gated(&self.infra.registry)
             }
         }
     }
@@ -208,19 +209,30 @@ impl McpServer {
         };
         let result = tools::execute_tool(&call.name, &call.arguments, &self.config_dir, &exec_ctx);
 
-        match result {
-            Ok(text) => JsonRpcResponse::success(
-                id,
-                json!({ "content": [{ "type": "text", "text": text }] }),
-            ),
-            Err(e) => JsonRpcResponse::success(
-                id,
-                json!({
-                    "content": [{ "type": "text", "text": format!("Error: {e}") }],
-                    "isError": true,
-                }),
-            ),
+        let e = match result {
+            Ok(text) => {
+                return JsonRpcResponse::success(
+                    id,
+                    json!({ "content": [{ "type": "text", "text": text }] }),
+                );
+            }
+            Err(e) => e,
+        };
+
+        // A tool this server doesn't expose is a protocol error, not a tool
+        // result: the call never reached a tool. Everything else did run and
+        // failed, which the MCP spec reports in-band as `isError`.
+        if let Some(unknown) = e.downcast_ref::<UnknownTool>() {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, unknown.to_string());
         }
+
+        JsonRpcResponse::success(
+            id,
+            json!({
+                "content": [{ "type": "text", "text": format!("Error: {e}") }],
+                "isError": true,
+            }),
+        )
     }
 
     /// List all available MCP resources.
@@ -250,7 +262,7 @@ impl McpServer {
         ) else {
             return JsonRpcResponse::error(
                 id,
-                INTERNAL_ERROR,
+                RESOURCE_NOT_FOUND,
                 format!("Resource not found: {}", read_params.uri),
             );
         };
@@ -278,24 +290,20 @@ impl McpServer {
     clippy::used_underscore_binding
 )]
 mod tests {
-    use std::sync::OnceLock;
-
     use serde_json::{Value, json};
 
     // `super::*` brings in McpServer + the protocol-type imports server.rs
-    // already declares (INTERNAL_ERROR, INVALID_PARAMS, InitializeParams,
-    // JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND, PROTOCOL_VERSION).
+    // already declares (INVALID_PARAMS, InitializeParams, JsonRpcRequest,
+    // JsonRpcResponse, METHOD_NOT_FOUND, PROTOCOL_VERSION, RESOURCE_NOT_FOUND).
     use super::*;
     use crate::{
-        config::CrapConfig,
         core::{
-            Registry,
             collection::CollectionDefinition,
             field::{FieldDefinition, FieldType},
-            upload::{CollectionUpload, storage::LocalStorage},
+            upload::CollectionUpload,
         },
-        db::{DbConnection, migrate, pool},
-        hooks::HookRunner,
+        db::DbConnection,
+        mcp::test_server::{make_server, make_server_with},
     };
 
     fn make_request(method: &str, id: Option<Value>, params: Option<Value>) -> JsonRpcRequest {
@@ -305,63 +313,6 @@ mod tests {
             method: method.to_string(),
             params,
         }
-    }
-
-    /// Build a full `McpServer` backed by a real `SQLite` pool and `HookRunner`.
-    fn make_server_with(collections: Vec<CollectionDefinition>) -> (tempfile::TempDir, McpServer) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut config = CrapConfig::test_default();
-        config.database.path = "test.db".to_string();
-
-        let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-
-        let shared = Registry::shared();
-        {
-            let mut reg = shared.write().unwrap();
-            for def in &collections {
-                reg.register_collection(def.clone());
-            }
-        }
-
-        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).expect("sync schema");
-
-        let registry = Registry::snapshot(&shared);
-        let runner = HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(Arc::clone(&registry))
-            .config(&config)
-            .build()
-            .expect("hook runner");
-
-        // Real local-disk storage rooted at `<tmp>/uploads` so hard-delete file
-        // cleanup is exercised end-to-end (mirrors production wiring).
-        let storage: crate::core::SharedStorage =
-            Arc::new(LocalStorage::new(tmp.path().join("uploads")));
-        let infra = AppInfra::standalone(crate::service::StandaloneInfra {
-            pool: db_pool,
-            registry,
-            hook_runner: runner,
-            storage,
-            token_provider: None,
-            event_transport: None,
-            invalidation_transport: None,
-            config: &config,
-            config_dir: tmp.path(),
-        })
-        .expect("build test infra");
-
-        let server = McpServer {
-            infra,
-            config,
-            config_dir: tmp.path().to_path_buf(),
-            client_name: OnceLock::new(),
-            transport_label: "(test)",
-        };
-        (tmp, server)
-    }
-
-    fn make_server() -> (tempfile::TempDir, McpServer) {
-        make_server_with(vec![CollectionDefinition::new("posts")])
     }
 
     // ── protocol type helpers ──────────────────────────────────────────────
@@ -403,9 +354,23 @@ mod tests {
         let (_tmp, server) = make_server();
         let req = make_request("notifications/initialized", None, None);
         let resp = server.handle_message(req);
-        // Notification response: id=None, no result, no error
+        // As a notification the transport drops this response entirely, so
+        // the id stays absent and there is nothing to report.
         assert!(resp.id.is_none());
-        assert!(resp.result.is_none());
+        assert!(resp.error.is_none());
+    }
+
+    /// Sent WITH an id it is a protocol violation, but the answer still has
+    /// to be a valid response object echoing that id — otherwise a client
+    /// waits forever on it.
+    #[test]
+    fn handle_notification_initialized_with_an_id_still_answers_it() {
+        let (_tmp, server) = make_server();
+        let req = make_request("notifications/initialized", Some(json!(4)), None);
+        let resp = server.handle_message(req);
+
+        assert_eq!(resp.id, Some(json!(4)));
+        assert!(resp.result.is_some());
         assert!(resp.error.is_none());
     }
 
@@ -488,8 +453,10 @@ mod tests {
         assert!(text.contains("posts"));
     }
 
+    /// An unknown tool never reached a tool, so it is a JSON-RPC protocol
+    /// error (`Invalid params`), not an in-band tool result.
     #[test]
-    fn handle_tools_call_unknown_tool_returns_is_error() {
+    fn handle_tools_call_unknown_tool_returns_invalid_params() {
         let (_tmp, server) = make_server();
         let req = make_request(
             "tools/call",
@@ -500,7 +467,26 @@ mod tests {
             })),
         );
         let resp = server.handle_message(req);
-        // Error during tool execution is returned as a success response with isError=true
+        assert!(resp.result.is_none());
+        let err = resp.error.expect("unknown tool is a protocol error");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert_eq!(err.message, "Unknown tool: nonexistent_tool");
+    }
+
+    /// A tool that ran and failed stays in-band with `isError: true` — the
+    /// other half of the split above.
+    #[test]
+    fn handle_tools_call_failing_tool_returns_is_error() {
+        let (_tmp, server) = make_server();
+        let req = make_request(
+            "tools/call",
+            Some(json!(7)),
+            Some(json!({
+                "name": "describe_collection",
+                "arguments": {}
+            })),
+        );
+        let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert_eq!(result["isError"], true);
@@ -514,7 +500,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let (_tmp, server) = make_server_with(vec![def]);
+        let (_tmp, server) = make_server_with(&[def]);
 
         // Missing required `title` → valid:false with a per-field error.
         let req = make_request(
@@ -581,7 +567,7 @@ mod tests {
     /// `ToolExecCtx`, `exec_delete` passed `None` and left the file behind.
     #[test]
     fn handle_tools_call_delete_cleans_upload_files() {
-        let (tmp, server) = make_server_with(vec![make_media_upload_def()]);
+        let (tmp, server) = make_server_with(&[make_media_upload_def()]);
 
         // Place a fake upload file at the storage path the url field points to.
         let media_dir = tmp.path().join("uploads/media");
@@ -694,8 +680,9 @@ mod tests {
             })),
         );
         let resp = server.handle_message(req);
-        assert!(resp.error.is_some());
-        assert_eq!(resp.error.unwrap().code, INTERNAL_ERROR);
+        let err = resp.error.expect("unknown uri is an error");
+        assert_eq!(err.code, RESOURCE_NOT_FOUND);
+        assert!(err.message.contains("crap://nonexistent"));
     }
 
     #[test]

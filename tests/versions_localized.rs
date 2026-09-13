@@ -206,4 +206,68 @@ fn a_draft_reads_per_locale() {
         Some("Hallo"),
         "an English draft must not surface as the German title"
     );
+
+    // The other half, and the one that was silently broken: reading the draft
+    // under the locale it was WRITTEN in must show the edit. The snapshot
+    // records every locale's decorated column straight from the main table,
+    // which a draft save never writes — so without stamping the edit into the
+    // writing locale's column, resolving from those columns handed back the
+    // published text and the draft looked like it had never been saved.
+    let en_doc = find_document_by_id(
+        &read_ctx,
+        &FindByIdInput::builder(&id)
+            .locale_ctx(Some(&en))
+            .use_draft(true)
+            .build(),
+    )
+    .expect("read the draft under en")
+    .expect("document");
+
+    assert_eq!(
+        en_doc.get_str("title"),
+        Some("Hello draft"),
+        "the draft must be visible under the locale it was written in"
+    );
+
+    // And the response carries no decorated columns — a shape no other read
+    // produces, and one that would hand a `de` reader the `en` translation.
+    for key in en_doc.fields.keys() {
+        assert!(
+            !key.contains("__"),
+            "a per-locale column leaked into the read: {key}"
+        );
+    }
+}
+
+/// A draft save reports the draft it stored, resolved for the writing locale
+/// and with no per-locale columns riding along.
+#[test]
+fn a_draft_save_reports_the_draft_for_its_own_locale() {
+    let h = setup();
+    let id = seed(&h);
+
+    let ctx = service_ctx(&h);
+    let de = ctx_for(&h, "de");
+    let (doc, _) = update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Hallo Entwurf")]))
+            .locale_ctx(Some(&de))
+            .draft(true)
+            .build(),
+    )
+    .expect("german draft");
+
+    assert_eq!(doc.get_str("title"), Some("Hallo Entwurf"));
+    assert_eq!(doc.get_str("_status"), Some("draft"));
+
+    for key in doc.fields.keys() {
+        assert!(
+            !key.contains("__"),
+            "a per-locale column leaked into the write response: {key}"
+        );
+    }
+
+    // The published row is untouched by a draft save.
+    assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo"));
 }

@@ -26,6 +26,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`show_collection_picker`** (boolean)
 - **`disable_local`** (boolean)
 - **`show_forgot_password`** (boolean)
+- **`show_resend_verification`** (boolean) — Whether to offer the self-service "resend verification link" page.
 - **`success`** (Option&lt;string&gt;) _(optional)_ — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as `null` when absent) to preserve the original `Option`-as-null contract.
 
 ## MFA challenge page
@@ -69,6 +70,20 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`page`** ([PageMeta](#pagemeta))
 - **`token`** (Option&lt;string&gt;) _(optional)_ — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case `error` is set instead).
 - **`error`** (Option&lt;string&gt;) _(optional)_
+
+## Resend verification page
+
+- **`page.type`**: `auth_resend_verification`
+- **Template**: `templates/auth/resend_verification.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec&lt;string&gt;)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+- **`success`** (boolean)
+- **`collections`** (Vec&lt;[AuthCollection](#authcollection)&gt;)
+- **`show_collection_picker`** (boolean)
 
 ## Error pages (400 / 403 / 404 / 500)
 

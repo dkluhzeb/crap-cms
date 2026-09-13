@@ -3,12 +3,14 @@
 
 use std::sync::Arc;
 
-use serde_json::{from_str, to_string};
+use serde::Serialize;
+use serde_json::{Value, from_str, to_string, to_value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
 use tracing::{debug, error};
 
 use crate::mcp::{
     McpServer,
+    batch::{Payload, classify, handle_batch},
     protocol::{INTERNAL_ERROR, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR},
 };
 
@@ -27,8 +29,9 @@ fn log_preview(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-/// Write a JSON-RPC response line to stdout. Returns `false` if the pipe is broken.
-async fn write_response(stdout: &mut Stdout, resp: &JsonRpcResponse) -> bool {
+/// Write a JSON-RPC response line to stdout — a single response object or a
+/// batch array. Returns `false` if the pipe is broken.
+async fn write_response<T: Serialize>(stdout: &mut Stdout, resp: &T) -> bool {
     let Ok(resp_json) = to_string(resp) else {
         error!("Failed to serialize MCP response");
         return true;
@@ -61,6 +64,72 @@ async fn dispatch(server: &Arc<McpServer>, request: JsonRpcRequest) -> JsonRpcRe
     }
 }
 
+/// Dispatch a whole batch on one blocking hop. `None` when the batch was
+/// all notifications and nothing is written back.
+async fn dispatch_batch(server: &Arc<McpServer>, members: Vec<Value>) -> Option<Value> {
+    let server_clone = Arc::clone(server);
+
+    let Ok(out) = tokio::task::spawn_blocking(move || handle_batch(&server_clone, members)).await
+    else {
+        error!("MCP spawn_blocking task panicked");
+
+        return to_value(JsonRpcResponse::error(
+            None,
+            INTERNAL_ERROR,
+            "Internal error",
+        ))
+        .ok();
+    };
+
+    out
+}
+
+/// Parse one input line into a payload, answering a parse error directly.
+/// `None` means the line was already answered and should be skipped.
+async fn parse_line(stdout: &mut Stdout, line: &str) -> Option<Payload> {
+    let parsed = from_str(line)
+        .map_err(|e| e.to_string())
+        .and_then(|body| classify(body).map_err(|e| e.to_string()));
+
+    match parsed {
+        Ok(payload) => Some(payload),
+        Err(e) => {
+            let resp = JsonRpcResponse::error(None, PARSE_ERROR, format!("Parse error: {e}"));
+            write_response(stdout, &resp).await;
+            None
+        }
+    }
+}
+
+/// Handle one payload. Returns `false` when the output pipe broke and the
+/// transport should stop.
+async fn handle_payload(server: &Arc<McpServer>, stdout: &mut Stdout, payload: Payload) -> bool {
+    match payload {
+        // An array is a JSON-RPC batch: every member runs, and only the
+        // non-notification members answer.
+        Payload::Batch(members) => {
+            let Some(out) = dispatch_batch(server, members).await else {
+                return true;
+            };
+
+            write_response(stdout, &out).await
+        }
+
+        Payload::Single(request) => {
+            // A request with no `id` is a JSON-RPC notification — dispatch it
+            // for its side effects but never reply (spec: MUST NOT reply).
+            let is_notification = request.id.is_none();
+            let response = dispatch(server, *request).await;
+
+            if is_notification {
+                return true;
+            }
+
+            write_response(stdout, &response).await
+        }
+    }
+}
+
 /// Run the stdio MCP transport. Reads newline-delimited JSON-RPC from stdin,
 /// processes each message, and writes responses to stdout.
 #[cfg(not(tarpaulin_include))] // requires interactive stdio
@@ -81,26 +150,11 @@ pub async fn run_stdio(server: McpServer) {
 
         debug!("MCP recv: {}", log_preview(&line, 200));
 
-        let request: JsonRpcRequest = match from_str(&line) {
-            Ok(req) => req,
-            Err(e) => {
-                let resp = JsonRpcResponse::error(None, PARSE_ERROR, format!("Parse error: {e}"));
-                write_response(&mut stdout, &resp).await;
-                continue;
-            }
+        let Some(payload) = parse_line(&mut stdout, &line).await else {
+            continue;
         };
 
-        // A request with no `id` is a JSON-RPC notification — dispatch it for
-        // its side effects but never send a response (spec: MUST NOT reply).
-        let is_notification = request.id.is_none();
-
-        let response = dispatch(&server, request).await;
-
-        if is_notification {
-            continue;
-        }
-
-        if !write_response(&mut stdout, &response).await {
+        if !handle_payload(&server, &mut stdout, payload).await {
             break;
         }
     }

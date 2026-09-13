@@ -18,7 +18,9 @@ use crate::{
         AdminState,
         context::{
             AuthBasePageContext, PageMeta, PageType,
-            page::auth::{AuthCollection, ForgotPasswordPage, LoginPage, MfaPage},
+            page::auth::{
+                AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResendVerificationPage,
+            },
         },
         handlers::{
             auth::{MFA_PENDING_COOKIE, append_cookies, session_cookies, session_same_site},
@@ -27,7 +29,10 @@ use crate::{
         server::extract_cookie,
     },
     config::ServerConfig,
-    core::{Document, Registry, Slug, auth::ClaimsBuilder, email, rate_limit::LoginRateLimiter},
+    core::{
+        CollectionDefinition, Document, Registry, Slug, auth::ClaimsBuilder, email,
+        rate_limit::LoginRateLimiter,
+    },
 };
 
 /// Build an ad-hoc rate limiter that reuses the global rate-limit backend under
@@ -133,6 +138,7 @@ pub(in crate::admin::handlers) fn login_error(
         show_collection_picker,
         disable_local: all_disable_local(state),
         show_forgot_password: show_forgot_password(state),
+        show_resend_verification: show_resend_verification(state),
         success: None,
     };
 
@@ -175,13 +181,41 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
         .any(|def| def.auth.as_ref().is_some_and(Auth::forgot_password_enabled))
 }
 
+/// Check whether the "didn't get a verification email?" link should show on
+/// the login page. Both halves must hold: some collection actually requires
+/// verification, and there is a transport to send the link over.
+pub(in crate::admin::handlers) fn show_resend_verification(state: &AdminState) -> bool {
+    if !email::is_configured(&state.config.email) {
+        return false;
+    }
+
+    !get_verifying_collections(state).is_empty()
+}
+
 pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<AuthCollection> {
+    auth_collections_where(state, |_| true)
+}
+
+/// The auth collections that require email verification — the only ones a
+/// resend link means anything for.
+pub(in crate::admin::handlers) fn get_verifying_collections(
+    state: &AdminState,
+) -> Vec<AuthCollection> {
+    auth_collections_where(state, |def| {
+        def.auth.as_ref().is_some_and(Auth::requires_verify_email)
+    })
+}
+
+fn auth_collections_where(
+    state: &AdminState,
+    keep: impl Fn(&CollectionDefinition) -> bool,
+) -> Vec<AuthCollection> {
     let mut collections: Vec<AuthCollection> = state
         .infra
         .registry
         .collections
         .values()
-        .filter(|def| def.is_auth_collection())
+        .filter(|def| def.is_auth_collection() && keep(def))
         .map(|def| AuthCollection {
             slug: def.slug.to_string(),
             display_name: def.display_name().to_string(),
@@ -210,6 +244,30 @@ pub(in crate::admin::handlers) fn render_forgot_success(
     };
 
     render_auth_page(state, "auth/forgot_password", &ctx)
+}
+
+/// Render the resend-verification page, in either the form or the success
+/// state. Both states come from one place so the page can never disagree
+/// with itself about which collections are on offer.
+pub(in crate::admin::handlers) fn render_resend_verification(
+    state: &AdminState,
+    collections: &[AuthCollection],
+    success: bool,
+) -> Response {
+    let ctx = ResendVerificationPage {
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(
+                PageType::AuthResendVerification,
+                "resend_verification_page_title",
+            ),
+        ),
+        success,
+        collections: collections.to_vec(),
+        show_collection_picker: collections.len() > 1,
+    };
+
+    render_auth_page(state, "auth/resend_verification", &ctx)
 }
 
 /// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.

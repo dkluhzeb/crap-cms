@@ -93,6 +93,46 @@ impl McpExposure {
         Self { hidden }
     }
 
+    /// Whether any collection or global sets `access.mcp` at all.
+    ///
+    /// When nothing does there is no exposure to resolve, nothing to hide,
+    /// and therefore nothing to enumerate — so the whole evaluation, and the
+    /// connection it needs, is skipped.
+    pub(in crate::mcp) fn any_gated(registry: &Registry) -> bool {
+        registry
+            .collections
+            .values()
+            .any(|def| def.access.mcp.is_some())
+            || registry
+                .globals
+                .values()
+                .any(|def| def.access.mcp.is_some())
+    }
+
+    /// Hide every collection and global that sets `access.mcp`, without
+    /// evaluating any rule.
+    ///
+    /// The fail-closed answer when the rules cannot be evaluated at all: a
+    /// gated slug stays hidden, an ungated one is unaffected.
+    pub(in crate::mcp) fn hide_all_gated(registry: &Registry) -> Self {
+        let collections = registry
+            .collections
+            .iter()
+            .map(|(slug, def)| (slug, def.access.mcp.as_ref()));
+        let globals = registry
+            .globals
+            .iter()
+            .map(|(slug, def)| (slug, def.access.mcp.as_ref()));
+
+        let hidden = collections
+            .chain(globals)
+            .filter(|(_, mcp_ref)| mcp_ref.is_some())
+            .map(|(slug, _)| AsRef::<str>::as_ref(slug).to_string())
+            .collect();
+
+        Self { hidden }
+    }
+
     /// Whether `slug` is exposed to the MCP surface.
     pub(in crate::mcp) fn allows(&self, slug: &str) -> bool {
         !self.hidden.contains(slug)

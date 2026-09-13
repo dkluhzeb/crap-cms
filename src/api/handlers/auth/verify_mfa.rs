@@ -19,7 +19,7 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{Slug, auth::ClaimsBuilder},
-    service::{AppInfra, auth},
+    service::{AppInfra, ServiceError, auth},
 };
 
 /// Owned inputs for the second-factor verification `spawn_blocking` body.
@@ -42,7 +42,7 @@ fn verify_code_blocking(input: &VerifyCodeInput) -> anyhow::Result<bool> {
         &input.user_id,
         &input.code,
     )
-    .map_err(crate::service::ServiceError::into_anyhow)
+    .map_err(ServiceError::into_anyhow)
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -94,12 +94,14 @@ impl ContentService {
             code: req.code.clone(),
         };
 
+        // Classified, not flattened: a busy pool is UNAVAILABLE (retryable)
+        // like everywhere else, rather than an INTERNAL a client won't retry.
         let verified = task::spawn_blocking(move || verify_code_blocking(&input))
             .await
             .inspect_err(|e| error!("VerifyMfa task error: {e}"))
             .map_err(|_| Status::internal("Internal error"))?
             .inspect_err(|e| error!("VerifyMfa error: {e:#}"))
-            .map_err(|_| Status::internal("Internal error"))?;
+            .map_err(|e| Status::from(ServiceError::classify(e, &self.db_kind)))?;
 
         if !verified {
             return Err(Status::unauthenticated("Invalid MFA code"));

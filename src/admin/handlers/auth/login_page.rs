@@ -7,7 +7,10 @@ use crate::admin::{
     AdminState,
     context::{AuthBasePageContext, PageMeta, PageType, page::auth::LoginPage},
     handlers::{
-        auth::{LoginPageQuery, all_disable_local, get_auth_collections, show_forgot_password},
+        auth::{
+            LoginPageQuery, all_disable_local, get_auth_collections, show_forgot_password,
+            show_resend_verification,
+        },
         shared::render_auth_page,
     },
 };
@@ -40,6 +43,7 @@ pub async fn login_page(State(state): State<AdminState>, query: Query<LoginPageQ
         show_collection_picker,
         disable_local: all_disable_local(&state),
         show_forgot_password: show_forgot_password(&state),
+        show_resend_verification: show_resend_verification(&state),
         success,
     };
 

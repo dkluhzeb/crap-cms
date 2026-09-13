@@ -37,8 +37,18 @@ of the API.
 
 ## TL;DR
 
-- **Replace your binary, restart.** DB schema migrations apply
-  automatically; no manual SQL.
+- **Do one thing before you swap the binary.** If your Lua encrypts data with
+  `crap.crypto.encrypt` and you never set `[auth] secret`, decrypt it *on
+  alpha.9* — the key changes and old ciphertext becomes unrecoverable
+  (item 18). Everyone else: replace the binary and restart. DB schema
+  migrations apply automatically; no manual SQL.
+- **Warn your users about live email links.** Reset tokens, verification
+  tokens, and MFA codes are now stored hashed, with no migration — every link
+  already sent stops working on restart. Users request a new one; verification
+  links now have a self-service page (item 19).
+- **Read clients: unreadable fields are no longer filterable.** Filtering or
+  sorting on a `hidden` field, or one denied by `access.read`, now fails
+  instead of quietly leaking the value it was meant to strip (item 20).
 - **Plugin authors: option typos now error.** Every Lua CRUD option
   table rejects unknown keys. A previously-ignored typo (e.g.
   `overrideAcces`) now fails loudly. Fix any stray keys in your
@@ -84,6 +94,19 @@ of the API.
   operation switches (item 16).
 - **Custom storage: remove the `url` handler and `public_url_base`.** The
   direct-URL limb is gone; everything serves via `/uploads/…` (item 17).
+- **Hook authors: `after_read` lost CRUD access** — the contract always said
+  so, it just wasn't enforced (item 21).
+- **Schema authors: a collection and a global can't share a slug** — a load
+  error now, so the server won't boot until one is renamed (item 22).
+- **Write clients: relationship values must be id strings**, `NaN`/`Inf` are
+  rejected on the gRPC wire, and MCP writes honor a present `null` instead of
+  dropping it (item 23).
+- **Subscribers: a draft save now reports the draft**, not the untouched
+  published row, and a typo'd operation name errors instead of opening a dead
+  stream (item 24).
+- **MCP clients: an unknown tool is a `-32602` protocol error**, and a
+  collection you can't see is indistinguishable from one that doesn't exist
+  (item 25).
 
 ## Required action items
 
@@ -472,6 +495,22 @@ flag.
   Valid: top-level field names + `id` / `created_at` / `updated_at` /
   `_status`.
 - Every tab in a `tabs` field requires a `label`.
+- **An empty group inside an `or` is a hard error.** `{"or": [{"status":
+  "a"}, {}]}` — and `{"or": []}` — used to be accepted as a vacuously-true
+  group, silently widening the whole `or` to match **every row**. On a
+  `delete_many` that selects the entire collection. It arises naturally in
+  Lua, where `{ tenant = nil }` *is* `{}`, so check any filter built from
+  optional values. In an access constraint the same input now fails closed
+  and denies.
+- **A filter value that doesn't fit the field's type is a validation error.**
+  `where = { price = { greater_than = "abc" } }` on a Number field, or a
+  non-boolean on a Checkbox, used to fall back to a text comparison — which
+  SQLite absorbed silently by affinity and Postgres rejected at execution
+  time as an opaque 500. Every surface now returns a 400 naming the field.
+  A stale or forged keyset cursor whose sort value can't bind to the sort
+  column is rejected the same way, so old cursors may need to be discarded.
+  (`like` / `contains` on a Number or Checkbox now cast to text, so those
+  keep working on Postgres.)
 
 ### 16. Event subscribers: `undelete`, `unpublish`, `restore`
 
@@ -495,6 +534,229 @@ every byte served goes through the `/uploads/…` proxy. Remove `url = ...`
 from `crap.storage.register` (now an unknown-key load error) and
 `public_url_base` from `[upload.s3]` (unknown config keys are fatal). A
 CDN/direct-link story returns as an explicit signed-URL design.
+
+### 18. Before you upgrade: rescue `crap.crypto` data
+
+**Do this on alpha.9, before you swap the binary.** Skip it and the data is
+unrecoverable.
+
+If you use `crap.crypto.encrypt` / `decrypt` **and** you never set
+`[auth] secret` in `crap.toml`, alpha.9 derived the AES key from the *empty*
+config value — the SHA-256 of the empty string, a key anyone could compute.
+alpha.10 fixes that by resolving the generated `data/.jwt_secret` at config
+load, so every consumer keys off the same real secret. The key therefore
+changes, and ciphertext written under the old one no longer decrypts.
+
+You are affected only if **both** hold:
+
+- your Lua calls `crap.crypto.encrypt` and stores the result, and
+- `[auth] secret` is absent or empty in `crap.toml`.
+
+Check with:
+
+```bash
+grep -n 'secret' crap.toml          # is [auth] secret set?
+grep -rn 'crypto.encrypt' hooks/ collections/ globals/ init.lua
+```
+
+If both hold, decrypt on alpha.9 and re-encrypt after upgrading. A one-off
+job is the simplest vehicle — define it, trigger it, then delete it:
+
+```lua
+-- jobs/rescue_crypto.lua, on alpha.9
+local M = {}
+
+M.run = crap.any.job_handler(function(_context)
+  local result = crap.collections.records.find({
+    limit = 500,
+    override_access = true,
+  })
+
+  for _, doc in ipairs(result.documents) do
+    if doc.secret_blob then
+      crap.collections.records.update(doc.id, {
+        secret_plain = crap.crypto.decrypt(doc.secret_blob),
+      }, { override_access = true })
+    end
+  end
+end)
+
+crap.jobs.define("rescue_crypto", { handler = "jobs.rescue_crypto.run" })
+
+return M
+```
+
+```bash
+crap-cms jobs trigger rescue_crypto     # still on alpha.9
+# upgrade, then run the mirror job that re-encrypts secret_plain
+```
+
+Page through everything — the snippet caps at 500 for brevity. Store the
+plaintext in a field you delete afterwards, and keep the window short.
+
+Setting an explicit `[auth] secret` before upgrading does *not* help: that
+changes the key too. The old key was `SHA-256("")` and nothing else
+reproduces it, because the helpers now refuse an empty secret outright. Do
+set one after the upgrade if you want the key pinned to something you control
+rather than to a generated file you must back up.
+
+Deployments that already set `[auth] secret` are unaffected: their key is
+unchanged. TOTP enrollment and signed upload URLs are unaffected on any
+deployment — both are newer than alpha.9.
+
+### 19. Tell your users: outstanding reset and verification links stop working
+
+Password-reset tokens, email-verification tokens, and MFA codes are now
+stored one-way instead of in the clear, so a database read, a backup, or a
+stray query log no longer hands over a working credential. Tokens are stored
+as a digest; an MFA code is keyed with `[auth] secret`, because six digits is
+a small enough space that a bare digest of one could be inverted by table
+lookup. The rendered mail is also dropped from the job queue once the send
+completes, so the link does not linger there after delivery.
+
+There is no migration, by design: hashing an existing plaintext token would
+defeat the point of the change. **Every link and code already in someone's
+inbox stops working the moment you restart.** In practice that is a window
+of one reset-token lifetime (`[auth] reset_token_expiry`, one hour by
+default) and up to 24 hours for verification links.
+
+No schema change is involved — the columns keep their names and widths — so
+nothing to run. What you should do:
+
+- Upgrade at a quiet hour if you can.
+- Expect a small burst of "my link doesn't work" reports. The answer is
+  "request a new one".
+- Users who need a new verification link can now get one themselves at
+  `/admin/resend-verification` (see Additive features), which did not exist
+  before. Password resets already had `/admin/forgot-password`.
+
+### 20. Read clients: filters and sorts on unreadable fields are rejected
+
+A field marked `hidden = true`, or one whose `access.read` rule denies the
+caller, can no longer be used as a filter or sort target. The read fails
+with `Cannot filter or sort on '<field>': the field is not readable in this
+context` — `PERMISSION_DENIED` on gRPC, a 403 on the admin surface.
+
+This closes a leak rather than tightening a preference: a `like` filter or an
+ordering over a stripped field let a caller recover the value the read strip
+had just removed, one query at a time.
+
+**Action:** audit any client, saved view, or bookmarked admin URL that
+filters or sorts on a field you have since marked `hidden` or gated with
+`access.read`. Those calls now fail loudly instead of quietly leaking. If a
+field genuinely needs to be filterable by everyone, drop the `hidden` flag or
+the `access.read` rule.
+
+Related, same reasoning: hidden and read-gated fields are no longer part of
+the **default** full-text index, so a bare `search` no longer matches their
+contents. To keep a read-gated field searchable, name it explicitly in
+`admin.list_searchable_fields`. The index is dropped and rebuilt from the
+table on the first migration run, so there is nothing to reindex by hand.
+
+### 21. Hook authors: `after_read` can no longer call `crap.*` CRUD
+
+The contract always said `after_read` has no database access. It did not
+enforce it: the hook inherited the read's transaction, and because
+`after_read` is fail-open, a write from a hook that then errored still
+committed. The call now raises on every surface.
+
+**Action:** if an `after_read` hook reads or writes through
+`crap.collections.*` / `crap.globals.*`, move the lookup into `before_read`
+and hand the result over through `ctx.context`, which is shared across one
+read:
+
+```lua
+-- before_read: do the query once, stash it
+function M.load_authors(ctx)
+  ctx.context.authors = crap.collections.users.find({
+    where = { role = "author" },
+    override_access = true,
+  })
+  return ctx
+end
+
+-- after_read: read from the stash, no CRUD
+function M.attach_author(ctx)
+  ctx.data.author_name = lookup(ctx.context.authors, ctx.data.author_id)
+  return ctx
+end
+```
+
+`before_read` runs once per read and keeps full CRUD access, so a per-document
+loop in `after_read` becomes one query up front — usually faster too. For a
+plain relationship join, prefer population (`depth`) over either hook.
+
+### 22. Schema authors: a collection and a global may not share a slug
+
+A slug now identifies exactly one thing. Defining a collection and a global
+under the same name is a load error, so the server will not boot until you
+rename one.
+
+This is a security fix as much as a naming rule: the MCP surface keys its
+exposure and its `access.mcp` gate by slug alone, so a global that
+`access.mcp` denied stayed executable through the identically-named
+collection's tools.
+
+**Action:** none unless the loader tells you otherwise. Re-defining the *same*
+kind under one slug is still legal — that is the documented plugin pattern for
+extending a collection, and it is unaffected.
+
+### 23. Write clients: three values that used to be accepted now error
+
+Each of these used to be coerced or ignored and is now a validation error.
+All three were silently corrupting data.
+
+- **A relationship or upload value must be an id string.** A number, a
+  boolean, a populated document object (a `depth > 0` read sent straight
+  back), or a list containing non-strings used to be stored as text: a
+  dangling reference that was never existence-checked, never ref-counted, and
+  unresolvable on the next populate. Write `"abc123"`, or `"posts/abc123"` for
+  a polymorphic target. If your client round-trips a populated read back into
+  a write, map the objects back to ids first.
+- **`NaN` and `±Inf` are rejected on the gRPC wire.** A non-finite
+  `double_value` was converted to `null`, which under the present-null
+  contract *cleared* the field. It is now `INVALID_ARGUMENT`, matching Lua.
+- **MCP write tools no longer drop `null`.** `update_posts {"id": …,
+  "subtitle": null}` used to keep the old value; a present null now clears the
+  field, the contract gRPC and Lua already had. Removing a translation —
+  documented as writing that locale's fields as null — was impossible over MCP
+  before. An unknown field name is now rejected whatever its value.
+
+### 24. Subscribers and draft writers: two contract corrections
+
+- **A draft save now reports the draft.** `update(..., draft = true)` returned
+  the untouched *published* row, so the operation's return value, the
+  `after_change` hook, and the emitted event all carried the pre-edit
+  document. All three now carry the stored draft, stamped
+  `_status = "draft"`. The published row is still untouched. **Action:** a
+  subscriber or hook that read the returned document expecting published
+  content must branch on `_status`.
+- **Subscribe rejects an unknown operation name.** `operations: ["creat"]`
+  used to open a stream that connected cleanly and then never delivered
+  anything. It is now an error at subscribe time. **Action:** none, unless you
+  had such a typo — in which case this is the first time you will hear about
+  it.
+
+### 25. MCP clients: unknown tools are protocol errors
+
+Two changes to how the Model Context Protocol server reports a tool it will
+not run:
+
+- **An unknown tool name is now a JSON-RPC error**, code `-32602`, message
+  `Unknown tool: <name>` — not a successful response carrying
+  `isError: true`. This is what the MCP specification requires. A tool that
+  *ran* and failed still reports in-band with `isError: true`, unchanged.
+  `resources/read` on an unknown URI now answers `-32002` instead of `-32603`.
+- **A collection you cannot see is reported as if it did not exist.**
+  Whether a collection is filtered out by `include_collections` /
+  `exclude_collections`, hidden by its `access.mcp` rule, or simply absent,
+  a direct tool call now gets the identical `Unknown tool` error. Previously
+  the first two answered `Tool not available: <slug>`, which let a client walk
+  a slug list and learn which collections it was being kept away from.
+
+**Action:** a client that distinguished those cases by message text needs to
+stop. A client that checked `isError` on the result now has to handle a
+protocol-level error for the unknown-tool case as well.
 
 ## Admin UI behavior
 
@@ -759,10 +1021,79 @@ continue to work.
   denials (their write-hooks bundle had no DB connection), so the dry-run
   validated fields the caller cannot write. They now evaluate denials like
   the real write path.
+- **Stored tokens are hashed.** Reset and verification tokens are written as
+  a SHA-256 digest; an MFA code is written as an HMAC keyed with
+  `[auth] secret`, since six digits is small enough to invert a bare digest by
+  table lookup. Every lookup hashes what the caller presented and compares in
+  constant time. A completed `_system_email` job has its payload emptied, so
+  the rendered link stops living in `_crap_jobs` after the send. **Action:**
+  see item 19 — links already sent stop working.
+- **The gRPC create/update codec no longer applies the password policy.** The
+  wire decoder ran the policy check while unpacking a request, *before* the
+  access rule was consulted, so an unauthenticated caller could probe the
+  configured minimum length and character classes by watching which passwords
+  came back rejected. The check now runs only in the write path, after the
+  access check — where it always also ran, so nothing is now unvalidated. The
+  codec keeps one shape check, which reveals nothing about the policy: a
+  `password` that is not a string is `INVALID_ARGUMENT` rather than coerced
+  to `""`. A present-but-empty password on a *create* is also rejected now,
+  on every surface, instead of quietly producing a passwordless account.
+  **Action:** none, unless a client sent an empty or non-string password and
+  relied on it being ignored.
+- **MCP no longer confirms which collections exist.** Covered in item 25.
+- **A password change invalidates an outstanding reset link.** The reset flow
+  cleared the token, but a logged-in password change (or the CLI) left it live
+  for the rest of its window. One password-update statement now always clears
+  it. **Action:** none.
+- **An expired reset link is refused before the form is shown.** The page
+  validated the token without checking expiry, so a dead link rendered the
+  form and only failed on submit — and then always as "invalid", because the
+  expired branch matched a type the service never returns. **Action:** none.
+- **`LoginResponse.user` is stripped like every other document.** The login
+  and MFA lookups read the user row raw, so a `hidden` field or one denied by
+  its `access.read` rule rode along on the login response while `Me` removed
+  it. **Action:** a client that read such a field off the login response will
+  no longer find it — read it through `Me` with an authorized user instead.
+- **Changing a user's email requires re-verification.** On a collection with
+  `verify_email`, an email change kept the `_verified` flag, so a user could
+  move their account to an address they had never proven they control.
+  **Action:** none, but expect a verification mail on email edits.
+- **Read-denied fields are no longer a query oracle.** Covered in item 20.
+- **Hook errors no longer carry the Lua stack traceback, or absolute server
+  paths, to clients.** An `error()` in a hook returned the whole traceback —
+  including `{config_dir}/hooks/….lua` — to the API caller, disclosing the
+  deployment's filesystem layout. Chunk names are now config-relative and the
+  traceback is stripped. **Action:** a client that parsed the traceback out of
+  an error message needs to stop; the message itself is unchanged.
+- **`read_config_file` redaction is structural.** The MCP tool redacted
+  secrets by matching lines, so a dotted key, an inline table, or a
+  multi-line string slipped a secret through. It now redacts by parsing the
+  document. **Action:** none.
+- **`restore --include-uploads` extracts only the `uploads` member.** A
+  crafted archive could write anywhere under the config directory, including
+  over your Lua. **Action:** none.
+- **`db console` no longer puts the Postgres password in `argv`.** It was
+  visible to any local process listing. **Action:** none.
+- **A revoked admin session could keep receiving live updates after logout.**
+  Session invalidation blocked new requests but did not tear down an open
+  stream. **Action:** none.
+- **`McpApiKey` no longer prints the key through `Display`.** **Action:**
+  none.
+- **`io.popen` is no longer reachable from Lua hooks.** `os.execute` was
+  already removed; `io.popen` was the surviving process-spawn path.
+  **Action:** a hook that shelled out through it now errors. There is no
+  replacement — process execution is outside the sandbox contract.
+- **A read of all locales applies field-read access per locale.** **Action:**
+  none.
+- **MCP job tools no longer leak raw backend text on internal errors.**
+  **Action:** none.
 
 ## gRPC clients (regenerate from `proto/content.proto`)
 
 Wire-contract changes — regenerate your gRPC stubs and adjust:
+
+- **New RPC: `ResendVerification`.** Additive, so existing stubs keep
+  working; regenerate to call it (see Additive features).
 
 - **`ListVersions` / `RestoreVersion` on a non-versioned collection now
   return `INVALID_ARGUMENT`** (was `FAILED_PRECONDITION`). The versioning
@@ -792,7 +1123,9 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   It previously dropped it silently, then (earlier in this cycle) rejected it with
   `INVALID_ARGUMENT`; a per-item `password` is now validated against
   `[auth.password_policy]` and hashed per document (parity with single `Create`).
-  `UpdateMany` still rejects a `password` (it applies one value to many rows). A **non-string** `password` (e.g. a number) is rejected the same way — it used to be silently dropped, creating a passwordless auth account.
+  `UpdateMany` still rejects a `password` (it applies one value to many rows).
+  A **non-string** `password` (e.g. a number) is rejected the same way — it used
+  to be silently dropped, creating a passwordless auth account.
 - **Removed always-true `success` fields** from `DeleteResponse`,
   `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
   and `AccountActionResponse`. A non-error response is the success signal;
@@ -894,6 +1227,58 @@ What changed:
   (`Rel::Doc`) at any depth. Regenerate both artifacts together.
 
 ## Bug fixes (no action needed)
+
+Two carry a caveat about data written before the upgrade — read those first
+if you use versions on a localized collection.
+
+- **Versions no longer lose every other locale's content.** A snapshot was
+  built from the row as resolved under the *writing* locale, so it held one
+  value per localized field. Restoring it wrote that value into the default
+  locale's column and `NULL`ed the rest: a German edit restored over the
+  English title and the other translations vanished. Snapshots now record
+  every locale's column. **Caveat:** snapshots taken *before* the upgrade
+  only ever held one locale, so restoring an old snapshot is still lossy —
+  there is nothing in the row to recover the other translations from. Treat
+  pre-upgrade snapshots on localized collections as single-locale.
+- **Version pruning no longer deletes the last published snapshot.**
+  `max_versions` could prune away the only published snapshot, leaving a
+  collection with no publishable history. The newest published snapshot is
+  now exempt from pruning. **Caveat:** snapshots already pruned are gone.
+- **Login works on a localized auth collection.** The user lookups selected
+  bare column names, which do not exist when a field is localized, so login
+  returned INTERNAL and every authenticated request came back UNAVAILABLE. If
+  you marked a field on your auth collection `localized` and then found auth
+  entirely broken, this was why.
+- **Undelete works on a localized soft-delete collection**, and **searching
+  the trash view returns results** — both previously failed or returned
+  nothing for the same bare-column reason.
+- **Version history shows dates.** `created_at` was stored but no query
+  selected it, so every version rendered an empty date. Existing rows have
+  the data; they just start displaying it.
+- **Restore on a `versions = { drafts = false }` collection works.** It wrote
+  `_status`, a column only created for drafts-enabled collections, and died
+  with a raw backend error after the hooks had already run.
+- **A trashed document's pending draft is no longer served as live.**
+- **Restoring a version refreshes the search index** (it used to go stale)
+  and no longer leaves a localized timezone Date's timezone wrong.
+- **Keyset (cursor) pagination no longer drops rows with a NULL sort value.**
+  If you paginate on an optional field, pages that silently skipped rows now
+  include them.
+- **`default_value = true` on a Checkbox field is stored as true.** It was
+  silently stored as false. If you worked around this by setting the value in
+  a `before_change` hook, you can drop the workaround.
+- **A collection added after the initial ref-count backfill is backfilled.**
+  Delete protection on collections defined later was counting from zero.
+- **`crap.hooks.register` / `remove` no longer half-apply at runtime.**
+- **Job auto-purge measures retention from completion, not creation.**
+  Long-running jobs were purged too early; expect runs to stick around
+  slightly longer than before.
+- **`VerifyMfa` reports real error codes** instead of INTERNAL for every
+  failure.
+- **A reference to a mistyped or stale id reports as a client error**, not an
+  internal one.
+- **Email templates render "expires in 60 minutes"**, not "expires
+  in60minutes".
 
 - **`updated_at` sorts correctly on SQLite after a publish/unpublish.** A status
   change stamped `updated_at` via SQLite's `datetime('now')` (space separator,
@@ -1132,6 +1517,66 @@ Previously accepted-but-inert; now real. Register a Lua handler with
 the populate cache delegates to it — for shared stores the built-in
 backends don't cover. Selecting the backend without a registration fails
 startup. See [crap.cache](../lua-api/cache.md).
+
+### Self-service verification resend
+
+A user whose verification email was lost or has expired no longer needs an
+administrator. `/admin/resend-verification` takes an address and mails a fresh
+link; the login page links to it whenever email is configured and at least one
+collection sets `verify_email`. The same flow is available to API clients as
+the `ResendVerification` RPC:
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "email": "user@example.com"
+}' localhost:50051 crap.ContentAPI/ResendVerification
+```
+
+Issuing a link retires the previous one, so only the newest email works. Like
+`ForgotPassword`, the call always reports success — an unverified account, a
+verified one, a locked one, and an address that was never registered are
+indistinguishable in the response, so the endpoint cannot be used to test which
+addresses exist. It shares the forgot-password rate-limit budget, per address
+and per IP.
+
+This matters most right after the upgrade: item 19 invalidates every
+verification link already in flight, and this is how users recover without
+opening a ticket.
+
+### `crap.validation_error` — reject a write on a named field
+
+A hook could only fail with `error("…")`, which reaches the caller as an
+opaque hook error and, on an admin form, as a general message. There is now a
+structured form:
+
+```lua
+function M.check(ctx)
+    if ctx.data.title and #ctx.data.title > 80 then
+        crap.validation_error({ title = "keep the title under 80 characters" })
+    end
+    return ctx
+end
+```
+
+It takes a table of field name to message and never returns — it raises,
+aborting the write. Every surface reports it where a built-in validator's
+message would go: `INVALID_ARGUMENT` over gRPC, an error under the `title`
+input on an admin form. Pass at least one field; an empty table is itself an
+error, so a mistake in the hook cannot let the write through. Plain
+`error("…")` still works and still means "opaque failure".
+
+### MCP accepts JSON-RPC batches
+
+Both transports now take an array of request objects in place of a single one.
+Every member runs and the reply is an array holding one response per member
+that carried an `id`, in the order sent. A batch of nothing but notifications
+gets no reply at all (HTTP `204`).
+
+A batch may hold at most 100 members; that and an empty array are refused
+whole with a single `-32600` error rather than expanding into unbounded work.
+The `initialize` handshake may not appear in a batch, so a batch never opens a
+session.
 
 ### Smaller additions
 

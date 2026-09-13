@@ -109,6 +109,22 @@ When `verify_email: true` is set on an auth collection:
 
 Available via gRPC as `VerifyEmail` RPC.
 
+If the link is lost or has expired, a user can ask for a new one at
+`/admin/resend-verification` (linked from the login page whenever email is
+configured and some collection requires verification), or through the
+`ResendVerification` RPC. Issuing a new link retires the previous one, so only
+the newest email works.
+
+**Security:** the resend endpoint always reports success, exactly like forgot
+password. An unverified account, a verified one, a locked one, and an address
+that was never registered all get the same answer, so the form cannot be used
+to test which addresses exist. It is rate limited per address and per IP under
+its own keyspace — the budget is sized like the forgot-password one but is
+separate, so clicking "resend" a few times cannot lock you out of your own
+password reset. The page is only served when email is configured and some
+collection requires verification; otherwise it would promise a mail it cannot
+send.
+
 The verification endpoint is rate-limited by IP (using the forgot-password rate limiter). Only actual token validation failures (invalid or expired tokens) count toward the rate limit — transient system errors do not penalize the user's IP.
 
 **Note:** Email verification requires SMTP to be configured. If SMTP is not configured, verification emails won't be sent (logged as warnings) and unverified users will be unable to log in.

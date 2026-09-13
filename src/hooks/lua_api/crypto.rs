@@ -1,7 +1,6 @@
 //! `crap.crypto` namespace — sha256, hmac, base64, AES-GCM encrypt/decrypt, `random_bytes`.
 
-use std::fmt::Write as _;
-
+use crate::core::hex::hex_encode;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
@@ -274,15 +273,6 @@ fn decrypt(secret: &str, encoded: &str) -> LuaResult<String> {
     String::from_utf8(plaintext).map_err(|e| RuntimeError(format!("decrypt utf8: {e:#}")))
 }
 
-/// Encode bytes as lowercase hex string.
-pub(super) fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
-}
-
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -323,32 +313,6 @@ mod tests {
             .unwrap();
         register_crypto(&lua, secret).unwrap();
         lua
-    }
-
-    // --- hex_encode ---
-
-    #[test]
-    fn hex_encode_empty() {
-        assert_eq!(hex_encode(&[]), "");
-    }
-
-    #[test]
-    fn hex_encode_known_input() {
-        assert_eq!(hex_encode(&[0x00, 0xff, 0x0a, 0xab]), "00ff0aab");
-    }
-
-    #[test]
-    fn hex_encode_single_byte() {
-        assert_eq!(hex_encode(&[0x42]), "42");
-        assert_eq!(hex_encode(&[0x00]), "00");
-        assert_eq!(hex_encode(&[0xff]), "ff");
-        assert_eq!(hex_encode(&[0x0a]), "0a");
-    }
-
-    #[test]
-    fn hex_encode_multiple_bytes() {
-        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
-        assert_eq!(hex_encode(&[0x01, 0x23, 0x45, 0x67]), "01234567");
     }
 
     // --- AES-GCM roundtrip ---

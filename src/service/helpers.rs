@@ -25,36 +25,61 @@ use crate::{
 /// it. A `None` policy falls back to [`PasswordPolicy::default`] — the policy is
 /// *always* enforced, so a context that forgets to thread the configured policy
 /// degrades to the default rules, never to no enforcement. No-op for a non-auth
-/// collection, an absent password, or an empty password (empty = "no change" on
-/// update; create requires a non-empty password upstream).
+/// collection or an absent password; what an empty one means is the caller's
+/// [`EmptyPassword`] choice.
 ///
 /// # Errors
 ///
 /// Returns [`ServiceError::Validation`] with a single `password` field error
-/// when the password violates the policy.
+/// when the password violates the policy, or is empty where empty is rejected.
 pub(crate) fn validate_password_policy(
     is_auth: bool,
     password: Option<&str>,
     policy: Option<&PasswordPolicy>,
+    empty: EmptyPassword,
 ) -> Result<(), ServiceError> {
     if !is_auth {
         return Ok(());
     }
 
-    let Some(pw) = password.filter(|p| !p.is_empty()) else {
+    // Absent is always fine: an auth document may legitimately have no
+    // password (an external auth method owns the credential).
+    let Some(pw) = password else {
         return Ok(());
     };
+
+    if pw.is_empty() {
+        return match empty {
+            EmptyPassword::MeansNoChange => Ok(()),
+            EmptyPassword::IsRejected => Err(password_error("Password must not be empty")),
+        };
+    }
 
     let default_policy = PasswordPolicy::default();
     let policy = policy.unwrap_or(&default_policy);
 
-    policy.validate(pw).map_err(|e| {
-        ServiceError::Validation(ValidationError::new(vec![FieldError::with_key(
-            "password",
-            e.to_string(),
-            "validation.password_policy",
-        )]))
-    })
+    policy
+        .validate(pw)
+        .map_err(|e| password_error(e.to_string()))
+}
+
+/// What a present-but-empty `password` means to the caller.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EmptyPassword {
+    /// Update: there is a stored password, and an empty value means "leave
+    /// it alone".
+    MeansNoChange,
+    /// Create: there is nothing to leave alone, so an empty value is a
+    /// caller error rather than a silently passwordless account.
+    IsRejected,
+}
+
+fn password_error(message: impl Into<String>) -> ServiceError {
+    ServiceError::Validation(ValidationError::new(vec![FieldError::with_key(
+        "password",
+        message,
+        "validation.password_policy",
+    )]))
 }
 
 /// Run after-change hooks and return the request-scoped context.
@@ -267,14 +292,30 @@ mod tests {
     fn password_policy_non_auth_is_skipped() {
         // A non-auth collection may carry a legitimate `password` field; the
         // policy never applies to it.
-        assert!(validate_password_policy(false, Some("x"), None).is_ok());
+        assert!(
+            validate_password_policy(false, Some("x"), None, EmptyPassword::IsRejected).is_ok()
+        );
     }
 
+    /// An absent password is always fine — an auth document may have none.
+    /// An empty one depends on the caller: "no change" on update, an error on
+    /// create, where treating it as "no change" would quietly produce a
+    /// passwordless account.
     #[test]
-    fn password_policy_absent_or_empty_is_skipped() {
-        // Absent password, and empty password ("no change" on update), skip.
-        assert!(validate_password_policy(true, None, None).is_ok());
-        assert!(validate_password_policy(true, Some(""), None).is_ok());
+    fn password_policy_absent_is_skipped_and_empty_follows_the_caller() {
+        assert!(validate_password_policy(true, None, None, EmptyPassword::IsRejected).is_ok());
+        assert!(validate_password_policy(true, None, None, EmptyPassword::MeansNoChange).is_ok());
+
+        assert!(
+            validate_password_policy(true, Some(""), None, EmptyPassword::MeansNoChange).is_ok()
+        );
+
+        let err = validate_password_policy(true, Some(""), None, EmptyPassword::IsRejected)
+            .expect_err("an empty password on create is a caller error");
+        match err {
+            ServiceError::Validation(ve) => assert_eq!(ve.errors[0].field, "password"),
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 
     #[test]
@@ -282,7 +323,8 @@ mod tests {
         // `None` policy falls back to the default (min length 8): a short
         // password is rejected as a structured `password` field error, so every
         // surface renders it on the password input.
-        let err = validate_password_policy(true, Some("short"), None).unwrap_err();
+        let err = validate_password_policy(true, Some("short"), None, EmptyPassword::IsRejected)
+            .unwrap_err();
         match err {
             ServiceError::Validation(ve) => {
                 assert_eq!(ve.errors.len(), 1);
@@ -298,14 +340,19 @@ mod tests {
 
     #[test]
     fn password_policy_valid_passes() {
-        assert!(validate_password_policy(true, Some("longenough"), None).is_ok());
+        assert!(
+            validate_password_policy(true, Some("longenough"), None, EmptyPassword::IsRejected)
+                .is_ok()
+        );
     }
 
     #[test]
     fn password_policy_none_falls_back_to_default_never_skips() {
         // The fail-safe: a context that forgets to thread a policy still enforces
         // the DEFAULT policy — never no enforcement.
-        assert!(validate_password_policy(true, Some("weak"), None).is_err());
+        assert!(
+            validate_password_policy(true, Some("weak"), None, EmptyPassword::IsRejected).is_err()
+        );
     }
 
     #[test]
@@ -316,7 +363,15 @@ mod tests {
             ..PasswordPolicy::default()
         };
         // Passes default (>=8) but fails the stricter threaded policy (>=12).
-        assert!(validate_password_policy(true, Some("longenough"), Some(&strict)).is_err());
+        assert!(
+            validate_password_policy(
+                true,
+                Some("longenough"),
+                Some(&strict),
+                EmptyPassword::IsRejected
+            )
+            .is_err()
+        );
     }
 
     /// Helper: build a Text field with the given hidden flags.

@@ -618,6 +618,62 @@ memories; the load-bearing ones:
     token entropy/expiry/single-use/constant-time, enumeration resistance,
     MFA pending-token binding, password-hash never leaving the DB.
   Convergence: a new class appeared, so the streak stays 0. Round 14 pending.
+- 2026-09-13 (23) — **ROUND 13 FOLLOW-THROUGH** — the four items Round 13
+  had recorded as open, all landed, plus the missing self-service surface the
+  first of them exposed. No new lens, no new class.
+  - **F-class — spendable secrets stored in the clear.** Reset tokens,
+    verification tokens and MFA codes sat in their columns as plaintext, so a
+    backup, a replica, or a stray query log handed over a live credential.
+    Fixed at the DB storage edge, not per flow: one `hash_security_value` /
+    `security_value_matches` pair, applied inside `db::query::auth`, so every
+    caller stores a SHA-256 digest and every lookup hashes what was presented
+    and compares in constant time. Breaking with no migration by decision —
+    outstanding links and codes die on upgrade.
+  - **F-class — pre-auth password-policy oracle.** The gRPC create/update
+    codec validated the password while unpacking the request, ahead of the
+    access check, letting an unauthenticated caller read back the configured
+    policy. The codec now only extracts; the service write path's existing
+    check (which always also ran) is the only one left. Removing it exposed a
+    second hole the codec had been masking: the coercion `as_str().unwrap_or("")`
+    turned a non-string password into `""`, and the service treats an empty
+    password as "no change" — on create that is a passwordless account. The
+    codec now rejects a non-string as a wire-shape error (no policy detail in
+    it), and `validate_password_policy` takes an explicit `EmptyPassword` mode
+    so create rejects an empty value on every surface instead of relying on
+    each caller to have checked upstream.
+  - **S/P-class — MCP answered protocol errors as tool results.** An unknown
+    tool came back `isError: true` rather than `-32602`, and an unknown
+    resource URI as `-32603` rather than MCP's `-32002`. Both fixed, and the
+    split is now typed: a dedicated `UnknownTool` error is the only thing the
+    JSON-RPC layer promotes out of band.
+  - **F-class — MCP confirmed which collections exist.** `Tool not available:
+    <slug>` for a filtered/`access.mcp`-hidden collection versus `Unknown tool`
+    for a name that was never generated let a client enumerate what it was
+    being kept from. Both now answer the identical `UnknownTool`, matching
+    `describe_collection`. Pinned by a test that asserts the two messages are
+    byte-identical.
+  - **M-class — no self-service verification resend.** Only an administrator
+    could reissue a verification link, from the CLI; with the tokens now
+    hashed, every outstanding link dies on upgrade and that gap becomes acute.
+    Added `/admin/resend-verification` (linked from the login page when it can
+    do anything) and a `ResendVerification` RPC, both over one service
+    chokepoint that also serves the sign-up email, so link shape, 24-hour
+    lifetime and single-live semantics cannot drift between the two. Shares
+    the forgot-password rate-limit budget and its anti-enumeration answer.
+  - **M6 — JSON-RPC batching was unimplemented** while the declared protocol
+    version requires it. Both transports now dispatch batches through one
+    shared `mcp::batch` module, with an empty array and a >100-member array
+    refused whole so a small request cannot expand into unbounded work.
+  - **D-class, found by the gate run — a documented Lua API did not exist.**
+    `crap.validation_error`, the structured way for a hook to reject a write,
+    was described in the CHANGELOG and asserted by an e2e test, but nothing
+    ever registered it; the test had been failing on "attempt to call a nil
+    value". Implemented with one encoder in Lua-land and one decoder in
+    `ServiceError::classify`, both anchored on a single constant in
+    `core::validate`, so the string channel between the two cannot drift.
+  Convergence: no new class, and every item was already on the books from
+  Round 13, so this does not count as a quiet round in its own right. The
+  streak stays 0; Round 14 pending.
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

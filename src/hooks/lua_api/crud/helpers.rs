@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value as LuaValue};
 use serde_json::Value;
 use tracing::warn;
 
@@ -148,6 +148,19 @@ pub(crate) fn extract_data(
     data_table: &Table,
     def: &CollectionDefinition,
 ) -> LuaResult<ExtractedData> {
+    // Checked BEFORE the flatten: `lua_table_to_hashmap` drops any value that
+    // is not a scalar, so a table-valued `password` would vanish and the
+    // account would be created with no password at all rather than erroring.
+    if def.is_auth_collection() {
+        let raw: LuaValue = data_table.get("password")?;
+        if !matches!(
+            raw,
+            LuaValue::Nil | LuaValue::String(_) | LuaValue::Integer(_) | LuaValue::Number(_)
+        ) {
+            return Err(RuntimeError("'password' must be a string".to_string()));
+        }
+    }
+
     let mut flat = lua_table_to_hashmap(data_table)?;
 
     let password = if def.is_auth_collection() {

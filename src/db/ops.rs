@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::core::{
     CollectionDefinition, Document, DocumentFields, collection::GlobalDefinition,
-    document::DocumentBuilder, prefixed_name, walk_leaf_fields,
+    document::DocumentBuilder, field::FieldDefinition, prefixed_name, walk_leaf_fields,
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
@@ -92,33 +92,40 @@ pub struct FindByIdFullParams<'a> {
     pub include_deleted: bool,
 }
 
-/// Resolve a draft snapshot's per-locale columns for the locale being read.
+/// Resolve a draft snapshot's per-locale columns for the locale being read,
+/// then drop them.
 ///
 /// Snapshots store `title__en` / `title__de` alongside the value that was
-/// resolved when the draft was saved. Without this, a draft saved in one
-/// locale would be served as the content of every other locale.
-fn resolve_snapshot_locale(
+/// resolved when the draft was saved. Without the resolve, a draft saved in
+/// one locale would be served as the content of every other locale. Without
+/// the drop, the caller would receive every locale's column beside the
+/// resolved field — a shape no other read produces, and one that hands a
+/// caller reading `de` the `en` translation it did not ask for.
+///
+/// Runs even when the locale context is absent or locales are off: a snapshot
+/// written while locales were enabled still carries the decorated columns, and
+/// they must not reach the caller either way.
+pub(crate) fn resolve_snapshot_locale(
     doc: &mut Document,
-    def: &CollectionDefinition,
+    fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
 ) {
-    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
-        return;
-    };
-    let locale = ctx.access_locale();
-    let fallback = ctx
-        .config
-        .fallback
-        .then(|| ctx.config.default_locale.clone());
+    let active = locale_ctx.filter(|c| c.config.is_enabled());
+    let locale = active.map(LocaleContext::access_locale);
+    let fallback = active.and_then(|ctx| {
+        ctx.config
+            .fallback
+            .then(|| ctx.config.default_locale.clone())
+    });
 
-    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, inherited| {
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
         if !(field.localized || inherited) {
             return Ok(());
         }
         let name = prefixed_name(prefix, &field.name);
-        let value = doc
-            .fields
-            .get(&format!("{name}__{locale}"))
+
+        let value = locale
+            .and_then(|l| doc.fields.get(&format!("{name}__{l}")))
             .filter(|v| !v.is_null())
             .or_else(|| {
                 fallback
@@ -129,8 +136,14 @@ fn resolve_snapshot_locale(
             .cloned();
 
         if let Some(value) = value {
-            doc.fields.insert(name, value);
+            doc.fields.insert(name.clone(), value);
         }
+
+        // Drop every decorated column for this field, whichever locale it
+        // names — including locales no longer in the config, which a snapshot
+        // taken before a config change can still carry.
+        let decorated = format!("{name}__");
+        doc.fields.retain(|k, _| !k.starts_with(&decorated));
 
         Ok(())
     });
@@ -150,7 +163,18 @@ fn resolve_snapshot_locale(
 ///
 /// Returns a backend error if any of the underlying queries fails.
 pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
+    // The overlay bypasses the SQL `WHERE` path, so the lifecycle filter has
+    // to be applied by hand: without this a soft-deleted document's pending
+    // draft is served as a live document (and the admin form opens it as
+    // editable, only to fail on save).
+    let lifecycle_ok = !p.use_draft
+        || !p.def.has_drafts()
+        || !p.def.soft_delete
+        || p.include_deleted
+        || query::versions::document_is_live(p.conn, p.slug, p.id)?;
+
     if p.use_draft
+        && lifecycle_ok
         && p.def.has_drafts()
         && let Some(version) = query::find_latest_version(p.conn, p.slug, p.id)?
         && version.status == "draft"
@@ -159,7 +183,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         // A snapshot carries every locale's decorated column plus the value
         // resolved at save time. Resolve for the READING locale, so a draft
         // saved under `en` doesn't surface as the `de` value (and vice versa).
-        resolve_snapshot_locale(&mut doc, p.def, p.locale_ctx);
+        resolve_snapshot_locale(&mut doc, &p.def.fields, p.locale_ctx);
 
         // SECURITY: the snapshot bypasses the SQL `WHERE` path, so the view's
         // row constraint (e.g. a `draft = { author = me }` rule) must be enforced

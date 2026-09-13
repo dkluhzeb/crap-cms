@@ -43,19 +43,34 @@ pub(in crate::mcp::tools) fn events_flag(args: &Value) -> bool {
 /// passes `true` (empty means "leave the password unchanged"); `create` and
 /// `create_many` pass `false` (there is nothing to preserve, so an empty
 /// password flows through to the policy validator and is rejected).
+///
+/// # Errors
+///
+/// When `password` is present but not a string. It used to be coerced to
+/// `None` and, because `password` is a reserved key, dropped from the data
+/// too — so `{"password": 12345}` created an account with no password at all.
 pub(in crate::mcp::tools) fn extract_auth_password(
     def: &CollectionDefinition,
     obj: &Value,
     empty_as_none: bool,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !def.is_auth_collection() {
-        return None;
+        return Ok(None);
     }
 
-    obj.get("password")
-        .and_then(Value::as_str)
-        .filter(|s| !(empty_as_none && s.is_empty()))
-        .map(ToString::to_string)
+    let Some(value) = obj.get("password") else {
+        return Ok(None);
+    };
+
+    let Some(pw) = value.as_str() else {
+        bail!("'password' must be a string");
+    };
+
+    if empty_as_none && pw.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(pw.to_string()))
 }
 
 /// Reserved top-level meta-keys for a single-document write tool — the keys
@@ -212,28 +227,44 @@ mod tests {
 
         let empty = json!({ "password": "" });
         assert_eq!(
-            extract_auth_password(&auth_def, &empty, false),
+            extract_auth_password(&auth_def, &empty, false).unwrap(),
             Some(String::new()),
             "create: empty flows through to the policy validator"
         );
         assert_eq!(
-            extract_auth_password(&auth_def, &empty, true),
+            extract_auth_password(&auth_def, &empty, true).unwrap(),
             None,
             "update: empty means no change"
         );
 
         let real = json!({ "password": "secret" });
         assert_eq!(
-            extract_auth_password(&auth_def, &real, true),
+            extract_auth_password(&auth_def, &real, true).unwrap(),
             Some("secret".to_string())
         );
 
         let plain_def = CollectionDefinition::new("posts");
         assert_eq!(
-            extract_auth_password(&plain_def, &real, false),
+            extract_auth_password(&plain_def, &real, false).unwrap(),
             None,
             "non-auth collection: password is ordinary field data"
         );
+    }
+
+    /// A non-string password used to coerce to `None` — and because
+    /// `password` is a reserved key it was stripped from the data too, so
+    /// `{"password": 12345}` created an account with no password at all.
+    #[test]
+    fn extract_auth_password_rejects_a_non_string() {
+        let mut auth_def = CollectionDefinition::new("users");
+        auth_def.auth = Some(Auth::new(true));
+
+        for value in [json!(12345), json!(true), json!(["a"]), json!(null)] {
+            let args = json!({ "password": value });
+            let err = extract_auth_password(&auth_def, &args, false)
+                .expect_err("a non-string password must be rejected");
+            assert!(err.to_string().contains("must be a string"));
+        }
     }
 
     // ── parse_where_filters: array operators ──────────────────────────────

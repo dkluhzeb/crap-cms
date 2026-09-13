@@ -347,7 +347,13 @@ pub fn run<O: Operation>(
 
     let ctx = builder.build();
 
-    O::run(&ctx, args).map_err(CoreError::Service)
+    // Classify ONCE, here, so every surface receives a typed error. An op
+    // body returns `Internal` for anything it could not type — including a
+    // hook that raised, whose message only becomes a `HookError` or a
+    // `Validation` after this pass. gRPC and admin used to each re-classify
+    // at their own boundary and MCP did not, so the same hook rejection
+    // reached an MCP client as "Internal error".
+    O::run(&ctx, args).map_err(|e| CoreError::Service(e.reclassify(infra.pool.kind())))
 }
 
 /// Resolve a principal WITHOUT running an operation — the queued-bulk path

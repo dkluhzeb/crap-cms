@@ -11,7 +11,9 @@ use crate::{
 
 use super::ServiceError;
 use super::validate::canonicalize_write_input;
-use crate::service::helpers::{collect_api_hidden_field_names, validate_password_policy};
+use crate::service::helpers::{
+    EmptyPassword, collect_api_hidden_field_names, validate_password_policy,
+};
 use crate::service::hooks::WriteHooks;
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -107,11 +109,15 @@ pub fn create_document_in_conn(
 
     // Authoritative password-policy enforcement — one chokepoint for every
     // surface and every create path (single AND `create_many`); falls back to
-    // the default policy so it can never silently skip. See `validate_password_policy`.
+    // the default policy so it can never silently skip. A present-but-empty
+    // password is a caller error here: on create there is nothing to leave
+    // alone, so treating it as "no change" would quietly produce a
+    // passwordless account. See `validate_password_policy`.
     validate_password_policy(
         def.is_auth_collection(),
         input.password,
         ctx.password_policy,
+        EmptyPassword::IsRejected,
     )?;
 
     let is_draft = input.draft && def.has_drafts();

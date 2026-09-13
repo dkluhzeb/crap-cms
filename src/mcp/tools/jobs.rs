@@ -29,6 +29,7 @@ use tracing::info;
 use crate::{
     config::McpJobTools,
     core::job::JobRun,
+    db::query::PaginationCtx,
     mcp::{protocol::ToolDefinition, schema, tools::ToolExecCtx},
     service::{
         self, ServiceContext,
@@ -317,7 +318,7 @@ fn exec_list_job_runs(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     // Capped by the same pagination config every other surface uses — an
     // uncapped limit would return the whole runs table in one response.
     let requested = args.get("limit").and_then(Value::as_i64);
-    let limit = crate::db::query::PaginationCtx::from_config(&ctx.config.pagination)
+    let limit = PaginationCtx::from_config(&ctx.config.pagination)
         .resolve_limit(Some(requested.unwrap_or(DEFAULT_RUN_LIMIT)));
     let offset = args
         .get("offset")

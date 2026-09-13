@@ -1,6 +1,36 @@
 //! Field validation error types returned by the hook system.
 
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, sync::OnceLock};
+
+use nanoid::nanoid;
+
+use serde_json::{Map, Value, from_str, to_string};
+
+/// Fixed part of the marker that tags an error message as a structured
+/// validation failure raised from Lua. Never used on its own — see
+/// [`hook_validation_prefix`].
+const HOOK_VALIDATION_TAG: &str = "crap:validation-error:";
+
+/// Per-process random suffix, so the marker cannot be guessed.
+static HOOK_VALIDATION_NONCE: OnceLock<String> = OnceLock::new();
+
+/// The marker that tags an error message as a structured validation failure.
+///
+/// A Lua hook can only fail by raising a string, so `crap.validation_error`
+/// encodes its field errors as JSON after this marker and
+/// [`ValidationError::from_hook_message`] is the one place that reads them
+/// back. Both halves go through this function so the two ends cannot drift.
+///
+/// The marker carries a random per-process suffix because the channel would
+/// otherwise be forgeable: a hook that interpolates user data into its
+/// message — `error("rejected: " .. doc.slug)` — would let that data
+/// impersonate a validation failure on a field of the attacker's choosing.
+/// A value minted after the process started cannot be embedded in content
+/// written before it, and is never disclosed.
+#[must_use]
+pub fn hook_validation_prefix() -> &'static str {
+    HOOK_VALIDATION_NONCE.get_or_init(|| format!("{HOOK_VALIDATION_TAG}{}:", nanoid!(16)))
+}
 
 /// A single field validation error.
 #[derive(Debug, Clone)]
@@ -80,6 +110,57 @@ impl ValidationError {
                 .or_insert_with(|| e.message.clone());
         }
         map
+    }
+
+    /// Encode as the single-line message a Lua hook raises. Single line
+    /// because mlua appends a stack traceback, and the decoder reads only up
+    /// to the first newline.
+    #[must_use]
+    pub fn to_hook_message(&self) -> String {
+        let mut fields = Map::new();
+        for e in &self.errors {
+            fields.insert(e.field.clone(), Value::String(e.message.clone()));
+        }
+
+        let encoded = to_string(&Value::Object(fields)).unwrap_or_else(|_| "{}".to_string());
+
+        format!("{}{encoded}", hook_validation_prefix())
+    }
+
+    /// Recover the field errors a hook encoded into its message.
+    ///
+    /// `None` when the message is an ordinary error — the caller then treats
+    /// it as a plain hook failure.
+    ///
+    /// The marker may sit anywhere in the string — mlua wraps the raised
+    /// value in `runtime error: …` and appends a traceback — but the JSON
+    /// must run to the end of that line.
+    #[must_use]
+    pub fn from_hook_message(message: &str) -> Option<Self> {
+        let prefix = hook_validation_prefix();
+        let start = message.find(prefix)? + prefix.len();
+        let rest = &message[start..];
+        let encoded = rest.split('\n').next().unwrap_or(rest).trim_end();
+
+        let Value::Object(fields) = from_str::<Value>(encoded).ok()? else {
+            return None;
+        };
+
+        // No translation key: the hook author wrote the message, so there is
+        // nothing to look up — and a key with no entry renders as the key.
+        let errors: Vec<FieldError> = fields
+            .into_iter()
+            .map(|(field, message)| {
+                let text = match message {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                };
+
+                FieldError::new(field, text)
+            })
+            .collect();
+
+        (!errors.is_empty()).then(|| Self::new(errors))
     }
 }
 

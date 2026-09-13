@@ -160,7 +160,7 @@ pub fn verify_second_factor(
             .map_err(|e| ServiceError::classify(e, infra.pool.kind()))?;
         let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
-        return super::verify_mfa_code(&ctx, user_id, code);
+        return super::verify_mfa_code(&ctx, user_id, code, auth_secret);
     }
 
     let conn = infra

@@ -118,6 +118,14 @@ pub struct McpConfig {
     /// (bulk creates, `write_config_file` with big assets).
     #[serde(with = "serde_filesize")]
     pub http_max_body_bytes: u64,
+    /// Maximum number of requests in one JSON-RPC batch. Default: 50.
+    ///
+    /// A batch multiplies what a single request can cost, so this bounds it
+    /// independently of the body-size cap: 50 small `delete_many` calls are a
+    /// few kilobytes of body but 50 whole-collection deletes. Set
+    /// `[server] bulk_max_documents` too if MCP is reachable by anyone you
+    /// would not hand a `DELETE` to. `0` disables batching entirely.
+    pub max_batch_members: usize,
 }
 
 impl Default for McpConfig {
@@ -131,6 +139,7 @@ impl Default for McpConfig {
             include_collections: Vec::new(),
             exclude_collections: Vec::new(),
             http_max_body_bytes: 1_048_576, // 1 MiB
+            max_batch_members: 50,
         }
     }
 }

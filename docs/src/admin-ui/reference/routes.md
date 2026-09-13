@@ -22,6 +22,7 @@ CSRF-protected. `/static/` and `/uploads/` are public.
 | `/admin/forgot-password` | GET, POST | Forgot password page / action (public) |
 | `/admin/reset-password` | GET, POST | Reset password page / action (public, requires token) |
 | `/admin/verify-email` | GET | Email verification (public, requires token) |
+| `/admin/resend-verification` | GET, POST | Request a fresh verification link (public) |
 | `/admin/collections` | GET | Collection list |
 | `/admin/collections/{slug}` | GET, POST | Collection items list / create action |
 | `/admin/collections/{slug}/create` | GET | Create form |

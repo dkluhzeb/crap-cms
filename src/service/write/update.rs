@@ -16,7 +16,8 @@ use crate::{
 use super::ServiceError;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
-    collect_api_hidden_field_names, enforce_access_constraints, validate_password_policy,
+    EmptyPassword, collect_api_hidden_field_names, enforce_access_constraints,
+    validate_password_policy,
 };
 use crate::service::hooks::WriteHooks;
 
@@ -164,6 +165,7 @@ pub(crate) fn update_document_in_conn(
         def.is_auth_collection(),
         input.password,
         ctx.password_policy,
+        EmptyPassword::MeansNoChange,
     )?;
 
     let is_draft = input.draft && def.has_drafts();

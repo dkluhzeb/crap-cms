@@ -49,6 +49,7 @@ pub mod event;
 pub mod field;
 pub mod field_denial;
 pub mod group_repr;
+pub mod hex;
 pub mod hook_ref;
 pub mod job;
 pub mod lua_lease;
@@ -70,7 +71,7 @@ pub mod walk;
 /// `macros/src/builder.rs` for the field rules.
 pub use crap_cms_macros::Builder;
 
-pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError, normalize_email};
+pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, normalize_email};
 pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
     LiveSetting, VersionsConfig,

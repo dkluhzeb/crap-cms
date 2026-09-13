@@ -2190,3 +2190,15 @@ crap.uploads = {}
 function crap.uploads.sign_url(url, expires_in) end
 
 
+--- Raise a structured validation error from a hook.
+---
+--- Takes a table of field name to message — `{ title = "title is required" }`
+--- — and never returns: it raises, aborting the write. Every surface reports
+--- it the way it reports a built-in validation failure (gRPC
+--- `INVALID_ARGUMENT`, a field error on the admin form), rather than as an
+--- opaque hook error.
+--- @param errors table  Map of field name to error message.
+--- @return nil # Never returns — always raises.
+function crap.validation_error(errors) end
+
+

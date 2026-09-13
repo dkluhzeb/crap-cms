@@ -282,6 +282,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 # job_tools = false       # Job tools: false | "read" | "all" (adds trigger_job)
 # api_key = ""            # API key for HTTP transport
 # http_max_body_bytes = "1MB" # Max POST /mcp body size
+# max_batch_members = 50      # Max requests in one JSON-RPC batch (0 = no batching)
 # include_collections = [] # Only expose these collections
 # exclude_collections = [] # Hide these collections
 
@@ -645,6 +646,7 @@ see [Custom routes](../lua-api/routes.md)).
 | `job_tools` | `false` \| `"read"` \| `"all"` | `false` | Background-job MCP tools. `false` exposes none; `"read"` adds `list_jobs` / `get_job_run` / `list_job_runs` (introspection, failure triage, and polling for queued bulk ops); `"all"` also exposes `trigger_job`, which queues **any** defined job. Tiered because MCP runs with override access, so a job's own `access` hook cannot restrict it. The `queue` argument on the bulk tools appears only from `"read"` up. `true` is rejected as ambiguous. |
 | `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server refuses to start without one, and the key must be **at least 32 characters** (MCP bypasses collection/field ACLs; generate one with `openssl rand -hex 32`). Requests must include `Authorization: Bearer <key>`. |
 | `http_max_body_bytes` | integer/string | `1048576` (1 MiB) | Maximum request-body size for `POST /mcp`. Accepts integer bytes or a filesize string (`"16MB"`). Raise for large bulk payloads or `write_config_file` assets. |
+| `max_batch_members` | integer | `50` | Maximum requests in one JSON-RPC batch, checked before any member runs. Counts requests, not bytes — a few kilobytes of `delete_many` calls is otherwise that many whole-collection deletes. `0` refuses batches entirely. Pair with `[server] bulk_max_documents`. |
 | `include_collections` | string[] | `[]` (empty) | Only expose these slugs via MCP (collections **and** globals). Empty = everything. Enforced identically in tool listing, execution and schema resources. |
 | `exclude_collections` | string[] | `[]` (empty) | Hide these slugs (collections **and** globals) from MCP. Takes precedence over `include_collections`. Enforced identically in tool listing, execution and schema resources. |
 

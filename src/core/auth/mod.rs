@@ -9,13 +9,14 @@ pub mod claims;
 /// Email normalization for auth comparisons.
 pub mod email;
 /// Error types for auth operations.
-pub mod errors;
 /// Newtype wrapper for Argon2id password hashes.
 pub mod hashed_password;
 /// Newtype wrapper for JWT signing secrets.
 pub mod jwt_secret;
 /// Password hashing provider trait + Argon2id implementation.
 pub mod password;
+/// One-way hashing for stored reset/verification tokens and MFA codes.
+pub mod security_value;
 /// Token provider trait + JWT implementation.
 pub mod token;
 pub mod totp;
@@ -24,12 +25,14 @@ pub mod user;
 
 pub use claims::{Claims, ClaimsBuilder, TokenUse};
 pub use email::normalize_email;
-pub use errors::ResetTokenError;
 pub use hashed_password::HashedPassword;
 pub use jwt_secret::JwtSecret;
 pub use password::{
     Argon2PasswordProvider, PasswordProvider, SharedPasswordProvider, dummy_verify, hash_password,
     verify_password,
+};
+pub use security_value::{
+    hash_mfa_code, hash_security_value, mfa_code_matches, security_value_matches,
 };
 pub use token::{
     JwtTokenProvider, SharedTokenProvider, TokenProvider, create_token, validate_token,

@@ -566,6 +566,13 @@ impl ContentApi for ContentService {
         self.verify_email_impl(request).await
     }
 
+    async fn resend_verification(
+        &self,
+        request: Request<content::ResendVerificationRequest>,
+    ) -> Result<Response<content::ResendVerificationResponse>, Status> {
+        Ok(self.resend_verification_impl(request))
+    }
+
     async fn list_collections(
         &self,
         request: Request<content::ListCollectionsRequest>,

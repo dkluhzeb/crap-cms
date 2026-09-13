@@ -228,3 +228,20 @@ grpcurl -plaintext -d '{
     "token": "the-token-from-email"
 }' localhost:50051 crap.ContentAPI/VerifyEmail
 ```
+
+### Resending the link
+
+A lost or expired link can be replaced without an administrator. The admin UI
+offers `/admin/resend-verification` (linked from the login page), and the same
+flow is available over gRPC:
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "email": "user@example.com"
+}' localhost:50051 crap.ContentAPI/ResendVerification
+```
+
+The new link retires the previous one. Like `ForgotPassword`, the call always
+returns success — an unverified account, a verified one, a locked one, and an
+unknown address are indistinguishable in the response.

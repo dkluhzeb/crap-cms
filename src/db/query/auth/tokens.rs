@@ -3,7 +3,7 @@
 use anyhow::{Context as _, Result};
 
 use crate::{
-    core::{CollectionDefinition, Document},
+    core::{CollectionDefinition, Document, auth::hash_security_value},
     db::{DbConnection, DbValue, document::row_to_document, query::get_column_names},
 };
 
@@ -25,10 +25,12 @@ fn set_token(
         conn.placeholder(3),
     );
     let sql = format!("UPDATE \"{slug}\" SET {token_col} = {p1}, {exp_col} = {p2} WHERE id = {p3}");
+    // The DIGEST is stored, never the token itself — the emailed value stays
+    // the only copy of the credential (see `hash_security_value`).
     conn.execute(
         &sql,
         &[
-            DbValue::Text(token.to_string()),
+            DbValue::Text(hash_security_value(token)),
             DbValue::Integer(exp),
             DbValue::Text(user_id.to_string()),
         ],
@@ -52,7 +54,9 @@ fn find_by_token(
         conn.placeholder(1)
     );
 
-    let Some(row) = conn.query_one(&sql, &[DbValue::Text(token.to_string())])? else {
+    // Looked up BY the digest: the column holds hashes, so the presented
+    // token is hashed to find its row.
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(hash_security_value(token))])? else {
         return Ok(None);
     };
 
@@ -205,14 +209,21 @@ pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Resu
     Ok(())
 }
 
-/// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
+/// Mark a user as unverified (set `_verified = 0`) and retire any outstanding
+/// verification link.
+///
+/// The link is cleared because unverifying is an act of revocation: an
+/// operator does it when an address looks wrong or compromised. Leaving the
+/// original signup link live would let whoever holds it re-verify
+/// immediately, anywhere inside its 24-hour window, undoing the revocation.
 ///
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
 pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE \"{slug}\" SET _verified = 0 WHERE id = {}",
+        "UPDATE \"{slug}\" SET _verified = 0, _verification_token = NULL, \
+         _verification_token_exp = NULL WHERE id = {}",
         conn.placeholder(1)
     );
     conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
@@ -299,6 +310,36 @@ mod tests {
             find_by_reset_token(&conn, "users", &auth_def(), "wrong-token")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// The column holds a DIGEST, never the token: a read of the table (or a
+    /// backup) inside the token's window must not hand over a usable
+    /// credential. Lookup by the raw token still works.
+    #[test]
+    fn reset_token_is_stored_hashed() {
+        let (_dir, conn) = setup();
+        set_reset_token(&conn, "users", "user1", "plain-token", 9_999_999_999).unwrap();
+
+        let stored = conn
+            .query_one("SELECT _reset_token FROM users WHERE id = 'user1'", &[])
+            .unwrap()
+            .and_then(|r| r.opt_text_at(0))
+            .expect("token column");
+        assert_ne!(stored, "plain-token", "the raw token must not be stored");
+        assert_eq!(stored, hash_security_value("plain-token"));
+
+        assert!(
+            find_by_reset_token(&conn, "users", &auth_def(), "plain-token")
+                .unwrap()
+                .is_some(),
+            "the raw token still finds its row"
+        );
+        assert!(
+            find_by_reset_token(&conn, "users", &auth_def(), &stored)
+                .unwrap()
+                .is_none(),
+            "presenting the stored digest is not presenting the token"
         );
     }
 

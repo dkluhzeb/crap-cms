@@ -52,12 +52,10 @@ impl ContentService {
                 .map_err(Status::invalid_argument)?
                 .into();
 
-            // Shared with single Create: a non-string password coerces to ""
-            // and fails the policy (InvalidArgument) instead of being silently
-            // dropped — the old inline `as_str()` extraction created a
-            // passwordless auth document from `{"password": 12345}`.
-            let password =
-                extract_auth_password(&mut data, is_auth, &self.infra.password_policy, false)?;
+            // Shared with single Create: a non-string password is rejected
+            // rather than coerced. The old inline `as_str()` extraction turned
+            // `{"password": 12345}` into a passwordless auth document.
+            let password = extract_auth_password(&mut data, is_auth, false)?;
 
             items.push(CreateManyItem { data, password });
         }

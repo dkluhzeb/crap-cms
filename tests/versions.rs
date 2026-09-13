@@ -1051,8 +1051,11 @@ fn service_update_draft_is_version_only() {
     )
     .unwrap();
 
-    // Result should be the EXISTING doc (unchanged main table)
-    assert_eq!(result.get_str("title"), Some("Original Title"));
+    // The result is the DRAFT the caller just saved — not the untouched
+    // published row (which used to be returned, so a draft save reported the
+    // pre-edit document to hooks, the response, and the event).
+    assert_eq!(result.get_str("title"), Some("Draft Title"));
+    assert_eq!(result.get_str("_status"), Some("draft"));
 
     // Main table should still have original data
     let conn = pool.get().unwrap();

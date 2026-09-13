@@ -41,7 +41,10 @@ use crate::admin::context::{
     locale_template::LocaleTemplateOption,
     nav::{NavCollection, NavGlobal},
     page::{
-        auth::{AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResetPasswordPage},
+        auth::{
+            AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResendVerificationPage,
+            ResetPasswordPage,
+        },
         collections::{
             CollectionCreatePage, CollectionDeleteConfirmPage, CollectionEditPage, CollectionEntry,
             CollectionFormErrorPage, CollectionItemsListPage, CollectionListPage,
@@ -188,6 +191,12 @@ const AUTH_PAGES: &[PageEntry] = &[
         page_type: "auth_reset",
         template: "auth/reset_password",
         schema: || schema_for!(ResetPasswordPage),
+    },
+    PageEntry {
+        heading: "Resend verification page",
+        page_type: "auth_resend_verification",
+        template: "auth/resend_verification",
+        schema: || schema_for!(ResendVerificationPage),
     },
 ];
 

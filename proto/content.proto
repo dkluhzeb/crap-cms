@@ -273,6 +273,19 @@ service ContentAPI {
   //                      not enabled for the collection
   rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
 
+  // ResendVerification issues a fresh verification link for an unverified
+  // account and emails it, replacing any outstanding link. Self-service
+  // counterpart to VerifyEmail, for a link that was lost or has expired.
+  //
+  // Auth: not required (the link goes to the account's stored address, never
+  // to an address supplied in the request).
+  //
+  // Always succeeds, exactly like ForgotPassword: the response is identical
+  // whether the address belongs to an unverified account, a verified one, a
+  // locked one, or no account at all, so the endpoint cannot be used to test
+  // which addresses are registered. Rate limited per address and per IP.
+  rpc ResendVerification (ResendVerificationRequest) returns (ResendVerificationResponse);
+
   // ListCollections returns metadata for all registered collections and globals.
   // No auth required; this is a registry-level read from in-memory definitions.
   // Does not reflect database state — structure comes from Lua definitions loaded
@@ -1028,6 +1041,19 @@ message VerifyEmailRequest {
 // VerifyEmailResponse is empty: success is signalled by a non-error response;
 // invalid or expired tokens return a NOT_FOUND status error instead.
 message VerifyEmailResponse {}
+
+// ResendVerificationRequest asks for a fresh verification link.
+message ResendVerificationRequest {
+  // The auth collection slug (must have verify_email=true in auth config).
+  string collection = 1;
+
+  // The account's email address. Matched case-insensitively.
+  string email = 2;
+}
+
+// ResendVerificationResponse is empty: the call always succeeds, to prevent
+// user enumeration.
+message ResendVerificationResponse {}
 
 // CountRequest counts documents matching an optional filter.
 message CountRequest {

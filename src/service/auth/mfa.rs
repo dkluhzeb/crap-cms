@@ -40,9 +40,10 @@ pub fn set_mfa_code(
     id: &str,
     code: &str,
     expiry: i64,
+    auth_secret: &str,
 ) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
-    query::set_mfa_code(conn.as_ref(), ctx.slug, id, code, expiry)?;
+    query::set_mfa_code(conn.as_ref(), ctx.slug, id, code, expiry, auth_secret)?;
     Ok(())
 }
 
@@ -51,9 +52,20 @@ pub fn set_mfa_code(
 /// # Errors
 ///
 /// Returns a backend error if the DB connection or query fails.
-pub fn verify_mfa_code(ctx: &ServiceContext, id: &str, code: &str) -> Result<bool, ServiceError> {
+pub fn verify_mfa_code(
+    ctx: &ServiceContext,
+    id: &str,
+    code: &str,
+    auth_secret: &str,
+) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
-    Ok(query::verify_mfa_code(conn.as_ref(), ctx.slug, id, code)?)
+    Ok(query::verify_mfa_code(
+        conn.as_ref(),
+        ctx.slug,
+        id,
+        code,
+        auth_secret,
+    )?)
 }
 
 /// Generate a fresh 6-digit MFA code.
@@ -100,6 +112,7 @@ pub fn mint_mfa_pending_token(
 /// (if any) stays valid.
 pub fn deliver_mfa_code(
     infra: &AppInfra,
+    auth_secret: &str,
     slug: &str,
     user: &Document,
     user_email: &str,
@@ -119,7 +132,7 @@ pub fn deliver_mfa_code(
 
     let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
-    if let Err(e) = set_mfa_code(&ctx, &user.id, code, exp) {
+    if let Err(e) = set_mfa_code(&ctx, &user.id, code, exp, auth_secret) {
         error!("Failed to store MFA code: {}", e);
         return;
     }

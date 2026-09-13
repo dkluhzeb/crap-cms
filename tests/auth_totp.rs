@@ -163,7 +163,7 @@ fn email_mode_dispatches_to_stored_code() {
     {
         let conn = infra.pool.get().unwrap();
         let ctx = ServiceContext::slug_only("users").conn(&conn).build();
-        service::auth::set_mfa_code(&ctx, &uid, "123456", now() + 300).unwrap();
+        service::auth::set_mfa_code(&ctx, &uid, "123456", now() + 300, SECRET).unwrap();
     }
 
     assert!(auth::verify_second_factor(&infra, SECRET, "users", &uid, "123456").unwrap());

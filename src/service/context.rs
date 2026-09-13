@@ -18,7 +18,7 @@ use crate::{
     },
     db::{
         BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
-        query::helpers::global_table,
+        query::{LocaleContext, helpers::global_table},
     },
     hooks::HookRunner,
     hooks::lifecycle::PublishEventInput,
@@ -227,8 +227,8 @@ impl<'a> ServiceContext<'a> {
     /// draft saves (lossy for non-default-locale columns) — preserving
     /// all locales in snapshots is a separate change.
     #[must_use]
-    pub fn default_locale_ctx(&self) -> Option<crate::db::query::LocaleContext> {
-        crate::db::query::LocaleContext::default_for(self.locale_config?)
+    pub fn default_locale_ctx(&self) -> Option<LocaleContext> {
+        LocaleContext::default_for(self.locale_config?)
     }
 
     /// Get the definition as a `CollectionDefinition`. Errors if the context

@@ -10,4 +10,4 @@ mod version;
 pub use create::persist_create;
 pub(crate) use update::persist_bulk_update;
 pub use update::persist_update;
-pub use version::{persist_draft_version, persist_unpublish};
+pub use version::{DraftDocumentArgs, draft_document, persist_draft_version, persist_unpublish};

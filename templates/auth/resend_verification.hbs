@@ -1,0 +1,70 @@
+{{#> layout/auth title=(t "resend_verification_page_title") header_title=(t "resend_verification_title")}}
+
+  {{#if success}}
+    <div class="auth-card__success">{{t "resend_verification_success"}}</div>
+
+    <a
+      href="/admin/login"
+      class="button button--primary auth-card__submit"
+    >
+      {{t "back_to_login"}}
+    </a>
+  {{else}}
+
+    <p class="auth-card__message">{{t "resend_verification_message"}}</p>
+
+    <form
+      class="auth-card__form"
+      method="POST"
+      action="/admin/resend-verification"
+    >
+      {{#if collections}}
+        {{#if show_collection_picker}}
+          <div class="form__field">
+            <label for="collection">{{t "account_type"}}</label>
+
+            <select
+              name="collection"
+              id="collection"
+            >
+              {{#each collections}}
+                <option value="{{this.slug}}">{{this.display_name}}</option>
+              {{/each}}
+            </select>
+          </div>
+        {{else}}
+          <input
+            type="hidden"
+            name="collection"
+            value="{{collections.[0].slug}}"
+          />
+        {{/if}}
+      {{/if}}
+
+      <div class="form__field">
+        <label for="email">{{t "email"}}</label>
+
+        <input
+          type="email"
+          name="email"
+          id="email"
+          placeholder="you@example.com"
+          required
+          autocomplete="email"
+        />
+      </div>
+
+      <button
+        type="submit"
+        class="button button--primary auth-card__submit"
+      >
+        {{t "send_verification_link"}}
+      </button>
+    </form>
+
+    <p class="auth-card__link">
+      <a href="/admin/login">{{t "back_to_login"}}</a>
+    </p>
+  {{/if}}
+
+{{/layout/auth}}

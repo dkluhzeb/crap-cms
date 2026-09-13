@@ -1369,10 +1369,12 @@ fn persist_draft_version_merges_data() {
         .conn(&conn)
         .build();
 
-    let existing = service::persist_draft_version(&ctx, &doc.id, &hook_data, None).unwrap();
+    let saved = service::persist_draft_version(&ctx, &doc.id, &hook_data, None).unwrap();
 
-    // Returned doc is the existing (unchanged) doc
-    assert_eq!(existing.get_str("title"), Some("Original"));
+    // The returned doc is the DRAFT that was stored, stamped as such — the
+    // main table is what stays unchanged (asserted below).
+    assert_eq!(saved.get_str("title"), Some("Draft Title"));
+    assert_eq!(saved.get_str("_status"), Some("draft"));
 
     // Main table should still have original data
     let main = query::find_by_id(&conn, "articles", &def, &doc.id, None)
@@ -1524,10 +1526,9 @@ fn service_update_draft_uses_locale_context() {
     )
     .unwrap();
 
-    // Result should be the existing doc (main table unchanged by draft)
-    // With the fix, persist_draft_version reads with DE locale context,
-    // so it sees the German title
-    assert_eq!(result.get_str("title"), Some("Deutscher Titel"));
+    // The result is the DRAFT just saved, read for the write's locale: the
+    // German draft edit, not the untouched published German title.
+    assert_eq!(result.get_str("title"), Some("Neuer Deutscher Titel"));
 
     // 4. Main table EN title should be unchanged
     {

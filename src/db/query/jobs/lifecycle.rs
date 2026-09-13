@@ -7,6 +7,7 @@ use anyhow::{Context as _, Result};
 use nanoid::nanoid;
 
 use crate::core::JobRun;
+use crate::core::email::SYSTEM_EMAIL_JOB;
 use crate::db::query::jobs::get_job_run;
 use crate::db::{DbConnection, DbValue};
 
@@ -347,6 +348,14 @@ pub fn complete_job_repairing(
 /// Mark a run completed. Guarded compare-and-set on `status = 'running'`
 /// and the attempt, so a stale writer cannot resurrect a terminal row.
 ///
+/// A completed `_system_email` run also has its `data` emptied. That payload
+/// is the rendered message body, which for a password-reset, verification, or
+/// MFA mail contains the live credential in the clear — the same value the
+/// user row deliberately stores only as a digest. Keeping it would leave the
+/// credential readable in `_crap_jobs` for as long as the row survives, and
+/// `[jobs] auto_purge` is off by default, so that is indefinitely. A pending
+/// or failed run keeps its data: the retry needs it.
+///
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
@@ -365,10 +374,12 @@ pub fn complete_job(
         conn.placeholder(2),
         conn.placeholder(3),
     );
+    let p4 = conn.placeholder(4);
 
     conn.execute(
         &format!(
-            "UPDATE _crap_jobs SET status = 'completed', result = {p2}, completed_at = {}
+            "UPDATE _crap_jobs SET status = 'completed', result = {p2}, completed_at = {},
+                data = CASE WHEN slug = {p4} THEN '{{}}' ELSE data END
          WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
             conn.now_expr()
         ),
@@ -376,6 +387,7 @@ pub fn complete_job(
             DbValue::Text(id.to_string()),
             result_val,
             DbValue::Integer(i64::from(attempt)),
+            DbValue::Text(SYSTEM_EMAIL_JOB.to_string()),
         ],
     )
     .context("Failed to complete job")?;

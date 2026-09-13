@@ -1,11 +1,17 @@
 //! Multi-factor authentication code management.
 
 use anyhow::Result;
-use subtle::ConstantTimeEq;
 
-use crate::db::{DbConnection, DbValue};
+use crate::{
+    core::auth::{hash_mfa_code, mfa_code_matches},
+    db::{DbConnection, DbValue},
+};
 
 /// Store a MFA code for a user. Overwrites any existing code.
+///
+/// `auth_secret` keys the stored digest: six digits is a small enough
+/// preimage space that a bare hash of one is invertible by table lookup, so
+/// without the key the stored form would still be the credential.
 ///
 /// # Errors
 ///
@@ -16,6 +22,7 @@ pub fn set_mfa_code(
     user_id: &str,
     code: &str,
     exp: i64,
+    auth_secret: &str,
 ) -> Result<()> {
     let (p1, p2, p3) = (
         conn.placeholder(1),
@@ -26,7 +33,8 @@ pub fn set_mfa_code(
         &format!("UPDATE \"{slug}\" SET _mfa_code = {p2}, _mfa_code_exp = {p3} WHERE id = {p1}"),
         &[
             DbValue::Text(user_id.to_string()),
-            DbValue::Text(code.to_string()),
+            // The keyed digest is stored, never the code itself.
+            DbValue::Text(hash_mfa_code(auth_secret, code)),
             DbValue::Integer(exp),
         ],
     )?;
@@ -56,6 +64,7 @@ pub fn verify_mfa_code(
     slug: &str,
     user_id: &str,
     code: &str,
+    auth_secret: &str,
 ) -> Result<bool> {
     let now = chrono::Utc::now().timestamp();
     let p1 = conn.placeholder(1);
@@ -75,8 +84,10 @@ pub fn verify_mfa_code(
         return Ok(false);
     };
 
-    // Compare BEFORE clearing so we know whether to return success.
-    let codes_match = stored_code.as_bytes().ct_eq(code.as_bytes());
+    // Compare BEFORE clearing so we know whether to return success. The
+    // column holds a digest keyed with the auth secret, so the presented code
+    // is hashed the same way to compare.
+    let codes_match = mfa_code_matches(auth_secret, code, &stored_code);
 
     // Expire at the boundary (`now == exp` is already expired), matching the
     // reset/verification token checks (`now >= exp`). Fail-closed by one second
@@ -87,7 +98,7 @@ pub fn verify_mfa_code(
     // brute-force across attempts.
     clear_mfa_code(conn, slug, user_id)?;
 
-    Ok(not_expired && bool::from(codes_match))
+    Ok(not_expired && codes_match)
 }
 
 /// Clear the MFA code for a user.
@@ -103,6 +114,9 @@ fn clear_mfa_code(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Any fixed key — the tests only need store and verify to agree on it.
+    const TEST_SECRET: &str = "test-auth-secret";
 
     fn setup() -> (tempfile::TempDir, crate::db::BoxedConnection) {
         let dir = tempfile::TempDir::new().unwrap();
@@ -131,12 +145,12 @@ mod tests {
     #[test]
     fn correct_code_verifies_and_clears() {
         let (_dir, conn) = setup();
-        set_mfa_code(&conn, "users", "u1", "123456", future_exp()).unwrap();
+        set_mfa_code(&conn, "users", "u1", "123456", future_exp(), TEST_SECRET).unwrap();
 
-        assert!(verify_mfa_code(&conn, "users", "u1", "123456").unwrap());
+        assert!(verify_mfa_code(&conn, "users", "u1", "123456", TEST_SECRET).unwrap());
 
         // Code cleared — second verify returns false even with the same code.
-        assert!(!verify_mfa_code(&conn, "users", "u1", "123456").unwrap());
+        assert!(!verify_mfa_code(&conn, "users", "u1", "123456", TEST_SECRET).unwrap());
     }
 
     /// Regression: the original implementation cleared the stored code
@@ -148,14 +162,14 @@ mod tests {
     #[test]
     fn wrong_code_clears_on_failed_attempt() {
         let (_dir, conn) = setup();
-        set_mfa_code(&conn, "users", "u1", "123456", future_exp()).unwrap();
+        set_mfa_code(&conn, "users", "u1", "123456", future_exp(), TEST_SECRET).unwrap();
 
-        assert!(!verify_mfa_code(&conn, "users", "u1", "999999").unwrap());
+        assert!(!verify_mfa_code(&conn, "users", "u1", "999999", TEST_SECRET).unwrap());
 
         // Even with the CORRECT code, the second attempt must fail —
         // the stored code was cleared by the wrong guess.
         assert!(
-            !verify_mfa_code(&conn, "users", "u1", "123456").unwrap(),
+            !verify_mfa_code(&conn, "users", "u1", "123456", TEST_SECRET).unwrap(),
             "code must be single-use; correct guess after a wrong one must fail",
         );
     }
@@ -164,25 +178,25 @@ mod tests {
     fn expired_code_returns_false_and_clears() {
         let (_dir, conn) = setup();
         // Expiration in the distant past.
-        set_mfa_code(&conn, "users", "u1", "123456", 1).unwrap();
+        set_mfa_code(&conn, "users", "u1", "123456", 1, TEST_SECRET).unwrap();
 
-        assert!(!verify_mfa_code(&conn, "users", "u1", "123456").unwrap());
+        assert!(!verify_mfa_code(&conn, "users", "u1", "123456", TEST_SECRET).unwrap());
 
         // Re-setting after expiry works fine — clear left columns NULL,
         // not in some half-state.
-        set_mfa_code(&conn, "users", "u1", "654321", future_exp()).unwrap();
-        assert!(verify_mfa_code(&conn, "users", "u1", "654321").unwrap());
+        set_mfa_code(&conn, "users", "u1", "654321", future_exp(), TEST_SECRET).unwrap();
+        assert!(verify_mfa_code(&conn, "users", "u1", "654321", TEST_SECRET).unwrap());
     }
 
     #[test]
     fn no_code_set_returns_false() {
         let (_dir, conn) = setup();
-        assert!(!verify_mfa_code(&conn, "users", "u1", "anything").unwrap());
+        assert!(!verify_mfa_code(&conn, "users", "u1", "anything", TEST_SECRET).unwrap());
     }
 
     #[test]
     fn missing_user_returns_false() {
         let (_dir, conn) = setup();
-        assert!(!verify_mfa_code(&conn, "users", "u_nonexistent", "123456").unwrap());
+        assert!(!verify_mfa_code(&conn, "users", "u_nonexistent", "123456", TEST_SECRET).unwrap());
     }
 }

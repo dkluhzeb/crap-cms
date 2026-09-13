@@ -7,9 +7,12 @@ use tokio::task;
 use tonic::Status;
 use tracing::error;
 
+use anyhow::anyhow;
+
 use crate::{
     api::handlers::ContentService,
     service::{
+        ServiceError,
         jobs::bulk_queue::{self, BulkJobData, QueuedBy},
         op::{self, Principal},
     },
@@ -21,7 +24,7 @@ enum QueueError {
     Core(op::CoreError),
     /// A service-level refusal (access denied, over the document cap) that
     /// keeps the status the synchronous call would have returned.
-    Service(crate::service::ServiceError),
+    Service(ServiceError),
     UnknownCollection(String),
 }
 
@@ -63,10 +66,7 @@ impl ContentService {
             // perform the operation is refused synchronously rather than
             // handed a job id for work that could never succeed.
             let conn = infra.pool.get().map_err(|e| {
-                QueueError::Service(crate::service::ServiceError::classify(
-                    anyhow::anyhow!(e),
-                    infra.pool.kind(),
-                ))
+                QueueError::Service(ServiceError::classify(anyhow!(e), infra.pool.kind()))
             })?;
 
             let def = infra

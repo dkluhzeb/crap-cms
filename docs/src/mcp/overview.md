@@ -96,6 +96,28 @@ payloads — bulk creates, or `write_config_file` with big assets. A JSON-RPC
 HTTP `204 No Content`, per the JSON-RPC convention of not responding to
 notifications.
 
+#### Batches
+
+Both transports accept a JSON-RPC **batch** — an array of request objects
+instead of one object. Every member runs, and the reply is an array holding
+one response per member that carried an `id`, in the order the members were
+sent. A batch of nothing but notifications gets no reply at all (HTTP `204`).
+
+A batch may hold at most `[mcp] max_batch_members` requests, **50** by
+default; an empty array is rejected, and so is a batch over the cap, both with
+a single `-32600` error object rather than an array. Set it to `0` to refuse
+batches entirely.
+
+The cap counts requests, not bytes, and is checked before any member runs.
+That is the point: fifty `delete_many` calls are a few kilobytes of body but
+fifty whole-collection deletes. If MCP is reachable by anyone you would not
+hand a `DELETE` to, set `[server] bulk_max_documents` as well — it defaults to
+unlimited, and a batch multiplies whatever it allows.
+
+The `initialize` handshake may not appear in a batch: it establishes the
+session the rest would run under, and the reply carries a session header there
+is only one of. Sending it inside a batch is refused with `-32600`.
+
 #### Sessions (`Mcp-Session-Id`)
 
 The HTTP transport tracks sessions per the MCP spec so audit logs carry
@@ -389,6 +411,46 @@ compose: a collection is reachable only if it passes both.
 
 All MCP write operations (create, update, delete) are logged at `info` level for
 audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC).
+
+## Errors
+
+A tool that ran and failed reports in-band: the call succeeds and the result
+carries `isError: true` with the message as text content. That covers
+validation failures, missing documents, and anything a hook rejects.
+
+Everything that never reached a tool is a JSON-RPC protocol error instead:
+
+| Code | When |
+|------|------|
+| `-32700` | The body is not valid JSON |
+| `-32600` | Not a valid request object, or a malformed batch |
+| `-32601` | Unknown JSON-RPC method |
+| `-32602` | Invalid params, including a tool name this server does not expose |
+| `-32603` | Internal server error |
+| `-32002` | Unknown resource URI on `resources/read` |
+
+A collection you cannot see is reported as if it were not there. Whether a
+collection is filtered out by `include_collections` / `exclude_collections`,
+hidden by its `access.mcp` rule, or simply does not exist, a direct tool call
+gets the same `-32602` `Unknown tool: <name>` and `describe_collection` gets
+the same `Unknown collection or global: <slug>`. MCP is not an enumeration
+oracle for collections you are not allowed to reach.
+
+That holds for the clock as well as the message. `access.mcp` rules are
+evaluated for the whole gated set once per call, before the tool name is even
+parsed, so a name that never existed costs the same as one that is hidden —
+otherwise the connection checkout and Lua call that only the second path paid
+for would give it away.
+
+The cost of that is worth knowing: once **any** collection sets `access.mcp`,
+every tool call evaluates every gated rule, not just the one for the slug it
+named. That is a connection and one Lua call per gated collection, on each
+call. Keep the rules cheap, and gate only what needs gating. A deployment with
+no `access.mcp` rule anywhere skips the evaluation entirely — nothing is
+hidden, so there is no timing to hide.
+
+If the rules cannot be evaluated at all — no database connection — every gated
+collection is hidden rather than exposed, on both listing and execution.
 
 ## Resources
 

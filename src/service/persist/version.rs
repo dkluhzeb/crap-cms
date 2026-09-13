@@ -2,9 +2,11 @@
 
 use anyhow::{Result, anyhow};
 
+use serde_json::Value;
+
 use crate::{
-    core::{Document, DocumentFields},
-    db::{LocaleContext, query},
+    core::{Document, DocumentFields, field::FieldDefinition},
+    db::{LocaleContext, ops, query},
     service::{ServiceContext, versions},
 };
 
@@ -29,7 +31,7 @@ pub fn persist_draft_version(
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
-    versions::save_draft_version(&versions::SaveDraftArgs {
+    let snapshot = versions::save_draft_version(&versions::SaveDraftArgs {
         conn,
         table: slug,
         parent_id: id,
@@ -40,7 +42,57 @@ pub fn persist_draft_version(
         locale_ctx,
     })?;
 
-    Ok(existing_doc)
+    Ok(draft_document(&DraftDocumentArgs {
+        id,
+        snapshot: &snapshot,
+        existing: &existing_doc,
+        fields: &def.fields,
+        locale_ctx,
+    }))
+}
+
+/// The document a draft save reports: the stored snapshot (the draft content),
+/// stamped `_status = "draft"`.
+///
+/// Shared with the globals draft path so both report the same shape.
+///
+/// The published row is untouched by a draft save, so returning it — as this
+/// path used to — meant `after_change` hooks, the operation's return value and
+/// the emitted event all carried the PRE-EDIT document: a published-only
+/// subscriber got an Update event for content that had not changed, while a
+/// draft subscriber got nothing.
+pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Document {
+    let &DraftDocumentArgs {
+        id,
+        snapshot,
+        existing,
+        fields,
+        locale_ctx,
+    } = args;
+
+    let mut doc = ops::document_from_snapshot(id, snapshot).unwrap_or_else(|| existing.clone());
+
+    // A snapshot holds every locale's decorated column. Resolve the one the
+    // write was made under and drop the rest, so the response has the same
+    // shape as any other write's — and doesn't hand back translations the
+    // caller never asked for.
+    ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx);
+
+    doc.fields
+        .insert("_status".to_string(), Value::String("draft".to_string()));
+
+    doc
+}
+
+/// Inputs for [`draft_document`]. Five fields, built at two call sites and
+/// consumed immediately, so a plain struct literal is enough.
+pub struct DraftDocumentArgs<'a> {
+    pub id: &'a str,
+    pub snapshot: &'a Value,
+    /// Fallback when the snapshot is not a JSON object.
+    pub existing: &'a Document,
+    pub fields: &'a [FieldDefinition],
+    pub locale_ctx: Option<&'a LocaleContext>,
 }
 
 /// Persist an unpublish operation: find existing doc, set status to draft,

@@ -584,4 +584,52 @@ mod tests {
             Some("Pending Draft Edit")
         );
     }
+
+    /// The mirror case: a SOFT-DELETED document's pending draft must not come
+    /// back from a LIVE draft read. The snapshot bypasses the SQL `WHERE`
+    /// path, so the lifecycle filter has to be applied by hand — otherwise
+    /// the admin form opens a trashed document as editable.
+    #[test]
+    fn live_draft_read_does_not_overlay_a_trashed_documents_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT,
+                _status TEXT DEFAULT 'published', _deleted_at TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT, created_at TEXT
+            );
+            -- A TRASHED document that still carries a pending draft snapshot.
+            INSERT INTO posts (id, title, _deleted_at)
+                VALUES ('gone1', 'Trashed', '2026-01-01T00:00:00Z');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v1', 'gone1', 1, 'draft', 1, '{\"title\":\"Pending Draft Edit\"}');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.soft_delete = true;
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(true, 0));
+
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let live = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("gone1").use_draft(true).build(),
+        )
+        .unwrap();
+        assert!(
+            live.is_none(),
+            "a live draft read must not surface a trashed document's snapshot"
+        );
+    }
 }

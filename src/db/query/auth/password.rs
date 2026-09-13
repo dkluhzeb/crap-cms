@@ -86,47 +86,19 @@ pub fn get_password_hash(
         .map(HashedPassword::new))
 }
 
-/// Update the password hash for a document by ID.
-/// Hashes the plaintext password before storing.
+/// Update a user's password.
+///
+/// ONE statement that also bumps `_session_version` (invalidating existing
+/// sessions) and clears any pending reset token: a password change makes an
+/// outstanding reset link obsolete, and doing it in the same statement means
+/// a mid-flow failure can never leave the password changed with the token
+/// still live. Every password write goes through here — the reset flow, the
+/// service write path, and the CLI.
 ///
 /// # Errors
 ///
 /// Returns an error if password hashing fails or the UPDATE fails.
 pub fn update_password(
-    conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
-    password: &str,
-) -> Result<()> {
-    let hash = hash_password(password)?;
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-    let sql = format!(
-        "UPDATE \"{slug}\" SET _password_hash = {p1}, \
-         _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {p2}"
-    );
-    conn.execute(
-        &sql,
-        &[
-            DbValue::Text(hash.as_ref().to_string()),
-            DbValue::Text(id.to_string()),
-        ],
-    )
-    .with_context(|| format!("Failed to update password for {id} in {slug}"))?;
-    Ok(())
-}
-
-/// Update a user's password AND clear any pending reset token in ONE
-/// statement, bumping `_session_version` (invalidates existing sessions).
-///
-/// Single-statement on purpose: the reset-token consumption path must never
-/// end up with the password changed but the token still live (a mid-flow
-/// failure between two separate UPDATEs could leave the consumed token
-/// reusable).
-///
-/// # Errors
-///
-/// Returns an error if password hashing fails or the UPDATE fails.
-pub fn update_password_clearing_reset_token(
     conn: &dyn DbConnection,
     slug: &str,
     id: &str,
@@ -189,6 +161,7 @@ mod tests {
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY, email TEXT UNIQUE, name TEXT,
                 _password_hash TEXT, _session_version INTEGER DEFAULT 0,
+                _reset_token TEXT, _reset_token_exp INTEGER,
                 created_at TEXT, updated_at TEXT
             );
             INSERT INTO users (id, email, name, created_at, updated_at)

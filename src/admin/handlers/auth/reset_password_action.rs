@@ -19,7 +19,7 @@ use crate::{
             shared::{paths, render_auth_page},
         },
     },
-    core::{Registry, SharedInvalidationTransport, auth::ResetTokenError},
+    core::{Registry, SharedInvalidationTransport},
     db::DbPool,
     service::{
         ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
@@ -56,7 +56,7 @@ fn consume_reset_token(
     token: &str,
     password: &str,
     invalidation_transport: &SharedInvalidationTransport,
-) -> anyhow::Result<()> {
+) -> Result<(), ServiceError> {
     let mut conn = pool.write()?;
     // SELECT-then-UPDATE (find token row, then write the new hash): take a write
     // lock up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under
@@ -90,12 +90,15 @@ fn consume_reset_token(
             }) => {}
             Err(e) => {
                 tx.commit()?;
-                return Err(e.into_anyhow());
+                return Err(e);
             }
         }
     }
 
-    Err(ResetTokenError::NotFound.into())
+    Err(ServiceError::InvalidToken {
+        kind: "reset",
+        reason: "not found",
+    })
 }
 
 /// POST /admin/reset-password — validate token, update password, redirect to login.
@@ -154,8 +157,14 @@ pub async fn reset_password_action(
             Redirect::to(&paths::login_with_success("success_password_reset")).into_response()
         }
         Ok(Err(e)) => {
-            let msg = match e.downcast_ref::<ResetTokenError>() {
-                Some(ResetTokenError::Expired) => "error_reset_link_expired",
+            // Match the TYPED refusal: the service returns
+            // `InvalidToken { reason }`, and flattening it to a string here
+            // meant the expired branch could never be reached, so a dead link
+            // always read as "invalid".
+            let msg = match e {
+                ServiceError::InvalidToken {
+                    reason: "expired", ..
+                } => "error_reset_link_expired",
                 _ => "error_reset_link_invalid",
             };
 

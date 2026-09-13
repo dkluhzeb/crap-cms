@@ -11,15 +11,18 @@
 //!   and the `INTERNAL_ERROR` / `INVALID_REQUEST` / `PARSE_ERROR` codes)
 //!   re-exported for the HTTP transport in `admin::mcp_handler`.
 //!
-//! Internal modules (`schema`, `resources`, `tools`) are `pub(crate)`
-//! and not part of the external API.
+//! Internal modules (`schema`, `resources`, `tools`, `batch`) are
+//! `pub(crate)` and not part of the external API.
 
 pub(crate) mod access;
+pub(crate) mod batch;
 pub(crate) mod protocol;
 pub(crate) mod resources;
 pub(crate) mod schema;
 pub(crate) mod server;
 pub(crate) mod stdio;
+#[cfg(test)]
+pub(crate) mod test_server;
 pub(crate) mod tools;
 
 pub use protocol::{

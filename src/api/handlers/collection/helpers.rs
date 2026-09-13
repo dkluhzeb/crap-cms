@@ -2,39 +2,50 @@
 
 use tonic::Status;
 
-use crate::{config::PasswordPolicy, core::DocumentFields};
+use crate::core::DocumentFields;
 
-/// Extract and validate password from an auth collection's data map.
+/// Split the password out of an auth collection's data map.
 ///
-/// - If not an auth collection, returns `Ok(None)` (password field stays in data).
-/// - If auth collection, removes `"password"` from `data` and validates it.
-/// - `allow_empty`: when `true` (update path), an empty password means "no change" -> `Ok(None)`.
-///   When `false` (create path), a present password is always validated.
+/// - Not an auth collection: returns `None` and leaves the field in `data`
+///   (a plain collection may have a legitimate `password` field).
+/// - Auth collection: removes `"password"` from `data` and returns it.
+/// - `allow_empty`: when `true` (update path), an empty password means
+///   "no change" → `None`.
+///
+/// The password POLICY is deliberately not applied here. The service write
+/// path is the authoritative chokepoint (`validate_password_policy`, run after
+/// the access check on every surface); validating in the codec as well meant
+/// an ANONYMOUS caller could tell a policy rejection from an access denial and
+/// so read the policy off an unauthenticated endpoint.
+///
+/// # Errors
+///
+/// `INVALID_ARGUMENT` when `password` is present but not a string. That is a
+/// wire-shape check, not a policy one — it reveals nothing about
+/// `[auth.password_policy]`, and without it a number coerced to `""` and
+/// created a passwordless account.
 pub(in crate::api::handlers) fn extract_auth_password(
     data: &mut DocumentFields,
     is_auth: bool,
-    policy: &PasswordPolicy,
     allow_empty: bool,
 ) -> Result<Option<String>, Status> {
     if !is_auth {
         return Ok(None);
     }
 
-    let Some(pw_val) = data.remove("password") else {
+    let Some(value) = data.remove("password") else {
         return Ok(None);
     };
 
-    let pw = pw_val.as_str().unwrap_or("").to_string();
+    let Some(pw) = value.as_str() else {
+        return Err(Status::invalid_argument("'password' must be a string"));
+    };
 
     if allow_empty && pw.is_empty() {
         return Ok(None);
     }
 
-    policy
-        .validate(&pw)
-        .map_err(|e| Status::invalid_argument(e.to_string()))?;
-
-    Ok(Some(pw))
+    Ok(Some(pw.to_string()))
 }
 
 #[cfg(test)]
@@ -47,16 +58,15 @@ mod tests {
 
     // ── extract_auth_password tests ───────────────────────────────────
 
-    fn default_policy() -> PasswordPolicy {
-        PasswordPolicy::default()
-    }
-
     #[test]
     fn password_non_auth_collection_ignored() {
         let mut data: DocumentFields =
             HashMap::from([("password".into(), json!("secret123"))]).into();
-        let result = extract_auth_password(&mut data, false, &default_policy(), false).unwrap();
-        assert!(result.is_none());
+        assert!(
+            extract_auth_password(&mut data, false, false)
+                .unwrap()
+                .is_none()
+        );
         assert!(data.contains_key("password"));
     }
 
@@ -64,37 +74,71 @@ mod tests {
     fn password_auth_collection_extracted() {
         let mut data: DocumentFields =
             HashMap::from([("password".into(), json!("secret123"))]).into();
-        let result = extract_auth_password(&mut data, true, &default_policy(), false).unwrap();
-        assert_eq!(result.as_deref(), Some("secret123"));
+        assert_eq!(
+            extract_auth_password(&mut data, true, false)
+                .unwrap()
+                .as_deref(),
+            Some("secret123")
+        );
         assert!(!data.contains_key("password"));
     }
 
     #[test]
     fn password_auth_collection_missing() {
         let mut data: DocumentFields = HashMap::from([("title".into(), json!("hello"))]).into();
-        let result = extract_auth_password(&mut data, true, &default_policy(), false).unwrap();
-        assert!(result.is_none());
+        assert!(
+            extract_auth_password(&mut data, true, false)
+                .unwrap()
+                .is_none()
+        );
     }
 
+    /// The codec no longer judges the password: a weak one is extracted and
+    /// handed to the service, which rejects it AFTER the access check — so an
+    /// anonymous caller can't read the policy off the endpoint.
     #[test]
-    fn password_too_short_rejected() {
+    fn password_policy_is_not_applied_in_the_codec() {
         let mut data: DocumentFields = HashMap::from([("password".into(), json!("short"))]).into();
-        let err = extract_auth_password(&mut data, true, &default_policy(), false).unwrap_err();
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            extract_auth_password(&mut data, true, false)
+                .unwrap()
+                .as_deref(),
+            Some("short")
+        );
+    }
+
+    /// A non-string password is a wire-shape error, not a silent coercion:
+    /// `{"password": 12345}` used to become `""` and create a passwordless
+    /// auth document.
+    #[test]
+    fn password_must_be_a_string() {
+        for value in [json!(12345), json!(true), json!(["a"]), json!(null)] {
+            let mut data: DocumentFields = HashMap::from([("password".into(), value)]).into();
+            let err = extract_auth_password(&mut data, true, false)
+                .expect_err("a non-string password must be rejected");
+            assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        }
     }
 
     #[test]
     fn password_empty_on_update_returns_none() {
         let mut data: DocumentFields = HashMap::from([("password".into(), json!(""))]).into();
-        let result = extract_auth_password(&mut data, true, &default_policy(), true).unwrap();
-        assert!(result.is_none());
+        assert!(
+            extract_auth_password(&mut data, true, true)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn password_valid_on_update() {
         let mut data: DocumentFields =
             HashMap::from([("password".into(), json!("newsecret123"))]).into();
-        let result = extract_auth_password(&mut data, true, &default_policy(), true).unwrap();
-        assert_eq!(result.as_deref(), Some("newsecret123"));
+        assert_eq!(
+            extract_auth_password(&mut data, true, true)
+                .unwrap()
+                .as_deref(),
+            Some("newsecret123")
+        );
     }
 }
