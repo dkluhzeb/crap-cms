@@ -533,6 +533,45 @@ fn finished_run_payload_is_stripped() {
     );
 }
 
+/// Regression: a run that failed before executing — here its queuer no longer
+/// exists — kept the submitted payload at rest; only the op-failure and
+/// completion paths dropped it.
+#[test]
+fn failed_run_payload_is_stripped() {
+    let ctx = setup();
+
+    let mut data = job_data(
+        BulkOpKind::CreateMany,
+        QueuedBy::User {
+            id: "ghost".to_string(),
+            collection: "users".to_string(),
+            session_version: 0,
+        },
+    );
+    data.documents = Some(vec![
+        [("title".to_string(), json!("secret-ish"))]
+            .into_iter()
+            .collect(),
+    ]);
+
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+
+    execute(&ctx, &run);
+
+    let finished = fetch_run(&ctx, &run.id);
+    assert_eq!(finished.status, JobStatus::Failed);
+    assert!(
+        !finished.data.contains("secret-ish"),
+        "a failed run must not keep the submitted payload: {}",
+        finished.data
+    );
+    assert!(
+        finished.data.contains("queued_by") && finished.data.contains("users"),
+        "the identity must survive so visibility still resolves: {}",
+        finished.data
+    );
+}
+
 /// A pending run is cancellable by the identity that queued it, invisible
 /// (and therefore not cancellable) to anyone else.
 #[test]

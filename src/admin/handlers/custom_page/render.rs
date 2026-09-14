@@ -20,7 +20,7 @@ use crate::{
         context::{BasePageContext, PageMeta, PageType, page::custom::CustomPage},
         custom_pages::is_valid_slug,
         handlers::shared::{
-            PageRequest, extract_editor_locale, forbidden, get_user_doc, has_read_access,
+            PageRequest, extract_editor_locale, forbidden, get_user_doc, has_page_access,
             not_found, render_page,
         },
     },
@@ -51,7 +51,7 @@ pub async fn render_custom_page(
     let registered = state.custom_pages.get(&slug);
     if let Some(access) = registered.and_then(|p| p.access.as_ref()) {
         let user_doc = get_user_doc(auth_user.as_ref());
-        if !has_read_access(&state, Some(access), user_doc, "") {
+        if !has_page_access(&state, Some(access), user_doc) {
             return forbidden(&state, "You don't have permission to view this page");
         }
     }

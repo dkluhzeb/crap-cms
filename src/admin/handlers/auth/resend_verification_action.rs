@@ -56,8 +56,8 @@ pub async fn resend_verification_action(
     // Recorded atomically against both limiters, and both are evaluated so
     // each counter advances on every attempt. Returning the generic success
     // on a block leaks nothing — the response is always the same. The
-    // per-email key is normalized (trim + lowercase) because the account
-    // lookup is case-insensitive, so casing variants must share a bucket.
+    // per-email key is the address in its stored form because the account
+    // lookup compares that form, so spelling variants must share a bucket.
     //
     // Derived from the forgot-password limiters with `rescoped`, exactly as
     // the gRPC twin does: the same thresholds and window, a separate budget.

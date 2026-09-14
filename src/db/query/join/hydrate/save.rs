@@ -1,36 +1,41 @@
 //! Join table data persistence (save operations).
 
-use anyhow::Result;
-use serde_json::Value;
 use std::collections::HashMap;
 
-use super::{
-    super::{
-        arrays::set_array_rows,
-        blocks::set_block_rows,
-        nested_dates::convert_block_rows,
-        relationships::{set_polymorphic_related, set_related_ids},
-    },
-    locale::resolve_join_locale,
-};
-use crate::db::query::poly_ref;
+use anyhow::Result;
+use serde_json::Value;
+
 use crate::{
-    core::{DocumentFields, FieldChildren, FieldDefinition, field_children, flatten_group_fields},
+    core::{
+        BlockDefinition, Builder, DocumentFields, FieldChildren, FieldDefinition, field_children,
+        flatten_group_fields,
+    },
     db::{
         DbConnection, LocaleContext,
-        query::{helpers::prefixed_name, is_non_default_single_locale},
+        query::{
+            helpers::{join_table, prefixed_name},
+            is_non_default_single_locale,
+            join::{
+                arrays::write_array_rows,
+                blocks::write_block_rows,
+                helpers::{JunctionTarget, RowIds},
+                hydrate::locale::resolve_join_locale,
+                nested_dates::convert_block_rows,
+                relationships::{set_polymorphic_related, set_related_ids},
+            },
+            poly_ref,
+        },
     },
 };
 
 /// Parse a JSON value into a list of string IDs.
 ///
 /// Accepts either a JSON array of strings or a comma-separated string.
-/// Accepts a JSON array of strings or a comma-separated string.
 pub(crate) fn parse_id_list(val: &Value) -> Vec<String> {
     match val {
         Value::Array(arr) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+            .filter_map(|v| v.as_str().map(ToString::to_string))
             .collect(),
         Value::String(s) => {
             if s.is_empty() {
@@ -87,97 +92,193 @@ pub fn save_join_table_data(
     data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
-    // A group-nested array/blocks/relationship lives under a flat `group__field`
-    // join key; flatten the canonical nested write data at this DB-layer edge so
-    // the inner walk finds it (idempotent — array row contents stay nested JSON).
-    let data = flatten_group_fields(data, fields);
-
-    save_join_data_inner(conn, slug, fields, parent_id, &data, locale_ctx, "")
+    JoinSave::builder(conn, slug, parent_id)
+        .locale_ctx(locale_ctx)
+        .build()
+        .save(fields, data)
 }
 
-fn save_join_data_inner(
+/// [`save_join_table_data`] for a raw restore of exported rows: every array
+/// and blocks row comes back under the id it was exported with (a row without
+/// one gets a minted id).
+///
+/// # Errors
+///
+/// Returns a backend error if any join-table write fails, e.g. when an
+/// exported row id is already taken by another document's row.
+pub fn restore_join_table_data(
     conn: &dyn DbConnection,
     slug: &str,
     fields: &[FieldDefinition],
     parent_id: &str,
     data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    JoinSave::builder(conn, slug, parent_id)
+        .locale_ctx(locale_ctx)
+        .row_ids(RowIds::Incoming)
+        .build()
+        .save(fields, data)
+}
+
+/// Where one join save writes, shared by every field it visits.
+#[derive(Builder)]
+struct JoinSave<'a> {
+    #[builder(required)]
+    conn: &'a dyn DbConnection,
+    #[builder(required)]
+    slug: &'a str,
+    #[builder(required)]
+    parent_id: &'a str,
+    locale_ctx: Option<&'a LocaleContext>,
+    #[builder(default = RowIds::Existing)]
+    row_ids: RowIds,
+}
+
+impl JoinSave<'_> {
+    /// Write the join fields `data` carries.
+    fn save(&self, fields: &[FieldDefinition], data: &DocumentFields) -> Result<()> {
+        // A group-nested array/blocks/relationship lives under a flat
+        // `group__field` join key; flatten the canonical nested write data at
+        // this DB-layer edge so the inner walk finds it (idempotent — array row
+        // contents stay nested JSON).
+        let data = flatten_group_fields(data, fields);
+
+        save_join_fields(self, fields, &data, "")
+    }
+}
+
+fn save_join_fields(
+    save: &JoinSave<'_>,
+    fields: &[FieldDefinition],
+    data: &DocumentFields,
     prefix: &str,
 ) -> Result<()> {
     for field in fields {
-        let locale = resolve_join_locale(field, locale_ctx);
-        let locale_ref = locale.as_deref();
-        let field_key = prefixed_name(prefix, &field.name);
-
-        // A shared (non-localized) join field maps to locale-independent junction
-        // rows; writing it under a non-default locale would replace the shared
-        // set from the wrong locale. Skip the write — parity with the scalar
-        // column locale-lock. Join localization is own-flag-only, so a localized
-        // parent group never makes a shared join field per-locale (hence
-        // `!field.localized`, not the inheritance-aware `is_locale_locked_write`).
-        let join_locked = !field.localized && is_non_default_single_locale(locale_ctx);
-
-        match field_children(field) {
-            FieldChildren::Array(sub) => {
-                if !join_locked && let Some(val) = data.get(&field_key) {
-                    let rows = coerce_array_rows(val);
-                    set_array_rows(conn, slug, &field_key, parent_id, &rows, sub, locale_ref)?;
-                }
-            }
-            FieldChildren::Blocks(defs) => {
-                if !join_locked && let Some(val) = data.get(&field_key) {
-                    let mut rows = match val {
-                        Value::Array(arr) => arr.clone(),
-                        _ => Vec::new(),
-                    };
-                    // Block rows are stored as JSON: convert their timezone
-                    // dates to UTC like every column-stored date.
-                    convert_block_rows(defs, &mut rows);
-                    set_block_rows(conn, slug, &field_key, parent_id, &rows, locale_ref)?;
-                }
-            }
-            FieldChildren::Group(sub) => {
-                save_join_data_inner(conn, slug, sub, parent_id, data, locale_ctx, &field_key)?;
-            }
-            FieldChildren::Wrapper(sub) => {
-                save_join_data_inner(conn, slug, sub, parent_id, data, locale_ctx, prefix)?;
-            }
-            FieldChildren::Tabs(tabs) => {
-                for tab in tabs {
-                    save_join_data_inner(
-                        conn,
-                        slug,
-                        &tab.fields,
-                        parent_id,
-                        data,
-                        locale_ctx,
-                        prefix,
-                    )?;
-                }
-            }
-            // Relationship/Upload has-many are leaves that write their own
-            // junction rows; every other leaf has no `relationship` so the
-            // guard falls through to a no-op.
-            FieldChildren::Leaf => {
-                if !join_locked
-                    && let Some(ref rc) = field.relationship
-                    && rc.has_many
-                    && let Some(val) = data.get(&field_key)
-                {
-                    if rc.is_polymorphic() {
-                        let items = parse_polymorphic_values(val);
-                        set_polymorphic_related(
-                            conn, slug, &field_key, parent_id, &items, locale_ref,
-                        )?;
-                    } else {
-                        let ids = parse_id_list(val);
-                        set_related_ids(conn, slug, &field_key, parent_id, &ids, locale_ref)?;
-                    }
-                }
-            }
-        }
+        save_join_field(save, field, data, prefix)?;
     }
+
     Ok(())
+}
+
+fn save_join_field(
+    save: &JoinSave<'_>,
+    field: &FieldDefinition,
+    data: &DocumentFields,
+    prefix: &str,
+) -> Result<()> {
+    let field_key = prefixed_name(prefix, &field.name);
+
+    // A shared (non-localized) join field maps to locale-independent junction
+    // rows; writing it under a non-default locale would replace the shared
+    // set from the wrong locale. Skip the write — parity with the scalar
+    // column locale-lock. Join localization is own-flag-only, so a localized
+    // parent group never makes a shared join field per-locale (hence
+    // `!field.localized`, not the inheritance-aware `is_locale_locked_write`).
+    let join_locked = !field.localized && is_non_default_single_locale(save.locale_ctx);
+
+    match field_children(field) {
+        FieldChildren::Group(sub) => save_join_fields(save, sub, data, &field_key),
+        FieldChildren::Wrapper(sub) => save_join_fields(save, sub, data, prefix),
+        FieldChildren::Tabs(tabs) => tabs
+            .iter()
+            .try_for_each(|tab| save_join_fields(save, &tab.fields, data, prefix)),
+        _ if join_locked => Ok(()),
+        FieldChildren::Array(sub) => match data.get(&field_key) {
+            Some(val) => save_array_field(save, field, &field_key, sub, val),
+            None => Ok(()),
+        },
+        FieldChildren::Blocks(defs) => match data.get(&field_key) {
+            Some(val) => save_blocks_field(save, field, &field_key, defs, val),
+            None => Ok(()),
+        },
+        // Relationship/Upload has-many are leaves that write their own
+        // junction rows; every other leaf has no `relationship` and is a no-op.
+        FieldChildren::Leaf => save_related_field(save, field, &field_key, data),
+    }
+}
+
+fn save_array_field(
+    save: &JoinSave<'_>,
+    field: &FieldDefinition,
+    field_key: &str,
+    sub: &[FieldDefinition],
+    val: &Value,
+) -> Result<()> {
+    let table_name = join_table(save.slug, field_key);
+    let locale = resolve_join_locale(field, save.locale_ctx);
+    let target = JunctionTarget {
+        table_name: &table_name,
+        parent_id: save.parent_id,
+        locale: locale.as_deref(),
+    };
+
+    write_array_rows(
+        save.conn,
+        &target,
+        &coerce_array_rows(val),
+        sub,
+        save.row_ids,
+    )
+}
+
+fn save_blocks_field(
+    save: &JoinSave<'_>,
+    field: &FieldDefinition,
+    field_key: &str,
+    defs: &[BlockDefinition],
+    val: &Value,
+) -> Result<()> {
+    let mut rows = match val {
+        Value::Array(arr) => arr.clone(),
+        _ => Vec::new(),
+    };
+
+    // Block rows are stored as JSON: convert their timezone dates to UTC like
+    // every column-stored date.
+    convert_block_rows(defs, &mut rows);
+
+    let table_name = join_table(save.slug, field_key);
+    let locale = resolve_join_locale(field, save.locale_ctx);
+    let target = JunctionTarget {
+        table_name: &table_name,
+        parent_id: save.parent_id,
+        locale: locale.as_deref(),
+    };
+
+    write_block_rows(save.conn, &target, &rows, save.row_ids)
+}
+
+fn save_related_field(
+    save: &JoinSave<'_>,
+    field: &FieldDefinition,
+    field_key: &str,
+    data: &DocumentFields,
+) -> Result<()> {
+    let Some(rc) = field.relationship.as_ref().filter(|rc| rc.has_many) else {
+        return Ok(());
+    };
+    let Some(val) = data.get(field_key) else {
+        return Ok(());
+    };
+
+    let locale = resolve_join_locale(field, save.locale_ctx);
+    let (conn, slug, parent_id) = (save.conn, save.slug, save.parent_id);
+
+    if rc.is_polymorphic() {
+        let items = parse_polymorphic_values(val);
+        return set_polymorphic_related(
+            conn,
+            slug,
+            field_key,
+            parent_id,
+            &items,
+            locale.as_deref(),
+        );
+    }
+
+    let ids = parse_id_list(val);
+    set_related_ids(conn, slug, field_key, parent_id, &ids, locale.as_deref())
 }
 
 #[cfg(test)]

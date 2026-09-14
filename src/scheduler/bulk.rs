@@ -15,12 +15,12 @@ use tracing::{error, info};
 use crate::{
     core::{Document, job::JobRun},
     db::{
-        DbPool, LocaleContext, query, query::filter::decode_where_json_str,
+        DbConnection, DbPool, LocaleContext, query, query::filter::decode_where_json_str,
         query::jobs as job_query,
     },
     service::{
         AppInfra, CreateManyItem, OpDeadline, ServiceContext,
-        jobs::bulk_queue::{BulkJobData, BulkOpKind, QueuedBy},
+        jobs::bulk_queue::{BulkJobData, BulkOpKind, QueuedBy, finished_payload},
         op::{
             self, CreateMany, CreateManyArgs, DeleteMany, DeleteManyArgs, Principal, TargetRef,
             UpdateMany, UpdateManyArgs,
@@ -57,9 +57,8 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
     let label = format!("Bulk job {}", p.job_run.id);
 
     let Some(infra) = p.app_infra else {
-        return record_permanent_job_failure(
-            p.pool,
-            p.job_run,
+        return fail_bulk_run(
+            p,
             &label,
             "bulk execution requires the app infra bundle (not available in this worker context)",
         );
@@ -68,12 +67,7 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
     let data: BulkJobData = match serde_json::from_str(&p.job_run.data) {
         Ok(d) => d,
         Err(e) => {
-            return record_permanent_job_failure(
-                p.pool,
-                p.job_run,
-                &label,
-                &format!("invalid bulk job data: {e}"),
-            );
+            return fail_bulk_run(p, &label, &format!("invalid bulk job data: {e}"));
         }
     };
 
@@ -100,7 +94,7 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
     let principal = match resolve_run_principal(infra, &queued_by, ui_locale) {
         Ok(principal) => principal,
         Err(reason) => {
-            return record_permanent_job_failure(p.pool, p.job_run, &label, &reason);
+            return fail_bulk_run(p, &label, &reason);
         }
     };
 
@@ -108,12 +102,7 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
         match LocaleContext::from_locale_string(locale.as_deref(), &infra.locale_config) {
             Ok(l) => l,
             Err(e) => {
-                return record_permanent_job_failure(
-                    p.pool,
-                    p.job_run,
-                    &label,
-                    &format!("invalid locale: {e}"),
-                );
+                return fail_bulk_run(p, &label, &format!("invalid locale: {e}"));
             }
         };
 
@@ -146,17 +135,28 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
     );
 
     match outcome {
-        Ok(summary) => record_bulk_success(p, &label, &summary, &queued_by),
-        Err(error_msg) => {
-            let result = record_permanent_job_failure(p.pool, p.job_run, &label, &error_msg);
-            // `failed` is terminal too (frozen contract: a finished run's
-            // request body is dropped once it reaches a terminal status) —
-            // the caller's documents/patch/filter must not sit at rest for
-            // the retention window just because the run failed.
-            strip_finished_payload(p.pool, p.job_run, &queued_by);
-            result
-        }
+        Ok(summary) => record_bulk_success(p, &label, &summary),
+        Err(error_msg) => fail_bulk_run(p, &label, &error_msg),
     }
+}
+
+/// Record a run's permanent failure and drop its request payload: `failed` is
+/// terminal too (frozen contract: a finished run's request body is dropped once
+/// it reaches a terminal status), so the caller's documents/patch/filter must
+/// not sit at rest for the retention window just because the run failed.
+///
+/// # Errors
+///
+/// Returns an error when the failure itself cannot be recorded.
+fn fail_bulk_run(p: &ExecuteBulkParams<'_>, label: &str, reason: &str) -> Result<()> {
+    let result = record_permanent_job_failure(p.pool, p.job_run, label, reason);
+
+    match p.pool.get() {
+        Ok(conn) => strip_finished_payload(&conn, p.job_run),
+        Err(e) => error!("bulk job: no connection to strip the finished payload: {e}"),
+    }
+
+    result
 }
 
 /// Mark a finished batch completed and drop its request payload.
@@ -164,12 +164,7 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when the completion mark itself cannot be written.
-fn record_bulk_success(
-    p: &ExecuteBulkParams<'_>,
-    label: &str,
-    summary: &str,
-    queued_by: &QueuedBy,
-) -> Result<()> {
+fn record_bulk_success(p: &ExecuteBulkParams<'_>, label: &str, summary: &str) -> Result<()> {
     let conn = p
         .pool
         .get()
@@ -190,7 +185,7 @@ fn record_bulk_success(
         );
     }
 
-    strip_finished_payload(p.pool, p.job_run, queued_by);
+    strip_finished_payload(&conn, p.job_run);
 
     info!("{label} completed in {:?}", p.start.elapsed());
 
@@ -199,24 +194,14 @@ fn record_bulk_success(
 
 /// Once a run is finished its request body (documents / patch / filter) can
 /// never be needed again, but it would otherwise sit in `_crap_jobs.data`
-/// until the retention purge. Replace it with just the identity the
-/// visibility rule needs, so the caller's submitted values are not kept at
-/// rest for the retention window.
-fn strip_finished_payload(pool: &DbPool, job_run: &JobRun, queued_by: &QueuedBy) {
-    let stripped = match serde_json::to_string(&json!({ "queued_by": queued_by })) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("bulk job: could not build the stripped payload: {e}");
-            return;
-        }
-    };
+/// until the retention purge. Replace it with just what the visibility rules
+/// need — the queuer and the collection — so the caller's submitted values
+/// are not kept at rest for the retention window. Every path that moves a
+/// `_system_bulk` run to a terminal status calls this.
+pub(super) fn strip_finished_payload(conn: &dyn DbConnection, job_run: &JobRun) {
+    let stripped = finished_payload(&job_run.data);
 
-    let Ok(conn) = pool.get() else {
-        error!("bulk job: no connection to strip the finished payload");
-        return;
-    };
-
-    if let Err(e) = job_query::set_job_data(&conn, &job_run.id, &stripped) {
+    if let Err(e) = job_query::set_job_data(conn, &job_run.id, &stripped) {
         error!("bulk job: could not strip the finished payload: {e:#}");
     }
 }

@@ -3,11 +3,14 @@
 //! walk that builds these lives in [`super::driver`]; the per-language rendering
 //! lives in the printer modules.
 
+use std::borrow::Cow;
+
 use crate::{core::Registry, typegen::helpers::SubTypeKind};
 
 /// A field's language-neutral type, resolved once from the schema. Each printer
 /// maps it to its own syntax — only [`FieldTy::Rel`] carries a populated target
 /// (Rust `Rel<T>`); the other languages render relationships as id strings.
+#[derive(Clone)]
 pub(in crate::typegen) enum FieldTy {
     /// A single string (`Text`/`Textarea`/`Email`/`Date`/`Richtext`/`Code`).
     Str,
@@ -57,6 +60,9 @@ pub(in crate::typegen) enum FieldTy {
         values: Vec<String>,
         many: bool,
     },
+    /// A localized column field read with `locale = "all"`: one value per
+    /// locale code.
+    Localized(Box<FieldTy>),
 }
 
 /// A named enum type generated from a `Select`/`Radio` field's options, emitted
@@ -79,9 +85,11 @@ pub(in crate::typegen) struct PolyDef {
 }
 
 /// One resolved field, ready for a printer to render.
+#[derive(Clone)]
 pub(in crate::typegen) struct Field<'a> {
-    /// The raw schema field name (the wire key). Printers sanitize per language.
-    pub name: &'a str,
+    /// The raw wire key: a schema field name, or a synthesized key such as a
+    /// timezone date's `<name>_tz`. Printers sanitize per language.
+    pub name: Cow<'a, str>,
     pub ty: FieldTy,
     pub optional: bool,
 }
@@ -93,7 +101,11 @@ pub(in crate::typegen) struct SubType<'a> {
     pub kind: SubTypeKind,
     /// The raw field name, for languages that describe the sub-type in a comment.
     pub field_name: &'a str,
+    /// Each field's optionality as input takes it; a read type makes every
+    /// field optional.
     pub fields: Vec<Field<'a>>,
+    /// Only ever read (the `locale = "all"` shape): no input variant exists.
+    pub read_only: bool,
 }
 
 /// A top-level document type (a collection document or a global).
@@ -103,9 +115,15 @@ pub(in crate::typegen) struct Document<'a> {
     /// The raw slug, for languages that describe the document in a comment.
     pub slug: &'a str,
     pub fields: Vec<Field<'a>>,
+    /// Stored keys a read document carries besides its fields (`_status`,
+    /// `_deleted_at`) — always optional, never part of the input.
+    pub system: Vec<Field<'a>>,
     /// Whether to emit `created_at`/`updated_at` (globals always do).
     pub timestamps: bool,
     pub is_global: bool,
+    /// The `locale = "all"` read shape: localized fields are per-locale maps, and
+    /// a printer emits only a read type for it.
+    pub localized: bool,
     /// Top-level `Select` fields with options as `(raw_name, raw_values)`, for
     /// languages that document them (Python). Empty for globals.
     pub select_options: Vec<(String, Vec<String>)>,

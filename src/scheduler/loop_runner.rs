@@ -32,11 +32,14 @@ use crate::{
     service::AppInfra,
 };
 
-use super::runner::{
-    ExecuteJobParams, check_cron_schedules, claim_retention_purge_tick, execute_job,
-    purge_soft_deleted, recover_stale_jobs,
+use super::{
+    bulk::strip_finished_payload,
+    runner::{
+        ExecuteJobParams, check_cron_schedules, claim_retention_purge_tick, execute_job,
+        purge_soft_deleted, recover_stale_jobs,
+    },
+    types::{SchedulerParams, TickJobConfig},
 };
-use super::types::{SchedulerParams, TickJobConfig};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
 ///
@@ -715,6 +718,9 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
         s.job_def.timeout
     };
     let should_retry = s.job_run.attempt < s.job_run.max_attempts;
+    // A bulk run failed here drops its request payload like every other
+    // terminal bulk run.
+    let bulk_run = (s.job_run.slug == SYSTEM_BULK_JOB).then(|| s.job_run.clone());
     let attempt = s.job_run.attempt;
     let pool_timeout = pool.clone();
     let job_id = s.job_run.id.clone();
@@ -782,6 +788,10 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
         {
             let _ = job_query::fail_job(&c, &id_log, &reason, should_retry, attempt)
                 .inspect_err(|e| warn!("Failed to mark job {id_log} as failed: {e}"));
+
+            if let Some(run) = bulk_run.as_ref().filter(|_| !should_retry) {
+                strip_finished_payload(&c, run);
+            }
         }
     });
 }

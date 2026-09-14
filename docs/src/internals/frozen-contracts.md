@@ -104,6 +104,30 @@ freeze is unconditional.
   wall-clock input with the zone; a value that already carries an offset is
   stored as given, so re-saving never shifts a date.
 
+- **Version snapshots record localized join fields per locale.** For a
+  localized array, blocks or has-many relationship field, a snapshot holds each
+  locale's rows under a flat `{field}__{locale}` key (`{group}__{field}__{locale}`
+  inside a group, the locale code in column form: `pt-BR` → `pt_BR`), next to the
+  bare key holding the default locale's rows — the same convention as localized
+  scalar columns. Restore writes each locale back
+  from its own key; a snapshot without per-locale keys (taken before alpha.10)
+  leaves localized join rows untouched. A draft save changes only the saving
+  locale's key, and builds on the latest draft snapshot when one exists.
+
+- **Email and text values are stored canonical.** An `email` field value is
+  stored trimmed, NFC-normalized and lowercased; Text, Textarea and Email values
+  are NFC-normalized on every write (nested row values included). Account
+  lookups (login, password reset, verification, CLI), uniqueness and filter
+  operands on these fields use the canonical form — in SQL and in the in-memory
+  constraint matcher alike, a `like` pattern judged after canonicalization.
+  Stored values are rewritten at startup, per collection or global, whenever
+  the set of its email and text columns differs from the last pass (gate:
+  `_crap_meta` key `canonical_text:{slug}`, value `{version}:{fingerprint}`);
+  a value colliding once canonical in a unique field or unique index stops
+  startup.
+- **Index names are unique per database.** Startup rejects two indexes — of
+  one collection or of two — that would get the same `idx_{slug}_…` name.
+
 ## Client-visible shapes
 
 - **Returned document shape.** `id`, the field columns, `created_at`,
@@ -115,6 +139,11 @@ freeze is unconditional.
 - **Result array key is `documents`** across `find` / `create_many` /
   `list_versions`. Bulk count keys: `created` / `modified` / `deleted` +
   `skipped`.
+- **`like` / `contains` matching.** ASCII-case-insensitive on every backend
+  and in memory; `%` matches any run of characters including line breaks, `_`
+  one character, and `\` escapes the next character (`ESCAPE '\'`). A `like`
+  pattern ending in a lone backslash is rejected by filters and never matches
+  when a constraint is evaluated in memory.
 - **Polymorphic relationship read format** `"collection/id"`.
 - **Filter DSL.** The operator set (`equals`, `not_equals`, `like`, `contains`,
   `greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`,
@@ -216,6 +245,41 @@ changing a representation is a breaking change to every consumer.
   carries the same `publisher`. Empty only on an event relayed from a node that
   predates the field.
 
+- **`FieldInfo` field metadata** carries `relationship_collections` (the
+  targets of a polymorphic relationship), `has_many` (a text, number or select
+  value list) and `timezone` (a date with a `<name>_tz` companion) alongside
+  the existing keys; a global's `DescribeCollection` reports
+  `timestamps: true`.
+
+- **A finished bulk run's stored payload is `{"queued_by": …, "collection": …}`**
+  — the queuer and the collection the visibility rules need; the request body
+  is dropped once the run reaches any terminal status (completed, failed or
+  stale).
+- **`TriggerJob` answers `NOT_FOUND` for a job the caller may not trigger**, the
+  same status as an unknown slug — also for a malformed payload, which is
+  reported only to a caller the job's access rule lets through.
+- **The upload API and `/uploads` resolve credentials like the admin UI**: an
+  unusable credential is `401` on the upload API and anonymous on `/uploads`.
+- **Account state is read from the stored account.** Every credential the auth
+  evaluator resolves — bearer, session cookie, strategy — is refused when the
+  account's stored `_locked` is set, and a strategy's user of a collection that
+  requires verification when its stored `_verified` isn't (a flag a strategy
+  hook sets on the document it returns counts too). A locked account's token
+  answers `Locked` before its session version is compared.
+- **A custom page's sidebar entry follows its route's access rule**: only an
+  outright allow shows it; a filter table hides it. A page without a rule is
+  listed and renders — `[access] default_deny` applies to collections and
+  globals, not pages.
+
+- **`data/crap.lock` is the instance lock.** `serve`, `work`, stdio `mcp` and
+  every other CLI command that opens the database take it shared before opening
+  it and hold it until they exit; `restore` and `migrate fresh` take it
+  exclusively for the whole command. The
+  data directory must be on a filesystem with file locks: a process that can't
+  take the lock doesn't start. The shared lock opens an existing lock file read-only, so a
+  read-only data directory works once the file exists; `restore` and
+  `migrate fresh` open it for writing, as an exclusive lock needs on NFS.
+
 ## MCP (Model Context Protocol)
 
 - **Tool-name grammar** `{op}_{slug}` for collections, `global_{op}_{slug}` for
@@ -252,6 +316,13 @@ changing a representation is a breaking change to every consumer.
   process-gated over stdio) and gated per-collection by the `access.mcp` key; it
   runs with `override_access`, so per-row/field access rules do **not** further
   restrict an authorized MCP caller.
+- **MCP collection schemas describe the stored document.** Block variants are
+  discriminated by `_block_type`; array and blocks rows accept an optional
+  `id` that keeps the row on update; has-many text and number fields are
+  arrays; a timezone date has a `<name>_tz` string property; a polymorphic
+  reference is a `collection/id` string constrained by `pattern`.
+  `describe_collection` reports `timestamps` and `has_drafts` for collections
+  and globals.
 
 ## Auth — TOTP (RFC 6238)
 
@@ -538,7 +609,10 @@ changing a representation is a breaking change to every consumer.
   secret` is replaced by the generated, persisted `data/.jwt_secret` before
   any consumer sees it, so JWT signing, `crap.crypto`, TOTP sealing and
   signed upload URLs all key off the same value. Deriving a key from an empty
-  secret is refused, never silently done.
+  secret is refused, never silently done. The secret is generated under an
+  exclusive lock on `data/.jwt_secret.lock` and written through a staged file
+  renamed into place; an existing secret file that can't be read is an error,
+  and only an empty one is ever replaced.
 - **A slug names either a collection or a global, never both.** Re-defining
   the same kind stays legal (the plugin extension pattern).
 - **`null` means "clear" on every write surface**, MCP included; non-finite
@@ -760,8 +834,9 @@ changing a representation is a breaking change to every consumer.
   internal parent→child marker (presence-only; do not set it). `CRAP_CONFIG_DIR`
   mirrors `--config`.
 - **Backup/export formats** are gated by a numeric `format_version` — the layout
-  (`manifest.json` + `crap.db` + `uploads.tar.gz`; the export envelope) is frozen
-  for a given version.
+  (`manifest.json` + `crap.db` + optional `uploads.tar.gz` + `jwt_secret` when
+  the auth secret was generated, owner-only, recorded by the manifest's
+  `includes_secret`; the export envelope) is frozen for a given version.
 - **`import` round-trips a document without loss.** A re-import preserves the
   target's incoming-reference count (the upsert is column-preserving via
   `ON CONFLICT … DO UPDATE` on both backends — never a delete-and-reinsert that
@@ -769,7 +844,22 @@ changing a representation is a breaking change to every consumer.
   collections, writes a present-but-null field as an explicit clear versus an
   absent field left untouched, and indexes the written row for full-text search
   exactly as the service write path does. A field the export omits is preserved;
-  a field it includes as `null` is cleared.
+  a field it includes as `null` is cleared. An export carries every document,
+  trashed ones included (`_deleted_at`), timezone companions (`<field>_tz`) and
+  array/blocks row `id`s, and import writes them back under the same ids. A
+  localized array, blocks or has-many field exports every locale's rows as
+  `{ "<locale>": rows }`, the shape of a localized column. An account exported
+  with `--include-credentials` carries a `_credentials` object keyed by stored
+  credential column (`_password_hash`, `_locked`, `_session_version`,
+  `_settings`, `_verified`, `_totp_secret`, `_totp_confirmed`,
+  `_totp_last_step`); one-time tokens are never exported and import rejects any
+  other key.
+- **`import` is one transaction.** Every document is written before reference
+  counts are settled, so a document may reference one later in the file.
+  Credentials imported over an existing account move its `_session_version`
+  past both the stored and the exported one. An account whose `_totp_secret`
+  doesn't open with the target's auth secret is refused before anything is
+  written.
 - **`restore --include-uploads` fails the command when uploads do not restore.**
   A backup with no uploads archive is a successful skip; a `tar` extraction that
   fails (non-zero exit, or `tar` missing) fails the whole `restore` rather than

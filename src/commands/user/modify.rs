@@ -1,13 +1,21 @@
 //! User modification commands — delete, lock, unlock, verify, unverify, change password.
 
+use std::{path::Path, sync::Arc};
+
 use anyhow::{Context as _, Result, anyhow};
 use dialoguer::Confirm;
 
 use crate::{
     cli::{self, crap_theme},
-    config::{LocaleConfig, PasswordPolicy},
-    core::Registry,
+    commands::helpers::create_live_transports,
+    config::{CrapConfig, LocaleConfig, PasswordPolicy},
+    core::{
+        CollectionDefinition, Document, Registry,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+        upload::create_storage_with_lease,
+    },
     db::{DbPool, query},
+    hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -18,70 +26,107 @@ use super::helpers::{
 /// Args for [`user_delete`].
 pub struct UserDeleteParams<'a> {
     pub pool: &'a DbPool,
-    pub registry: &'a Registry,
-    pub locale: &'a LocaleConfig,
+    pub registry: &'a Arc<Registry>,
+    pub config: &'a CrapConfig,
+    pub config_dir: &'a Path,
     pub collection: &'a str,
     pub email: Option<String>,
     pub id: Option<String>,
     pub confirm: bool,
 }
 
+/// Ask the operator to confirm the delete; `false` when they decline.
+fn confirm_delete(doc: &Document, email: &str, collection: &str) -> Result<bool> {
+    Confirm::with_theme(&crap_theme())
+        .with_prompt(format!(
+            "Delete user {} ({email}) from '{collection}'?",
+            doc.id
+        ))
+        .default(false)
+        .interact()
+        .context("Failed to read confirmation")
+}
+
+/// Delete through the service layer, like every other surface: a user other
+/// documents reference is refused, a soft-delete collection moves the user to
+/// the trash, delete hooks run and upload files are cleaned up. With live
+/// updates over Redis, the delete reaches `serve`'s subscribers through
+/// `transports` and tears down the user's open streams there. Collection access
+/// rules don't apply to the operator's CLI.
+fn delete_through_service(
+    p: &UserDeleteParams<'_>,
+    def: &Arc<CollectionDefinition>,
+    id: &str,
+    transports: (Option<SharedEventTransport>, SharedInvalidationTransport),
+) -> Result<()> {
+    let (event_transport, invalidation_transport) = transports;
+
+    let hook_runner = HookRunner::builder()
+        .config_dir(p.config_dir)
+        .registry(Arc::clone(p.registry))
+        .config(p.config)
+        .invalidation_transport(invalidation_transport.clone())
+        .build()?;
+    let storage =
+        create_storage_with_lease(p.config_dir, &p.config.upload, hook_runner.lua_lease())?;
+
+    let ctx = ServiceContext::collection(p.collection, def)
+        .pool(p.pool)
+        .runner(&hook_runner)
+        .override_access(true)
+        .event_transport(event_transport)
+        .invalidation_transport(Some(invalidation_transport))
+        .build();
+
+    service::delete_document(&ctx, id, Some(&*storage), Some(&p.config.locale))
+        .map_err(ServiceError::into_anyhow)
+        .context("Failed to delete user")?;
+
+    Ok(())
+}
+
 /// Delete a user from an auth collection.
 ///
 /// # Errors
 ///
-/// Returns an error if the user can't be resolved, the prompt fails, the DB
-/// transaction fails, or any of the delete/ref-count steps fails.
+/// Returns an error if the user can't be resolved, the prompt fails, the user
+/// is still referenced by other documents, or the delete fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
+pub fn user_delete(p: &UserDeleteParams<'_>) -> Result<()> {
     let (_, doc) = resolve_user(&UserLookup {
         pool: p.pool,
         registry: p.registry,
         collection: p.collection,
-        email: p.email,
-        id: p.id,
-        locale: p.locale,
+        email: p.email.clone(),
+        id: p.id.clone(),
+        locale: &p.config.locale,
     })?;
     let user_email = get_user_email(&doc);
 
-    if !p.confirm {
-        let proceed = Confirm::with_theme(&crap_theme())
-            .with_prompt(format!(
-                "Delete user {} ({}) from '{}'?",
-                doc.id, user_email, p.collection
-            ))
-            .default(false)
-            .interact()
-            .context("Failed to read confirmation")?;
+    // Built — and a configured Redis reached — before the prompt, so a delete
+    // that couldn't reach `serve`'s subscribers fails before it is confirmed.
+    let transports = create_live_transports(p.config)?;
 
-        if !proceed {
-            cli::info("Aborted.");
+    if !p.confirm && !confirm_delete(&doc, user_email, p.collection)? {
+        cli::info("Aborted.");
 
-            return Ok(());
-        }
+        return Ok(());
     }
 
-    let mut conn = p.pool.get().context("Failed to get database connection")?;
-    let reg = p.registry;
-    let def = reg
+    let def = p
+        .registry
         .get_collection(p.collection)
         .ok_or_else(|| anyhow!("Collection '{}' not found in registry", p.collection))?;
 
-    let tx = conn
-        .transaction_immediate()
-        .context("Failed to start transaction")?;
+    delete_through_service(p, def, &doc.id, transports)?;
 
-    query::ref_count::before_hard_delete(&tx, p.collection, &doc.id, &def.fields, p.locale)
-        .context("Failed to adjust ref counts")?;
-
-    query::fts::fts_delete(&tx, p.collection, &doc.id).context("Failed to clear FTS entry")?;
-
-    query::delete(&tx, p.collection, &doc.id).context("Failed to delete user")?;
-
-    tx.commit().context("Failed to commit delete transaction")?;
-
+    let outcome = if def.soft_delete {
+        "Moved user to the trash"
+    } else {
+        "Deleted user"
+    };
     cli::success(&format!(
-        "Deleted user {} ({}) from '{}'",
+        "{outcome} {} ({}) in '{}'",
         doc.id, user_email, p.collection
     ));
 

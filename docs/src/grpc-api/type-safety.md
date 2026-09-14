@@ -152,7 +152,12 @@ Each field in the response has:
 | `relationship_collection` | string? | Target collection slug for `relationship` fields |
 | `relationship_has_many` | bool? | Whether it's a many-to-many relationship |
 | `relationship_max_depth` | int? | Per-field population depth cap |
+| `relationship_collections` | string[] | Target collections of a polymorphic relationship; its values are `collection/id` |
+| `has_many` | bool | Whether a `text`, `number` or `select` field holds a list |
+| `timezone` | bool | Whether a `date` field carries its IANA timezone in `<name>_tz` |
+| `localized` | bool | Whether the field stores a value per locale |
 | `fields` | FieldInfo[] | Sub-fields for `array` and `group` types (recursive) |
+| `blocks` | BlockInfo[] | Block types of a `blocks` field |
 
 ## Building Typed Clients
 
@@ -362,8 +367,22 @@ upgrade):
 crap-cms typegen client -l ts,go,py,rs
 ```
 
-Each **collection** gets a `…Data` type (writable input fields) and a
-`…Document` type (adds `id` + timestamps); each **global** gets a single type.
+In TypeScript each **collection** and **global** gets a `…Data` type (the input
+for creating, with its required fields) and a `…Document` read type, and each
+group or array row type gets a `…Data` input variant beside its read type; Rust,
+Go and Python emit read types only. The row type of an array stored in its own table
+(not nested inside another row) has an optional `id` — send it back on update to
+keep the stored row. A read type
+has `id`, every field **optional** and nullable (a draft may lack required
+values, field read access and `select` leave keys out, and an empty value reads
+as `null` — `?: T | null` in TypeScript), the timestamps, and the stored keys
+the collection has: `_status` (drafts), `_deleted_at` (soft delete) and
+`<name>_tz` (timezone dates). A collection or global with localized fields also
+gets a `locale = "all"` read type — `…LocalizedDocument` in TypeScript,
+`…Localized` elsewhere — whose localized fields are per-locale maps. A locale
+without a value holds `null`: `Localized<T>` is `{ [locale: string]: T | null }`,
+Rust `HashMap<String, Option<T>>`, Go `map[string]*T` (a nil-able value
+unchanged) and Python `dict[str, Optional[T]]`.
 The field mapping is richer than the minimal `fieldTypeToTS` above — it models
 population depth, narrows selects, and types polymorphic relationships:
 
@@ -371,7 +390,7 @@ population depth, narrows selects, and types polymorphic relationships:
 |---|---|---|---|---|
 | `text` / `richtext` / `date` / … | `String` | `string` | `string` | `str` |
 | `number` | `f64` | `float64` | `number` | `float` |
-| `checkbox` | `bool` | `bool` | `boolean` | `bool` |
+| `checkbox` | `bool` | `*bool` | `boolean` | `bool` |
 | `select` | `enum { …, Other(String) }` | `type X string` + consts | `"a" \| "b"` | `Literal["a", "b"]` |
 | relationship / upload (single) | `Rel<T>` | `Rel[T]` | `string \| TDocument` | `str \| T` |
 | relationship / upload (has-many) | `Vec<Rel<T>>` | `[]Rel[T]` | `(string \| TDocument)[]` | `list[str \| T]` |
@@ -385,9 +404,13 @@ Key semantics baked into these types:
   both JSON forms automatically (Rust via `#[serde(untagged)]`, Go via a custom
   `UnmarshalJSON`); TS/Python are a union you narrow with a
   `typeof x === "string"` / `isinstance(x, str)` check.
-- **A single relationship is optional.** A non-`has_many` relationship/upload is
-  optional on read even when `required` on write, because it can be absent after
-  the target is soft-deleted or access-denied. Handle the empty case.
+- **Every field is optional on read.** Even a `required` field can be absent:
+  a draft read returns it empty, field read access and `select` drop it, and a
+  single relationship is empty once its target is soft-deleted or
+  access-denied. Handle the empty case. Rust wraps each field in `Option`,
+  Python defaults it to `None`, and Go reads it through a pointer or a nil-able
+  type, so an absent boolean or group is distinguishable from `false` or an
+  empty group.
 - **`select` is lossless in Rust and Go.** A value dropped from the schema after
   you generated still deserializes (`Other(String)` in Rust, a bare `string`
   newtype in Go) instead of erroring; TypeScript and Python narrow to the known

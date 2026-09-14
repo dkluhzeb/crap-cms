@@ -404,10 +404,19 @@ pub(super) static CLI_DETAIL_EXPORT: CliCommandDetail = CliCommandDetail {
             flag: "-o, --output <FILE>",
             description: "Output file (default: stdout)",
         },
+        CliFlag {
+            flag: "--include-credentials",
+            description: "Also export each account's password hash, lock, session version, \
+                          verification and TOTP state (treat the file like a database dump)",
+        },
     ]),
     args: None,
     subcommands: None,
-    examples: Some(&["crap-cms export", "crap-cms export -c posts -o posts.json"]),
+    examples: Some(&[
+        "crap-cms export",
+        "crap-cms export -c posts -o posts.json",
+        "crap-cms export -c users --include-credentials -o users.json",
+    ]),
 };
 
 pub(super) static CLI_DETAIL_IMPORT: CliCommandDetail = CliCommandDetail {

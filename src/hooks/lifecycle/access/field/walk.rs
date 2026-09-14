@@ -9,7 +9,7 @@ use crate::core::{
     BLOCK_TYPE_KEY, DenialSeg, DocumentFields, FieldChildren, FieldDefinition, FieldDenial,
     HookRef, any_field, field_children,
 };
-use crate::db::query::helpers::prefixed_name;
+use crate::db::query::helpers::{prefixed_name, tz_column};
 
 pub(super) fn extract_read_access(f: &FieldDefinition) -> Option<&HookRef> {
     f.access.read.as_ref()
@@ -45,7 +45,10 @@ pub(crate) fn collect_denials_flat<F: Fn(&FieldDefinition) -> bool>(
         let full_name = prefixed_name(prefix, &field.name);
 
         if is_denied(field) {
+            // A timezone date's zone is part of its value.
+            let zone = field.has_tz_companion().then(|| tz_column(&full_name));
             out.push(FieldDenial::Flat(full_name));
+            out.extend(zone.map(FieldDenial::Flat));
 
             continue; // Parent denied → its sub-fields go with it.
         }
@@ -91,12 +94,18 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
 ) {
     for field in fields {
         if is_denied(field) {
-            out.push(FieldDenial::Nested {
+            let denial = |leaf: String| FieldDenial::Nested {
                 array_key: array_key.to_string(),
                 array_block_type: array_block_type.map(str::to_string),
                 row_path: row_path.to_vec(),
-                leaf: field.name.clone(),
-            });
+                leaf,
+            };
+            out.push(denial(field.name.clone()));
+
+            // A timezone date's zone is part of its value.
+            if field.has_tz_companion() {
+                out.push(denial(tz_column(&field.name)));
+            }
 
             continue;
         }
@@ -237,6 +246,12 @@ fn strip_level_with_snapshot<E, F>(
             && is_denied(hook, snapshot)
         {
             level.remove(&field.name);
+
+            // A timezone date's zone is part of its value.
+            if field.has_tz_companion() {
+                level.remove(&tz_column(&field.name));
+            }
+
             continue; // Parent denied → its sub-fields go with it.
         }
 
@@ -321,9 +336,77 @@ mod tests {
             .build()
     }
 
+    /// Regression: a denied timezone date's `<name>_tz` companion wasn't denied
+    /// with it, so a hidden or read-denied date still shipped its zone — at the
+    /// document level, in groups, and inside array rows.
+    #[test]
+    fn denying_a_timezone_date_denies_its_zone() {
+        let date = FieldDefinition::builder("starts", FieldType::Date)
+            .timezone(true)
+            .build();
+        let fields = vec![
+            date.clone(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![date.clone()])
+                .build(),
+            FieldDefinition::builder("slots", FieldType::Array)
+                .fields(vec![date])
+                .build(),
+        ];
+        let mut out = Vec::new();
+
+        collect_denials_flat(
+            &fields,
+            &|f: &FieldDefinition| f.name == "starts",
+            "",
+            &mut out,
+        );
+
+        let paths: Vec<String> = out.iter().map(FieldDenial::display_path).collect();
+        for path in [
+            "starts",
+            "starts_tz",
+            "seo__starts",
+            "seo__starts_tz",
+            "slots.starts",
+            "slots.starts_tz",
+        ] {
+            assert!(paths.contains(&path.to_string()), "{path}: {paths:?}");
+        }
+    }
+
+    /// Regression: a read-denied timezone date was removed but its `<name>_tz`
+    /// companion stayed in the document, leaking the zone of a value the
+    /// reader may not see.
+    #[test]
+    fn a_denied_timezone_date_takes_its_zone_with_it() {
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .access(FieldAccess {
+                    read: Some("h".into()),
+                    ..Default::default()
+                })
+                .build(),
+        ];
+        let mut level = json!({
+            "starts": "2026-01-01T10:00:00.000Z",
+            "starts_tz": "Europe/Berlin",
+            "title": "kept",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        strip_read_access_data_aware(&fields, &mut level, &|_, _| true);
+
+        assert!(!level.contains_key("starts"), "{level:?}");
+        assert!(!level.contains_key("starts_tz"), "{level:?}");
+        assert!(level.contains_key("title"), "{level:?}");
+    }
+
     /// A doc-dependent rule (hide `secret` unless `status == "published"`)
     /// strips at the document level based on `ctx.data`.
-
     #[test]
     fn data_aware_strip_top_level_uses_sibling_data() {
         let fields = vec![

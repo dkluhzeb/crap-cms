@@ -11,7 +11,7 @@ use std::path::Path;
 use super::ImagesAction;
 use crate::{
     cli::{self, Table},
-    commands::helpers::init_stack,
+    commands::helpers::{Project, open_project},
     config::parse_duration_string,
     core::{JobStatus, upload::SYSTEM_IMAGE_CONVERT_JOB},
     db::{BoxedConnection, DbConnection, DbValue, query::jobs as job_query},
@@ -25,12 +25,17 @@ use crate::{
 /// or the dispatched action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
-    // `init_stack` runs `sync_all` which ensures the `_crap_jobs`
+    // `open_project` runs `sync_all` which ensures the `_crap_jobs`
     // schema (priority + unique_key columns, indexes, legacy
     // image-queue drain) is up to date before any read. Operators
     // upgrading from alpha.8 who run `images list` before `serve`
     // would otherwise hit a "no such column: priority" error.
-    let (_cfg, _registry, pool) = init_stack(config_dir)?;
+    let Project {
+        lock: _instance_lock,
+        config: _cfg,
+        registry: _registry,
+        pool,
+    } = open_project(config_dir)?;
     let conn = pool.get().context("Failed to get DB connection")?;
 
     match action {

@@ -79,11 +79,20 @@ impl ClientPrinter for RustPrinter {
     }
 
     fn document(&mut self, def: &Document) {
-        let fields = &def.fields;
-        let timestamps = def.timestamps;
-        self.struct_def(&def.name, |w| {
+        let name = if def.localized {
+            self.w.line(&format!(
+                "/// The `{}` document read with `locale = \"all\"`: localized fields hold one value per locale.",
+                def.slug
+            ));
+            format!("{}Localized", def.name)
+        } else {
+            def.name.clone()
+        };
+        let (fields, system, timestamps) = (&def.fields, &def.system, def.timestamps);
+
+        self.struct_def(&name, |w| {
             w.line("pub id: String,");
-            for f in fields {
+            for f in fields.iter().chain(system) {
                 emit_field(w, f);
             }
             if timestamps {
@@ -129,8 +138,9 @@ impl ClientPrinter for RustPrinter {
     }
 }
 
-/// Emit one field: an optional polymorphic-target comment, a combined
-/// `#[serde(...)]` line (rename and/or skip), then the `pub ident: Type,`.
+/// Emit one read field — every field is optional on read: an optional
+/// polymorphic-target comment, a combined `#[serde(...)]` line (rename and
+/// skip), then the `pub ident: Option<Type>,`.
 fn emit_field(w: &mut CodeWriter, field: &Field) {
     if let FieldTy::PolyRel { targets, .. } = &field.ty {
         w.line(&format!(
@@ -139,24 +149,16 @@ fn emit_field(w: &mut CodeWriter, field: &Field) {
         ));
     }
     let ty = rust_ty(&field.ty);
-    let f = idents::rust_field(field.name);
+    let f = idents::rust_field(&field.name);
 
     let mut serde_parts: Vec<String> = Vec::new();
     if let Some(wire) = &f.rename {
         serde_parts.push(format!("rename = \"{wire}\""));
     }
-    if field.optional {
-        serde_parts.push("skip_serializing_if = \"Option::is_none\"".to_string());
-    }
-    if !serde_parts.is_empty() {
-        w.line(&format!("#[serde({})]", serde_parts.join(", ")));
-    }
+    serde_parts.push("skip_serializing_if = \"Option::is_none\"".to_string());
+    w.line(&format!("#[serde({})]", serde_parts.join(", ")));
 
-    if field.optional {
-        w.line(&format!("pub {}: Option<{ty}>,", f.ident));
-    } else {
-        w.line(&format!("pub {}: {ty},", f.ident));
-    }
+    w.line(&format!("pub {}: Option<{ty}>,", f.ident));
 }
 
 /// Map a [`FieldTy`] to its Rust type string.
@@ -197,6 +199,13 @@ fn rust_ty(ty: &FieldTy) -> String {
         FieldTy::SubType { name, list } => {
             let n = idents::rust_type(name);
             if *list { format!("Vec<{n}>") } else { n }
+        }
+        // A locale without a value reads as `null`.
+        FieldTy::Localized(inner) => {
+            format!(
+                "std::collections::HashMap<String, Option<{}>>",
+                rust_ty(inner)
+            )
         }
     }
 }
@@ -386,7 +395,7 @@ mod tests {
             "leading-digit struct prefixed: {out}"
         );
         assert!(
-            out.contains("pub r#type: String,"),
+            out.contains("pub r#type: Option<String>,"),
             "keyword → r#type: {out}"
         );
         assert!(
@@ -414,7 +423,7 @@ mod tests {
         assert!(out.contains("#[derive(Debug, Clone, Serialize, Deserialize)]"));
         assert!(out.contains("pub struct Posts {"));
         assert!(out.contains("    pub id: String,"));
-        assert!(out.contains("    pub title: String,"));
+        assert!(out.contains("    pub title: Option<String>,"));
         assert!(out.contains("    pub content: Option<String>,"));
         assert!(out.contains("    pub created_at: Option<String>,"));
     }
@@ -561,7 +570,7 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub price: f64,"));
+        assert!(out.contains("pub price: Option<f64>,"));
         assert!(out.contains("Option<bool>"));
         assert!(out.contains("Option<serde_json::Value>"));
     }
@@ -632,7 +641,10 @@ mod tests {
             out.contains("pub struct PostsSeo {"),
             "group sub-type: {out}"
         );
-        assert!(out.contains("pub title: String,"), "group sub-field: {out}");
+        assert!(
+            out.contains("pub title: Option<String>,"),
+            "group sub-field: {out}"
+        );
         assert!(
             out.contains("pub description: Option<String>,"),
             "group optional sub-field: {out}"
@@ -706,7 +718,7 @@ mod tests {
         // Single upload is optional on read (populate can null it).
         assert!(out.contains("pub image: Option<String>,"), "got: {out}");
         assert!(
-            out.contains("pub status: ItemsStatus,"),
+            out.contains("pub status: Option<ItemsStatus>,"),
             "select → enum type: {out}"
         );
     }
@@ -889,7 +901,7 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(
-            out.contains("pub images: Vec<String>,"),
+            out.contains("pub images: Option<Vec<String>>,"),
             "has-many upload should be Vec<String>: {out}"
         );
     }
@@ -902,7 +914,7 @@ mod tests {
         render_global(&mut out, &global);
         assert!(out.contains("pub struct SiteSettings {"));
         assert!(out.contains("pub id: String,"));
-        assert!(out.contains("pub site_name: String,"));
+        assert!(out.contains("pub site_name: Option<String>,"));
         assert!(out.contains("pub created_at: Option<String>,"));
     }
 
@@ -962,7 +974,10 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub tags: Vec<String>,"), "required: {out}");
+        assert!(
+            out.contains("pub tags: Option<Vec<String>>,"),
+            "list: {out}"
+        );
         assert!(out.contains("Option<Vec<String>>"), "optional: {out}");
     }
 
@@ -982,7 +997,7 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub scores: Vec<f64>,"), "required: {out}");
+        assert!(out.contains("pub scores: Option<Vec<f64>>,"), "list: {out}");
         assert!(out.contains("Option<Vec<f64>>"), "optional: {out}");
     }
 
@@ -1007,10 +1022,10 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub email: String,"));
-        assert!(out.contains("pub date: String,"));
-        assert!(out.contains("pub body: String,"));
-        assert!(out.contains("pub notes: String,"));
+        assert!(out.contains("pub email: Option<String>,"));
+        assert!(out.contains("pub date: Option<String>,"));
+        assert!(out.contains("pub body: Option<String>,"));
+        assert!(out.contains("pub notes: Option<String>,"));
     }
 
     #[test]
@@ -1029,13 +1044,16 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub snippet: String,"), "code → String: {out}");
+        assert!(
+            out.contains("pub snippet: Option<String>,"),
+            "code → String: {out}"
+        );
         assert!(
             out.contains("Option<Vec<serde_json::Value>>"),
             "join → Vec<Value>: {out}"
         );
         assert!(
-            out.contains("pub color: String,"),
+            out.contains("pub color: Option<String>,"),
             "radio no-options → String: {out}"
         );
     }
@@ -1056,7 +1074,10 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub tags: Vec<String>,"), "required: {out}");
+        assert!(
+            out.contains("pub tags: Option<Vec<String>>,"),
+            "list: {out}"
+        );
         assert!(out.contains("Option<Vec<String>>"), "optional: {out}");
     }
 
@@ -1086,8 +1107,8 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(!out.contains("layout_row"), "row name not a field: {out}");
         assert!(
-            out.contains("pub first_name: String,"),
-            "row required: {out}"
+            out.contains("pub first_name: Option<String>,"),
+            "row sub-field: {out}"
         );
         assert!(
             out.contains("pub last_name: Option<String>,"),
@@ -1102,6 +1123,9 @@ mod tests {
             "collapsible sub: {out}"
         );
         assert!(!out.contains("sections"), "tabs name not a field: {out}");
-        assert!(out.contains("pub tab_field: String,"), "tabs sub: {out}");
+        assert!(
+            out.contains("pub tab_field: Option<String>,"),
+            "tabs sub: {out}"
+        );
     }
 }

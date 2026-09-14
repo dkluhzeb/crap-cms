@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use crate::{
     cli::{self, crap_theme},
     commands::{
-        load_config_and_sync,
+        Project,
         make::make_collection_command,
+        open_project,
         user::{UserCreateParams, user_create},
     },
-    config::CrapConfig,
     scaffold,
 };
 
@@ -247,8 +247,12 @@ fn prompt_first_user(config_dir: &Path, auth_collection: &str) -> Result<()> {
         return Ok(());
     }
 
-    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-    let (pool, registry) = load_config_and_sync(config_dir)?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool,
+    } = open_project(config_dir)?;
 
     if let Err(e) = user_create(UserCreateParams {
         pool: &pool,

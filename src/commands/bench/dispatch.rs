@@ -7,10 +7,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 
 use crate::{
-    commands::BenchAction,
-    config::CrapConfig,
-    db::{migrate, pool},
-    hooks::{self as hook_init, HookRunner},
+    commands::{BenchAction, Project, open_project},
+    hooks::HookRunner,
 };
 
 use super::{create, hooks, queries};
@@ -27,12 +25,12 @@ pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
-    let registry = hook_init::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let db_pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
-
-    migrate::sync_all(&db_pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool: db_pool,
+    } = open_project(&config_dir)?;
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)

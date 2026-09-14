@@ -7,6 +7,7 @@ mod sync;
 mod system_columns;
 
 pub(super) use create::append_default_value_for;
+pub(super) use indexes::{compound_index_columns, managed_index_names};
 pub(super) use sync::sync_collection_table;
 
 #[cfg(test)]

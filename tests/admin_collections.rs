@@ -18,6 +18,7 @@
 
 use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -346,6 +347,42 @@ async fn dashboard_returns_200() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
     assert!(body.to_lowercase().contains("posts") || body.to_lowercase().contains("dashboard"));
+}
+
+/// The collections list hides a collection its `access.admin` rule denies,
+/// as the dashboard and the navigation do.
+#[tokio::test]
+async fn list_collections_hides_collections_the_admin_rule_denies() {
+    let mut posts = make_posts_def();
+    posts.access.admin = Some("hooks.access.deny_all".into());
+    let app = setup_app(vec![posts, make_users_def()], vec![]);
+
+    let hooks = app._tmp.path().join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    fs::write(
+        hooks.join("access.lua"),
+        "local M = {}\nfunction M.deny_all(ctx)\n    return false\nend\nreturn M\n",
+    )
+    .unwrap();
+
+    let user_id = create_test_user(&app, "hidden@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "hidden@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_string(resp.into_body()).await;
+    assert!(!body.contains("/admin/collections/posts"), "{body}");
+    assert!(body.contains("/admin/collections/users"), "{body}");
 }
 
 #[tokio::test]

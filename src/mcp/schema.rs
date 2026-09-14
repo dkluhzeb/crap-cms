@@ -3,9 +3,10 @@
 use serde_json::{Map, Value, json};
 
 use crate::core::{
-    CollectionDefinition, FieldChildren, FieldDefinition, FieldType, GlobalDefinition,
-    field_children,
+    BLOCK_TYPE_KEY, CollectionDefinition, FieldChildren, FieldDefinition, FieldType,
+    GlobalDefinition, JobStatus, LocalizedString, field_children,
 };
+use crate::db::query::helpers::tz_column;
 use crate::service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
@@ -92,22 +93,46 @@ fn select_radio_schema(field: &FieldDefinition) -> Value {
     json!({ "type": "string", "enum": values })
 }
 
-/// Schema for Relationship/Upload fields — string or array of strings based on cardinality.
+/// Schema for Relationship/Upload fields — a reference, or a list of them for
+/// has-many.
 fn relationship_schema(field: &FieldDefinition) -> Value {
     let has_many = field
         .relationship
         .as_ref()
         .map_or(field.has_many, |r| r.has_many);
+    let reference = reference_schema(field);
 
     if has_many {
-        json!({ "type": "array", "items": { "type": "string" } })
+        json!({ "type": "array", "items": reference })
     } else {
-        json!({ "type": "string" })
+        reference
     }
 }
 
+/// One reference: a document id, or `collection/id` for a polymorphic
+/// relationship, constrained to its target collections.
+fn reference_schema(field: &FieldDefinition) -> Value {
+    let Some(rc) = field.relationship.as_ref().filter(|rc| rc.is_polymorphic()) else {
+        return json!({ "type": "string" });
+    };
+
+    let targets = rc.all_collections().join("|");
+
+    json!({ "type": "string", "pattern": format!("^({targets})/.+$") })
+}
+
+/// The optional row `id` of an array or blocks row. Sending it back keeps the
+/// row, and the sub-fields the update doesn't send, instead of replacing it.
+fn row_id_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "Row id: send it back to keep this row and its unsent sub-fields"
+    })
+}
+
 /// Schema for Blocks fields — array with `oneOf` variants per block type.
-fn blocks_schema(field: &FieldDefinition) -> Value {
+/// `row_id` offers the row `id` of blocks stored in their own table.
+fn blocks_schema(field: &FieldDefinition, row_id: bool) -> Value {
     if field.blocks.is_empty() {
         return json!({ "type": "array" });
     }
@@ -118,18 +143,22 @@ fn blocks_schema(field: &FieldDefinition) -> Value {
         .map(|b| {
             let mut props = Map::new();
             props.insert(
-                "blockType".to_string(),
+                BLOCK_TYPE_KEY.to_string(),
                 json!({ "type": "string", "const": b.block_type }),
             );
+            if row_id {
+                props.insert("id".to_string(), row_id_schema());
+            }
 
+            // Everything inside a block row is stored as JSON.
             for sf in &b.fields {
-                props.insert(sf.name.clone(), field_to_json_schema(sf));
+                insert_field_props(&mut props, sf, false);
             }
 
             json!({
                 "type": "object",
                 "properties": props,
-                "required": ["blockType"]
+                "required": [BLOCK_TYPE_KEY]
             })
         })
         .collect();
@@ -140,15 +169,23 @@ fn blocks_schema(field: &FieldDefinition) -> Value {
     })
 }
 
-/// Convert a single `FieldDefinition` to a JSON Schema value.
-pub(in crate::mcp) fn field_to_json_schema(field: &FieldDefinition) -> Value {
+/// A field's JSON Schema. `relational` while the field sits outside every array
+/// or blocks row: only such arrays and blocks store their rows in their own
+/// table, where a row keeps its `id`.
+fn field_schema(field: &FieldDefinition, relational: bool) -> Value {
     let description = field.mcp.description.as_deref().or(field
         .admin
         .description
         .as_ref()
-        .map(crate::core::LocalizedString::resolve_default));
+        .map(LocalizedString::resolve_default));
 
     let mut schema = match field.field_type {
+        FieldType::Text if field.has_many => {
+            json!({ "type": "array", "items": { "type": "string" } })
+        }
+        FieldType::Number if field.has_many => {
+            json!({ "type": "array", "items": { "type": "number" } })
+        }
         FieldType::Text
         | FieldType::Textarea
         | FieldType::Email
@@ -161,10 +198,10 @@ pub(in crate::mcp) fn field_to_json_schema(field: &FieldDefinition) -> Value {
         FieldType::Select | FieldType::Radio => select_radio_schema(field),
         FieldType::Relationship | FieldType::Upload => relationship_schema(field),
         FieldType::Array => {
-            json!({ "type": "array", "items": fields_to_object_schema(&field.fields) })
+            json!({ "type": "array", "items": array_row_schema(&field.fields, relational) })
         }
-        FieldType::Blocks => blocks_schema(field),
-        FieldType::Group => fields_to_object_schema(&field.fields),
+        FieldType::Blocks => blocks_schema(field, relational),
+        FieldType::Group => fields_to_object_schema(&field.fields, relational),
         // Json has no schema constraint; Row/Collapsible/Tabs are pure layout wrappers.
         FieldType::Json | FieldType::Row | FieldType::Collapsible | FieldType::Tabs => json!({}),
     };
@@ -178,17 +215,47 @@ pub(in crate::mcp) fn field_to_json_schema(field: &FieldDefinition) -> Value {
     schema
 }
 
+/// Schema for one array row: its sub-fields — stored as JSON inside the row —
+/// plus, when `row_id`, the optional row `id` of a row in its own table.
+fn array_row_schema(fields: &[FieldDefinition], row_id: bool) -> Value {
+    let mut row = fields_to_object_schema(fields, false);
+
+    if row_id && let Some(props) = get_props(&mut row) {
+        props.insert("id".to_string(), row_id_schema());
+    }
+
+    row
+}
+
+/// Insert a field's property, and the `{name}_tz` companion of a timezone date.
+fn insert_field_props(props: &mut Map<String, Value>, field: &FieldDefinition, relational: bool) {
+    props.insert(field.name.clone(), field_schema(field, relational));
+
+    if field.has_tz_companion() {
+        props.insert(
+            tz_column(&field.name),
+            json!({ "type": "string", "description": "IANA timezone of the date" }),
+        );
+    }
+}
+
 /// Insert a field into the schema properties, tracking required fields.
-fn insert_prop(props: &mut Map<String, Value>, required: &mut Vec<Value>, field: &FieldDefinition) {
-    props.insert(field.name.clone(), field_to_json_schema(field));
+fn insert_prop(
+    props: &mut Map<String, Value>,
+    required: &mut Vec<Value>,
+    field: &FieldDefinition,
+    relational: bool,
+) {
+    insert_field_props(props, field, relational);
 
     if field.required {
         required.push(Value::String(field.name.clone()));
     }
 }
 
-/// Convert a list of `FieldDefinition`s to a JSON Schema `object` with `properties` and `required`.
-fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
+/// Convert a list of `FieldDefinition`s to a JSON Schema `object` with
+/// `properties` and `required`; `relational` as in [`field_schema`].
+fn fields_to_object_schema(fields: &[FieldDefinition], relational: bool) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
 
@@ -196,19 +263,19 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
         match field_children(field) {
             FieldChildren::Wrapper(sub) => {
                 for sf in sub {
-                    insert_prop(&mut props, &mut required, sf);
+                    insert_prop(&mut props, &mut required, sf, relational);
                 }
             }
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
                     for sf in &tab.fields {
-                        insert_prop(&mut props, &mut required, sf);
+                        insert_prop(&mut props, &mut required, sf, relational);
                     }
                 }
             }
             // Join stores no value → no property. Every other field (scalar,
             // Group, Array, Blocks, Relationship…) is one property whose own
-            // sub-schema `field_to_json_schema` builds — not flattened here.
+            // sub-schema `field_schema` builds — not flattened here.
             FieldChildren::Group(_)
             | FieldChildren::Array(_)
             | FieldChildren::Blocks(_)
@@ -216,7 +283,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
                 if field.field_type == FieldType::Join {
                     continue;
                 }
-                insert_prop(&mut props, &mut required, field);
+                insert_prop(&mut props, &mut required, field, relational);
             }
         }
     }
@@ -266,10 +333,7 @@ fn wire_prop(field: &WireField) -> Value {
         WireKind::Select => json!({ "type": "array", "items": { "type": "string" } }),
         WireKind::Duration => json!({ "type": ["integer", "string"] }),
         WireKind::JobStatus => {
-            let statuses: Vec<&str> = crate::core::JobStatus::ALL
-                .iter()
-                .map(crate::core::JobStatus::as_str)
-                .collect();
+            let statuses: Vec<&str> = JobStatus::ALL.iter().map(JobStatus::as_str).collect();
 
             json!({ "type": "string", "enum": statuses })
         }
@@ -304,7 +368,7 @@ fn add_wire_props(schema: &mut Value, wire: &OpWire, def: Option<&CollectionDefi
             WireKind::DataObject => {
                 let def = def.expect("DataObject op carries a collection definition");
                 json!({
-                    "allOf": [fields_to_object_schema(&def.fields)],
+                    "allOf": [fields_to_object_schema(&def.fields, true)],
                     "description": field.doc
                 })
             }
@@ -357,7 +421,7 @@ fn options_schema(wire: &OpWire, def: Option<&CollectionDefinition>) -> Value {
 /// Schema for an op whose field data spreads at the top level (create /
 /// update / validate): the definition's field schema plus the wire options.
 fn data_spread_schema(fields: &[FieldDefinition], wire: &OpWire) -> Value {
-    let mut schema = fields_to_object_schema(fields);
+    let mut schema = fields_to_object_schema(fields, true);
 
     add_wire_props(&mut schema, wire, None);
 
@@ -371,7 +435,7 @@ fn data_spread_schema(fields: &[FieldDefinition], wire: &OpWire) -> Value {
 /// optional, not required: bulk seeding may legitimately include strategy-only
 /// users without a password.
 fn create_many_item_schema(def: &CollectionDefinition) -> Value {
-    let mut schema = fields_to_object_schema(&def.fields);
+    let mut schema = fields_to_object_schema(&def.fields, true);
 
     if def.is_auth_collection()
         && let Some(props) = get_props(&mut schema)
@@ -433,8 +497,9 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
                 );
             }
 
-            // Partial update: field-level `required` constraints don't apply —
-            // only the wire model's required options (`id`) do.
+            // Partial update: field-level `required` constraints don't apply at
+            // any depth — only the wire model's required options (`id`) do.
+            strip_field_required(&mut schema);
             let obj = schema.as_object_mut().expect("schema is object");
             obj.insert("required".to_string(), json!(["id"]));
 
@@ -454,6 +519,28 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
     }
 }
 
+/// Drop field-level `required` lists at every depth of a schema, for a partial
+/// update: what an update must carry is decided by the service's validation,
+/// which knows what is stored. A block row still names its block type, so that
+/// entry stays.
+fn strip_field_required(schema: &mut Value) {
+    match schema {
+        Value::Object(obj) => {
+            if let Some(Value::Array(required)) = obj.get_mut("required") {
+                required.retain(|name| name == BLOCK_TYPE_KEY);
+
+                if required.is_empty() {
+                    obj.remove("required");
+                }
+            }
+
+            obj.values_mut().for_each(strip_field_required);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_field_required),
+        _ => {}
+    }
+}
+
 /// Generate the input schema for a global CRUD tool — same wire-model
 /// rendering, keyed by the global op names.
 pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
@@ -469,6 +556,14 @@ pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) ->
 
     match op {
         CrudOp::Find => options_schema(wire, None),
+        CrudOp::Update => {
+            // Partial update: field-level `required` constraints don't apply at
+            // any depth, and a global update has no required option of its own.
+            let mut schema = data_spread_schema(&def.fields, wire);
+            strip_field_required(&mut schema);
+
+            schema
+        }
         _ => data_spread_schema(&def.fields, wire),
     }
 }
@@ -497,21 +592,21 @@ mod tests {
     #[test]
     fn text_field_schema() {
         let f = text_field("title");
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn number_field_schema() {
         let f = FieldDefinition::builder("count", FieldType::Number).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "number");
     }
 
     #[test]
     fn checkbox_field_schema() {
         let f = FieldDefinition::builder("active", FieldType::Checkbox).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "boolean");
     }
 
@@ -523,7 +618,7 @@ mod tests {
                 SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
             ])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
         let enm = s["enum"].as_array().unwrap();
         assert_eq!(enm.len(), 2);
@@ -532,7 +627,7 @@ mod tests {
     #[test]
     fn date_field_has_format() {
         let f = FieldDefinition::builder("created", FieldType::Date).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["format"], "date-time");
     }
 
@@ -541,7 +636,7 @@ mod tests {
         let f = FieldDefinition::builder("tags", FieldType::Relationship)
             .relationship(RelationshipConfig::new("tags", true))
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
     }
 
@@ -552,7 +647,7 @@ mod tests {
                 description: Some("Publication status".to_string()),
             })
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["description"], "Publication status");
     }
 
@@ -565,7 +660,7 @@ mod tests {
                     .build(),
             )
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["description"], "Admin desc");
     }
 
@@ -633,7 +728,7 @@ mod tests {
         let f = FieldDefinition::builder("items", FieldType::Array)
             .fields(vec![text_field("label"), required_text("value")])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
         assert!(s["items"]["properties"]["label"].is_object());
     }
@@ -661,12 +756,83 @@ mod tests {
         assert!(s["properties"].is_object());
     }
 
+    /// Regression: a global's update schema kept its fields' `required`
+    /// constraints, so an agent's partial update failed schema validation.
     #[test]
     fn global_update_schema() {
         let mut def = GlobalDefinition::new("settings");
         def.fields = vec![required_text("site_name")];
         let s = global_input_schema(&def, CrudOp::Update);
         assert!(s["properties"]["site_name"].is_object());
+        assert!(s.get("required").is_none(), "{s}");
+    }
+
+    /// Regression: an update schema dropped only the top-level `required`, so a
+    /// partial update of a group, array row or block with a required
+    /// sub-field failed schema validation. A block row still names its type.
+    #[test]
+    fn update_schemas_drop_required_at_every_depth() {
+        let fields = vec![
+            required_text("title"),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![required_text("meta_title")])
+                .build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![required_text("value")])
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "quote",
+                    vec![required_text("body")],
+                )])
+                .build(),
+        ];
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = fields.clone();
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = fields;
+
+        let collection = collection_input_schema(&def, CrudOp::Update);
+        let global = global_input_schema(&global, CrudOp::Update);
+
+        assert_eq!(collection["required"], json!(["id"]));
+        assert!(global.get("required").is_none(), "{global}");
+
+        for s in [&collection, &global] {
+            let props = &s["properties"];
+            assert!(props["seo"].get("required").is_none(), "{s}");
+            assert!(props["items"]["items"].get("required").is_none(), "{s}");
+            assert_eq!(
+                props["content"]["items"]["oneOf"][0]["required"],
+                json!([BLOCK_TYPE_KEY]),
+                "{s}"
+            );
+        }
+    }
+
+    /// Regression: every array and blocks row offered a row `id`, though a row
+    /// nested inside another row is stored as JSON and never matched by id.
+    #[test]
+    fn only_rows_in_their_own_table_offer_an_id() {
+        let notes = FieldDefinition::builder("notes", FieldType::Array)
+            .fields(vec![text_field("body")])
+            .build();
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label"), notes])
+                .build(),
+        ];
+
+        let s = collection_input_schema(&def, CrudOp::Create);
+        let row = &s["properties"]["items"]["items"]["properties"];
+
+        assert!(row["id"].is_object(), "{s}");
+        assert!(
+            row["notes"]["items"]["properties"].get("id").is_none(),
+            "{s}"
+        );
     }
 
     // ── field types not yet covered ────────────────────────────────────────
@@ -674,35 +840,35 @@ mod tests {
     #[test]
     fn textarea_field_schema() {
         let f = FieldDefinition::builder("body", FieldType::Textarea).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn email_field_schema() {
         let f = FieldDefinition::builder("email", FieldType::Email).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn code_field_schema() {
         let f = FieldDefinition::builder("snippet", FieldType::Code).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn richtext_field_schema() {
         let f = FieldDefinition::builder("content", FieldType::Richtext).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn json_field_schema() {
         let f = FieldDefinition::builder("metadata", FieldType::Json).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         // Json fields use an empty schema ({}) — no type restriction
         assert!(s.is_object());
         assert!(s.get("type").is_none());
@@ -713,7 +879,7 @@ mod tests {
         let f = FieldDefinition::builder("address", FieldType::Group)
             .fields(vec![text_field("street"), required_text("city")])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "object");
         assert!(s["properties"]["street"].is_object());
         assert!(s["properties"]["city"].is_object());
@@ -731,7 +897,7 @@ mod tests {
                 SelectOption::new(LocalizedString::Plain("L".to_string()), "l"),
             ])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
         let enm = s["enum"].as_array().unwrap();
         assert_eq!(enm.len(), 3);
@@ -740,7 +906,7 @@ mod tests {
     #[test]
     fn radio_field_schema_without_options() {
         let f = FieldDefinition::builder("mode", FieldType::Radio).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
         assert!(s.get("enum").is_none());
     }
@@ -748,7 +914,7 @@ mod tests {
     #[test]
     fn select_field_without_options() {
         let f = FieldDefinition::builder("cat", FieldType::Select).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
         assert!(s.get("enum").is_none());
     }
@@ -762,7 +928,7 @@ mod tests {
                 SelectOption::new(LocalizedString::Plain("B".to_string()), "b"),
             ])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
         assert!(s["items"]["enum"].is_array());
     }
@@ -770,7 +936,7 @@ mod tests {
     #[test]
     fn upload_field_single() {
         let f = FieldDefinition::builder("avatar", FieldType::Upload).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
@@ -779,7 +945,7 @@ mod tests {
         let f = FieldDefinition::builder("images", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", true))
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
     }
 
@@ -787,7 +953,7 @@ mod tests {
     fn relationship_single_no_config() {
         // has_many from has_many field, no relationship config
         let f = FieldDefinition::builder("author", FieldType::Relationship).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
@@ -797,17 +963,17 @@ mod tests {
         let f = FieldDefinition::builder("categories", FieldType::Relationship)
             .has_many(true)
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
     }
 
     #[test]
     fn row_field_schema_is_empty_object() {
-        // Row as standalone field_to_json_schema → empty object placeholder
+        // Row as standalone field_schema → empty object placeholder
         let f = FieldDefinition::builder("my_row", FieldType::Row)
             .fields(vec![text_field("a"), text_field("b")])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert!(s.is_object());
         // Empty schema placeholder (no type key)
         assert!(s.get("type").is_none());
@@ -818,7 +984,7 @@ mod tests {
         let f = FieldDefinition::builder("my_collapsible", FieldType::Collapsible)
             .fields(vec![text_field("x")])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert!(s.is_object());
         assert!(s.get("type").is_none());
     }
@@ -826,7 +992,7 @@ mod tests {
     #[test]
     fn tabs_field_schema_is_empty_object() {
         let f = FieldDefinition::builder("my_tabs", FieldType::Tabs).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert!(s.is_object());
         assert!(s.get("type").is_none());
     }
@@ -834,14 +1000,14 @@ mod tests {
     #[test]
     fn join_field_schema_is_string() {
         let f = FieldDefinition::builder("related", FieldType::Join).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "string");
     }
 
     #[test]
     fn blocks_empty_schema() {
         let f = FieldDefinition::builder("content", FieldType::Blocks).build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
         // No items when no blocks defined
         assert!(s.get("items").is_none());
@@ -855,21 +1021,82 @@ mod tests {
                 BlockDefinition::new("cta", vec![text_field("label"), text_field("url")]),
             ])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
         let one_of = s["items"]["oneOf"].as_array().unwrap();
         assert_eq!(one_of.len(), 2);
-        // Both variants require "blockType"
+        // Every variant is discriminated by the stored `_block_type` key and
+        // may carry the row `id` an update round-trips.
         for variant in one_of {
             let req = variant["required"].as_array().unwrap();
-            assert!(req.contains(&Value::String("blockType".to_string())));
+            assert!(req.contains(&json!("_block_type")), "{variant}");
+            assert!(!req.contains(&json!("id")), "{variant}");
+            assert_eq!(variant["properties"]["id"]["type"], "string", "{variant}");
         }
-        // hero variant has "heading" property
         let hero = one_of
             .iter()
-            .find(|v| v["properties"]["blockType"]["const"].as_str() == Some("hero"))
+            .find(|v| v["properties"]["_block_type"]["const"].as_str() == Some("hero"))
             .unwrap();
         assert!(hero["properties"]["heading"].is_object());
+    }
+
+    /// An array row may carry the `id` an update round-trips, so a kept row
+    /// preserves the sub-fields the update doesn't send.
+    #[test]
+    fn array_items_carry_the_row_id() {
+        let f = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![required_text("label")])
+            .build();
+        let s = field_schema(&f, true);
+
+        assert_eq!(s["items"]["properties"]["id"]["type"], "string", "{s}");
+        let required = s["items"]["required"].as_array().unwrap();
+        assert!(!required.contains(&json!("id")), "{s}");
+    }
+
+    /// A polymorphic reference is stored as `collection/id`; the schema says so
+    /// and names the target collections.
+    #[test]
+    fn polymorphic_relationship_names_its_targets() {
+        for has_many in [false, true] {
+            let mut rc = RelationshipConfig::new("posts", has_many);
+            rc.polymorphic = vec!["posts".into(), "pages".into()];
+            let f = FieldDefinition::builder("subject", FieldType::Relationship)
+                .relationship(rc)
+                .build();
+            let s = field_schema(&f, true);
+
+            let value = if has_many { &s["items"] } else { &s };
+            assert_eq!(value["type"], "string", "{s}");
+            assert_eq!(value["pattern"], "^(posts|pages)/.+$", "{s}");
+        }
+    }
+
+    /// A has-many text or number field stores a list.
+    #[test]
+    fn has_many_scalars_are_arrays() {
+        for (ft, item) in [(FieldType::Text, "string"), (FieldType::Number, "number")] {
+            let f = FieldDefinition::builder("values", ft)
+                .has_many(true)
+                .build();
+            let s = field_schema(&f, true);
+
+            assert_eq!(s["type"], "array", "{s}");
+            assert_eq!(s["items"]["type"], item, "{s}");
+        }
+    }
+
+    /// A timezone date carries its IANA zone in the `{name}_tz` companion.
+    #[test]
+    fn timezone_date_has_its_zone_companion() {
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        let s = fields_to_object_schema(&fields, true);
+
+        assert_eq!(s["properties"]["starts_tz"]["type"], "string", "{s}");
     }
 
     // ── Tabs layout flattening ─────────────────────────────────────────────
@@ -1049,7 +1276,7 @@ mod tests {
         let f = FieldDefinition::builder("options", FieldType::Array)
             .fields(vec![required_text("key"), text_field("value")])
             .build();
-        let s = field_to_json_schema(&f);
+        let s = field_schema(&f, true);
         assert_eq!(s["type"], "array");
         assert!(s["items"]["properties"]["key"].is_object());
         assert!(s["items"]["properties"]["value"].is_object());

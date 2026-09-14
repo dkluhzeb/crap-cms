@@ -7,7 +7,10 @@ use serde_json::Value;
 
 use crate::{
     cli::{self, Table},
-    commands::{JobsAction, helpers::init_stack},
+    commands::{
+        JobsAction,
+        helpers::{Project, hold_instance_lock, open_project},
+    },
     config::{CrapConfig, JobsConfig, parse_duration_string},
     core::{
         Registry,
@@ -311,6 +314,7 @@ fn run_cancel(config_dir: &Path, slug: Option<String>, id: Option<String>) -> Re
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let cfg = CrapConfig::load(&config_dir)?;
+    let _instance_lock = hold_instance_lock(&config_dir)?;
     let pool = pool::create_pool(&config_dir, &cfg)?;
     let conn = pool.get().context("Failed to get DB connection")?;
 
@@ -346,6 +350,7 @@ fn run_purge(config_dir: &Path, older_than: &str) -> Result<()> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let cfg = CrapConfig::load(&config_dir)?;
+    let _instance_lock = hold_instance_lock(&config_dir)?;
     let pool = pool::create_pool(&config_dir, &cfg)?;
 
     let secs = parse_duration_string(older_than).ok_or_else(|| {
@@ -372,7 +377,12 @@ fn run_purge(config_dir: &Path, older_than: &str) -> Result<()> {
 pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
     match action {
         JobsAction::List => {
-            let (_cfg, registry, pool) = init_stack(config_dir)?;
+            let Project {
+                lock: _instance_lock,
+                config: _cfg,
+                registry,
+                pool,
+            } = open_project(config_dir)?;
             run_list(&registry, &pool)
         }
         JobsAction::Trigger {
@@ -380,7 +390,12 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             data,
             priority,
         } => {
-            let (cfg, registry, pool) = init_stack(config_dir)?;
+            let Project {
+                lock: _instance_lock,
+                config: cfg,
+                registry,
+                pool,
+            } = open_project(config_dir)?;
             run_trigger(
                 &registry,
                 &pool,
@@ -391,13 +406,23 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             )
         }
         JobsAction::Status { id, slug, limit } => {
-            let (_cfg, _registry, pool) = init_stack(config_dir)?;
+            let Project {
+                lock: _instance_lock,
+                config: _cfg,
+                registry: _registry,
+                pool,
+            } = open_project(config_dir)?;
             run_status(&pool, id.as_deref(), slug.as_deref(), limit)
         }
         JobsAction::Cancel { slug, id } => run_cancel(config_dir, slug, id),
         JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),
         JobsAction::Healthcheck => {
-            let (cfg, registry, pool) = init_stack(config_dir)?;
+            let Project {
+                lock: _instance_lock,
+                config: cfg,
+                registry,
+                pool,
+            } = open_project(config_dir)?;
             let health = run_healthcheck(&cfg, &registry, &pool)?;
 
             // CI usability: a non-healthy result must be distinguishable

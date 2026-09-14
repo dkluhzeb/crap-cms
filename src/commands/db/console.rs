@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::{
     cli,
+    commands::helpers::hold_instance_lock,
     config::{CrapConfig, DbUrl},
     db::{DbConnection, pool},
 };
@@ -23,6 +24,7 @@ pub fn console(config_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let _instance_lock = hold_instance_lock(&config_dir)?;
     let p = pool::create_pool(&config_dir, &cfg).context("Failed to create pool")?;
     let conn = p.get().context("Failed to get connection")?;
 
@@ -30,7 +32,7 @@ pub fn console(config_dir: &Path) -> Result<()> {
     let mut cmd = console_command(
         conn.kind(),
         &db_path,
-        cfg.database.url.as_ref().map(crate::config::DbUrl::as_str),
+        cfg.database.url.as_ref().map(DbUrl::as_str),
     )?;
     let program = cmd.get_program().to_string_lossy().into_owned();
 

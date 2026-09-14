@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{Document, FieldChildren, FieldDefinition, field_children},
-    db::query::helpers::prefixed_name,
+    db::query::helpers::{prefixed_name, tz_column},
 };
 
 /// Recursively extract prefixed columns from `doc.fields` into a nested Group object.
@@ -44,6 +44,14 @@ pub(super) fn reconstruct_group_fields(
 
                 if let Some(val) = doc.fields.remove(&col_name) {
                     group_obj.insert(sub.name.clone(), val);
+                }
+
+                // A timezone date's `<name>_tz` companion sits beside it in the
+                // group, where writes and the generated types expect it.
+                if sub.has_tz_companion()
+                    && let Some(tz) = doc.fields.remove(&tz_column(&col_name))
+                {
+                    group_obj.insert(tz_column(&sub.name), tz);
                 }
             }
         }
@@ -103,6 +111,41 @@ mod tests {
         );
         assert!(!doc.fields.contains_key("seo__meta_title"));
         assert!(!doc.fields.contains_key("seo__meta_desc"));
+    }
+
+    /// Regression: a timezone date inside a group came back nested while its
+    /// `<name>_tz` companion stayed a flat `group__name_tz` key.
+    #[test]
+    fn hydrate_group_nests_a_timezone_companion() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (id TEXT PRIMARY KEY, meta__starts TEXT, meta__starts_tz TEXT);
+             INSERT INTO events VALUES ('e1', '2026-01-01T09:00:00.000Z', 'Europe/Berlin');",
+        )
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("starts", FieldType::Date)
+                        .timezone(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert(
+            "meta__starts".to_string(),
+            json!("2026-01-01T09:00:00.000Z"),
+        );
+        doc.fields
+            .insert("meta__starts_tz".to_string(), json!("Europe/Berlin"));
+
+        hydrate_document(&conn, "events", &fields, &mut doc, None, None).unwrap();
+
+        assert_eq!(doc.fields["meta"]["starts_tz"], json!("Europe/Berlin"));
+        assert!(!doc.fields.contains_key("meta__starts_tz"));
     }
 
     #[test]

@@ -9,20 +9,22 @@ use chrono::Utc;
 use tokio::task;
 use tracing::{error, warn};
 
-use crate::core::collection::{Auth, Surface};
 use crate::{
     admin::{
         AdminState, auth_middleware,
         handlers::{
             auth::{
-                LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
-                is_totp_collection, login_error, mfa_pending_cookie, session_redirect,
+                LoginForm, append_cookies, client_ip, create_session_token, is_totp_collection,
+                login_error, mfa_pending_cookie, session_redirect,
             },
             shared::paths,
         },
+        server::headers_to_map,
     },
     core::{
-        CollectionDefinition, Document, SharedPasswordProvider, normalize_email,
+        CollectionDefinition, Document, SharedPasswordProvider,
+        collection::{Auth, Surface},
+        normalize_email,
         rate_limit::MFA_ISSUE_KEYSPACE,
     },
     service::{
@@ -191,11 +193,11 @@ pub async fn login_action(
     // under-limit check before any recorded). Both are evaluated (not
     // short-circuited) so each counter advances every attempt; a successful
     // login clears both below.
-    // Key the per-email limiter on the normalized (trimmed, lowercased) address
-    // so casing/whitespace variants of the same account share one bucket. The
-    // credential lookup is case-insensitive (`LOWER(email) = ?`), so without
-    // this an attacker rotates `Victim@x.com` / `VICTIM@X.COM` / … to sidestep
-    // the per-account lockout. The clear-on-success below uses the same key.
+    // Key the per-email limiter on the address in its stored form (trimmed,
+    // lowercased, NFC-composed) so spelling variants of the same account share
+    // one bucket. The credential lookup compares that form, so without this an
+    // attacker rotates `Victim@x.com` / `VICTIM@X.COM` / … to sidestep the
+    // per-account lockout. The clear-on-success below uses the same key.
     let email_key = normalize_email(&form.email);
 
     let email_blocked = state.login_limiter.check_and_block(&email_key);

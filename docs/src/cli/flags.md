@@ -326,6 +326,8 @@ crap-cms user delete [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 | `--id` | — | User ID |
 | `--confirm` | `-y` | Skip confirmation prompt |
 
+Deletes through the same service as the admin UI, and delete hooks run. A user of a soft-delete collection is moved to the trash; `trash purge` later refuses it while other documents still reference it. On other collections, a user other documents still reference is refused right away. With Redis live updates, the user's open live streams on `serve` are closed.
+
 #### `user lock` / `user unlock`
 
 ```bash
@@ -711,15 +713,20 @@ crap-cms db cleanup --confirm
 ### `export` — Export collection data
 
 ```bash
-crap-cms export [-c <COLLECTION>] [-o <FILE>]
+crap-cms export [-c <COLLECTION>] [-o <FILE>] [--include-credentials]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--collection` | `-c` | Export only this collection (default: all) |
 | `--output` | `-o` | Output file (default: stdout) |
+| `--include-credentials` | | Also export each account's password hash, lock, session version, verification and TOTP state |
 
 Export includes `crap_version` and `exported_at` metadata in the JSON envelope. On import, a version mismatch produces a warning (but does not abort).
+
+Every document is exported, trashed ones included (with their `_deleted_at`), along with timezone companions (`<field>_tz`) and the ids of array and blocks rows. A localized array, blocks or has-many field carries every locale's rows as `{ "<locale>": rows }`, like a localized column.
+
+Without `--include-credentials` an export carries no credentials, and importing an auth collection from it leaves new accounts without a password (an account that already exists keeps its stored one). With the flag, each account carries a `_credentials` object. One-time tokens (password reset, email verification, MFA codes) are never exported. Treat a file exported with the flag like a database dump.
 
 Export covers **collections only** — globals are not part of the envelope. For a complete copy of a deployment (globals, versions, uploads) use `backup` / `restore`.
 
@@ -743,7 +750,11 @@ crap-cms import backup.json
 crap-cms import backup.json -c posts
 ```
 
-Import is a **raw restore**, not a write through the service layer: each document is upserted by `id` straight into its table (existing rows with the same id are overwritten), join tables are rebuilt, and `_ref_count` is kept consistent. Lifecycle hooks, field validation, access rules and live events do **not** run. Every collection in the file must exist in the current Lua definitions — unknown collections are rejected **before anything is written**. Each collection is then imported in its own transaction, so a failure inside collection N (a malformed document, a DB error) rolls back N but leaves collections 1…N-1 imported.
+Import is a **raw restore**, not a write through the service layer: each document is upserted by `id` straight into its table (existing rows with the same id are overwritten), join tables are rebuilt with their exported row ids, and `_ref_count` is kept consistent — counts are settled once every document is written, so a document may reference one later in the file. Trashed documents import trashed. Email and text values are stored in canonical form, as every write stores them. Lifecycle hooks, field validation, access rules and live events do **not** run.
+
+Accounts that end the import without a password can't log in until one is set; import warns when that happens. Credentials imported over an existing account revoke its sessions. An account whose TOTP secret was sealed with a different auth secret is refused, naming it: import into an installation with the same auth secret, or export without `--include-credentials`.
+
+Every collection in the file must exist in the current Lua definitions, and the whole import runs in **one transaction**: an unknown collection, a malformed document or a DB error leaves nothing imported.
 
 ### `typegen` — Generate typed definitions
 
@@ -811,6 +822,8 @@ crap-cms migrate down -s 2
 crap-cms migrate fresh -y
 ```
 
+`fresh` refuses while a `serve`, `work` or stdio `mcp` process uses the project, and keeps them from starting until it finishes.
+
 ### `backup` — Backup database
 
 ```bash
@@ -827,6 +840,10 @@ crap-cms backup
 crap-cms backup -o /tmp/backups -i
 ```
 
+`backup` copies the SQLite database file; back up a Postgres database with `pg_dump`. `--include-uploads` archives the local `uploads/` directory; uploads kept in S3 or custom storage need that service's own backup.
+
+When the auth secret is generated (`[auth] secret` is empty), the backup also contains it as `jwt_secret`, readable by the owner only — sessions, TOTP enrollments and `crap.crypto` ciphertext in the database depend on it. Keep backups as private as the secret.
+
 ### `restore` — Restore from backup
 
 ```bash
@@ -838,7 +855,7 @@ crap-cms restore <BACKUP> [-i] [-y]
 | `--include-uploads` | `-i` | Also restore uploads from `uploads.tar.gz` if present |
 | `--confirm` | `-y` | Required — confirms the destructive operation |
 
-Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files.
+Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files. Refuses while a `serve`, `work` or stdio `mcp` process or any other CLI command uses the project (they hold `data/crap.lock`), and keeps them from starting until the restore finishes. A backed-up auth secret is written back to `data/.jwt_secret`; a different secret already there is kept as `data/.jwt_secret.pre-restore-<timestamp>`, so repeated restores never overwrite an earlier one — unless the restore's own config load generated it, when it holds nothing worth keeping. When `crap.toml` sets `[auth] secret`, that secret takes precedence and the restore warns that the backup's secret isn't used.
 
 ```bash
 crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y

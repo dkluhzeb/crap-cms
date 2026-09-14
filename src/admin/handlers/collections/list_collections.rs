@@ -9,7 +9,7 @@ use crate::{
             page::collections::{CollectionEntry, CollectionListPage},
         },
         handlers::shared::{
-            PageRequest, extract_editor_locale, get_user_doc, has_read_access, render_page,
+            PageRequest, extract_editor_locale, get_user_doc, is_admin_visible, render_page,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -30,7 +30,15 @@ pub async fn list_collections(
         .registry
         .collections
         .iter()
-        .filter(|(_, def)| has_read_access(&state, def.access.read.as_ref(), user_doc, &def.slug))
+        .filter(|(_, def)| {
+            is_admin_visible(
+                &state,
+                def.access.read.as_ref(),
+                def.access.admin.as_ref(),
+                user_doc,
+                &def.slug,
+            )
+        })
         .map(|(slug, def)| CollectionEntry {
             slug: slug.to_string(),
             display_name: def.display_name().to_string(),

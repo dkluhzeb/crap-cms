@@ -60,8 +60,8 @@ pub use forms::{
 };
 pub(super) use helpers::{
     all_disable_local, client_ip, create_session_token, extract_mfa_token, extract_user_email,
-    get_auth_collections, get_verifying_collections, headers_to_map, is_totp_collection,
-    login_error, render_forgot_success, render_mfa, render_resend_verification, session_redirect,
+    get_auth_collections, get_verifying_collections, is_totp_collection, login_error,
+    render_forgot_success, render_mfa, render_resend_verification, session_redirect,
     show_forgot_password, show_resend_verification, sole_auth_collection,
 };
 pub(in crate::admin) use session::{

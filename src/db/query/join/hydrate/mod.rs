@@ -6,8 +6,8 @@ mod read;
 pub(crate) mod save;
 
 pub use read::{hydrate_document, hydrate_documents};
-pub use save::save_join_table_data;
 pub(crate) use save::{parse_id_list, parse_polymorphic_values};
+pub use save::{restore_join_table_data, save_join_table_data};
 
 #[cfg(test)]
 pub(super) mod test_helpers {

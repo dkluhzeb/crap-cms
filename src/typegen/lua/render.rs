@@ -11,7 +11,10 @@ use crate::{
         },
         custom_pages::CustomPage,
     },
-    core::{CollectionDefinition, FieldType, Registry, Slug, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, FieldDefinition, FieldType, Registry, Slug,
+        collection::GlobalDefinition,
+    },
     db::query::get_column_names,
     hooks::lifecycle::RenderInfo,
     typegen::{
@@ -99,23 +102,42 @@ fn render_template_data_types(out: &mut String) {
     out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
 }
 
-/// Render type definitions for a single collection.
-fn render_collection(out: &mut String, col: &CollectionDefinition) {
-    let pascal = to_pascal_case(&col.slug);
+/// The stored system keys a read document carries besides its fields.
+fn write_system_fields(out: &mut String, drafts: bool, soft_delete: bool) {
+    if drafts {
+        w!(out, "---@field _status? \"draft\" | \"published\"");
+    }
 
-    // Sub-type classes (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&col.fields, &pascal) {
+    if soft_delete {
+        w!(out, "---@field _deleted_at? string");
+    }
+}
+
+/// Emit the classes of an owner's array rows and group shapes. A relational
+/// array row carries its junction `id`.
+fn render_sub_type_classes(out: &mut String, fields: &[FieldDefinition], pascal: &str) {
+    for stf in collect_sub_type_fields(fields, pascal) {
         let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         let namespace = match stf.kind {
             SubTypeKind::Array => "array_row",
             SubTypeKind::Group => "group",
         };
         w!(out, "---@class crap.{namespace}.{sub_pascal}");
+        if stf.row_id {
+            w!(out, "---@field id? string");
+        }
         for sf in &stf.field.fields {
             write_field(out, sf, &sub_pascal);
         }
         out.push('\n');
     }
+}
+
+/// Render type definitions for a single collection.
+fn render_collection(out: &mut String, col: &CollectionDefinition) {
+    let pascal = to_pascal_case(&col.slug);
+
+    render_sub_type_classes(out, &col.fields, &pascal);
 
     // crap.data.* — hook ctx.data (mutable input). `id` and timestamps
     // are emitted as OPTIONAL because the table is reused across hooks
@@ -152,11 +174,14 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // (e.g. crap.collections.find_by_id, custom auth strategies)
     // accept the per-collection types without union-mismatch
     // diagnostics from lua-language-server.
+    // Every field is optional on read: a draft may lack required values, and
+    // field read access and `select` drop keys.
     w!(out, "---@class crap.doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
     for f in &col.fields {
-        write_field(out, f, &pascal);
+        write_field_partial(out, f, &pascal);
     }
+    write_system_fields(out, col.has_drafts(), col.soft_delete);
     if col.timestamps {
         w!(out, "---@field created_at? string");
         w!(out, "---@field updated_at? string");
@@ -168,7 +193,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     w!(out, "---@field collection \"{}\"", col.slug);
     w!(
         out,
-        "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\""
+        "---@field operation \"create\" | \"update\" | \"delete\" | \"find\" | \"find_by_id\""
     );
     w!(out, "---@field data crap.data.{pascal}");
     w!(out, "---@field context table<string, any>");
@@ -516,19 +541,7 @@ fn render_collection_accessor(out: &mut String, slug: &str, pascal: &str) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    // Sub-type classes (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&global.fields, &pascal) {
-        let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
-        let namespace = match stf.kind {
-            SubTypeKind::Array => "array_row",
-            SubTypeKind::Group => "group",
-        };
-        w!(out, "---@class crap.{namespace}.{sub_pascal}");
-        for sf in &stf.field.fields {
-            write_field(out, sf, &sub_pascal);
-        }
-        out.push('\n');
-    }
+    render_sub_type_classes(out, &global.fields, &pascal);
 
     // crap.global_data.* — hook ctx.data for globals. `id` and
     // timestamps are emitted optional for the same reason as
@@ -554,8 +567,9 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     w!(out, "---@class crap.global_doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
     for f in &global.fields {
-        write_field(out, f, &pascal);
+        write_field_partial(out, f, &pascal);
     }
+    write_system_fields(out, global.has_drafts(), false);
     w!(out, "---@field created_at? string");
     w!(out, "---@field updated_at? string");
     out.push('\n');
@@ -563,7 +577,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     // crap.hook.global_*
     w!(out, "---@class crap.hook.global_{}", global.slug);
     w!(out, "---@field collection \"{}\"", global.slug);
-    w!(out, "---@field operation \"update\" | \"get_global\"");
+    w!(out, "---@field operation \"update\" | \"get\"");
     w!(out, "---@field data crap.global_data.{pascal}");
     w!(out, "---@field context table<string, any>");
     w!(out, "---@field hook_depth integer");
@@ -793,7 +807,65 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
 mod tests {
     use super::super::test_helpers::{checkbox_field, select_field, text_field};
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType, RelationshipConfig};
+    use crate::core::{FieldDefinition, FieldTab, FieldType, RelationshipConfig, VersionsConfig};
+
+    /// One `---@class` annotation block, from its header to the blank line after it.
+    fn class_block<'a>(out: &'a str, header: &str) -> &'a str {
+        let start = out.find(header).expect("class emitted");
+        let rest = &out[start..];
+
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    }
+
+    /// The generated hook contexts name exactly the operations the runtime
+    /// passes: collection hooks include `delete`, global reads are `get`.
+    #[test]
+    fn hook_context_operations_match_the_runtime() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![text_field("title", true)];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains(
+                r#"---@field operation "create" | "update" | "delete" | "find" | "find_by_id""#
+            ),
+            "{out}"
+        );
+
+        let global = GlobalDefinition::new("footer");
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains(r#"---@field operation "update" | "get""#),
+            "{out}"
+        );
+    }
+
+    /// A read document may lack any field (a draft, field read access, a
+    /// select list) and carries the stored system keys the collection has.
+    #[test]
+    fn read_document_fields_are_optional_with_system_keys() {
+        let mut col = CollectionDefinition::new("events");
+        col.soft_delete = true;
+        col.versions = Some(VersionsConfig::new(true, 10));
+        col.fields = vec![
+            text_field("title", true),
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let doc = class_block(&out, "---@class crap.doc.Events");
+        assert!(doc.contains("---@field title? string"), "{doc}");
+        assert!(doc.contains("---@field starts_tz? string"), "{doc}");
+        assert!(
+            doc.contains(r#"---@field _status? "draft" | "published""#),
+            "{doc}"
+        );
+        assert!(doc.contains("---@field _deleted_at? string"), "{doc}");
+    }
 
     #[test]
     fn render_collection_output() {
@@ -1102,7 +1174,7 @@ mod tests {
         ];
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("---@class crap.array_row.PostsItems"));
+        assert!(out.contains("---@class crap.array_row.PostsItems\n---@field id? string"));
         assert!(out.contains("---@field label string"));
         assert!(out.contains("---@field desc? string"));
     }

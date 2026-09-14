@@ -109,11 +109,11 @@ impl ContentService {
         let headers = self.metadata_headers(request.metadata());
         let req = request.into_inner();
 
-        // Normalize the per-email limiter key (trim + lowercase). `find_by_email`
-        // is case-insensitive (`LOWER(email)=LOWER(?)`), so keying the limiter on
-        // the raw address would let an attacker rotate casing/whitespace to get a
-        // fresh lockout bucket per spelling of one account. Mirrors the admin
-        // login twin (`login_action.rs`).
+        // Key the per-email limiter on the address in its stored form (trimmed,
+        // lowercased, NFC-composed). `find_by_email` compares that form, so
+        // keying the limiter on the raw address would let an attacker rotate
+        // casing/whitespace to get a fresh lockout bucket per spelling of one
+        // account. Mirrors the admin login twin (`login_action.rs`).
         let email_key = normalize_email(&req.email);
 
         // Atomically record this attempt against both limiters and reject if

@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context as _, Result};
+use nanoid::nanoid;
 
 use crate::db::{DbConnection, DbValue, query::helpers::placeholder_list};
 
@@ -118,10 +119,38 @@ pub(super) fn delete_junction_rows(
 /// The invariant destination of a diff-based junction write — identical across
 /// every row of one `set_*_rows` call. Bundled so the per-row INSERT helpers
 /// stay within the argument limit.
+#[derive(Clone, Copy)]
 pub(super) struct JunctionTarget<'a> {
     pub table_name: &'a str,
     pub parent_id: &'a str,
     pub locale: Option<&'a str>,
+}
+
+/// How a diff-based junction write treats an incoming row's `id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowIds {
+    /// Keep an id only when it names an existing row of this parent; every
+    /// other row gets a server-minted id, so a client can neither choose a
+    /// primary key nor address another parent's row.
+    Existing,
+    /// Keep every incoming id, minting only for a row without one: a raw
+    /// restore of exported rows, which must come back under the ids they had.
+    Incoming,
+}
+
+/// Plan one incoming row's identity as `(id, is_update)`. An id already
+/// claimed earlier in the same write is never used twice.
+pub(super) fn plan_row_id(
+    incoming: Option<&str>,
+    exists: impl Fn(&str) -> bool,
+    claimed: &HashSet<String>,
+    row_ids: RowIds,
+) -> (String, bool) {
+    match incoming.filter(|id| !id.is_empty() && !claimed.contains(*id)) {
+        Some(id) if exists(id) => (id.to_string(), true),
+        Some(id) if row_ids == RowIds::Incoming => (id.to_string(), false),
+        _ => (nanoid!(), false),
+    }
 }
 
 /// The set of existing junction-row ids for one parent[+locale]. The
@@ -197,6 +226,34 @@ pub(super) fn delete_junction_rows_except(
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;
+
+    /// An existing row keeps its id either way; an unknown id is kept only for
+    /// a restore, and never twice in one write.
+    #[test]
+    fn plan_row_id_keeps_incoming_ids_only_for_a_restore() {
+        let none = HashSet::new();
+        let exists = |id: &str| id == "stored";
+
+        assert_eq!(
+            plan_row_id(Some("stored"), exists, &none, RowIds::Existing),
+            ("stored".to_string(), true)
+        );
+
+        let (minted, is_update) = plan_row_id(Some("exported"), exists, &none, RowIds::Existing);
+        assert!(!is_update);
+        assert_ne!(minted, "exported");
+
+        assert_eq!(
+            plan_row_id(Some("exported"), exists, &none, RowIds::Incoming),
+            ("exported".to_string(), false)
+        );
+
+        let claimed: HashSet<String> = ["exported".to_string()].into();
+        assert_ne!(
+            plan_row_id(Some("exported"), exists, &claimed, RowIds::Incoming).0,
+            "exported"
+        );
+    }
 
     fn setup() -> InMemoryConn {
         let conn = InMemoryConn::open();

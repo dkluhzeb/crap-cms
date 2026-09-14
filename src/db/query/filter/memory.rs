@@ -22,16 +22,18 @@
 //! operator-rejection here: enforcement is by convention + documentation, not by
 //! narrowing what a Lua hook may return.
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 
+use regex::{Regex, escape};
 use serde_json::Value;
 
-use crate::core::{
-    DocumentFields, FieldDefinition, FieldType, parse_bool, prefixed_name, walk_leaf_fields,
+use crate::{
+    core::{
+        DocumentFields, FieldDefinition, FieldType, canonical_operand, flatten_group_fields,
+        parse_bool, prefixed_name, walk_leaf_fields,
+    },
+    db::{Filter, FilterClause, FilterOp, query::helpers::normalize_date_value},
 };
-use crate::db::query::helpers::normalize_date_value;
-use crate::db::{Filter, FilterClause, FilterOp};
 
 /// Evaluate filter clauses against in-memory document data, coercing comparisons
 /// by each constrained field's type so the result mirrors the SQL `WHERE` path.
@@ -57,9 +59,13 @@ pub fn matches_constraints_typed(
 
     let types = field_type_map(fields);
 
+    // Constraints name a group's sub-field by its flat path (`seo__owner`),
+    // while documents carry the group nested.
+    let flat = flatten_group_fields(data, fields);
+
     constraints
         .iter()
-        .all(|clause| matches_clause(data, clause, &types))
+        .all(|clause| matches_clause(&flat, clause, &types))
 }
 
 /// `matches_constraints_typed` with no field-type information — a blind string
@@ -115,22 +121,32 @@ fn matches_filter(
 
     let ft = types.get(&filter.field);
     let value_str = value_to_string(value);
+    // Operands in the form the field's values are stored in, as SQL binds them:
+    // otherwise an email typed with capitals fails `equals` and passes
+    // `not_equals` here while SQL decides the reverse.
+    let operand = |raw: &str| canonical_operand(ft, raw).into_owned();
 
     match &filter.op {
         // Equality/membership are coerced by field type so Checkbox/Number agree
         // with SQL's `coerce_filter_value` instead of a blind string compare.
-        FilterOp::Equals(expected) => typed_eq(value, expected, ft),
-        FilterOp::NotEquals(expected) => !typed_eq(value, expected, ft),
-        FilterOp::In(values) => values.iter().any(|e| typed_eq(value, e, ft)),
-        FilterOp::NotIn(values) => !values.iter().any(|e| typed_eq(value, e, ft)),
-        FilterOp::Contains(needle) => value_str.contains(needle.as_str()),
-        FilterOp::Like(pattern) => matches_like(&value_str, pattern),
-        FilterOp::GreaterThan(expected) => order_is(value, expected, Ordering::Greater, false),
-        FilterOp::LessThan(expected) => order_is(value, expected, Ordering::Less, false),
-        FilterOp::GreaterThanOrEqual(expected) => {
-            order_is(value, expected, Ordering::Greater, true)
+        FilterOp::Equals(expected) => typed_eq(value, &operand(expected), ft),
+        FilterOp::NotEquals(expected) => !typed_eq(value, &operand(expected), ft),
+        FilterOp::In(values) => values.iter().any(|e| typed_eq(value, &operand(e), ft)),
+        FilterOp::NotIn(values) => !values.iter().any(|e| typed_eq(value, &operand(e), ft)),
+        FilterOp::Contains(needle) => value_str
+            .to_ascii_lowercase()
+            .contains(&operand(needle).to_ascii_lowercase()),
+        FilterOp::Like(pattern) => matches_like(&value_str, &operand(pattern)),
+        FilterOp::GreaterThan(expected) => {
+            order_is(value, &operand(expected), Ordering::Greater, false)
         }
-        FilterOp::LessThanOrEqual(expected) => order_is(value, expected, Ordering::Less, true),
+        FilterOp::LessThan(expected) => order_is(value, &operand(expected), Ordering::Less, false),
+        FilterOp::GreaterThanOrEqual(expected) => {
+            order_is(value, &operand(expected), Ordering::Greater, true)
+        }
+        FilterOp::LessThanOrEqual(expected) => {
+            order_is(value, &operand(expected), Ordering::Less, true)
+        }
         FilterOp::Exists => true,     // field exists (checked above)
         FilterOp::NotExists => false, // field exists but op says it shouldn't
     }
@@ -239,25 +255,40 @@ fn compare_typed(value: &Value, expected: &str) -> Option<Ordering> {
     }
 }
 
-/// Simple LIKE pattern matching (SQL-style: % = any chars, _ = single char).
+/// SQL `LIKE` matching: `%` matches any run of characters, `_` one character,
+/// and `\` escapes the next one. Agrees with the SQL backends so the in-memory
+/// and SQL paths decide alike:
+/// - literal characters are regex-escaped, so a `.`/`(`/`[` matches itself (an
+///   over-match here would fail open);
+/// - `%` spans line breaks, as in SQL;
+/// - ASCII case is folded on both sides: `SQLite` `LIKE` is ASCII-case-insensitive
+///   and Postgres uses `ILIKE`; ASCII-only folding tracks `SQLite` and stays at
+///   most stricter than `ILIKE` for non-ASCII (fail-closed);
+/// - a pattern ending in a lone `\` matches nothing (the SQL path rejects it).
 fn matches_like(value: &str, pattern: &str) -> bool {
-    // Match the SQL backends exactly so the in-memory and SQL paths agree:
-    // - Escape regex metacharacters in the literal portion FIRST, so a `.`/`(`/`[`
-    //   in the pattern matches itself (as SQL `LIKE` does); without this the
-    //   in-memory path would over-match (fail-open).
-    // - Translate the SQL wildcards `%` → `.*`, `_` → `.` (one char), which
-    //   `regex::escape` leaves untouched.
-    // - Fold ASCII case on both sides: SQLite `LIKE` is ASCII-case-insensitive
-    //   by default and Postgres uses `ILIKE`, so case-insensitive is the expected
-    //   behavior. ASCII-only folding (not Unicode) tracks SQLite precisely and
-    //   stays at most stricter than Postgres `ILIKE` for non-ASCII (fail-closed).
-    let regex_pattern = regex::escape(pattern)
-        .replace('%', ".*")
-        .replace('_', ".")
-        .to_ascii_lowercase();
+    let Some(body) = like_to_regex(&pattern.to_ascii_lowercase()) else {
+        return false;
+    };
 
-    regex::Regex::new(&format!("^{regex_pattern}$"))
-        .is_ok_and(|re| re.is_match(&value.to_ascii_lowercase()))
+    Regex::new(&format!("(?s)^{body}$")).is_ok_and(|re| re.is_match(&value.to_ascii_lowercase()))
+}
+
+/// Translate a `LIKE` pattern to a regex body, or `None` when it ends in a
+/// lone escape character.
+fn like_to_regex(pattern: &str) -> Option<String> {
+    let mut body = String::with_capacity(pattern.len() * 2);
+    let mut chars = pattern.chars();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => body.push_str(&escape(&chars.next()?.to_string())),
+            '%' => body.push_str(".*"),
+            '_' => body.push('.'),
+            other => body.push_str(&escape(&other.to_string())),
+        }
+    }
+
+    Some(body)
 }
 
 #[cfg(test)]
@@ -317,6 +348,100 @@ mod tests {
             field: field.to_string(),
             op: FilterOp::NotEquals(value.to_string()),
         })
+    }
+
+    /// Regression: SQL compares an email or text operand in its stored form
+    /// while this matcher compared it as typed, so an access rule's
+    /// `not_equals` on an address typed with capitals let the row through on
+    /// live events and population while SQL excluded it.
+    #[test]
+    fn email_and_text_operands_compare_in_their_stored_form() {
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Email).build(),
+            FieldDefinition::builder("name", FieldType::Text).build(),
+        ];
+        let d = data(&[("email", json!("bob@x.com")), ("name", json!("Caf\u{e9}"))]);
+
+        assert!(!matches_constraints_typed(
+            &d,
+            &[neq("email", "Bob@X.com")],
+            &fields
+        ));
+        assert!(matches_constraints_typed(
+            &d,
+            &[eq("email", " Bob@X.com")],
+            &fields
+        ));
+        assert!(matches_constraints_typed(
+            &d,
+            &[eq("name", "Cafe\u{301}")],
+            &fields
+        ));
+        assert!(!matches_constraints_typed(
+            &d,
+            &[neq("name", "Cafe\u{301}")],
+            &fields
+        ));
+    }
+
+    /// Regression: the matcher read constraint paths at the top level only, so a
+    /// rule on a group's sub-field (`seo__owner`) never saw a document carrying
+    /// the group nested — `equals` refused the row, `not_exists` let it through.
+    #[test]
+    fn group_sub_field_constraints_match_nested_groups() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("owner", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let d = data(&[("seo", json!({ "owner": "u1" }))]);
+        let clause = |op: FilterOp| {
+            FilterClause::Single(Filter {
+                field: "seo__owner".to_string(),
+                op,
+            })
+        };
+
+        assert!(matches_constraints_typed(
+            &d,
+            &[clause(FilterOp::Equals("u1".to_string()))],
+            &fields
+        ));
+        assert!(!matches_constraints_typed(
+            &d,
+            &[clause(FilterOp::NotExists)],
+            &fields
+        ));
+    }
+
+    /// Regression: ordered operators compared the operand as typed, so a text
+    /// bound typed with a combining accent sorted apart from the same stored
+    /// value.
+    #[test]
+    fn ordered_operands_compare_in_their_stored_form() {
+        let fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+        let d = data(&[("name", json!("Caf\u{e9}"))]);
+        let clause = |op: FilterOp| {
+            FilterClause::Single(Filter {
+                field: "name".to_string(),
+                op,
+            })
+        };
+
+        assert!(matches_constraints_typed(
+            &d,
+            &[clause(FilterOp::LessThanOrEqual("Cafe\u{301}".to_string()))],
+            &fields
+        ));
+        assert!(matches_constraints_typed(
+            &d,
+            &[clause(FilterOp::GreaterThanOrEqual(
+                "Cafe\u{301}".to_string()
+            ))],
+            &fields
+        ));
     }
 
     // ── Empty constraints ───────────────────────────────────────────
@@ -420,6 +545,36 @@ mod tests {
     }
 
     // ── Contains ────────────────────────────────────────────────────
+
+    /// `contains` folds ASCII case like SQL `LIKE` / `ILIKE`, so the in-memory
+    /// check agrees with the database.
+    #[test]
+    fn contains_is_ascii_case_insensitive() {
+        let d = data(&[("title", json!("Hello World"))]);
+        assert!(matches_constraints(
+            &d,
+            &[FilterClause::Single(Filter {
+                field: "title".to_string(),
+                op: FilterOp::Contains("WORLD".to_string()),
+            })]
+        ));
+    }
+
+    /// `%` matches across line breaks, as it does in SQL.
+    #[test]
+    fn matches_like_spans_newlines() {
+        assert!(matches_like("line one\nline two", "line%two"));
+    }
+
+    /// A backslash escapes `%` and `_` in a `like` pattern, as `ESCAPE '\\'`
+    /// does in SQL.
+    #[test]
+    fn matches_like_honors_backslash_escapes() {
+        assert!(matches_like("100%", "100\\%"));
+        assert!(!matches_like("1000", "100\\%"));
+        assert!(matches_like("a_b", "a\\_b"));
+        assert!(!matches_like("axb", "a\\_b"));
+    }
 
     #[test]
     fn contains_match() {

@@ -6,11 +6,14 @@ use tracing::info;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, collection::Auth},
+    core::{CollectionDefinition, FieldDefinition, IndexDefinition, collection::Auth},
     db::{
         DbConnection,
         migrate::helpers::collect_column_specs,
-        query::{helpers::locale_column, is_valid_identifier},
+        query::{
+            helpers::{locale_column, quote_ident, sql_ident},
+            is_valid_identifier,
+        },
     },
 };
 
@@ -31,15 +34,30 @@ fn index_name(slug: &str, parts: &[&str]) -> String {
     format!("{}{}", index_prefix(slug), parts.join("_"))
 }
 
-/// Add an index entry to the desired set and create statement list.
+/// Add an index entry to the desired set and create statement list. Two indexes
+/// of one table can't share a name: `CREATE … IF NOT EXISTS` would silently skip
+/// the second.
+///
+/// # Errors
+///
+/// Returns an error naming the index when its name is already taken.
 fn add_index(
     desired: &mut HashSet<String>,
     stmts: &mut Vec<String>,
     idx_name: String,
     sql: String,
-) {
-    stmts.push(sql);
+) -> Result<()> {
+    if desired.contains(&idx_name) {
+        bail!(
+            "Two indexes would both be named '{idx_name}' — rename a field or change a compound \
+             index so their names differ"
+        );
+    }
+
     desired.insert(idx_name);
+    stmts.push(sql);
+
+    Ok(())
 }
 
 /// Collect field-level indexes (index=true, skip if unique=true — already indexed).
@@ -59,18 +77,24 @@ fn collect_field_indexes(
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
                 let idx_name = index_name(slug, &[&col]);
-                let sql = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})");
+                let sql = format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {slug} ({})",
+                    sql_ident(&idx_name),
+                    sql_ident(&col)
+                );
 
-                add_index(desired, stmts, idx_name, sql);
+                add_index(desired, stmts, idx_name, sql)?;
             }
         } else {
             let idx_name = index_name(slug, &[&spec.col_name]);
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
-                idx_name, slug, spec.col_name
+                sql_ident(&idx_name),
+                slug,
+                sql_ident(&spec.col_name)
             );
 
-            add_index(desired, stmts, idx_name, sql);
+            add_index(desired, stmts, idx_name, sql)?;
         }
     }
 
@@ -99,23 +123,54 @@ fn collect_soft_delete_unique_indexes(
                 let col = locale_column(&spec.col_name, locale)?;
                 let idx_name = index_name(slug, &[&col, "active_unique"]);
                 let sql = format!(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col}) WHERE _deleted_at IS NULL"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {slug} ({}) WHERE _deleted_at IS NULL",
+                    sql_ident(&idx_name),
+                    sql_ident(&col)
                 );
 
-                add_index(desired, stmts, idx_name, sql);
+                add_index(desired, stmts, idx_name, sql)?;
             }
         } else {
             let idx_name = index_name(slug, &[&spec.col_name, "active_unique"]);
             let sql = format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                idx_name, slug, spec.col_name
+                sql_ident(&idx_name),
+                slug,
+                sql_ident(&spec.col_name)
             );
 
-            add_index(desired, stmts, idx_name, sql);
+            add_index(desired, stmts, idx_name, sql)?;
         }
     }
 
     Ok(())
+}
+
+/// The columns a compound index spans: a localized field is indexed by its
+/// default locale's column.
+///
+/// # Errors
+///
+/// Returns an error if the default locale code has no column form.
+pub(in crate::db::migrate) fn compound_index_columns(
+    fields: &[FieldDefinition],
+    index_def: &IndexDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<Vec<String>> {
+    let specs = collect_column_specs(fields, locale_config);
+
+    index_def
+        .fields
+        .iter()
+        .map(
+            |field_name| match specs.iter().find(|s| s.col_name == *field_name) {
+                Some(s) if s.is_localized => {
+                    locale_column(field_name, &locale_config.default_locale)
+                }
+                _ => Ok(field_name.clone()),
+            },
+        )
+        .collect()
 }
 
 /// Collect collection-level compound indexes.
@@ -126,8 +181,6 @@ fn collect_compound_indexes(
     desired: &mut HashSet<String>,
     stmts: &mut Vec<String>,
 ) -> Result<()> {
-    let specs = collect_column_specs(&def.fields, locale_config);
-
     for index_def in &def.indexes {
         for field_name in &index_def.fields {
             if !is_valid_identifier(field_name) {
@@ -137,36 +190,27 @@ fn collect_compound_indexes(
             }
         }
 
-        let expanded_cols: Vec<String> = index_def
-            .fields
+        let expanded_cols = compound_index_columns(&def.fields, index_def, locale_config)?;
+
+        let col_list = expanded_cols
             .iter()
-            .map(|field_name| {
-                let spec = specs.iter().find(|s| s.col_name == *field_name);
-
-                match spec {
-                    Some(s) if s.is_localized => {
-                        locale_column(field_name, &locale_config.default_locale)
-                    }
-                    _ => Ok(field_name.clone()),
-                }
-            })
-            .collect::<Result<Vec<String>>>()?;
-
-        let col_list = expanded_cols.join(", ");
+            .map(|col| sql_ident(col))
+            .collect::<Vec<_>>()
+            .join(", ");
         let field_parts: Vec<&str> = index_def.fields.iter().map(String::as_str).collect();
         let idx_name = index_name(slug, &field_parts);
         let unique = if index_def.unique { "UNIQUE " } else { "" };
-        let sql = format!("CREATE {unique}INDEX IF NOT EXISTS {idx_name} ON {slug} ({col_list})");
+        let sql = format!(
+            "CREATE {unique}INDEX IF NOT EXISTS {} ON {slug} ({col_list})",
+            sql_ident(&idx_name)
+        );
 
-        add_index(desired, stmts, idx_name, sql);
+        add_index(desired, stmts, idx_name, sql)?;
     }
 
     Ok(())
 }
 
-/// Sync B-tree indexes for a collection table: field-level `index: true` and
-/// collection-level compound `indexes`. Idempotent — creates missing indexes,
-/// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
 /// Case-insensitive unique backstop for the auth identity column. The
 /// validation-layer unique check compares emails with `LOWER() = LOWER()`
 /// (matching `find_by_email`'s login lookup), but validation can be raced —
@@ -180,15 +224,15 @@ fn collect_auth_email_ci_index(
     def: &CollectionDefinition,
     desired: &mut HashSet<String>,
     stmts: &mut Vec<String>,
-) {
+) -> Result<()> {
     if !def.is_auth_collection() {
-        return;
+        return Ok(());
     }
 
     // Injected for every auth collection when absent, so it's always present;
     // guard anyway for hand-built definitions in tests.
     if !def.fields.iter().any(|f| f.name == "email") {
-        return;
+        return Ok(());
     }
 
     let idx_name = index_name(slug, &["email", "ci_unique"]);
@@ -200,7 +244,7 @@ fn collect_auth_email_ci_index(
     let sql =
         format!("CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} (LOWER(email)){partial}");
 
-    add_index(desired, stmts, idx_name, sql);
+    add_index(desired, stmts, idx_name, sql)
 }
 
 /// Index the auth token columns. Reset / verification flows look a user up
@@ -211,40 +255,73 @@ fn collect_auth_token_indexes(
     def: &CollectionDefinition,
     desired: &mut HashSet<String>,
     stmts: &mut Vec<String>,
-) {
+) -> Result<()> {
     if !def.is_auth_collection() {
-        return;
+        return Ok(());
     }
 
-    let mut add = |col: &str| {
-        let idx_name = index_name(slug, &[col]);
-        desired.insert(idx_name.clone());
-        stmts.push(format!(
-            "CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})"
-        ));
-    };
-
-    add("_reset_token");
-
+    let mut columns = vec!["_reset_token"];
     if def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
-        add("_verification_token");
+        columns.push("_verification_token");
     }
+
+    for col in columns {
+        let idx_name = index_name(slug, &[col]);
+        let sql = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON {slug} ({})",
+            sql_ident(&idx_name),
+            sql_ident(col)
+        );
+
+        add_index(desired, stmts, idx_name, sql)?;
+    }
+
+    Ok(())
 }
 
-pub(super) fn sync_indexes(
-    conn: &dyn DbConnection,
+/// The indexes a collection's table should have: their names and their
+/// `CREATE` statements.
+fn desired_indexes(
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
-) -> Result<()> {
+) -> Result<(HashSet<String>, Vec<String>)> {
     let mut desired: HashSet<String> = HashSet::new();
     let mut stmts: Vec<String> = Vec::new();
 
     collect_field_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_soft_delete_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
-    collect_auth_token_indexes(slug, def, &mut desired, &mut stmts);
-    collect_auth_email_ci_index(slug, def, &mut desired, &mut stmts);
+    collect_auth_token_indexes(slug, def, &mut desired, &mut stmts)?;
+    collect_auth_email_ci_index(slug, def, &mut desired, &mut stmts)?;
+
+    Ok((desired, stmts))
+}
+
+/// The names of every index the migration manages on a collection's table.
+///
+/// # Errors
+///
+/// Returns an error if a compound index names an invalid field or a locale
+/// column name can't be built.
+pub(in crate::db::migrate) fn managed_index_names(
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<HashSet<String>> {
+    Ok(desired_indexes(slug, def, locale_config)?.0)
+}
+
+/// Sync B-tree indexes for a collection table: field-level `index: true` and
+/// collection-level compound `indexes`. Idempotent — creates missing indexes,
+/// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
+pub(super) fn sync_indexes(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let (desired, stmts) = desired_indexes(slug, def, locale_config)?;
 
     // Drop stale indexes (in existing but not in desired)
     let prefix = index_prefix(slug);
@@ -253,7 +330,9 @@ pub(super) fn sync_indexes(
     for name in existing.difference(&desired) {
         info!("Dropping stale index: {}", name);
 
-        conn.execute_ddl(&format!("DROP INDEX IF EXISTS {name}"), &[])
+        // The name comes from the database catalog, where it may hold any
+        // character after the managed prefix — always quote it.
+        conn.execute_ddl(&format!("DROP INDEX IF EXISTS {}", quote_ident(name)), &[])
             .with_context(|| format!("Failed to drop index {name}"))?;
     }
 
@@ -286,6 +365,27 @@ mod tests {
         .collect()
     }
 
+    /// Regression: a field index and a compound index over the same column got
+    /// one name, and `CREATE … IF NOT EXISTS` silently skipped the second —
+    /// here the unique one, so uniqueness went unenforced.
+    #[test]
+    fn indexes_sharing_a_name_are_rejected() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .index(true)
+                .build(),
+        ];
+        let mut compound = IndexDefinition::new(vec!["title".to_string()]);
+        compound.unique = true;
+        def.indexes = vec![compound];
+
+        let err = desired_indexes("posts", &def, &LocaleConfig::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("idx_posts_title"), "{err}");
+    }
+
     /// Regression: every managed index name must start with `index_prefix`.
     /// The stale-drop scan only drops names matching that prefix, so a builder
     /// that produced a differently-prefixed name would leave a permanent orphan.
@@ -305,6 +405,39 @@ mod tests {
             let name = index_name("posts", &parts);
             assert!(name.starts_with(&prefix), "{name} must start with {prefix}");
         }
+    }
+
+    /// Index DDL quotes names that carry a capital — a locale code such as
+    /// `de-DE` — so Postgres creates and drops the index it was asked for.
+    #[test]
+    fn index_ddl_quotes_uppercase_locale_names() {
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .index(true)
+                    .build(),
+            ],
+        );
+        let locales = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de-DE".to_string()],
+            fallback: true,
+        };
+
+        let mut desired = HashSet::new();
+        let mut stmts = Vec::new();
+        collect_field_indexes("posts", &def, &locales, &mut desired, &mut stmts).unwrap();
+
+        assert!(desired.contains("idx_posts_title__de_DE"), "{desired:?}");
+        assert!(
+            stmts.contains(
+                &"CREATE INDEX IF NOT EXISTS \"idx_posts_title__de_DE\" ON posts (\"title__de_DE\")"
+                    .to_string()
+            ),
+            "{stmts:?}"
+        );
     }
 
     #[test]

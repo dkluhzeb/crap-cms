@@ -61,7 +61,7 @@ return M
 | `priority` | integer | 0 | Default scheduling priority; higher = sooner. Per-enqueue value overrides this. |
 | `skip_if_running` | boolean | true | Skip cron trigger if previous run still active |
 | `labels` | table | nil | Display labels (`{ singular = "..." }`) |
-| `access` | string | nil | Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`) so one function can serve both, or branch to allow read-only viewers. Returns `true`/`false` only — a filter table is rejected. |
+| `access` | string | nil | Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`) so one function can serve both, or branch to allow read-only viewers. On `"trigger"`, `ctx.data` is the queued payload — `nil` when there is none, or when it isn't a JSON object (such a payload is then rejected, but only for a caller the rule allows), so guard against `nil`. Returns `true`/`false` only — a filter table is rejected. |
 
 ## Queuing from Hooks
 

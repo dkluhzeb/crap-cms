@@ -391,19 +391,25 @@ fn check_flat_sub_fields<'a>(
     clippy::used_underscore_binding
 )]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
-    use crate::config::LocaleConfig;
-    use crate::core::CollectionDefinition;
-    use crate::core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig};
-    use crate::db::{
-        DbValue,
-        query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode},
+    use crate::{
+        config::{CrapConfig, LocaleConfig},
+        core::{
+            BlockDefinition, CollectionDefinition, FieldDefinition, FieldTab, FieldType,
+            RelationshipConfig,
+        },
+        db::{
+            BoxedConnection, DbValue, pool,
+            query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode},
+        },
     };
 
-    fn test_conn() -> (tempfile::TempDir, crate::db::BoxedConnection) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let config = crate::config::CrapConfig::default();
-        let p = crate::db::pool::create_pool(dir.path(), &config).unwrap();
+    fn test_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
         (dir, p.get().unwrap())
     }
 
@@ -986,6 +992,40 @@ mod tests {
             }
             other => panic!("Expected Or, got {other:?}"),
         }
+    }
+
+    /// A locale code with capitals (`de-DE` → `title__de_DE`) names a column
+    /// Postgres folds to lowercase unless it is quoted; the condition quotes it.
+    #[test]
+    fn uppercase_locale_column_is_quoted_in_the_where_clause() {
+        let (_dir, conn) = test_conn();
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de-DE".into()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de-DE".to_string()],
+                fallback: true,
+            },
+        };
+        let filters = vec![FilterClause::Single(Filter {
+            field: "title".into(),
+            op: FilterOp::Equals("Hallo".into()),
+        })];
+
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
+        let mut params = Vec::new();
+        let sql = build_where_clause(
+            &conn,
+            &resolved,
+            "test",
+            &def.fields,
+            Some(&ctx),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(sql, " WHERE \"title__de_DE\" = ?1");
     }
 
     #[test]

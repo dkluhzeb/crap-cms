@@ -28,6 +28,9 @@ pub(super) struct BackupManifest {
     pub include_uploads: bool,
     pub source_db: String,
     pub source_config: String,
+    /// Whether the backup carries the generated auth secret (`jwt_secret`).
+    #[serde(default)]
+    pub includes_secret: bool,
 }
 
 #[cfg(test)]
@@ -45,6 +48,7 @@ mod tests {
             include_uploads: true,
             source_db: "/tmp/crap.db".into(),
             source_config: "/tmp/config".into(),
+            includes_secret: true,
         };
 
         let s = serde_json::to_string_pretty(&m).unwrap();
@@ -58,6 +62,7 @@ mod tests {
         assert_eq!(back.include_uploads, m.include_uploads);
         assert_eq!(back.source_db, m.source_db);
         assert_eq!(back.source_config, m.source_config);
+        assert_eq!(back.includes_secret, m.includes_secret);
     }
 
     #[test]
@@ -72,6 +77,7 @@ mod tests {
         }"#;
         let m: BackupManifest = serde_json::from_str(raw).unwrap();
         assert!(m.uploads_size.is_none());
+        assert!(!m.includes_secret, "an older backup carries no secret");
     }
 
     /// A pre-versioning manifest (no `format_version`) defaults to 1 so old

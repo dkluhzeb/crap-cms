@@ -4,13 +4,11 @@ use anyhow::{Context as _, Result};
 use tracing::info;
 
 use crate::config::LocaleConfig;
-use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
+use crate::core::{FieldDefinition, field::flatten_array_sub_fields};
 use crate::db::DbConnection;
 use crate::db::migrate::helpers::add_column_if_missing;
-use crate::db::migrate::helpers::column_specs::ensure_locale_column;
-use crate::db::migrate::helpers::introspection::{
-    get_table_columns, sanitize_locale, table_exists,
-};
+use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
+use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
 use crate::db::query::helpers::{join_table, quote_ident, tz_column};
 
 /// Sync an array join table (create or alter).
@@ -64,10 +62,7 @@ fn create_array_table(
     ];
 
     if has_locale_col {
-        columns.push(format!(
-            "_locale TEXT NOT NULL DEFAULT '{}'",
-            sanitize_locale(&locale_config.default_locale)?
-        ));
+        columns.push(locale_column_definition(&locale_config.default_locale));
     }
 
     for sub_field in flat_subs {
@@ -77,7 +72,7 @@ fn create_array_table(
             conn.column_type_for(&sub_field.field_type)
         ));
 
-        if sub_field.field_type == FieldType::Date && sub_field.timezone {
+        if sub_field.has_tz_companion() {
             columns.push(format!("{} TEXT", quote_ident(&tz_column(&sub_field.name))));
         }
     }
@@ -107,7 +102,7 @@ fn alter_array_table(
         );
         add_column_if_missing(conn, table_name, &sub_field.name, &col_def, &existing)?;
 
-        if sub_field.field_type == FieldType::Date && sub_field.timezone {
+        if sub_field.has_tz_companion() {
             let tz_col = tz_column(&sub_field.name);
             let tz_def = format!("{} TEXT", quote_ident(&tz_col));
             add_column_if_missing(conn, table_name, &tz_col, &tz_def, &existing)?;
@@ -121,6 +116,7 @@ fn alter_array_table(
 mod tests {
     use super::*;
     use crate::core::FieldTab;
+    use crate::core::FieldType;
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::join_tables::sync_join_tables;
 

@@ -112,7 +112,7 @@ fn collect_leaf_param(
         return Ok(());
     };
 
-    let is_date_tz = field.field_type == FieldType::Date && field.timezone;
+    let is_date_tz = field.has_tz_companion();
     let tz_key = if is_date_tz {
         Some(tz_column(&data_key))
     } else {

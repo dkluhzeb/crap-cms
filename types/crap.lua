@@ -201,8 +201,8 @@ crap = {}
 --- @field hidden? boolean Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
 
 --- @class crap.TextField : crap.BaseField
---- @field min_length? integer Minimum string length. Validated server-side + HTML minlength.
---- @field max_length? integer Maximum string length. Validated server-side + HTML maxlength.
+--- @field min_length? integer Minimum string length in characters, validated server-side.
+--- @field max_length? integer Maximum string length in characters, validated server-side.
 --- @field has_many? boolean Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
 
 --- @class crap.NumberField : crap.BaseField
@@ -212,8 +212,8 @@ crap = {}
 --- @field has_many? boolean Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
 
 --- @class crap.TextareaField : crap.BaseField
---- @field min_length? integer Minimum string length. Validated server-side + HTML minlength.
---- @field max_length? integer Maximum string length. Validated server-side + HTML maxlength.
+--- @field min_length? integer Minimum string length in characters, validated server-side.
+--- @field max_length? integer Maximum string length in characters, validated server-side.
 
 --- @class crap.RichtextField : crap.BaseField
 
@@ -298,8 +298,8 @@ crap = {}
 --- @field picker_appearance? crap.PickerAppearance Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
 --- @field min_rows? integer Minimum rows. Validated on create/update.
 --- @field max_rows? integer Maximum rows. Admin disables "Add" at max.
---- @field min_length? integer Minimum string length. Validated server-side + HTML minlength.
---- @field max_length? integer Maximum string length. Validated server-side + HTML maxlength.
+--- @field min_length? integer Minimum string length in characters, validated server-side.
+--- @field max_length? integer Maximum string length in characters, validated server-side.
 --- @field min? number Minimum value. Validated server-side + HTML min attr.
 --- @field max? number Maximum value. Validated server-side + HTML max attr.
 --- @field integer? boolean Restrict a `number` field to whole values: fractional input is rejected at validation and the admin renders an integer stepper. Storage stays floating-point (exact for the realistic `±2^53` range).

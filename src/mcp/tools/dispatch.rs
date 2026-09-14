@@ -140,7 +140,7 @@ fn mcp_exposure(ctx: &ToolExecCtx<'_>) -> Result<McpExposure> {
 ///
 /// Fails CLOSED: without a connection the rules cannot be evaluated, so every
 /// gated slug stays hidden rather than becoming reachable during an outage.
-fn exposure_for_call(ctx: &ToolExecCtx<'_>) -> McpExposure {
+pub(in crate::mcp::tools) fn exposure_for_call(ctx: &ToolExecCtx<'_>) -> McpExposure {
     if !McpExposure::any_gated(&ctx.infra.registry) {
         return McpExposure::default();
     }

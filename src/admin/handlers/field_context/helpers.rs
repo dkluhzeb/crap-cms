@@ -106,8 +106,7 @@ pub fn inject_timezone_values_from_row(
     };
 
     for (fc, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
-        if fd.field_type == FieldType::Date
-            && fd.timezone
+        if fd.has_tz_companion()
             && let FieldContext::Date(df) = fc
         {
             let tz_key = tz_column(&fd.name);

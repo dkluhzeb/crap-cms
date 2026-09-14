@@ -73,6 +73,7 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     unsafe fn set_env(key: &str, val: &str) {
         unsafe { std::env::set_var(key, val) };
@@ -148,7 +149,7 @@ mod tests {
             "[server]\nadmin_port = 9999\nhost = \"${CRAP_TEST_HOST2:-0.0.0.0}\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 9999);
         assert_eq!(config.server.host, "0.0.0.0");
         unsafe { remove_env("CRAP_TEST_ADMIN_PORT") };
@@ -164,7 +165,7 @@ mod tests {
              [server]\nadmin_port = 3000\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 3000);
     }
 
@@ -177,7 +178,7 @@ mod tests {
             "[email]\nsmtp_host = \"${CRAP_TEST_SMTP_HOST}\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.email.smtp_host, "mail.example.com");
         unsafe { remove_env("CRAP_TEST_SMTP_HOST") };
     }

@@ -8,7 +8,7 @@ use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{FieldDefinition, FieldType, Registry, SharedRegistry},
+    core::{FieldDefinition, Registry, SharedRegistry},
     hooks::lifecycle::InitPhase,
 };
 
@@ -194,8 +194,7 @@ fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
 /// that don't already have their own `default_timezone`.
 fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
     for field in fields.iter_mut() {
-        if field.field_type == FieldType::Date && field.timezone && field.default_timezone.is_none()
-        {
+        if field.has_tz_companion() && field.default_timezone.is_none() {
             field.default_timezone = Some(default_tz.to_string());
         }
 
@@ -403,6 +402,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::FieldType;
     use mlua::{Lua, LuaOptions, StdLib, Value};
 
     fn sandboxed_lua() -> Lua {

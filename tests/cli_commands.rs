@@ -17,14 +17,18 @@
     clippy::unreadable_literal
 )]
 
-use serde_json::json;
+use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
-use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
-use crap_cms::db::{DbConnection as _, DbPool, migrate, pool, query};
+use crap_cms::core::{CollectionDefinition, DocumentFields};
+use crap_cms::db::{
+    DbConnection as _, DbPool, DbValue, LocaleContext, LocaleMode, migrate, pool, query,
+};
 use crap_cms::hooks;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -43,9 +47,26 @@ fn full_setup() -> (
     DbPool,
     std::sync::Arc<crap_cms::core::Registry>,
 ) {
+    full_setup_with(&[])
+}
+
+/// [`full_setup`] with extra collection definitions written into the copied
+/// config dir as `collections/{name}.lua`.
+fn full_setup_with(
+    collections: &[(&str, &str)],
+) -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
+
+    for (name, lua) in collections {
+        let path = config_dir.join("collections").join(format!("{name}.lua"));
+        std::fs::write(path, lua).expect("write collection");
+    }
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
@@ -73,7 +94,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 /// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
-    def: &crap_cms::core::CollectionDefinition,
+    def: &CollectionDefinition,
     email: &str,
     password: &str,
     extra_fields: &[(&str, &str)],
@@ -136,7 +157,7 @@ fn cmd_export_all() {
     }
 
     let output_path = tmp.path().join("export.json");
-    commands::export::export(&config_dir, None, Some(output_path.clone())).unwrap();
+    commands::export::export(&config_dir, None, Some(output_path.clone()), false).unwrap();
 
     // Verify the JSON file structure
     let content = std::fs::read_to_string(&output_path).unwrap();
@@ -183,7 +204,7 @@ fn cmd_export_collection_filter() {
     }
 
     let output_path = tmp.path().join("export_filtered.json");
-    commands::export::export(&config_dir, Some("posts"), Some(output_path.clone())).unwrap();
+    commands::export::export(&config_dir, Some("posts"), Some(output_path.clone()), false).unwrap();
 
     let content = std::fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -206,6 +227,7 @@ fn cmd_export_nonexistent_errors() {
         &config_dir,
         Some("nonexistent_collection"),
         Some(output_path),
+        false,
     );
     assert!(
         result.is_err(),
@@ -216,6 +238,494 @@ fn cmd_export_nonexistent_errors() {
         err_msg.contains("not found"),
         "error should mention 'not found', got: {err_msg}"
     );
+}
+
+/// Soft delete, a timezone date and every nesting an import has to walk: a
+/// group in a group, a row in a group, and an array and a group inside tabs.
+const EVENTS_LUA: &str = r#"
+crap.collections.define("events", {
+    soft_delete = true,
+    fields = {
+        { name = "title", type = "text" },
+        { name = "starts", type = "date", picker_appearance = "dayAndTime", timezone = true },
+        { name = "venue", type = "group", fields = {
+            { name = "address", type = "group", fields = {
+                { name = "street", type = "text" },
+            } },
+            { name = "venue_row", type = "row", fields = {
+                { name = "room", type = "text" },
+            } },
+        } },
+        { name = "event_tabs", type = "tabs", tabs = {
+            { label = "More", fields = {
+                { name = "slots", type = "array", fields = {
+                    { name = "label", type = "text" },
+                } },
+                { name = "extra", type = "group", fields = {
+                    { name = "note", type = "text" },
+                } },
+            } },
+        } },
+    },
+})
+"#;
+
+fn document_fields(value: Value) -> DocumentFields {
+    value.as_object().unwrap().clone().into_iter().collect()
+}
+
+/// Seed one live event carrying every nested value and one trashed event.
+/// Returns `(live_id, trashed_id)`.
+fn seed_events(pool: &DbPool, def: &CollectionDefinition) -> (String, String) {
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    let data = document_fields(json!({
+        "title": "Launch",
+        "starts": "2026-03-01T09:00",
+        "starts_tz": "Europe/Berlin",
+        "venue": { "address": { "street": "Main St" }, "room": "A1" },
+        "extra": { "note": "Bring badge" },
+    }));
+    let live = query::create(&tx, "events", def, &data, None).unwrap();
+
+    let rows = document_fields(json!({
+        "slots": [{ "label": "Morning" }, { "label": "Evening" }],
+    }));
+    query::save_join_table_data(&tx, "events", &def.fields, &live.id, &rows, None).unwrap();
+
+    let gone = query::create(
+        &tx,
+        "events",
+        def,
+        &document_fields(json!({ "title": "Cancelled" })),
+        None,
+    )
+    .unwrap();
+    query::soft_delete(&tx, "events", &gone.id).unwrap();
+
+    tx.commit().unwrap();
+
+    (live.id.to_string(), gone.id.to_string())
+}
+
+/// Export the events collection to `path`, returning its documents sorted by id.
+fn export_events(config_dir: &Path, path: &Path) -> Vec<Value> {
+    export_docs(config_dir, "events", path)
+}
+
+/// Export one collection to `path`, returning its documents sorted by id.
+fn export_docs(config_dir: &Path, slug: &str, path: &Path) -> Vec<Value> {
+    commands::export::export(config_dir, Some(slug), Some(path.to_path_buf()), false).unwrap();
+
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut docs = parsed["collections"][slug].as_array().unwrap().clone();
+    docs.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
+    docs
+}
+
+/// A localized array: rows are stored per locale.
+const GUIDES_LUA: &str = r#"
+crap.collections.define("guides", {
+    fields = {
+        { name = "title", type = "text", localized = true },
+        { name = "steps", type = "array", localized = true, fields = {
+            { name = "label", type = "text" },
+        } },
+    },
+})
+"#;
+
+/// Regression: an export read a localized array's rows under the default
+/// locale only, silently dropping every other translation, and import refused
+/// the field outright. Every locale's rows now round-trip.
+#[test]
+fn cmd_export_import_round_trips_localized_array_rows() {
+    let (tmp, pool, registry) = full_setup_with(&[("guides", GUIDES_LUA)]);
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
+    let def = registry.get_collection("guides").unwrap();
+    let in_locale = |mode: LocaleMode| LocaleContext {
+        mode,
+        config: cfg.locale.clone(),
+    };
+
+    let id = {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data = document_fields(json!({ "title": "Guide" }));
+        let doc = query::create(
+            &tx,
+            "guides",
+            def,
+            &data,
+            Some(&in_locale(LocaleMode::Default)),
+        )
+        .unwrap();
+
+        for (locale, label) in [("en", "One"), ("de", "Eins")] {
+            let rows = document_fields(json!({ "steps": [{ "label": label }] }));
+            let ctx = in_locale(LocaleMode::Single(locale.to_string()));
+            query::save_join_table_data(&tx, "guides", &def.fields, &doc.id, &rows, Some(&ctx))
+                .unwrap();
+        }
+
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let first_path = tmp.path().join("first.json");
+    let first = export_docs(&config_dir, "guides", &first_path);
+    assert_eq!(first[0]["steps"]["en"][0]["label"], "One", "{}", first[0]);
+    assert_eq!(first[0]["steps"]["de"][0]["label"], "Eins", "{}", first[0]);
+
+    {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        query::delete(&tx, "guides", &id).unwrap();
+        tx.commit().unwrap();
+    }
+
+    commands::export::import(&config_dir, &first_path, Some("guides")).unwrap();
+
+    let second = export_docs(&config_dir, "guides", &tmp.path().join("second.json"));
+    assert_eq!(
+        second, first,
+        "export → import → export must reproduce every locale's rows"
+    );
+}
+
+/// Export → import → export reproduces the first export exactly: trashed
+/// documents, timezone companions, nested layout values and array row ids all
+/// survive the round trip.
+#[test]
+fn cmd_export_import_round_trips_every_stored_value() {
+    let (tmp, pool, registry) = full_setup_with(&[("events", EVENTS_LUA)]);
+    let config_dir = tmp.path().join("config");
+    let def = registry.get_collection("events").unwrap();
+    let (live, trashed) = seed_events(&pool, def);
+
+    let first_path = tmp.path().join("first.json");
+    let first = export_events(&config_dir, &first_path);
+
+    let ids: Vec<&str> = first.iter().filter_map(|d| d["id"].as_str()).collect();
+    assert!(
+        ids.contains(&trashed.as_str()),
+        "the export must include trashed documents: {ids:?}"
+    );
+
+    let live_doc = first.iter().find(|d| d["id"] == live.as_str()).unwrap();
+    assert_eq!(live_doc["starts_tz"], "Europe/Berlin", "{live_doc}");
+    assert_eq!(
+        live_doc["venue"]["address"]["street"], "Main St",
+        "{live_doc}"
+    );
+    assert_eq!(live_doc["slots"][1]["label"], "Evening", "{live_doc}");
+
+    {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for id in [&live, &trashed] {
+            query::delete(&tx, "events", id).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    commands::export::import(&config_dir, &first_path, Some("events")).unwrap();
+
+    let second = export_events(&config_dir, &tmp.path().join("second.json"));
+    assert_eq!(
+        second, first,
+        "export → import → export must reproduce the first export"
+    );
+}
+
+/// A backup carries the generated auth secret (owner-only), and restoring it
+/// puts that secret back — sessions, sealed TOTP secrets and `crap.crypto`
+/// ciphertext in the restored database stay usable.
+#[test]
+fn cmd_backup_and_restore_carry_the_generated_auth_secret() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    let secret_path = config_dir.join("data").join(".jwt_secret");
+    let secret = std::fs::read_to_string(&secret_path).expect("config load generates the secret");
+
+    let backup_output = tmp.path().join("backups");
+    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+
+    let backup_dir = std::fs::read_dir(&backup_output)
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.is_dir())
+        .unwrap();
+
+    let backed_up = backup_dir.join("jwt_secret");
+    assert_eq!(
+        std::fs::read_to_string(&backed_up).ok().as_deref(),
+        Some(secret.as_str()),
+        "the backup must carry the generated secret"
+    );
+
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::metadata(&backed_up).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "the backed-up secret must be owner-only"
+    );
+
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(backup_dir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["includes_secret"], true);
+
+    std::fs::write(&secret_path, "a-secret-generated-on-a-new-host").unwrap();
+    commands::db::restore(&config_dir, &backup_dir, false, true).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&secret_path).unwrap(),
+        secret,
+        "restore must write the backed-up secret back"
+    );
+}
+
+/// A plain export leaves credentials out; `--include-credentials` carries
+/// them, so an imported account keeps its password and can still log in.
+#[test]
+fn cmd_export_with_credentials_keeps_imported_accounts_usable() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let def = registry.get_collection("users").unwrap();
+    let user = create_user(
+        &pool,
+        def,
+        "carry@example.com",
+        "correct horse",
+        &[("name", "Carry")],
+    );
+
+    let plain_path = tmp.path().join("plain.json");
+    commands::export::export(&config_dir, Some("users"), Some(plain_path.clone()), false).unwrap();
+    let plain: Value =
+        serde_json::from_str(&std::fs::read_to_string(&plain_path).unwrap()).unwrap();
+    assert!(
+        plain["collections"]["users"][0]
+            .get("_credentials")
+            .is_none(),
+        "credentials stay out of a plain export"
+    );
+
+    let full_path = tmp.path().join("full.json");
+    commands::export::export(&config_dir, Some("users"), Some(full_path.clone()), true).unwrap();
+
+    let hash = {
+        let conn = pool.get().unwrap();
+        query::get_password_hash(&conn, "users", &user.id)
+            .unwrap()
+            .expect("the seeded user has a password")
+    };
+
+    {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        query::delete(&tx, "users", &user.id).unwrap();
+        tx.commit().unwrap();
+    }
+
+    commands::export::import(&config_dir, &full_path, Some("users")).unwrap();
+
+    let conn = pool.get().unwrap();
+    let restored = query::get_password_hash(&conn, "users", &user.id).unwrap();
+    let restored: Option<&str> = restored.as_ref().map(AsRef::as_ref);
+    assert_eq!(
+        restored,
+        Some(hash.as_ref()),
+        "the imported account keeps its password"
+    );
+}
+
+/// Regression: importing credentials over an existing account wrote the file's
+/// session version back, so tokens the target had already revoked — here by a
+/// password change after the export — were accepted again. Import now moves
+/// the version past both.
+#[test]
+fn cmd_import_with_credentials_revokes_the_existing_accounts_sessions() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let def = registry.get_collection("users").unwrap();
+    let user = create_user(
+        &pool,
+        def,
+        "revoke@example.com",
+        "correct horse",
+        &[("name", "Revoke")],
+    );
+
+    let full_path = tmp.path().join("full.json");
+    commands::export::export(&config_dir, Some("users"), Some(full_path.clone()), true).unwrap();
+
+    let revoked_at = {
+        let conn = pool.get().unwrap();
+        query::update_password(&conn, "users", &user.id, "battery staple").unwrap();
+        query::auth::get_session_version(&conn, "users", &user.id).unwrap()
+    };
+
+    commands::export::import(&config_dir, &full_path, Some("users")).unwrap();
+
+    let conn = pool.get().unwrap();
+    let after = query::auth::get_session_version(&conn, "users", &user.id).unwrap();
+    assert!(
+        after > revoked_at,
+        "an import over an existing account must not bring revoked sessions back \
+         (version {after}, revoked at {revoked_at})"
+    );
+}
+
+/// A user other documents still reference is not deleted — the delete
+/// protection every other surface applies.
+#[test]
+fn cmd_user_delete_refuses_a_referenced_user() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
+    let def = registry.get_collection("users").unwrap();
+    let user = create_user(
+        &pool,
+        def,
+        "referenced@example.com",
+        "pw",
+        &[("name", "Ref")],
+    );
+
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE users SET _ref_count = 1 WHERE id = ?1",
+            &[DbValue::Text(user.id.to_string())],
+        )
+        .unwrap();
+
+    let result = commands::user_delete(&commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
+        collection: "users",
+        email: None,
+        id: Some(user.id.to_string()),
+        confirm: true,
+    });
+
+    assert!(result.is_err(), "a referenced user must not be deleted");
+    let conn = pool.get().unwrap();
+    assert!(
+        query::find_by_id(&conn, "users", def, &user.id, None)
+            .unwrap()
+            .is_some()
+    );
+}
+
+const MEMBERS_LUA: &str = r#"
+crap.collections.define("members", {
+    auth = true,
+    soft_delete = true,
+    fields = {
+        { name = "name", type = "text" },
+    },
+})
+"#;
+
+/// Deleting a user of a soft-delete collection moves it to the trash, as every
+/// other surface does, instead of erasing it.
+#[test]
+fn cmd_user_delete_trashes_a_user_of_a_soft_delete_collection() {
+    let (tmp, pool, registry) = full_setup_with(&[("members", MEMBERS_LUA)]);
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
+    let def = registry.get_collection("members").unwrap();
+
+    let member = {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data = document_fields(json!({ "email": "member@example.com", "name": "Member" }));
+        let doc = query::create(&tx, "members", def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc
+    };
+
+    commands::user_delete(&commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        config: &cfg,
+        config_dir: &config_dir,
+        collection: "members",
+        email: None,
+        id: Some(member.id.to_string()),
+        confirm: true,
+    })
+    .unwrap();
+
+    let conn = pool.get().unwrap();
+    assert!(
+        query::find_by_id(&conn, "members", def, &member.id, None)
+            .unwrap()
+            .is_none(),
+        "the member leaves the live view"
+    );
+
+    let all = query::FindQuery::builder().include_deleted(true).build();
+    let trashed = query::find(&conn, "members", def, &all, None).unwrap();
+    assert!(
+        trashed.iter().any(|d| d.id == member.id),
+        "the member is moved to the trash, not erased"
+    );
+}
+
+const DOCS_LUA: &str = r#"
+crap.collections.define("docs", {
+    upload = true,
+    soft_delete = true,
+    fields = {
+        { name = "caption", type = "text", localized = true },
+    },
+})
+"#;
+
+/// Purging a trashed upload deletes its file, also when the collection has
+/// localized fields.
+#[test]
+fn cmd_trash_purge_removes_files_of_a_localized_upload_collection() {
+    let (tmp, pool, _registry) = full_setup_with(&[("docs", DOCS_LUA)]);
+    let config_dir = tmp.path().join("config");
+
+    let file = config_dir.join("uploads").join("docs").join("report.txt");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "report").unwrap();
+
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO docs (id, filename, url, _deleted_at) \
+             VALUES ('d1', 'report.txt', '/uploads/docs/report.txt', '2026-01-01T00:00:00.000Z')",
+            &[],
+        )
+        .unwrap();
+    drop(pool);
+
+    commands::trash::run(
+        commands::TrashAction::Purge {
+            collection: Some("docs".to_string()),
+            older_than: "all".to_string(),
+            dry_run: false,
+        },
+        &config_dir,
+    )
+    .unwrap();
+
+    assert!(!file.exists(), "the purged upload's file must be deleted");
 }
 
 #[test]
@@ -241,7 +751,7 @@ fn cmd_import_roundtrip() {
 
     // Export to file
     let export_path = tmp.path().join("roundtrip.json");
-    commands::export::export(&config_dir, None, Some(export_path.clone())).unwrap();
+    commands::export::export(&config_dir, None, Some(export_path.clone()), false).unwrap();
 
     // Delete all posts
     {
@@ -679,29 +1189,29 @@ fn parse_key_val_empty_key() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 24. load_config_and_sync (commands/mod.rs)
+// 24. open_project (commands/mod.rs)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn load_config_and_sync_works() {
+fn open_project_works() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let (pool, registry) = commands::load_config_and_sync(&config_dir).unwrap();
+    let project = commands::open_project(&config_dir).unwrap();
 
     // Verify pool works
-    let conn = pool.get().expect("should get connection");
+    let conn = project.pool.get().expect("should get connection");
     drop(conn);
 
     // Verify registry has expected collections
-    assert!(registry.get_collection("posts").is_some());
-    assert!(registry.get_collection("users").is_some());
+    assert!(project.registry.get_collection("posts").is_some());
+    assert!(project.registry.get_collection("users").is_some());
 }
 
 #[test]
-fn load_config_and_sync_bad_dir() {
-    let result = commands::load_config_and_sync(Path::new("/nonexistent/dir/config"));
+fn open_project_bad_dir() {
+    let result = commands::open_project(Path::new("/nonexistent/dir/config"));
     assert!(result.is_err());
 }
 
@@ -1040,10 +1550,11 @@ fn cli_user_paths_maintain_ref_counts_and_fts() {
     drop(conn);
 
     // CLI delete: refs decremented back, FTS row removed.
-    commands::user_delete(commands::UserDeleteParams {
+    commands::user_delete(&commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
-        locale: &cfg.locale,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: None,
         id: Some(user_id.to_string()),

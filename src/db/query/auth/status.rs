@@ -62,6 +62,34 @@ pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Res
     Ok(u64::try_from(raw).unwrap_or(0))
 }
 
+/// A user's lock flag and session version, read in one query — `(false, 0)`
+/// when no such user exists, as [`is_locked`] and [`get_session_version`]
+/// answer.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or a column fails to parse.
+pub fn lock_and_session_version(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+) -> Result<(bool, u64)> {
+    let sql = format!(
+        "SELECT _locked, COALESCE(_session_version, 0) AS sv FROM \"{slug}\" WHERE id = {}",
+        conn.placeholder(1)
+    );
+
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(id.to_string())])? else {
+        return Ok((false, 0));
+    };
+
+    let locked = row.get_bool("_locked")?;
+    // A stored negative version reads as 0, as in `get_session_version`.
+    let session_version = u64::try_from(row.get_i64("sv")?).unwrap_or(0);
+
+    Ok((locked, session_version))
+}
+
 /// Atomically bump the user's `_session_version`, invalidating every
 /// JWT that was issued before this call. Used by logout / account
 /// lock / password reset — anything that should kick the user out
@@ -84,6 +112,36 @@ pub fn bump_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Re
     conn.execute(&sql, &[DbValue::Text(id.to_string())])
         .with_context(|| format!("Failed to bump _session_version for {id} in {slug}"))?;
     get_session_version(conn, slug, id)
+}
+
+/// Set the user's `_session_version`. A token carries the version it was
+/// issued under, so moving the version past every one handed out revokes them
+/// all.
+///
+/// # Errors
+///
+/// Returns an error if the version exceeds the stored range, or a backend
+/// error if the UPDATE fails.
+pub fn set_session_version(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+    version: u64,
+) -> Result<()> {
+    let version = i64::try_from(version).context("session version exceeds the stored range")?;
+    let sql = format!(
+        "UPDATE \"{slug}\" SET _session_version = {} WHERE id = {}",
+        conn.placeholder(1),
+        conn.placeholder(2)
+    );
+
+    conn.execute(
+        &sql,
+        &[DbValue::Integer(version), DbValue::Text(id.to_string())],
+    )
+    .with_context(|| format!("Failed to set _session_version for {id} in {slug}"))?;
+
+    Ok(())
 }
 
 /// Check whether a user exists in the given collection.
@@ -159,6 +217,23 @@ mod tests {
         )
         .unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn lock_and_session_version_reads_both_in_one_query() {
+        let (_dir, conn) = setup();
+        lock_user(&conn, "users", "user1").unwrap();
+        bump_session_version(&conn, "users", "user1").unwrap();
+
+        assert_eq!(
+            lock_and_session_version(&conn, "users", "user1").unwrap(),
+            (true, 1)
+        );
+        assert_eq!(
+            lock_and_session_version(&conn, "users", "missing").unwrap(),
+            (false, 0),
+            "a missing user answers like is_locked and get_session_version"
+        );
     }
 
     #[test]

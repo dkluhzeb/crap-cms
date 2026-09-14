@@ -1,10 +1,10 @@
 //! `user` command dispatcher.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use std::path::Path;
 
 use crate::{
-    commands::{UserAction, load_config_and_sync},
+    commands::{Project, UserAction, open_project},
     config::CrapConfig,
     core::Registry,
     db::DbPool,
@@ -30,10 +30,12 @@ use super::{
 /// validation, DB constraint violations, etc.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
-    let (pool, registry) = load_config_and_sync(config_dir)?;
-    // One load for every subcommand: each needs at least the locale config to
-    // read a (possibly localized) auth collection's rows.
-    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool,
+    } = open_project(config_dir)?;
 
     match action {
         UserAction::Create {
@@ -59,10 +61,11 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             email,
             id,
             confirm,
-        } => user_delete(UserDeleteParams {
+        } => user_delete(&UserDeleteParams {
             pool: &pool,
             registry: &registry,
-            locale: &cfg.locale,
+            config: &cfg,
+            config_dir,
             collection: &collection,
             email,
             id,

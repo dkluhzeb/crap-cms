@@ -199,6 +199,11 @@ enum Command {
         /// Output file (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Also export each account's password hash, lock, session version,
+        /// verification and TOTP state (treat the file like a database dump)
+        #[arg(long)]
+        include_credentials: bool,
     },
 
     /// Import collection data from JSON (raw upsert)
@@ -676,8 +681,12 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
             DbAction::Console => commands::db::console(c),
             DbAction::Cleanup { confirm } => commands::db::cleanup(c, confirm),
         }),
-        Command::Export { collection, output } => with_config(config_flag, |c| {
-            commands::export::export(c, collection.as_deref(), output)
+        Command::Export {
+            collection,
+            output,
+            include_credentials,
+        } => with_config(config_flag, |c| {
+            commands::export::export(c, collection.as_deref(), output, include_credentials)
         }),
         Command::Import { file, collection } => with_config(config_flag, |c| {
             commands::export::import(c, &file, collection.as_deref())

@@ -122,6 +122,7 @@ chrono-tz = "0.10"
 sha2 = "0.11"
 semver = "1"
 similar = { version = "3.1.0", features = ["text"] }
+unicode-normalization = "0.1"
 
 # Storage / cache backends (optional in main crate)
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
@@ -290,6 +291,7 @@ chrono-tz.workspace = true
 sha2.workspace = true
 semver.workspace = true
 similar.workspace = true
+unicode-normalization.workspace = true
 
 # Storage / cache backends (optional, gated by features)
 rust-s3 = { workspace = true, optional = true }

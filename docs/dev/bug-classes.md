@@ -27,6 +27,15 @@ triaged against this ledger **before** it is fixed:
 3. **No matching class** → genuinely new information. Add a row, pick a
    guard from the toolbox, note the founding instance.
 
+**Chokepoint check before every concrete fix.** Before writing a fix, ask
+whether the bug is one copy of some logic disagreeing with another — an
+encode, decode, shaping or lookup that the canonical path already does. If
+so, the fix is to route every path through one chokepoint (the existing one,
+or a new one every copy migrates to) plus a guard test that fails when a copy
+drifts — never to patch the copy to imitate the other. The fix plan names the
+chokepoint each fix lands in. Patching copies is what kept the Round 15
+focused reviews finding new instances of the same cluster.
+
 Fix discipline is unchanged: regression test first, then fix, then
 CHANGELOG. New: the CHANGELOG entry (or commit message) names the class
 ID it belongs to when one applies.
@@ -301,6 +310,9 @@ memories; the load-bearing ones:
   unless `picker_appearance = "dayAndTime"`, and a timezone field's list cell
   renders as `dayAndTime`. The equality-filter corollary is the same
   unreachable configuration.
+- A collection and a global sharing a slug mixing up their `access.admin`
+  gates — **unreachable** (R15): the shared slug is rejected at definition time
+  and again at startup, so the two gates can never be looked up under one name.
 
 ## Maintenance
 
@@ -758,6 +770,239 @@ memories; the load-bearing ones:
     UTC digits and saved them back as local time, shifting the date by its
     offset on every save — the display side of M4 had never been wired for
     rows.
+- 2026-09-13 (25) — **CONVERGENCE ROUND 15** (5 fresh lenses: generated
+  contracts vs runtime, composite feature matrix, Unicode and text identity,
+  endpoint authorization inventory, data portability and lifecycle tools).
+  **37 reported, 36 confirmed — 8 HIGH, 18 MED, 10 LOW — NOT a quiet round.**
+  No finding needed a new class; most sit in guarded classes whose guards did
+  not reach them:
+  - **M4 (guard failed) — HIGH ×2: versions mixed localized join rows.**
+    Snapshots read array/blocks/relationship rows without a locale and restore
+    wrote them back without one, and a non-default-locale draft overwrote the
+    default locale's rows. Snapshots now keep per-locale join keys
+    (`items__de`), restore writes each locale back under its own locale, and a
+    draft writes only its locale's key; a snapshot taken before leaves
+    localized rows untouched.
+  - **L2 — HIGH: a draft save built on the published row**, so a second draft
+    edit — another locale, or any partial update — reverted the earlier ones.
+    Drafts now build on the latest draft snapshot.
+  - **D1/D5 — generated contracts:** MCP block schemas discriminated on
+    `blockType` while the runtime uses `_block_type` (HIGH); array and blocks
+    rows had no `id`, so a schema-following update replaced every row; client
+    typegen made required fields non-optional though drafts, field read access
+    and `select` omit them (HIGH — every read field optional, by decision);
+    read types lacked `_status`/`_deleted_at`/`_tz` and any `locale = "all"`
+    shape (generated, by decision); `DescribeCollection` hard-coded a global's
+    timestamps and drafts; `FieldInfo` lacked polymorphic targets, value lists
+    and timezone (additive proto fields); generated Lua hook types named the
+    wrong operations.
+  - **P9/S9 — HIGH: email identity.** SQLite `LOWER` folds ASCII only, so
+    `Ärger@…` could never log in and `Ärger@…`/`ärger@…` registered twice;
+    NFC/NFD twins passed `unique`. Email is stored trimmed, lowercased and NFC,
+    text NFC (by decision), filters compare the canonical form, and a
+    versioned migration rewrites stored addresses, stopping startup on a
+    collision instead of choosing one.
+  - **S5 — identifiers:** a locale code with capitals broke Postgres filters,
+    sorting, cursors and index DDL (generated names with capitals are quoted
+    now); index names were not length-checked. **P1:** the in-memory filter's
+    `contains` compared case-sensitively and `%` stopped at line breaks.
+    **P9:** `like` escaping differed per backend (`ESCAPE '\'` everywhere
+    now). **D1:** the browser `maxlength` counted UTF-16 units. **F14:**
+    `Content-Disposition` carried raw UTF-8 and bidi overrides.
+  - **D8 — HIGH ×2: portability.** Backups lacked the generated auth secret;
+    export → import dropped credentials (`--include-credentials`, opt-in by
+    decision), trashed documents, `_tz` companions and nested layouts, and
+    re-minted array/blocks row ids.
+  - **F13 (guard failed):** the upload API and `/uploads` loaded a token's
+    user outside the evaluator — an unusable token became anonymous and a
+    collection's accepted methods were ignored. **F6:** a custom page gate
+    counted a filter table as allowed. **P2:** `/admin/collections` ignored
+    `access.admin` that the dashboard applied, and MCP job tools read and
+    cancelled bulk runs of collections MCP hides. **F11:** existence probes
+    in upload delete and `TriggerJob`.
+  - **P5 — lifecycle:** CLI `user delete` bypassed the service (reference
+    protection, soft delete, hooks). **M4:** trash purge, CLI and retention,
+    read upload rows without a locale. **L5:** `restore` checked only the
+    server PID — a shared instance lock now keeps it apart from server, worker
+    and stdio MCP. **P9/D2:** `backup` misreported Postgres and silently
+    skipped remote uploads.
+  - **Found while fixing.** The upload API tests had passed only because of
+    the F13 bug: their helper minted tokens with a stale session version that
+    the old path quietly downgraded to anonymous. A surface-parity allowlist
+    entry went stale with the removed probe. Observation, not changed: the
+    evaluator's `is_locked` check on the loaded document can never fire —
+    reads don't select `_locked` — so locking takes effect only because
+    `lock_user` also bumps the session version.
+  Convergence: no new class, but eight HIGHs, so not a quiet round; the streak
+  stays 0. Round 16 pending, and a loadtest is still due before the tag.
+  - **Post-fix review (6 reviewers over the round's own diff).** 4 HIGH,
+    14 MED, about 30 LOW or style. HIGH: `import` applied reference counts per
+    document, so a document referencing one later in the file — collections
+    import in slug order — failed the import on a fresh database (counts now
+    settle once every document is written, in one transaction); localized
+    array/blocks/has-many rows exported under the default locale only and
+    import refused them (exported per locale now); a second draft save nested
+    a group field's per-locale keys into the group, so the draft read showed
+    another locale's edit and restore skipped the group's rows; and the
+    round's own parked observation was a live HIGH on a sibling path — strategy
+    auth read `_locked`/`_verified` off the hook's document, which never
+    carries them, so a locked account signed in through a strategy (the lock is
+    now read from the row on every credential path). MED: the in-memory
+    matcher compared operands as typed (a `not_equals` on an address with
+    capitals failed open); `migrate fresh` released the instance lock at once
+    (now a `#[must_use]` `InstanceLock`) and `work` took it after writing;
+    `trash purge` deleted files before commit; CLI `user delete` had no live
+    transports; stored text was never NFC-converted; imported TOTP secrets
+    sealed under another secret silently re-enrolled; a credential import
+    revived revoked sessions; the sidebar showed pages the route refused;
+    `TriggerJob` rejected a malformed payload before its access rule (an
+    oracle); failed and stale bulk runs kept their payloads; timezone
+    companions read back flat (localized, and in groups); `typegen proto`
+    emitted an unsanitized `_tz` ident; and, pre-existing, colliding index
+    names silently skipped an index. LOW/style: `like` escape judged before an
+    email's trim, catalog index names unquoted on drop, restore wrote localized
+    emails as typed, the kept previous secret was overwritten and written
+    non-atomically, restore took its lock before validating the config,
+    TypeScript names missing from the collision check, the MCP global update
+    schema kept `required`, dead optional branches in the generators,
+    over-long functions and parameter lists, stale comments, and docs that
+    filed two breaking changes under Fixed.
+  - **Decisions after the review.** Stored text is migrated to NFC like
+    email: the rewrite covers columns, per-locale columns, array rows and
+    JSON-stored rows, reruns when a collection's email/text column set changes
+    (the meta value fingerprints it), and stops on collisions in unique fields
+    and unique indexes. An import refuses TOTP secrets that don't open with
+    the target's auth secret. TypeScript group and row types get `…Data` input
+    variants beside all-optional read types; Go reads booleans and single
+    groups through pointers. A filesystem without file locks stays a hard
+    startup failure, documented. Refuted: client-chosen junction ids
+    overwriting another document's rows (import uses plain `INSERT`, so a
+    taken id is a primary-key error), credentials in exports without the flag,
+    lock lifetime in `serve`/`work`/`mcp`. Lesson for the program: an
+    observation that a guard can never fire is a finding — trace every caller
+    of that guard before parking it.
+  Convergence after the review: still not quiet; the streak stays 0.
+  - **Re-review of the fix pass** (4 lenses over the fixes): 1 HIGH, 10 MED,
+    ~25 LOW — all fixed test-first, gates green, UNCOMMITTED. HIGH: the
+    canonical rewrite built per-locale column names from the raw locale code,
+    so a hyphenated locale (`pt-BR`, column `title__pt_BR`) stopped startup.
+    MED, same root: draft save and read, version restore and import built or
+    read per-locale snapshot keys and columns in the raw form too — every site
+    now goes through `locale_column`, and the draft read also resolves (and
+    drops) per-locale `_tz` keys. MED: the unique-index check skipped trashed
+    rows and failed on a localized field (one shared `compound_index_columns`
+    for the index and the check); version restore validated and wrote
+    snapshots as typed; a custom page without a rule was hidden under
+    `default_deny` while its route rendered it; `trash purge` held two pooled
+    connections; the TypeScript collision check counted enum names TypeScript
+    never emits; MCP update schemas kept nested `required`; generated
+    per-locale maps and TypeScript read fields weren't nullable; a localized
+    field couldn't be imported with locales off. LOW: import refuses rows per
+    locale with locales off and duplicate ids, runs IMMEDIATE, and reports
+    password-less accounts only with password login; an empty `.jwt_secret`
+    is replaced through a staged file; `migrate fresh` locks before the pool
+    opens; `restore` refuses a non-project directory and doesn't keep aside a
+    secret its own config load generated; CLI `user delete` reaches Redis
+    before the prompt; a strategy's failed account lookup is logged with its
+    own reason; one query reads a token's lock and session version; upload
+    pool exhaustion answers 503; ordered in-memory operands are canonical; a
+    read-denied timezone date takes its `_tz` along; `has_tz_companion`
+    replaced ~30 copies; import-rule and function-length cleanups;
+    `import_cmd.rs` split; stale doc wording fixed.
+  - **Decisions after the re-review.** Per-locale map values and TypeScript
+    read fields are nullable in every generated language. A job access rule
+    sees `nil` `ctx.data` for a malformed payload — documented, not changed.
+    CLI `user delete` builds its live transports before the prompt and fails
+    when Redis is unreachable. Lesson for the program: a naming helper
+    existing isn't enough — every construction of the same key has to route
+    through it, or a variant input (a hyphen) splits the key space; grep for
+    hand-built forms of the key when a helper is introduced.
+  Convergence after the re-review: still not quiet; the streak stays 0.
+  - **Focused review of the re-review fix pass** (3 lenses: locale keys &
+    restore; import & CLI lifecycle; auth, typegen & MCP): 2 HIGH, 9 MED, ~12
+    LOW — all fixed test-first, UNCOMMITTED. HIGH: a draft save stamped a
+    localized timezone date's per-locale value but not its zone, which the
+    draft read now resolves per locale (a regression of the previous pass);
+    junction `_locale` defaults used the column form of the code (`en_US`)
+    while every read filters on `en-US`, hiding existing rows once a field
+    became localized (pre-existing). MED: a draft read with no value in the
+    reading locale returned the saving locale's; the canonical unique-index
+    check read only text values; an unreadable `.jwt_secret` was replaced and
+    two starting processes could each generate a secret (both regressions of
+    the previous pass — generation now runs under `data/.jwt_secret.lock`);
+    `trash empty` failed on localized collections; one-shot CLI commands
+    opened the database without the instance lock (every one now holds it
+    shared through `open_project`); a denied timezone date leaked its zone on
+    the flat, nested and `locale = "all"` strip paths; generated array-row
+    types lacked the row `id` updates need; upload bearer auth answered 500
+    on pool exhaustion. LOW: restore warns when a configured secret overrides
+    the restored one, import report and comment wording, read vs write pool
+    for IMMEDIATE transactions, tuple parameter bundles replaced by structs,
+    builders/constructors, test setup shared, stale restore docs.
+  - **Decisions after the focused review.** CLI commands that open the
+    database take `data/crap.lock` shared; relational array-row types carry an
+    optional `id` in every generated language (Lua included); the generated
+    secret is resolved under an exclusive lock, and only a readable empty file
+    is ever replaced. Lesson for the program: a fix pass that restructures code
+    (a rewritten lookup, a split file, a new chokepoint) produces its own
+    regressions at the seams — three of this review's findings came from the
+    previous pass — so a structural fix pass gets a focused review before the
+    next round.
+  Convergence after the focused review: still not quiet; the streak stays 0.
+  - **Second focused review** (3 lenses over the focused-review fixes): 1 HIGH,
+    4 MED, ~15 LOW — fixed test-first, UNCOMMITTED. HIGH: a draft read resolved
+    a localized field inside a group into a flat key beside the nested value,
+    so a reader saw the locale the draft was last saved in and a read-denied
+    sub-field could leak (older, extended by the previous pass to nulls and
+    zones) — resolution now flattens, resolves and re-nests. MED: global draft
+    and published snapshots skipped locale resolution; MCP offered a row `id`
+    on rows nested in another row; CLI commands failed on a read-only data
+    directory (the lock file was always opened for writing); admin file
+    serving and custom routes read a database error during sign-in as an
+    anonymous request. LOW: draft join fields fall back on empty rows and read
+    `[]`; row-id tests for typegen, proto and Lua; row-id doc wording; Go
+    `ID`; the polymorphic junction rebuild keeps the `_locale` default;
+    neutral lock messages and `hold_exclusive_instance_lock`; restore detects
+    a secret set in `crap.toml`; staged secrets swept under the lock; an empty
+    secret file no longer counts as generated; a stale doc line, a duplicate
+    log line.
+  - **Decisions after the second focused review.** An existing lock file is
+    locked through a read-only handle; a database error during sign-in answers
+    `503`/`500` on every admin surface. Lesson for the program: a helper that
+    rewrites document keys must run on the shape the data is stored in — test
+    it with nested groups, not only top-level fields.
+  Convergence after the second focused review: still not quiet; the streak
+  stays 0.
+  - **Third focused review** (3 lenses over the second-focused fixes): 4 HIGH,
+    4 MED, 6 LOW — fixed test-first, UNCOMMITTED. HIGH: snapshots read
+    per-locale columns as text, so drafts returned localized numbers, checkboxes
+    and multi-value fields as strings and restore cleared a localized
+    multi-value field (restore also skipped a non-localized one — pre-existing);
+    the in-memory constraint matcher looked group sub-field paths up at the top
+    level only, so a row rule on `seo__owner` misjudged nested documents; an
+    admin request without credentials checked out a connection before finding
+    nothing to evaluate, so the previous pass's `503` refused public pages and
+    files under load (a regression of the previous pass); the exclusive instance
+    lock went through a read-only handle, which NFS and `fcntl`-lock platforms
+    refuse (a regression of the previous pass's decision). MED: `locale = "all"`
+    draft reads resolved to the default locale; the upload access check
+    answered `404` on a database error; the handler error log dropped the chain
+    of non-transient errors; restore judged a configured secret from
+    `crap.toml`'s text, missing `${VAR:-}` with the variable unset. LOW: empty
+    groups kept through draft resolution; the snapshot resolver split, with a
+    locale-pair struct; a `resolve_global_doc` parameter struct; empty secret
+    files not backed up; a misplaced test doc; inline import paths in the MCP
+    schema and config tests.
+  - **Decisions after the third focused review.** Corrected: only the shared
+    lock opens an existing lock file read-only; `restore` and `migrate fresh`
+    open it for writing. Whether the auth secret was generated is recorded on
+    the loaded config, not re-derived from `crap.toml`. Lesson for the program:
+    a new early failure (a `503` on a checkout) must come after the paths that
+    need no resource — check which requests reach the failing step — and a
+    decision resting on platform semantics (read-only handles for locks) needs
+    each mode's caveats read before it is recommended.
+  Convergence after the third focused review: still not quiet; the streak
+  stays 0.
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

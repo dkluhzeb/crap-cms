@@ -7,13 +7,13 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use super::TrashAction;
 use crate::{
     cli::{self, Table},
-    commands::helpers::init_stack,
+    commands::{Project, open_project},
     config::{CrapConfig, LocaleConfig, UploadStorage},
     core::{
-        CollectionDefinition, Document, Registry, upload,
+        CollectionDefinition, Document, DocumentFields, Registry, upload,
         upload::{StorageBackend, create_storage_with_lease},
     },
-    db::{DbConnection, DbPool, DbValue, query},
+    db::{BoxedConnection, DbConnection, DbPool, DbValue, query},
     hooks::HookRunner,
 };
 
@@ -199,7 +199,7 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
 
     let threshold_secs = parse_threshold(p.older_than)?;
 
-    let mut conn = p.pool.get().context("Failed to get DB connection")?;
+    let mut conn = p.pool.write().context("Failed to get DB connection")?;
     let mut total = 0u64;
     let mut total_skipped = 0u64;
 
@@ -218,24 +218,14 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
             for id in &ids {
                 cli::info(&format!("Would purge: {slug} / {id}"));
             }
-        } else {
-            // `transaction_immediate()` — `purge_documents` issues
-            // reads (find_by_id_unfiltered to look up upload paths) and
-            // writes (DELETEs + FTS sync) on the same tx. DEFERRED would
-            // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
-            let tx = conn.transaction_immediate().context("Start transaction")?;
-            let skipped = purge_documents(&tx, slug, def, &ids, p.storage, p.locale)?;
-            tx.commit().context("Commit purge")?;
 
-            // Re-acquire connection after commit (tx consumed it)
-            conn = p.pool.get().context("Failed to get DB connection")?;
-
-            total_skipped += skipped;
-            total += ids.len() as u64 - skipped;
+            total += ids.len() as u64;
             continue;
         }
 
-        total += ids.len() as u64;
+        let skipped = purge_collection(p, &mut conn, (slug, def), &ids)?;
+        total_skipped += skipped;
+        total += ids.len() as u64 - skipped;
     }
 
     if p.dry_run {
@@ -252,33 +242,85 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Permanently delete a list of documents, cleaning up uploads, FTS, and
-/// reference counts. Documents that are still referenced by others
-/// (`_ref_count > 0`) are skipped — the same delete protection the server
-/// surfaces enforce. Returns the number of skipped documents.
+/// Purge one collection's candidates in a transaction of their own, deleting
+/// the upload files only once it commits: a purge that fails keeps both the
+/// rows and their files. Runs on the purge's one connection. Returns the
+/// number of skipped documents.
+fn purge_collection(
+    p: &PurgeParams<'_>,
+    conn: &mut BoxedConnection,
+    (slug, def): (&str, &CollectionDefinition),
+    ids: &[String],
+) -> Result<u64> {
+    // `transaction_immediate()` — `purge_documents` issues reads (upload
+    // lookups) and writes (DELETEs + FTS sync) on the same tx. DEFERRED would
+    // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
+    let tx = conn.transaction_immediate().context("Start transaction")?;
+    let purged = purge_documents(&tx, (slug, def), ids, p.locale)?;
+    tx.commit().context("Commit purge")?;
+
+    delete_purged_files(p.storage, def, &purged);
+
+    Ok(purged.skipped)
+}
+
+/// Delete the files of the uploads a committed purge removed.
+fn delete_purged_files(storage: &dyn StorageBackend, def: &CollectionDefinition, purged: &Purged) {
+    let Some(upload) = def.upload.as_ref() else {
+        return;
+    };
+
+    for fields in &purged.upload_docs {
+        upload::delete_upload_files(storage, fields, upload);
+    }
+}
+
+/// What purging one collection's documents did.
+struct Purged {
+    /// Documents skipped because others still reference them.
+    skipped: u64,
+    /// The stored fields of each purged upload, whose files go once the purge
+    /// commits.
+    upload_docs: Vec<DocumentFields>,
+}
+
+impl Purged {
+    fn new() -> Self {
+        Self {
+            skipped: 0,
+            upload_docs: Vec::new(),
+        }
+    }
+}
+
+/// Permanently delete a list of documents, cleaning up FTS and reference
+/// counts, and collect the purged uploads' fields for file cleanup. Documents
+/// that are still referenced by others (`_ref_count > 0`) are skipped — the
+/// same delete protection the server surfaces enforce.
 fn purge_documents(
     tx: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+    (slug, def): (&str, &CollectionDefinition),
     ids: &[String],
-    storage: &dyn StorageBackend,
     locale: &LocaleConfig,
-) -> Result<u64> {
-    let mut skipped = 0u64;
+) -> Result<Purged> {
+    let mut purged = Purged::new();
+    // The row lookup needs the locale context: a collection with localized
+    // fields has no bare columns to select.
+    let locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
 
     for id in ids {
         if query::ref_count::get_ref_count(tx, slug, id)?.unwrap_or(0) > 0 {
             cli::warning(&format!(
                 "Skipping {slug} / {id} — still referenced by other documents"
             ));
-            skipped += 1;
+            purged.skipped += 1;
             continue;
         }
 
-        if let Some(upload) = def.upload.as_ref()
-            && let Ok(Some(doc)) = query::find_by_id_unfiltered(tx, slug, def, id, None)
+        if def.upload.is_some()
+            && let Some(doc) = query::find_by_id_unfiltered(tx, slug, def, id, locale_ctx.as_ref())?
         {
-            upload::delete_upload_files(storage, &doc.fields, upload);
+            purged.upload_docs.push(doc.fields);
         }
 
         query::ref_count::before_hard_delete(tx, slug, id, &def.fields, locale)?;
@@ -286,7 +328,7 @@ fn purge_documents(
         query::delete(tx, slug, id)?;
     }
 
-    Ok(skipped)
+    Ok(purged)
 }
 
 /// Find IDs of soft-deleted documents eligible for purging in a collection.
@@ -328,7 +370,7 @@ fn find_purge_candidates(
 fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = pool.write().context("Failed to get DB connection")?;
     // `transaction_immediate()` — avoid `SQLITE_BUSY_SNAPSHOT` against
     // concurrent writers.
     let tx = conn.transaction_immediate().context("Start transaction")?;
@@ -348,15 +390,27 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
     Ok(())
 }
 
-/// Permanently delete all trashed documents in a collection.
-fn run_empty(
-    registry: &Registry,
-    pool: &DbPool,
-    storage: &dyn StorageBackend,
-    locale: &LocaleConfig,
-    collection: &str,
+/// Args for [`run_empty`].
+struct EmptyParams<'a> {
+    registry: &'a Registry,
+    pool: &'a DbPool,
+    storage: &'a dyn StorageBackend,
+    locale: &'a LocaleConfig,
+    collection: &'a str,
     confirm: bool,
-) -> Result<()> {
+}
+
+/// Permanently delete all trashed documents in a collection.
+fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
+    let EmptyParams {
+        registry,
+        pool,
+        storage,
+        locale,
+        collection,
+        confirm,
+    } = *p;
+
     validate_soft_delete(registry, collection)?;
 
     let def = registry
@@ -365,9 +419,11 @@ fn run_empty(
         .with_context(|| format!("Collection '{collection}' not found"))?
         .clone();
 
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = pool.write().context("Failed to get DB connection")?;
     let fq = deleted_filter();
-    let docs = query::find(&conn, collection, &def, &fq, None)?;
+    // A localized collection has no bare columns to select.
+    let locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
+    let docs = query::find(&conn, collection, &def, &fq, locale_ctx.as_ref())?;
 
     if docs.is_empty() {
         cli::info(&format!("No trashed documents in '{collection}'."));
@@ -390,10 +446,12 @@ fn run_empty(
     // same tx. See the matching note in `run_purge`.
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let skipped = purge_documents(&tx, collection, &def, &ids, storage, locale)?;
+    let purged = purge_documents(&tx, (collection, &def), &ids, locale)?;
 
     tx.commit().context("Commit empty trash")?;
+    delete_purged_files(storage, &def, &purged);
 
+    let skipped = purged.skipped;
     cli::success(&format!(
         "Permanently deleted {} document(s) from '{}'.",
         ids.len() as u64 - skipped,
@@ -419,7 +477,12 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
-    let (cfg, registry, pool) = init_stack(&config_dir)?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool,
+    } = open_project(&config_dir)?;
 
     // A custom storage backend delegates to Lua, so it needs a VM pool.
     // Build a hook runner only in that case; the lease keeps the pool
@@ -457,14 +520,14 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         TrashAction::Empty {
             collection,
             confirm,
-        } => run_empty(
-            &registry,
-            &pool,
-            &*storage,
-            &cfg.locale,
-            &collection,
+        } => run_empty(&EmptyParams {
+            registry: &registry,
+            pool: &pool,
+            storage: &*storage,
+            locale: &cfg.locale,
+            collection: &collection,
             confirm,
-        ),
+        }),
     }
 }
 
@@ -473,7 +536,10 @@ mod tests {
     use super::*;
     use crate::{
         config::DatabaseConfig,
-        core::field::{FieldDefinition, FieldType, RelationshipConfig},
+        core::{
+            field::{FieldDefinition, FieldType, RelationshipConfig},
+            upload::CollectionUpload,
+        },
         db::{DbValue, migrate, pool},
     };
 
@@ -548,26 +614,23 @@ mod tests {
     fn purge_decrements_referenced_targets() {
         let (media, posts) = defs_with_relationship();
         let posts_def = posts.clone();
-        let (tmp, db_pool, _) = setup_db(&[media, posts]);
-        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+        let (_tmp, db_pool, _) = setup_db(&[media, posts]);
 
         let mut conn = db_pool.get().unwrap();
         insert_referencing_post(&conn);
         assert_eq!(ref_count(&conn, "media", "m1"), Some(1));
 
         let tx = conn.transaction_immediate().unwrap();
-        let skipped = purge_documents(
+        let purged = purge_documents(
             &tx,
-            "posts",
-            &posts_def,
+            ("posts", &posts_def),
             &["p1".to_string()],
-            &*storage,
             &LocaleConfig::default(),
         )
         .unwrap();
         tx.commit().unwrap();
 
-        assert_eq!(skipped, 0);
+        assert_eq!(purged.skipped, 0);
         let conn = db_pool.get().unwrap();
         assert_eq!(ref_count(&conn, "media", "m1"), Some(0));
         assert_eq!(ref_count(&conn, "posts", "p1"), None, "p1 must be gone");
@@ -579,30 +642,194 @@ mod tests {
     fn purge_skips_still_referenced_documents() {
         let (media, posts) = defs_with_relationship();
         let media_def = media.clone();
-        let (tmp, db_pool, _) = setup_db(&[media, posts]);
-        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+        let (_tmp, db_pool, _) = setup_db(&[media, posts]);
 
         let mut conn = db_pool.get().unwrap();
         insert_referencing_post(&conn);
 
         let tx = conn.transaction_immediate().unwrap();
-        let skipped = purge_documents(
+        let purged = purge_documents(
             &tx,
-            "media",
-            &media_def,
+            ("media", &media_def),
             &["m1".to_string()],
-            &*storage,
             &LocaleConfig::default(),
         )
         .unwrap();
         tx.commit().unwrap();
 
-        assert_eq!(skipped, 1);
+        assert_eq!(purged.skipped, 1);
         let conn = db_pool.get().unwrap();
         assert_eq!(
             ref_count(&conn, "media", "m1"),
             Some(1),
             "still-referenced m1 must survive the purge"
+        );
+    }
+
+    /// Regression: purge deleted a trashed upload's files inside its
+    /// transaction, so a purge that failed on a later document rolled the rows
+    /// back while their files were already gone. The rows' files are now only
+    /// collected in the transaction and deleted once it commits.
+    #[test]
+    fn purge_keeps_upload_files_until_the_purge_commits() {
+        let mut media = CollectionDefinition::new("media");
+        media.soft_delete = true;
+        media.upload = Some(CollectionUpload::new());
+        media.fields = vec![
+            FieldDefinition::builder("filename", FieldType::Text).build(),
+            FieldDefinition::builder("url", FieldType::Text).build(),
+        ];
+        let media_def = media.clone();
+        let (tmp, db_pool, _) = setup_db(&[media]);
+
+        let file = tmp.path().join("uploads").join("media").join("a.png");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+
+        let mut conn = db_pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO media (id, filename, url, _deleted_at) VALUES \
+             ('m1', 'a.png', '/uploads/media/a.png', '2026-01-01T00:00:00.000Z')",
+            &[],
+        )
+        .unwrap();
+
+        let tx = conn.transaction_immediate().unwrap();
+        let purged = purge_documents(
+            &tx,
+            ("media", &media_def),
+            &["m1".to_string()],
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+        drop(tx);
+
+        assert!(file.exists(), "a purge that doesn't commit keeps the file");
+        assert_eq!(purged.upload_docs.len(), 1);
+        assert_eq!(purged.upload_docs[0].get("filename"), Some(&"a.png".into()));
+
+        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+        delete_purged_files(&*storage, &media_def, &purged);
+        assert!(
+            !file.exists(),
+            "the collected fields name the file to delete"
+        );
+    }
+
+    /// Regression: the purge held a pooled connection for the candidate lookup
+    /// and took a second one per collection, so a pool of one connection could
+    /// never purge.
+    #[test]
+    fn purge_runs_on_a_single_connection() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.soft_delete = true;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                pool_max_size: 1,
+                write_pool_max_size: 1,
+                connection_timeout: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+
+        let registry_shared = Registry::shared();
+        registry_shared.write().unwrap().register_collection(posts);
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
+
+        db_pool
+            .get()
+            .unwrap()
+            .execute(
+                "INSERT INTO posts (id, _deleted_at) VALUES ('p1', '2026-01-01T00:00:00.000Z')",
+                &[],
+            )
+            .unwrap();
+
+        let storage = upload::create_storage(tmp.path(), &config.upload).unwrap();
+        run_purge(&PurgeParams {
+            registry: &registry,
+            pool: &db_pool,
+            storage: &*storage,
+            locale: &LocaleConfig::default(),
+            collection: Some("posts"),
+            older_than: "all",
+            dry_run: false,
+        })
+        .unwrap();
+
+        let conn = db_pool.get().unwrap();
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_none(),
+            "p1 must be purged"
+        );
+    }
+
+    /// Regression: `trash empty` read the trashed documents without a locale
+    /// context, so on a collection with a localized field the SELECT named a
+    /// bare column that doesn't exist and the command failed.
+    #[test]
+    fn empty_trash_works_on_a_localized_collection() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.soft_delete = true;
+        posts.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let registry_shared = Registry::shared();
+        registry_shared.write().unwrap().register_collection(posts);
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &locale).expect("sync");
+
+        db_pool
+            .get()
+            .unwrap()
+            .execute(
+                "INSERT INTO posts (id, title__en, _deleted_at) \
+                 VALUES ('p1', 'Hi', '2026-01-01T00:00:00.000Z')",
+                &[],
+            )
+            .unwrap();
+
+        let storage = upload::create_storage(tmp.path(), &config.upload).unwrap();
+        run_empty(&EmptyParams {
+            registry: &registry,
+            pool: &db_pool,
+            storage: &*storage,
+            locale: &locale,
+            collection: "posts",
+            confirm: true,
+        })
+        .unwrap();
+
+        let conn = db_pool.get().unwrap();
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_none()
         );
     }
 

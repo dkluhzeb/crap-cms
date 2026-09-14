@@ -846,7 +846,11 @@ async fn describe_global() {
         .into_inner();
 
     assert_eq!(resp.slug, "settings");
-    assert!(!resp.timestamps);
+    assert!(
+        resp.timestamps,
+        "a global's table always carries timestamps"
+    );
+    assert!(!resp.drafts);
     assert!(!resp.auth);
     assert_eq!(resp.fields.len(), 1);
     assert_eq!(resp.fields[0].name, "site_name");

@@ -95,7 +95,7 @@ rejected at registration time.
 | `section` | no | Sidebar section heading. `nil` → renders ungrouped at the bottom. |
 | `label` | no | Sidebar label. `nil` → page routes but isn't shown in nav. |
 | `icon` | no | Material Symbols icon name (e.g. `"monitoring"`, `"heart-pulse"`). |
-| `access` | no | Lua function-ref (registered via `crap.access.register`). Returning `false` produces a 403 and hides the page from sidebar nav. |
+| `access` | no | Lua function-ref (registered via `crap.access.register`). Returning `false` produces a 403 and hides the page from sidebar nav. Without it every admin user sees the page — `[access] default_deny` applies to collections and globals, not pages. |
 
 ## Step 3 — provide the dynamic counts
 

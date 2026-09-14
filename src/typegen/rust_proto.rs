@@ -8,11 +8,11 @@ use crate::core::{
     CollectionDefinition, FieldDefinition, Registry, collection::GlobalDefinition,
     flatten_array_sub_fields,
 };
+use crate::db::query::helpers::tz_column;
 
 use super::client::{FieldTy, resolve_ty};
 use super::helpers::{
-    collect_sub_type_fields, is_optional, is_single_ref, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case, w, wraw,
+    collect_sub_type_fields, sorted_collection_slugs, sorted_global_slugs, to_pascal_case, w, wraw,
 };
 use super::idents;
 
@@ -57,20 +57,6 @@ pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
 /// Render the numeric getters. A number field arrives as `IntValue` (integers,
 /// exact) or `DoubleValue` (fractional); both collapse to `f64`.
 fn render_num_helpers(out: &mut String) {
-    w!(out, "fn get_num(doc: &Document, name: &str) -> f64 {{");
-    w!(out, "    doc.fields.as_ref()");
-    w!(out, "        .and_then(|f| f.fields.get(name))");
-    w!(out, "        .and_then(|v| match &v.kind {{");
-    w!(
-        out,
-        "            Some(Kind::IntValue(n)) => Some(*n as f64),"
-    );
-    w!(out, "            Some(Kind::DoubleValue(n)) => Some(*n),");
-    w!(out, "            _ => None,");
-    w!(out, "        }})");
-    w!(out, "        .unwrap_or(0.0)");
-    w!(out, "}}");
-    w!(out, "");
     w!(
         out,
         "fn get_num_opt(doc: &Document, name: &str) -> Option<f64> {{"
@@ -119,16 +105,6 @@ fn render_helpers(out: &mut String) {
     w!(out, "");
     render_num_helpers(out);
 
-    w!(out, "fn get_bool(doc: &Document, name: &str) -> bool {{");
-    w!(out, "    doc.fields.as_ref()");
-    w!(out, "        .and_then(|f| f.fields.get(name))");
-    w!(out, "        .and_then(|v| match &v.kind {{");
-    w!(out, "            Some(Kind::BoolValue(b)) => Some(*b),");
-    w!(out, "            _ => None,");
-    w!(out, "        }})");
-    w!(out, "        .unwrap_or(false)");
-    w!(out, "}}");
-    w!(out, "");
     w!(
         out,
         "fn get_bool_opt(doc: &Document, name: &str) -> Option<bool> {{"
@@ -166,7 +142,7 @@ fn render_helpers(out: &mut String) {
     w!(out, "");
 
     // Numeric list: a `has_many` number field. Each element is `IntValue`
-    // (exact) or `DoubleValue`; both collapse to `f64`, mirroring `get_num`.
+    // (exact) or `DoubleValue`; both collapse to `f64`, mirroring `get_num_opt`.
     w!(
         out,
         "fn get_num_list(doc: &Document, name: &str) -> Vec<f64> {{"
@@ -286,7 +262,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     // Sub-type from_struct impls for arrays
     for stf in collect_sub_type_fields(&col.fields, &pascal) {
         let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
-        render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
+        render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields, stf.row_id);
     }
 
     w!(out, "impl {} {{", pascal);
@@ -295,6 +271,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     w!(out, "            id: doc.id.clone(),");
 
     render_field_extractions(out, &col.fields, &pascal, "doc");
+    render_system_extractions(out, col.has_drafts(), col.soft_delete);
 
     if col.timestamps {
         w!(out, "            created_at: doc.created_at.clone(),");
@@ -319,7 +296,7 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
 
     for stf in collect_sub_type_fields(&global.fields, &pascal) {
         let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
-        render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
+        render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields, stf.row_id);
     }
 
     w!(out, "impl {} {{", pascal);
@@ -328,6 +305,7 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     w!(out, "            id: doc.id.clone(),");
 
     render_field_extractions(out, &global.fields, &pascal, "doc");
+    render_system_extractions(out, global.has_drafts(), false);
 
     w!(out, "            created_at: doc.created_at.clone(),");
     w!(out, "            updated_at: doc.updated_at.clone(),");
@@ -360,40 +338,43 @@ fn render_field_extractions(
             idents::rust_field(&f.name).ident,
             extraction
         );
+
+        if f.has_tz_companion() {
+            let tz = tz_column(&f.name);
+            let ident = idents::rust_field(&tz).ident;
+            w!(
+                out,
+                "            {ident}: get_str_opt({doc_var}, \"{tz}\"),"
+            );
+        }
     }
 }
 
-/// Wrap a list extraction in `Option` if the field is optional.
-fn opt_list(expr: &str, doc_var: &str, name: &str, optional: bool) -> String {
-    if optional {
-        format!(
-            "{{ let v = {expr}({doc_var}, \"{name}\"); if v.is_empty() {{ None }} else {{ Some(v) }} }}"
-        )
-    } else {
-        format!("{expr}({doc_var}, \"{name}\")")
+/// Extraction lines for the stored system keys a read document carries.
+fn render_system_extractions(out: &mut String, drafts: bool, soft_delete: bool) {
+    for (present, key) in [(drafts, "_status"), (soft_delete, "_deleted_at")] {
+        if present {
+            w!(out, "            {key}: get_str_opt(doc, \"{key}\"),");
+        }
     }
 }
 
-/// Simple scalar extraction: `get_X` or `get_X_opt` depending on optionality.
-fn scalar(base: &str, doc_var: &str, name: &str, optional: bool) -> String {
-    if optional {
-        format!("{base}_opt({doc_var}, \"{name}\")")
-    } else {
-        format!("{base}({doc_var}, \"{name}\")")
-    }
+/// A list extraction, `None` when the list is empty.
+fn opt_list(expr: &str, doc_var: &str, name: &str) -> String {
+    format!(
+        "{{ let v = {expr}({doc_var}, \"{name}\"); if v.is_empty() {{ None }} else {{ Some(v) }} }}"
+    )
 }
 
-/// Generate the extraction expression for a single field.
+/// A scalar extraction through the `get_X_opt` getter.
+fn scalar(base: &str, doc_var: &str, name: &str) -> String {
+    format!("{base}_opt({doc_var}, \"{name}\")")
+}
+
 /// Build the `from_document` extraction expression for a sub-typed field,
 /// calling the generated `from_struct`. `is_list` selects Array (a list of
 /// structs) vs Group (a single struct).
-fn sub_type_extraction(
-    sub: &str,
-    name: &str,
-    doc_var: &str,
-    optional: bool,
-    is_list: bool,
-) -> String {
+fn sub_type_extraction(sub: &str, name: &str, doc_var: &str, is_list: bool) -> String {
     let arm = if is_list {
         format!(
             "Some(Kind::ListValue(list)) => Some(\
@@ -409,66 +390,41 @@ fn sub_type_extraction(
         format!("Some(Kind::StructValue(s)) => Some({sub}::from_struct(s)),")
     };
 
-    let expr = format!(
+    format!(
         "{doc_var}.fields.as_ref()\
         .and_then(|f| f.fields.get(\"{name}\"))\
         .and_then(|v| match &v.kind {{ {arm} _ => None, }})"
-    );
-
-    if optional {
-        expr
-    } else {
-        format!("{expr}.unwrap_or_default()")
-    }
+    )
 }
 
 /// Top-level select/radio-with-options: decode string(s) and wrap in the
 /// generated enum's `From<String>` so the value matches the enum-typed field.
-fn enum_extraction(
-    enum_name: &str,
-    doc_var: &str,
-    name: &str,
-    has_many: bool,
-    optional: bool,
-) -> String {
-    if has_many {
-        let mapped = format!(
-            "get_str_list({doc_var}, \"{name}\").into_iter().map({enum_name}::from).collect::<Vec<_>>()"
-        );
-        if optional {
-            format!("{{ let v = {mapped}; if v.is_empty() {{ None }} else {{ Some(v) }} }}")
-        } else {
-            mapped
-        }
-    } else if optional {
-        format!("get_str_opt({doc_var}, \"{name}\").map({enum_name}::from)")
-    } else {
-        format!("{enum_name}::from(get_str({doc_var}, \"{name}\"))")
+fn enum_extraction(enum_name: &str, doc_var: &str, name: &str, has_many: bool) -> String {
+    if !has_many {
+        return format!("get_str_opt({doc_var}, \"{name}\").map({enum_name}::from)");
     }
+
+    let mapped = format!(
+        "get_str_list({doc_var}, \"{name}\").into_iter().map({enum_name}::from).collect::<Vec<_>>()"
+    );
+
+    format!("{{ let v = {mapped}; if v.is_empty() {{ None }} else {{ Some(v) }} }}")
 }
 
 /// Nested (sub-field) select/radio-with-options — same as [`enum_extraction`]
 /// but reading from a `DataMap` (`s`) instead of a `Document`.
-fn enum_sub_extraction(enum_name: &str, name: &str, has_many: bool, optional: bool) -> String {
+fn enum_sub_extraction(enum_name: &str, name: &str, has_many: bool) -> String {
     if has_many {
-        let base = format!(
-            "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {STR_LIST}, _ => None }})"
+        return format!(
+            "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {STR_LIST}, _ => None }})\
+             .map(|l| l.into_iter().map({enum_name}::from).collect())"
         );
-        if optional {
-            format!("{base}.map(|l| l.into_iter().map({enum_name}::from).collect())")
-        } else {
-            format!("{base}.unwrap_or_default().into_iter().map({enum_name}::from).collect()")
-        }
-    } else {
-        let base = format!(
-            "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }})"
-        );
-        if optional {
-            format!("{base}.map({enum_name}::from)")
-        } else {
-            format!("{enum_name}::from({base}.unwrap_or_default())")
-        }
     }
+
+    format!(
+        "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }})\
+         .map({enum_name}::from)"
+    )
 }
 
 /// The match arms decoding a proto value into a polymorphic enum: a bare id
@@ -496,38 +452,26 @@ fn poly_arms(poly_name: &str, targets: &[&str]) -> String {
 
 /// A polymorphic-relationship extraction. `getter` is an `Option<&FieldValue>`
 /// expression naming the field's value in the current context (top-level or
-/// nested). Has-one is `Option<Poly>` (always optional on read); has-many is
-/// `Option<Vec<Poly>>` / `Vec<Poly>`.
-fn poly_extraction(
-    poly_name: &str,
-    targets: &[&str],
-    getter: &str,
-    has_many: bool,
-    optional: bool,
-) -> String {
+/// nested). Has-one is `Option<Poly>`; has-many is `Option<Vec<Poly>>`.
+fn poly_extraction(poly_name: &str, targets: &[&str], getter: &str, has_many: bool) -> String {
     let arms = poly_arms(poly_name, targets);
+
     if has_many {
-        let base = format!(
+        return format!(
             "{getter}.and_then(|v| match &v.kind {{ Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ {arms} _ => None }}).collect::<Vec<_>>()), _ => None }})"
         );
-        if optional {
-            base
-        } else {
-            format!("{base}.unwrap_or_default()")
-        }
-    } else {
-        // Single polymorphic relationships are optional on read.
-        format!("{getter}.and_then(|v| match &v.kind {{ {arms} _ => None }})")
     }
+
+    format!("{getter}.and_then(|v| match &v.kind {{ {arms} _ => None }})")
 }
 
 /// Decode a top-level field, reading from a `Document` (`doc_var`). Dispatches on
 /// the SHARED [`resolve_ty`] so this generator and `client/rust.rs` can never
-/// disagree about a field's type — the whole class of proto↔client drift.
+/// disagree about a field's type — the whole class of proto↔client drift. Every
+/// field decodes to an `Option`, matching the client structs: a draft may lack
+/// required values, and field read access and `select` leave keys out.
 fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str) -> String {
     let name = &field.name;
-    // Single relationships/uploads are optional on read even when `required`.
-    let optional = is_optional(field) || is_single_ref(field);
 
     match &resolve_ty(field, parent_pascal) {
         // Strings (incl. id-string relationships: empty-collection upload / no target).
@@ -535,23 +479,27 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
         | FieldTy::Rel {
             target: None,
             many: false,
-        } => scalar("get_str", doc_var, name, optional),
+        } => scalar("get_str", doc_var, name),
         FieldTy::StrList
         | FieldTy::Rel {
             target: None,
             many: true,
-        } => opt_list("get_str_list", doc_var, name, optional),
-        FieldTy::Num => scalar("get_num", doc_var, name, optional),
-        FieldTy::Bool => scalar("get_bool", doc_var, name, optional),
-        FieldTy::NumList => opt_list("get_num_list", doc_var, name, optional),
-        FieldTy::Json | FieldTy::Map | FieldTy::JsonList => complex_fallback(optional),
+        } => opt_list("get_str_list", doc_var, name),
+        FieldTy::Num => scalar("get_num", doc_var, name),
+        FieldTy::Bool => scalar("get_bool", doc_var, name),
+        FieldTy::NumList => opt_list("get_num_list", doc_var, name),
+        // `resolve_ty` never produces the `locale = "all"` shape; the decoders
+        // target the single-locale structs.
+        FieldTy::Json | FieldTy::Map | FieldTy::JsonList | FieldTy::Localized(_) => {
+            COMPLEX_FALLBACK.to_string()
+        }
 
         // Typed relationship/upload — `get_rel(_list)` decode both the id string
         // and the populated document; `T` is inferred from the struct field type.
         FieldTy::Rel {
             target: Some(_),
             many: true,
-        } => opt_list("get_rel_list", doc_var, name, optional),
+        } => opt_list("get_rel_list", doc_var, name),
         FieldTy::Rel {
             target: Some(_),
             many: false,
@@ -566,35 +514,41 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
             &targets.iter().map(String::as_str).collect::<Vec<_>>(),
             &format!("{doc_var}.fields.as_ref().and_then(|f| f.fields.get(\"{name}\"))"),
             *many,
-            optional,
         ),
         FieldTy::Enum { name: en, many, .. } => {
-            enum_extraction(&idents::rust_type(en), doc_var, name, *many, optional)
+            enum_extraction(&idents::rust_type(en), doc_var, name, *many)
         }
         FieldTy::SubType { name: sn, list } => {
-            sub_type_extraction(&idents::rust_type(sn), name, doc_var, optional, *list)
+            sub_type_extraction(&idents::rust_type(sn), name, doc_var, *list)
         }
     }
 }
 
-/// The proto wire carries no structured JSON/blocks/join, so these decode to the
-/// field's default (`None` / `Default::default()`).
-fn complex_fallback(optional: bool) -> String {
-    if optional {
-        "None /* complex field */".to_string()
-    } else {
-        "Default::default() /* complex field */".to_string()
-    }
-}
+/// The proto wire carries no structured JSON/blocks/join, so these decode to
+/// `None`.
+const COMPLEX_FALLBACK: &str = "None /* complex field */";
 
 /// Render a `from_struct` impl for an array/group sub-type. `pascal` is the
 /// sub-type's compound name (e.g. `PostsItems`), threaded into
 /// [`sub_field_extraction`] so a nested group/array references the right
-/// nested sub-type name.
-fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDefinition]) {
+/// nested sub-type name. `row_id` reads the junction `id` a relational array
+/// row carries.
+fn render_sub_type_from_struct(
+    out: &mut String,
+    pascal: &str,
+    fields: &[FieldDefinition],
+    row_id: bool,
+) {
     w!(out, "impl {} {{", pascal);
     w!(out, "    fn from_struct(s: &DataMap) -> Self {{");
     w!(out, "        Self {{");
+
+    if row_id {
+        w!(
+            out,
+            "            id: s.fields.get(\"id\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }}),"
+        );
+    }
 
     // Flatten layout wrappers exactly like `render_field_extractions` and the
     // client struct-definition side — a Row/Collapsible/Tabs nested inside an
@@ -607,6 +561,15 @@ fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDe
             idents::rust_field(&f.name).ident,
             extraction
         );
+
+        if f.has_tz_companion() {
+            let tz = tz_column(&f.name);
+            let ident = idents::rust_field(&tz).ident;
+            w!(
+                out,
+                "            {ident}: s.fields.get(\"{tz}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }}),"
+            );
+        }
     }
 
     w!(out, "        }}");
@@ -644,23 +607,14 @@ fn nested_rel_arm(t: &str, has_many: bool) -> String {
 /// relationships/uploads → `Rel<T>` / `Vec<Rel<T>>`, polymorphic → the generated
 /// discriminated enum, empty-collection uploads → `String` / `Vec<String>`, and a
 /// nested group/array → the child sub-type via its own `from_struct`.
-/// `parent_pascal` is the enclosing sub-type's compound name. A single
-/// relationship/upload is optional on read; other optionals yield `Option<T>`.
+/// `parent_pascal` is the enclosing sub-type's compound name. Every sub-field
+/// decodes to an `Option`, matching the client sub-types.
 fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String {
     let name = &field.name;
-    let optional = is_optional(field) || is_single_ref(field);
 
-    // `get(arm)` → an `Option<T>` reading `s.fields[name]`; `finish(base, dflt)`
-    // keeps the `Option` for an optional field or unwraps it for a required one.
+    // An `Option<T>` reading `s.fields[name]` through the match arm `arm`.
     let get = |arm: &str| {
         format!("s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {arm}, _ => None }})")
-    };
-    let finish = |base: String, dflt: &str| {
-        if optional {
-            base
-        } else {
-            format!("{base}.{dflt}")
-        }
     };
 
     match &resolve_ty(field, parent_pascal) {
@@ -669,47 +623,31 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
         | FieldTy::Rel {
             target: None,
             many: false,
-        } => finish(
-            get("Some(Kind::StringValue(s)) => Some(s.clone())"),
-            "unwrap_or_default()",
-        ),
+        } => get("Some(Kind::StringValue(s)) => Some(s.clone())"),
         FieldTy::StrList
         | FieldTy::Rel {
             target: None,
             many: true,
-        } => finish(get(STR_LIST), "unwrap_or_default()"),
-        FieldTy::Num => finish(
-            get(
-                "Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n)",
-            ),
-            "unwrap_or(0.0)",
+        } => get(STR_LIST),
+        FieldTy::Num => get(
+            "Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n)",
         ),
-        FieldTy::Bool => finish(
-            get("Some(Kind::BoolValue(b)) => Some(*b)"),
-            "unwrap_or(false)",
+        FieldTy::Bool => get("Some(Kind::BoolValue(b)) => Some(*b)"),
+        FieldTy::NumList => get(
+            "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
         ),
-        FieldTy::NumList => finish(
-            get(
-                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
-            ),
-            "unwrap_or_default()",
-        ),
-        FieldTy::Json | FieldTy::Map | FieldTy::JsonList => complex_fallback(optional),
+        // `resolve_ty` never produces the `locale = "all"` shape; the decoders
+        // target the single-locale structs.
+        FieldTy::Json | FieldTy::Map | FieldTy::JsonList | FieldTy::Localized(_) => {
+            COMPLEX_FALLBACK.to_string()
+        }
 
         // Typed relationship — id string OR populated document. Decoding the
         // `StructValue` form is what closes the nested-populated-relationship gap.
         FieldTy::Rel {
             target: Some(t),
             many,
-        } => {
-            let arm = nested_rel_arm(&idents::rust_type(t), *many);
-            let dflt = if *many {
-                "unwrap_or_default()"
-            } else {
-                "unwrap_or(Rel::Id(String::new()))"
-            };
-            finish(get(&arm), dflt)
-        }
+        } => get(&nested_rel_arm(&idents::rust_type(t), *many)),
 
         FieldTy::PolyRel {
             name: pn,
@@ -720,10 +658,9 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
             &targets.iter().map(String::as_str).collect::<Vec<_>>(),
             &format!("s.fields.get(\"{name}\")"),
             *many,
-            optional,
         ),
         FieldTy::Enum { name: en, many, .. } => {
-            enum_sub_extraction(&idents::rust_type(en), name, *many, optional)
+            enum_sub_extraction(&idents::rust_type(en), name, *many)
         }
 
         FieldTy::SubType {
@@ -731,26 +668,18 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
             list: false,
         } => {
             let sub = idents::rust_type(sn);
-            let base = get(&format!(
+            get(&format!(
                 "Some(Kind::StructValue(m)) => Some({sub}::from_struct(m))"
-            ));
-            if optional {
-                base
-            } else {
-                format!("{base}.unwrap_or_else(|| {sub}::from_struct(&DataMap::default()))")
-            }
+            ))
         }
         FieldTy::SubType {
             name: sn,
             list: true,
         } => {
             let sub = idents::rust_type(sn);
-            finish(
-                get(&format!(
-                    "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ Some(Kind::StructValue(m)) => Some({sub}::from_struct(m)), _ => None }}).collect())"
-                )),
-                "unwrap_or_default()",
-            )
+            get(&format!(
+                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ Some(Kind::StructValue(m)) => Some({sub}::from_struct(m)), _ => None }}).collect())"
+            ))
         }
     }
 }
@@ -796,6 +725,35 @@ mod tests {
         );
     }
 
+    /// A relational array row's `from_struct` reads its junction `id`; a row
+    /// nested inside another row is JSON without one.
+    #[test]
+    fn proto_array_rows_read_their_id() {
+        let mut notes = FieldDefinition::builder("notes", FieldType::Array).build();
+        notes.fields = vec![text_field("body", false)];
+        let mut items = FieldDefinition::builder("items", FieldType::Array).build();
+        items.fields = vec![text_field("title", true), notes];
+
+        let col = make_col("projects", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        let impl_of = |name: &str| {
+            let start = out.find(&format!("impl {name} {{")).expect(name);
+            let rest = &out[start..];
+            rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_string()
+        };
+
+        assert!(
+            impl_of("ProjectsItems").contains("id: s.fields.get(\"id\")"),
+            "{out}"
+        );
+        assert!(
+            !impl_of("ProjectsItemsNotes").contains("id: s.fields.get(\"id\")"),
+            "{out}"
+        );
+    }
+
     /// Identifier safety: the `from_document` struct-field position must be the
     /// SANITIZED ident (matching the generated struct), while the wire lookup
     /// keeps the raw key. A keyword field `type` → `r#type: get_str(doc, "type")`.
@@ -813,8 +771,32 @@ mod tests {
         render_collection_impl(&mut out, &col);
 
         assert!(
-            out.contains("r#type: get_str(doc, \"type\")"),
+            out.contains("r#type: get_str_opt(doc, \"type\")"),
             "struct field must be sanitized while the lookup uses the raw key: {out}"
+        );
+    }
+
+    /// Regression: a timezone date's `<name>_tz` companion was assigned under
+    /// its raw key, so a digit-leading field (`2fa_tz`) generated Rust that
+    /// doesn't compile. The struct field is sanitized; the lookup keeps the key.
+    #[test]
+    fn proto_timezone_companion_uses_a_sanitized_ident() {
+        let col = make_col(
+            "events",
+            vec![
+                FieldDefinition::builder("2fa", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        let ident = idents::rust_field("2fa_tz").ident;
+        assert_ne!(ident, "2fa_tz");
+        assert!(
+            out.contains(&format!("{ident}: get_str_opt(doc, \"2fa_tz\")")),
+            "{out}"
         );
     }
 
@@ -830,7 +812,7 @@ mod tests {
         assert!(out.contains("impl Posts {"));
         assert!(out.contains("fn from_document(doc: &Document) -> Self"));
         assert!(out.contains("id: doc.id.clone()"));
-        assert!(out.contains("title: get_str(doc, \"title\")"));
+        assert!(out.contains("title: get_str_opt(doc, \"title\")"));
         assert!(out.contains("content: get_str_opt(doc, \"content\")"));
         assert!(out.contains("created_at: doc.created_at.clone()"));
     }
@@ -854,7 +836,7 @@ mod tests {
         let mut out = String::new();
         render_collection_impl(&mut out, &col);
         assert!(
-            out.contains("status: TasksStatus::from(get_str(doc, \"status\"))"),
+            out.contains("status: get_str_opt(doc, \"status\").map(TasksStatus::from)"),
             "select→enum: {out}"
         );
     }
@@ -944,7 +926,7 @@ mod tests {
         let mut out = String::new();
         render_collection_impl(&mut out, &col);
 
-        assert!(out.contains("price: get_num(doc, \"price\")"));
+        assert!(out.contains("price: get_num_opt(doc, \"price\")"));
         assert!(out.contains("active: get_bool_opt(doc, \"active\")"));
     }
 
@@ -1139,8 +1121,12 @@ mod tests {
 
         assert!(out.contains("fn get_str(doc: &Document, name: &str) -> String"));
         assert!(out.contains("fn get_str_opt(doc: &Document, name: &str) -> Option<String>"));
-        assert!(out.contains("fn get_num(doc: &Document, name: &str) -> f64"));
-        assert!(out.contains("fn get_bool(doc: &Document, name: &str) -> bool"));
+        assert!(out.contains("fn get_num_opt(doc: &Document, name: &str) -> Option<f64>"));
+        assert!(out.contains("fn get_bool_opt(doc: &Document, name: &str) -> Option<bool>"));
+        // Every decoded field is optional, so no non-optional numeric or boolean
+        // getter is emitted for the generated code to leave unused.
+        assert!(!out.contains("fn get_num(doc"), "{out}");
+        assert!(!out.contains("fn get_bool(doc"), "{out}");
         assert!(out.contains("fn get_str_list(doc: &Document, name: &str) -> Vec<String>"));
     }
 
@@ -1214,7 +1200,7 @@ mod tests {
         render_collection_impl(&mut out, &col);
 
         assert!(
-            out.contains("first: get_str(doc, \"first\")"),
+            out.contains("first: get_str_opt(doc, \"first\")"),
             "row sub-fields promoted: {out}"
         );
         assert!(

@@ -22,11 +22,12 @@ use crate::{
         auth_middleware::check_admin_gate_for_doc,
         handlers::{
             auth::{
-                client_ip, create_session_token, extract_user_email, headers_to_map,
-                session_redirect, sole_auth_collection,
+                client_ip, create_session_token, extract_user_email, session_redirect,
+                sole_auth_collection,
             },
             shared::paths,
         },
+        server::headers_to_map,
     },
     core::{Document, HookRef, collection::Auth},
     db::{DbPool, query},

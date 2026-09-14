@@ -19,7 +19,7 @@ use crate::{
     admin::{
         AdminState,
         context::{CrapMeta, EditorLocaleContext, EditorLocaleOption, NavData, UserContext},
-        handlers::shared::{has_access_with_conn, is_admin_visible_with_conn},
+        handlers::shared::{has_page_access_with_conn, is_admin_visible_with_conn},
     },
     core::auth::{AuthUser, Claims},
     typegen::LuaAnnotation,
@@ -268,8 +268,10 @@ fn filter_nav_in_place(
         )
     });
 
+    // A page the route would refuse stays out of the sidebar: pages grant on an
+    // outright allow only.
     nav.custom_pages
-        .retain(|p| has_access_with_conn(state, p.access.as_ref(), user_doc, &tx, "read", ""));
+        .retain(|p| has_page_access_with_conn(state, p.access.as_ref(), user_doc, &tx));
 
     let _ = tx.commit();
 }

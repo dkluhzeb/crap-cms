@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldType},
+    core::{CollectionDefinition, FieldDefinition},
     db::{
         LocaleContext,
         query::helpers::{locale_column, prefixed_name, tz_column, walk_leaf_fields},
@@ -55,7 +55,7 @@ pub fn collect_column_names(fields: &[FieldDefinition], names: &mut Vec<String>)
             let col = prefixed_name(prefix, &field.name);
             names.push(col.clone());
 
-            if field.field_type == FieldType::Date && field.timezone {
+            if field.has_tz_companion() {
                 names.push(tz_column(&col));
             }
         }
@@ -111,7 +111,7 @@ fn collect_expected_locale_inner(
             names.insert(base.clone());
         }
 
-        if field.field_type == FieldType::Date && field.timezone {
+        if field.has_tz_companion() {
             let tz_base = tz_column(&base);
 
             if is_localized {

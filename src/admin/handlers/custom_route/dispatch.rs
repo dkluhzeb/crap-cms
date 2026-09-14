@@ -16,7 +16,7 @@ use axum::{
     extract::{ConnectInfo, Extension, RawPathParams, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
+        header::{CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
     },
     response::{IntoResponse, Response},
 };
@@ -29,15 +29,18 @@ use crate::{
         AdminState,
         custom_routes::{RouteAccess, RouteBody, RouteCookie, RouteDefinition, RouteResponse},
         handlers::{
-            auth::{CSRF_COOKIE, SESSION_COOKIE, client_ip, headers_to_map},
+            auth::{CSRF_COOKIE, client_ip},
             custom_route::MountedRoute,
+            shared::db_error_status,
         },
-        server::extract_cookie,
+        server::{
+            bearer_token, evaluate_admin_request, extract_cookie, headers_to_map,
+            session_cookie_token,
+        },
     },
     core::Document,
-    core::collection::Surface,
     hooks::lifecycle::{LuaCrudInfra, RouteHandlerInput},
-    service::auth::{AuthRequest, EvaluateDeps, Resolution, evaluate},
+    service::auth::Resolution,
 };
 
 /// Request parts (owned) gathered from the extractors, grouped so the
@@ -153,8 +156,10 @@ fn csrf_valid(headers: &HeaderMap) -> bool {
 }
 
 /// Resolve the request's principal via the unified auth evaluator. Returns
-/// `None` for anonymous / invalid / lookup-error — custom routes are public, so
-/// a failed resolution is simply an anonymous request, never a rejection.
+/// `None` for an anonymous or invalid credential — custom routes are public, so
+/// a credential that doesn't authenticate is simply an anonymous request. A
+/// database error is returned, so the request answers `503`/`500` instead of
+/// running as anonymous.
 ///
 /// `allow_cookie` gates the **session cookie** credential: it is honored only
 /// for safe methods or when the route opts into CSRF (`csrf = true`). A mutating
@@ -165,50 +170,21 @@ fn resolve_principal(
     state: &AdminState,
     headers: &HeaderMap,
     allow_cookie: bool,
-) -> Option<Principal> {
-    let conn = state.infra.pool.get().ok()?;
+) -> Result<Option<Principal>> {
+    let session = allow_cookie
+        .then(|| session_cookie_token(headers))
+        .flatten();
 
-    let cookie_header = headers
-        .get(COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let session = if allow_cookie {
-        extract_cookie(cookie_header, SESSION_COOKIE).map(str::to_string)
-    } else {
-        None
-    };
-    let bearer = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let headers_map = headers_to_map(headers);
+    let resolution = evaluate_admin_request(state, headers, bearer_token(headers), session)?;
 
-    let resolution = evaluate(
-        &AuthRequest {
-            surface: Surface::Admin,
-            bearer_token: bearer.as_deref(),
-            session_cookie_token: session.as_deref(),
-            headers: &headers_map,
-        },
-        &EvaluateDeps {
-            registry: &state.infra.registry,
-            token_provider: state.infra.token_provider.as_ref(),
-            hook_runner: &state.infra.hook_runner,
-            conn: &conn,
-            locale_config: &state.infra.locale_config,
-        },
-    );
-
-    match resolution {
+    Ok(match resolution {
         Resolution::Authenticated(auth) => Some(Principal {
             collection: auth.user.claims.collection.to_string(),
             ui_locale: Some(auth.user.ui_locale),
             user: auth.user.user_doc,
         }),
         _ => None,
-    }
+    })
 }
 
 /// Assemble the owned [`RouteHandlerInput`] from the request, route metadata, and
@@ -256,7 +232,7 @@ fn run_dispatch_blocking(job: DispatchJob) -> Result<DispatchOutcome> {
     // The session cookie authenticates a mutating request only when the route
     // opts into CSRF; otherwise (and always for Bearer) it would be a CSRF hole.
     let allow_cookie = !is_mutating(&raw.method) || def.csrf;
-    let principal = resolve_principal(&state, &raw.headers, allow_cookie);
+    let principal = resolve_principal(&state, &raw.headers, allow_cookie)?;
     let input = build_input(def, raw, principal);
 
     let allowed = match &def.access {
@@ -435,6 +411,7 @@ pub async fn dispatch_custom_route(
         body,
         ip,
     };
+    let db_kind = state.infra.pool.kind().to_string();
     let job = DispatchJob {
         state,
         mounted,
@@ -444,10 +421,9 @@ pub async fn dispatch_custom_route(
     match task::spawn_blocking(move || run_dispatch_blocking(job)).await {
         Ok(Ok(DispatchOutcome::Response(resp))) => response_to_axum(resp),
         Ok(Ok(DispatchOutcome::Forbidden)) => StatusCode::FORBIDDEN.into_response(),
-        Ok(Err(e)) => {
-            error!("custom route handler error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        // A busy or exhausted pool — while resolving the caller or running the
+        // route — answers `503`, as on every other surface.
+        Ok(Err(e)) => db_error_status(e, &db_kind, "custom route handler error").into_response(),
         Err(e) => {
             error!("custom route task error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

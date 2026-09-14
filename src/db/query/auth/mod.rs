@@ -1,16 +1,20 @@
 //! Auth query functions: password, tokens, account status, MFA.
 
+mod credentials;
 mod mfa;
 mod password;
 mod status;
 mod tokens;
 mod totp;
 
+pub use credentials::{
+    CREDENTIAL_COLUMNS, credential_columns, credential_values, read_credentials,
+};
 pub use mfa::{set_mfa_code, verify_mfa_code};
 pub use password::{find_by_email, get_password_hash, has_password, update_password};
 pub use status::{
-    bump_session_version, get_session_version, is_locked, is_verified, lock_user, unlock_user,
-    user_exists,
+    bump_session_version, get_session_version, is_locked, is_verified, lock_and_session_version,
+    lock_user, set_session_version, unlock_user, user_exists,
 };
 pub use tokens::{
     clear_reset_token, clear_verification_token, find_by_reset_token, find_by_verification_token,

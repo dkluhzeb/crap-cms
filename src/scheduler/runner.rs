@@ -13,12 +13,15 @@ use crate::{
     core::{
         CollectionDefinition, DocumentFields, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
+        job::SYSTEM_BULK_JOB,
         upload::{self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage},
         validate::humanize_hook_message,
     },
-    db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
+    db::{DbConnection, DbPool, DbValue, LocaleContext, query, query::jobs as job_query},
     hooks::{HookRunner, LuaCrudInfra},
 };
+
+use super::bulk::strip_finished_payload;
 
 /// Borrowed inputs for [`write_job_failure`], grouped per the >4-params rule
 /// (mirrors [`ExecuteJobParams`]: all-reference fields, `Copy`, literal-built
@@ -489,6 +492,12 @@ pub fn recover_stale_jobs(
                 job.attempt,
                 "stale: worker heartbeat expired, retries exhausted",
             )?;
+
+            // `stale` is terminal: a bulk run drops its request payload here too.
+            if job.slug == SYSTEM_BULK_JOB {
+                strip_finished_payload(conn, job);
+            }
+
             terminal += 1;
             info!("Marked stale job {} ({})", job.id, job.slug);
         }
@@ -611,6 +620,9 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
 
     let mut purged = 0u64;
     let mut upload_docs = Vec::new();
+    // The upload row lookup needs the locale context: a collection with
+    // localized fields has no bare columns to select.
+    let locale_ctx = LocaleContext::from_locale_string(None, p.locale_config)?;
 
     for row in &rows {
         let id = match row.get_value(0) {
@@ -653,7 +665,7 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
         // before `before_hard_delete` so a skipped row leaves the targets'
         // ref counts untouched for the retry on the next purge tick.
         if p.def.is_upload_collection() {
-            match query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None) {
+            match query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, locale_ctx.as_ref()) {
                 Ok(Some(doc)) => upload_docs.push(doc.fields),
                 Ok(None) => {}
                 Err(e) => {
@@ -967,6 +979,34 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("heartbeat expired")
+        );
+    }
+
+    /// Regression: a bulk run recovered as terminal `stale` kept its submitted
+    /// payload at rest; it now keeps only the identity its visibility reads.
+    #[test]
+    fn recover_strips_the_payload_of_a_stale_bulk_run() {
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
+        let registry = make_registry_with_jobs(Vec::new());
+
+        let data = r#"{"op":"create_many","collection":"posts","queued_by":{"kind":"system"},"max_documents":10,"documents":[{"title":"secret-ish"}]}"#;
+        job_query::insert_job(&conn, SYSTEM_BULK_JOB, data, "grpc", 1, "bulk", 0).unwrap();
+        conn.execute_batch(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
+             heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
+        )
+        .unwrap();
+
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
+
+        let stale = job_query::list_job_runs(&conn, None, Some(JobStatus::Stale), 100, 0).unwrap();
+        assert_eq!(stale.len(), 1);
+        assert!(!stale[0].data.contains("secret-ish"), "{}", stale[0].data);
+        assert!(
+            stale[0].data.contains("queued_by") && stale[0].data.contains("posts"),
+            "{}",
+            stale[0].data
         );
     }
 

@@ -114,6 +114,7 @@ impl CorsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn cors_config_defaults() {
@@ -202,7 +203,7 @@ allow_credentials = true
 "#,
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(
             config.cors.allowed_origins,
             vec!["https://example.com", "https://app.example.com"]

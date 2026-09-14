@@ -12,8 +12,8 @@ use crate::{
     admin, api,
     commands::{
         helpers::{
-            create_live_transports, load_and_validate_config, run_on_init_hooks,
-            spawn_shutdown_signal,
+            create_live_transports, hold_instance_lock, load_and_validate_config,
+            run_on_init_hooks, spawn_shutdown_signal,
         },
         update,
     },
@@ -572,6 +572,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     #[cfg(unix)]
     check_existing_pid(&config_dir);
+    let _instance_lock = hold_instance_lock(&config_dir)?;
     write_pid_file(&config_dir, process::id())?;
     info!("Config directory: {}", config_dir.display());
 

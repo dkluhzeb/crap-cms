@@ -88,6 +88,141 @@ crap.pages.register("status", {
     );
 }
 
+// ── custom_page_with_a_filter_table_access_rule_is_forbidden ─────────────
+
+/// A page access rule that returns a filter table has no rows to narrow, so it
+/// doesn't grant access.
+#[tokio::test]
+async fn custom_page_with_a_filter_table_access_rule_is_forbidden() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    fs::write(
+        tmp.path().join("init.lua"),
+        r#"
+crap.pages.register("secret", {
+    label = "Secret",
+    access = "hooks.access.page_filter",
+})
+"#,
+    )
+    .expect("write init.lua");
+
+    let hooks_dir = tmp.path().join("hooks");
+    fs::create_dir_all(&hooks_dir).expect("mkdir hooks");
+    fs::write(
+        hooks_dir.join("access.lua"),
+        "local M = {}\nfunction M.page_filter(ctx)\n    return { status = \"published\" }\nend\nreturn M\n",
+    )
+    .expect("write access hooks");
+
+    let pages_dir = tmp.path().join("templates").join("pages");
+    fs::create_dir_all(&pages_dir).expect("mkdir templates/pages");
+    fs::write(
+        pages_dir.join("secret.hbs"),
+        "{{#> layout/main}}<p>Secret content</p>{{/layout/main}}\n",
+    )
+    .expect("write template");
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.admin.dev_mode = true;
+
+    let app = setup_app_at(vec![make_users_def()], vec![], config, tmp);
+    let user_id = create_test_user(&app, "filter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "filter@test.com");
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/p/secret")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // The sidebar agrees with the route: a page it refuses isn't listed.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        !body.contains("/admin/p/secret"),
+        "the sidebar must not list a page its route refuses"
+    );
+}
+
+// ── custom_page_without_access_rule_is_listed_under_default_deny ─────────
+
+/// A page with no access rule renders under `default_deny` — the rule gates
+/// collections and globals, not pages — and the sidebar lists it, agreeing
+/// with the route.
+#[tokio::test]
+async fn custom_page_without_access_rule_is_listed_under_default_deny() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    fs::write(
+        tmp.path().join("init.lua"),
+        "crap.pages.register(\"open\", { label = \"Open\" })\n",
+    )
+    .expect("write init.lua");
+
+    let pages_dir = tmp.path().join("templates").join("pages");
+    fs::create_dir_all(&pages_dir).expect("mkdir templates/pages");
+    fs::write(
+        pages_dir.join("open.hbs"),
+        "{{#> layout/main}}<p>Open content</p>{{/layout/main}}\n",
+    )
+    .expect("write template");
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.admin.dev_mode = true;
+    config.access.default_deny = true;
+
+    let app = setup_app_at(vec![make_users_def()], vec![], config, tmp);
+    let user_id = create_test_user(&app, "open@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "open@test.com");
+
+    let get = |uri: &str| {
+        app.router.clone().oneshot(
+            Request::get(uri)
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+
+    let resp = get("/admin/p/open").await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "the route renders the page");
+
+    let resp = get("/admin").await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("/admin/p/open"),
+        "the sidebar must list a page its route renders"
+    );
+}
+
 // ── custom_page_missing_template_returns_404 ─────────────────────────────
 
 #[tokio::test]

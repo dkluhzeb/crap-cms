@@ -36,9 +36,9 @@
 //! - [`resolve_config_dir`] walks the CWD upwards looking for
 //!   `crap.toml` (or honors `--config` / `CRAP_CONFIG_DIR`).
 //!   Every command that needs a config calls it first.
-//! - [`load_config_and_sync`] loads `crap.toml`, opens the DB
-//!   pool, and runs schema sync. Used by every command that
-//!   reads or writes data.
+//! - [`open_project`] loads `crap.toml`, takes the instance lock
+//!   shared, opens the DB pool, and runs schema sync. Used by every
+//!   command that reads or writes data.
 //! - [`UpdateCmd`] is the typed clap subcommand for `crap-cms
 //!   update *` — exposed so `main.rs` can wire it directly.
 //!
@@ -73,7 +73,7 @@ pub mod work;
 mod helpers;
 mod types;
 
-pub use helpers::load_config_and_sync;
+pub use helpers::{Project, open_project};
 pub use resolve_config::resolve_config_dir;
 pub use types::{
     BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,

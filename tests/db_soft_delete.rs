@@ -560,6 +560,61 @@ fn find_by_id_unfiltered_includes_soft_deleted() {
     assert_eq!(unfiltered.unwrap().get_str("title"), Some("Hidden"));
 }
 
+// ── Regression: purge reads upload files on a localized collection ─────
+
+/// The automatic purge of an upload collection with localized fields purges
+/// the expired row and hands back its files for cleanup, instead of failing to
+/// read the row and skipping it.
+#[test]
+fn purge_soft_deleted_handles_a_localized_upload_collection() {
+    let mut def = CollectionDefinition::new("docs");
+    def.timestamps = true;
+    def.soft_delete = true;
+    def.soft_delete_retention = Some("1h".to_string());
+    def.upload = Some(crap_cms::core::upload::CollectionUpload::new());
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text).build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+        FieldDefinition::builder("caption", FieldType::Text)
+            .localized(true)
+            .build(),
+    ];
+
+    let locale = LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+    let shared = Registry::shared();
+    shared.write().unwrap().register_collection(def);
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&db_pool, &registry, &locale).expect("sync schema");
+
+    db_pool
+        .get()
+        .unwrap()
+        .execute(
+            "INSERT INTO docs (id, filename, url, _deleted_at) VALUES \
+             ('d1', 'report.txt', '/uploads/docs/report.txt', \
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7200 seconds'))",
+            &[],
+        )
+        .unwrap();
+
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction_immediate().unwrap();
+    let (purged, files) = purge_soft_deleted(&tx, &registry, &locale).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(purged, 1, "the expired upload row is purged");
+    assert_eq!(files.len(), 1, "its files are handed back for cleanup");
+}
+
 // ── Regression: empty_trash must skip referenced documents ──────────────
 
 /// Regression: permanently deleting soft-deleted documents (empty trash) must

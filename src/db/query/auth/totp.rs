@@ -149,10 +149,11 @@ pub fn reset_totp(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     fn setup() -> (tempfile::TempDir, crate::db::BoxedConnection) {
         let dir = tempfile::TempDir::new().unwrap();
-        let config = crate::config::CrapConfig::default();
+        let config = CrapConfig::default();
         let pool = crate::db::pool::create_pool(dir.path(), &config).unwrap();
         let conn = pool.get().unwrap();
         conn.execute(

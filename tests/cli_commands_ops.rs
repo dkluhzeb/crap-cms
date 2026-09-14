@@ -277,7 +277,9 @@ fn cmd_user_unlock_by_email() {
 
 #[test]
 fn cmd_user_delete_with_confirm_by_email() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -290,10 +292,11 @@ fn cmd_user_delete_with_confirm_by_email() {
     let id = doc.id.clone();
 
     // Delete with confirm=true (skips interactive prompt)
-    commands::user_delete(commands::UserDeleteParams {
+    commands::user_delete(&commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
-        locale: &LOCALE,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: Some("deleteme@example.com".to_string()),
         id: None,
@@ -310,7 +313,9 @@ fn cmd_user_delete_with_confirm_by_email() {
 
 #[test]
 fn cmd_user_delete_with_confirm_by_id() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
     let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
@@ -323,10 +328,11 @@ fn cmd_user_delete_with_confirm_by_id() {
     let id = doc.id.to_string();
 
     // Delete by ID with confirm=true
-    commands::user_delete(commands::UserDeleteParams {
+    commands::user_delete(&commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
-        locale: &LOCALE,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: None,
         id: Some(id.clone()),
@@ -342,12 +348,15 @@ fn cmd_user_delete_with_confirm_by_id() {
 
 #[test]
 fn cmd_user_delete_nonexistent_email_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
 
-    let result = commands::user_delete(commands::UserDeleteParams {
+    let result = commands::user_delete(&commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
-        locale: &LOCALE,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "users",
         email: Some("nonexistent@example.com".to_string()),
         id: None,
@@ -479,12 +488,15 @@ fn cmd_user_unlock_non_auth_errors() {
 
 #[test]
 fn cmd_user_delete_non_auth_errors() {
-    let (_tmp, pool, registry) = full_setup();
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let cfg = CrapConfig::load(&config_dir).unwrap();
 
-    let result = commands::user_delete(commands::UserDeleteParams {
+    let result = commands::user_delete(&commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
-        locale: &LOCALE,
+        config: &cfg,
+        config_dir: &config_dir,
         collection: "posts",
         email: Some("anyone@example.com".to_string()),
         id: None,

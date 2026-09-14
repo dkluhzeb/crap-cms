@@ -21,9 +21,11 @@ impl Default for AccessConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::CrapConfig;
+
     #[test]
     fn access_config_default_deny_true_by_default() {
-        let config = crate::config::CrapConfig::default();
+        let config = CrapConfig::default();
         assert!(config.access.default_deny);
     }
 
@@ -35,7 +37,7 @@ mod tests {
             "[access]\ndefault_deny = true\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.access.default_deny);
     }
 }

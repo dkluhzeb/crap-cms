@@ -1,5 +1,7 @@
 //! Value helpers: pagination limits, date normalization, type coercion.
 
+use std::borrow::Cow;
+
 use anyhow::Result;
 use anyhow::anyhow;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -7,7 +9,7 @@ use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, FieldType, parse_truthy},
+    core::{CollectionDefinition, FieldType, normalize_email, normalize_text, parse_truthy},
     db::{DbConnection, DbValue, types::real_to_json_number},
 };
 
@@ -240,10 +242,10 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
             .ok()
             .filter(|f| f.is_finite())
             .map_or(DbValue::Null, DbValue::Real),
-        // Trim email on the way in so stored values share the normal form the
-        // case-insensitive login lookup / rate-limit keys compare against — a
-        // surrounding-whitespace email otherwise stored but never matched.
-        FieldType::Email => DbValue::Text(value.trim().to_string()),
+        // Email and text are stored in canonical form, so login, uniqueness and
+        // filters compare one spelling of each value however it was typed.
+        FieldType::Email => DbValue::Text(normalize_email(value)),
+        FieldType::Text | FieldType::Textarea => DbValue::Text(normalize_text(value)),
         FieldType::Date => DbValue::Text(normalize_date_value(value)),
         _ => DbValue::Text(value.to_string()),
     }
@@ -475,6 +477,18 @@ pub(crate) fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// Render a generated identifier for SQL: quoted when it contains a capital
+/// letter, bare otherwise. Postgres folds an unquoted identifier to lowercase,
+/// so a column named after a locale code with capitals (`title__de_DE`) would
+/// otherwise refer to a column that doesn't exist.
+pub(crate) fn sql_ident(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(quote_ident(name))
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
 /// Append a SQL condition with `WHERE` or `AND` depending on whether a WHERE clause already exists.
 pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condition: &str) {
     sql.push_str(if *has_where { " AND " } else { " WHERE " });
@@ -690,6 +704,32 @@ mod tests {
         assert!(validate_no_null_byte(&FieldType::Text, "t", "hello world").is_ok());
         // Empty passes.
         assert!(validate_no_null_byte(&FieldType::Text, "t", "").is_ok());
+    }
+
+    /// A generated name with capitals (a `de_DE` locale suffix) is quoted, so
+    /// Postgres doesn't fold it to a column that doesn't exist.
+    #[test]
+    fn sql_ident_quotes_only_names_with_capitals() {
+        assert_eq!(sql_ident("title__de"), "title__de");
+        assert_eq!(sql_ident("title__de_DE"), "\"title__de_DE\"");
+    }
+
+    /// Email and text reach storage in one canonical form, whichever way the
+    /// same characters were typed.
+    #[test]
+    fn coerce_value_stores_canonical_email_and_text() {
+        assert_eq!(
+            coerce_value(&FieldType::Email, "  ANGE\u{300}LE@J\u{dc}RGEN.example "),
+            DbValue::Text("ang\u{e8}le@j\u{fc}rgen.example".into())
+        );
+
+        for ft in [FieldType::Text, FieldType::Textarea] {
+            assert_eq!(
+                coerce_value(&ft, "Cafe\u{301} Cr\u{e8}me"),
+                DbValue::Text("Caf\u{e9} Cr\u{e8}me".into()),
+                "{ft:?} keeps case but composes accents"
+            );
+        }
     }
 
     #[test]

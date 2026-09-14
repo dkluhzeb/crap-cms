@@ -242,6 +242,10 @@ pub async fn run(
 ) -> Result<()> {
     let cfg = load_and_validate_config(config_dir)?;
 
+    // Before the database is opened: schema sync and `on_init` hooks write, and
+    // must not run against a database a restore is replacing.
+    let _instance_lock = helpers::hold_instance_lock(config_dir)?;
+
     let registry = hooks::init_lua(config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let db_pool = pool::create_pool(config_dir, &cfg).context("Failed to create database pool")?;
 

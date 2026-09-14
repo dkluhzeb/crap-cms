@@ -56,6 +56,7 @@ impl Default for LiveConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn live_config_defaults() {
@@ -77,7 +78,7 @@ mod tests {
             "[auth]\nsecret = \"0123456789abcdef0123456789abcdef01234567\"\n[live]\ntransport = \"redis\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.live.transport, LiveTransport::Redis);
     }
 }

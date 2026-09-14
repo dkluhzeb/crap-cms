@@ -114,13 +114,14 @@ fn clear_mfa_code(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     /// Any fixed key — the tests only need store and verify to agree on it.
     const TEST_SECRET: &str = "test-auth-secret";
 
     fn setup() -> (tempfile::TempDir, crate::db::BoxedConnection) {
         let dir = tempfile::TempDir::new().unwrap();
-        let config = crate::config::CrapConfig::default();
+        let config = CrapConfig::default();
         let pool = crate::db::pool::create_pool(dir.path(), &config).unwrap();
         let conn = pool.get().unwrap();
         conn.execute(

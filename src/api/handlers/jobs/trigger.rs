@@ -12,7 +12,7 @@ use crate::{
         content,
         handlers::{ContentService, content_service::pool_error_status},
     },
-    service::{self, AppInfra, ServiceContext},
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
 /// Owned bundle for the `TriggerJob` spawn-blocking body. Process-stable
@@ -68,7 +68,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         .registry
         .get_job(&input.slug)
         .cloned()
-        .ok_or_else(|| Status::not_found(format!("Job '{}' not found", input.slug)))?;
+        .ok_or_else(|| job_not_found(&input.slug))?;
 
     let job_ctx = ServiceContext::slug_only(&input.slug)
         .conn(&conn)
@@ -94,9 +94,18 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
             unique_key: input.unique_key.as_deref(),
         },
     )
-    .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?;
+    .map_err(|e| match e {
+        // A job the caller may not trigger answers like one that doesn't
+        // exist, so the RPC can't be used to discover job slugs.
+        ServiceError::AccessDenied(_) => job_not_found(&input.slug),
+        other => Status::from(other.reclassify(infra.pool.kind())),
+    })?;
 
     Ok(job_run.id)
+}
+
+fn job_not_found(slug: &str) -> Status {
+    Status::not_found(format!("Job '{slug}' not found"))
 }
 
 #[cfg(not(tarpaulin_include))]

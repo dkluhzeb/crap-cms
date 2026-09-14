@@ -1,8 +1,9 @@
 //! Admin auth machinery: per-request principal resolution
 //! (`middleware`), `admin.access` gating (`gate`), error-page
-//! rendering for the gate's denial paths (`pages`), and the
+//! rendering for the gate's denial paths (`pages`), the
 //! claims-to-AuthUser helper used by MFA / login-callback flows
-//! (`load_user`).
+//! (`load_user`), and credential resolution for admin-surface handlers
+//! outside the middleware (`request`).
 //!
 //! Per CLAUDE.md `mod.rs` files contain no business logic; this
 //! file is module declarations and public re-exports only.
@@ -11,7 +12,10 @@ mod gate;
 mod load_user;
 mod middleware;
 mod pages;
+mod request;
 
 pub(crate) use gate::check_admin_gate_for_doc;
 pub(crate) use load_user::load_auth_user;
 pub(in crate::admin) use middleware::auth_middleware;
+pub(crate) use middleware::headers_to_map;
+pub(crate) use request::{bearer_token, evaluate_admin_request, session_cookie_token};

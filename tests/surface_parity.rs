@@ -92,11 +92,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
-    // REST upload delete: a pre-flight existence probe (404-vs-proceed boolean,
-    // no content served). The request is already access-gated by
-    // `check_upload_access` above the call, and `find_by_id` excludes
-    // soft-deleted rows, so it cannot probe trashed docs.
-    ("api/upload/delete.rs", "query::find_by_id("),
 ];
 
 fn is_allowlisted(rel_path: &str, call: &str) -> bool {
@@ -385,9 +380,6 @@ const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
     // Bootstrap user creation: password policy + ref_count::after_create
     // + fts_upsert, mirroring service create.
     ("commands/user/create.rs", "query::create("),
-    // Offline user deletion: before_hard_delete + fts_delete,
-    // mirroring service delete.
-    ("commands/user/modify.rs", "query::delete("),
     // Bootstrap password set (create) and offline password change —
     // both run the password policy first; hashing is inside the
     // primitive itself.

@@ -5,7 +5,10 @@ use http_body_util::BodyExt;
 use serde_json::json;
 
 use crap_cms::{
-    admin::{AdminState, server::build_router, templates, translations::Translations},
+    admin::{
+        AdminState, custom_pages::CustomPageRegistry, server::build_router, templates,
+        translations::Translations,
+    },
     config::CrapConfig,
     config::EmailConfig,
     core::{
@@ -149,6 +152,10 @@ pub fn setup_app_at(
         tmp.path(),
     );
 
+    // Registered from `init.lua` the same way `admin::server` does, so page
+    // access rules and sidebar entries are exercised rather than bypassed.
+    let custom_pages = CustomPageRegistry::from_pages(infra.hook_runner.extract_custom_pages());
+
     let state = AdminState {
         mcp_sessions: Arc::default(),
         infra,
@@ -174,7 +181,7 @@ pub fn setup_app_at(
         shutdown: tokio_util::sync::CancellationToken::new(),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
-        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
+        custom_pages,
     };
 
     let router = build_router(state);

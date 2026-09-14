@@ -134,9 +134,9 @@ pub async fn forgot_password_action(
     // short-circuited) so each counter advances every attempt. Returning the
     // generic success on a block leaks nothing — the response is always
     // "success" regardless of whether the email exists.
-    // Normalize the per-email key (trim + lowercase) so casing variants of one
-    // account can't each get a fresh flooding budget — the account lookup is
-    // case-insensitive, so the limiter must be too.
+    // Key the per-email limiter on the address in its stored form so spelling
+    // variants of one account can't each get a fresh flooding budget — the
+    // account lookup compares that form, so the limiter must too.
     let email_key = normalize_email(&form.email);
 
     let email_blocked = state.forgot_password_limiter.check_and_block(&email_key);

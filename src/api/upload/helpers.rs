@@ -11,7 +11,7 @@ use serde::Serialize;
 use tracing::{error, warn};
 
 use crate::{
-    admin::{AdminState, server::load_auth_user},
+    admin::{AdminState, server::evaluate_admin_request},
     core::{
         AuthUser, CollectionDefinition, Document, DocumentFields, HookRef,
         collection::LiveMode,
@@ -19,7 +19,10 @@ use crate::{
     },
     db::AccessResult,
     hooks::{AccessCheckInput, lifecycle::PublishEventInput},
-    service::ServiceError,
+    service::{
+        ServiceError,
+        auth::{AuthFailure, Resolution},
+    },
 };
 
 /// JSON body for an error response: `{ "error": "<message>" }`.
@@ -47,57 +50,68 @@ pub fn extract_bearer_token(auth_header: &str) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
+/// The bearer token of an `Authorization` header, `None` when there is no
+/// header, or a `401` for a header that isn't a bearer credential.
+fn bearer_from_headers(headers: &HeaderMap) -> Result<Option<&str>, Box<Response>> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Ok(None);
+    };
+
+    let value = value.to_str().map_err(|_| {
+        Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "Invalid Authorization header",
+        ))
+    })?;
+
+    extract_bearer_token(value).map(Some).ok_or_else(|| {
+        Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "Authorization header must use Bearer scheme",
+        ))
+    })
+}
+
+/// The response for a credential that was supplied but can't be used.
+fn auth_failure_response(failure: AuthFailure) -> Response {
+    let message = match failure {
+        AuthFailure::Lookup => {
+            return json_error(StatusCode::SERVICE_UNAVAILABLE, "User lookup failed");
+        }
+        AuthFailure::Locked => "Account locked",
+        AuthFailure::StaleSession => "Session invalidated",
+        AuthFailure::UserMissing => "User no longer exists",
+        AuthFailure::UnknownCollection => "Auth collection no longer exists",
+        AuthFailure::BadToken => "Invalid or expired token",
+        AuthFailure::Unaccepted => "Credential not accepted on this surface",
+    };
+
+    json_error(StatusCode::UNAUTHORIZED, message)
+}
+
+/// Resolve the caller of an upload API request through the shared auth
+/// evaluator (admin surface): the collection's accepted methods, locked
+/// accounts and stale sessions decide exactly as they do for the admin UI.
 ///
-/// Returns `Ok(None)` when no Authorization header is present (anonymous),
-/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token.
+/// Returns `Ok(None)` for an anonymous request, `Ok(Some(user))` when a method
+/// authenticated it, and an error response when a credential was supplied but
+/// can't be used — never an anonymous fallback for a bad credential.
 #[cfg(not(tarpaulin_include))]
 pub fn extract_bearer_user(
     state: &AdminState,
     headers: &HeaderMap,
 ) -> Result<Option<AuthUser>, Box<Response>> {
-    let auth_header = match headers.get(AUTHORIZATION) {
-        Some(h) => match h.to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                return Err(Box::new(json_error(
-                    StatusCode::UNAUTHORIZED,
-                    "Invalid Authorization header",
-                )));
-            }
-        },
-        None => return Ok(None),
-    };
+    let bearer = bearer_from_headers(headers)?;
 
-    let Some(token) = extract_bearer_token(auth_header) else {
-        return Err(Box::new(json_error(
-            StatusCode::UNAUTHORIZED,
-            "Authorization header must use Bearer scheme",
-        )));
-    };
+    // `db_error_response` logs the error it classifies.
+    let resolution = evaluate_admin_request(state, headers, bearer, None)
+        .map_err(|e| Box::new(db_error_response(e, state.infra.pool.kind())))?;
 
-    // Route through `state.infra.token_provider` (the trait-object form)
-    // rather than the free `validate_token` against `jwt_secret`.
-    // The two are wired with the same secret today (`startup.rs` ties
-    // them) but a future backend swap (Paseto, opaque tokens, …) flows
-    // here automatically only via the provider.
-    let claims = state
-        .infra
-        .token_provider
-        .validate_token(token)
-        .map_err(|_| {
-            Box::new(json_error(
-                StatusCode::UNAUTHORIZED,
-                "Invalid or expired token",
-            ))
-        })?;
-
-    Ok(load_auth_user(
-        &state.infra.pool,
-        &state.infra.registry,
-        &claims,
-        &state.config.locale,
-    ))
+    match resolution {
+        Resolution::Authenticated(auth) => Ok(Some(auth.user)),
+        Resolution::Anonymous => Ok(None),
+        Resolution::Invalid(failure) => Err(Box::new(auth_failure_response(failure))),
+    }
 }
 
 /// Return a JSON error response.
@@ -128,19 +142,16 @@ pub fn check_upload_access(
     operation: &str,
     collection: &str,
 ) -> Result<(), Box<Response>> {
-    let mut conn = state.infra.pool.get().map_err(|_| {
-        Box::new(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Database error",
-        ))
-    })?;
+    let db_kind = state.infra.pool.kind();
+    let mut conn = state
+        .infra
+        .pool
+        .get()
+        .map_err(|e| Box::new(db_error_response(e, db_kind)))?;
 
-    let tx = conn.transaction().map_err(|_| {
-        Box::new(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Database error",
-        ))
-    })?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| Box::new(db_error_response(e, db_kind)))?;
 
     let result = state.infra.hook_runner.check_access(
         &AccessCheckInput::builder(operation, collection)
@@ -167,6 +178,13 @@ pub fn check_upload_access(
         }
         _ => Ok(()),
     }
+}
+
+/// The response to a failed connection checkout or transaction start: an
+/// exhausted or busy pool is `503`, as every other surface reports it, and
+/// anything else a generic `500`.
+fn db_error_response(e: anyhow::Error, db_kind: &str) -> Response {
+    service_error_to_response(&ServiceError::classify(e, db_kind))
 }
 
 /// Publish a mutation event and build the `EventUser` from auth.
@@ -396,6 +414,23 @@ mod tests {
         assert!(
             !parsed["error"].as_str().unwrap().contains("database"),
             "client must not see backend detail",
+        );
+    }
+
+    /// Regression: the upload access check answered `500` when the pool was
+    /// exhausted, where every other surface answers `503`.
+    #[test]
+    fn an_exhausted_pool_answers_503() {
+        let err =
+            anyhow!("timed out waiting for connection").context("Failed to get DB connection");
+
+        assert_eq!(
+            db_error_response(err, "sqlite").status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            db_error_response(anyhow!("disk I/O error"), "sqlite").status(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 

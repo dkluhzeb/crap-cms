@@ -8,6 +8,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Generated client read types no longer promise fields a read can omit.**
+  `typegen client` made a document's `required` fields non-optional, but a
+  draft read returns them empty, and field read access and `select` leave keys
+  out, so typed clients crashed or lied on real responses. Every field of a
+  generated read document, and of its group and row types, is now optional —
+  and nullable in TypeScript (`?: T | null`), where an empty value reads as
+  `null`. Go reads a boolean and a single group through a pointer, so an absent field
+  no longer looks like `false` or an empty group. TypeScript `…Document` no
+  longer extends `…Data`, which keeps its required fields for creating — nested
+  ones too, through a `…Data` variant of each group and row type. The row type
+  of an array stored in its own table (not nested in another row) gains the
+  optional `id` its rows carry, so an update can keep them. Read
+  documents also gained the keys the server returns but the types left out:
+  `_status` (drafts), `_deleted_at` (soft delete) and `<name>_tz` (timezone
+  dates). A collection or global with localized fields gains a
+  `locale = "all"` read type (`…LocalizedDocument` in TypeScript, `…Localized`
+  elsewhere) whose localized fields are per-locale maps, holding `null` for a
+  locale without a value. **Migration:**
+  regenerate with `crap-cms typegen client` and handle absent values where the
+  old types said a field was always present; in Go, dereference booleans and
+  single groups.
+
+- **Email and text values are stored in one canonical form.** Email fields
+  were only trimmed, while logins compared a Rust-lowercased address against
+  the database's `LOWER()`, which folds only A–Z on SQLite: a user registered
+  as `Ärger@example.com` could never log in or reset their password, and
+  `Ärger@…` and `ärger@…` could register as two accounts. Visually identical
+  text in different Unicode forms (`é` as one code point or as `e` + accent)
+  also passed `unique` as two values. Email values are now stored trimmed,
+  NFC-normalized and lowercased, and Text, Textarea and Email values are
+  NFC-normalized on every write; logins and token lookups compare the
+  canonical form exactly, and filters compare it — in the database and in
+  memory alike. Stored email and text values — their columns, per-locale
+  columns, array rows, and values inside JSON-stored rows — are converted at
+  startup, and again for a collection or global whose email or text fields
+  change.
+  **Migration:** if two live documents hold the same value, once compared this
+  way, in a unique field or unique index, startup stops and lists them; merge
+  or change one of them, then start again.
+
+- **A backslash escapes `%` and `_` in `like` filters.** Postgres treated `\`
+  as an escape character in `LIKE` and SQLite did not, so the same pattern
+  matched differently per backend. Both now use `ESCAPE '\'`: write `\%`, `\_`
+  or `\\` for a literal `%`, `_` or backslash. A pattern that ends in a lone
+  backslash is rejected instead of erroring on one backend and matching
+  nothing on the other. **Migration:** double every literal backslash in a
+  `like` value — in filters, access constraints and saved admin URLs.
+
+- **`crap-cms user delete` deletes through the service layer.** It deleted the
+  row directly: a user other documents still referenced was deleted anyway, a
+  user of a soft-delete collection was erased instead of trashed, delete hooks
+  didn't run, and with Redis live updates the user's open streams on `serve`
+  stayed open. It now deletes through the same service as the admin UI.
+  **Migration:** on a soft-delete auth collection the user is moved to the
+  trash — run `crap-cms trash purge` to remove it for good; on other
+  collections a user other documents still reference is refused.
+
 - **Timezone dates nested in JSON rows are stored as UTC.** A date with
   `timezone = true` inside a blocks row, inside a group within an array or
   blocks row, or inside a nested array row was stored as the wall-clock digits
@@ -807,6 +864,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The upload API and file serving bypassed the admin's auth rules.** The REST
+  upload API and the `/uploads` route loaded a token's user on their own: a
+  token of a locked account or a revoked session was treated as an anonymous
+  request, which a collection open to anonymous callers then accepted or
+  served, instead of the documented `401`; and a collection whose auth
+  `methods` don't accept that credential on the admin surface still
+  authenticated there. Both now resolve the caller through the same evaluator
+  as the admin UI, and the upload API answers an unusable credential with
+  `401`.
+
+- **`/admin/collections` listed collections hidden by `access.admin`.** The
+  list checked read access only, while the dashboard and navigation also apply
+  the admin rule. It now applies both.
+
+- **Deleting an upload through the API revealed whether an id existed.** Under a
+  delete rule that returns a filter, an upload outside the filter answered
+  `403` while a missing id answered `404`, because an unfiltered existence
+  check ran before the rule. The check is gone; both answer alike.
+
+- **A custom page whose access rule returned a filter table was shown.** A page
+  has no rows for a filter to narrow, so a filter table now denies it — on the
+  page route and in the sidebar alike.
+
+- **gRPC `TriggerJob` revealed which job slugs exist.** A job the caller may not
+  trigger returned `PERMISSION_DENIED` while an unknown slug returned
+  `NOT_FOUND`, and a malformed payload was rejected before the access rule ran.
+  Both now return `NOT_FOUND`, as job reads already do; a malformed payload is
+  reported only to a caller the rule lets through.
+
+- **A locked account could sign in through a custom auth strategy.** The
+  strategy path checked `_locked` and `_verified` on the document the hook
+  returned, which carries neither when the hook looks the user up through the
+  API — so a locked account authenticated, and on a collection requiring
+  verification every strategy user was refused. Both flags are now read from
+  the stored account (a flag the hook sets on its document still counts).
+
+- **Tokens of an account locked without revoking its sessions stayed valid.**
+  The per-request lock check read a field user documents never carry, so only
+  the session revocation that API locks perform kept a locked account out. A
+  lock set another way — an import, direct SQL — left its tokens working. The
+  lock is now read from the stored account on every request.
+
+- **Importing credentials over an existing account could revive revoked
+  sessions.** The import wrote the export's session version back, so tokens
+  the target had revoked since became valid again. The session version now
+  moves past both.
+
+- **Importing TOTP secrets sealed with another auth secret quietly reset
+  enrollment.** Such a secret can't be read, so the account re-enrolled on its
+  next login — letting anyone with the password register an authenticator.
+  `import` now refuses those accounts, naming them, before writing anything.
+
+- **A failed or stale bulk run kept its request payload.** Only runs that
+  completed, or whose operation failed, dropped the submitted documents, patch
+  and filter; a run abandoned before executing (its queuer locked or deleted,
+  an invalid locale), timed out, or recovered as stale kept them until the
+  retention purge. Every terminal status now drops them.
+
+- **MCP job tools could read and cancel bulk runs of collections MCP doesn't
+  expose.** `get_job_run` and `cancel_job_run` now hide a bulk run unless its
+  collection is exposed to MCP. A finished bulk run keeps its collection name
+  for this check; runs that finished before this release don't carry it and
+  stay hidden from MCP.
+
 - **Rate limits: budgets that were shared, missing, or wiped.**
   - gRPC `ResetPassword` counted against the forgot-password per-IP budget
     while the admin reset used its own, so switching surfaces bought a fresh
@@ -1122,10 +1243,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   honoring `methods`/`surfaces`, session revocation, account locks, and custom
   header-activated strategies (an API-key user can call `Me` without a JWT).
   Error details changed with the unification (codes now come from the shared
-  mapping every RPC uses, pinned by a unit test): a token invalidated by locking
-  answers `UNAUTHENTICATED` ("Session invalidated" — locking bumps the session
-  version; the message was "Account is locked"), and a **deleted** user answers
-  `UNAUTHENTICATED` ("User no longer exists") instead of `NOT_FOUND`.
+  mapping every RPC uses, pinned by a unit test): a token of a locked account
+  answers `PERMISSION_DENIED` ("Account locked" — the stored lock is read on
+  every request; the message was "Account is locked"), and a **deleted** user
+  answers `UNAUTHENTICATED` ("User no longer exists") instead of `NOT_FOUND`.
 - **Validate dry-runs follow the target operation's access rules.** The
   `Validate`/`ValidateGlobal` endpoints ran validators — including `unique`
   checks — without any collection-level access gate, so an anonymous caller
@@ -1921,6 +2042,254 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **A draft read showed another locale's value for fields inside a group.** A
+  group's localized sub-field was resolved beside the group instead of in it,
+  so a reader saw the locale the draft was last saved in — and a read-denied
+  sub-field could still be returned. Draft reads of a localized array, blocks or
+  has-many field also now fall back on a locale without rows, as the published
+  read does.
+- **A global's draft was read without resolving the locale**, returning the
+  last save's value and every locale's copy of it.
+- **MCP offered a row `id` for rows nested inside another row.** Those rows are
+  stored as part of their parent, so the `id` was saved as data and unsent
+  sub-fields were dropped; only rows stored in their own table offer it.
+- **CLI commands failed on a read-only data directory.** Commands that share
+  the project now take an existing `data/crap.lock` through a read-only handle;
+  `restore` and `migrate fresh` still need it writable.
+- **Admin file serving and custom routes treated a database error during sign-in
+  as an anonymous request**, refusing signed-in users under load; they now
+  answer `503` like every other surface. A request without credentials needs no
+  database connection, so public pages and files keep serving when the pool is
+  busy, and a database error while checking access to a private file answers
+  `503` instead of `404`.
+- **Generated Go row types spelled the row id `Id`**; it is `ID`, as on
+  documents.
+- **Version snapshots recorded localized numbers, checkboxes and multi-value
+  fields as text.** A draft read returned them as strings, and restoring a
+  version cleared a localized multi-value field. Restoring a version also left a
+  multi-value select, text or number field that isn't localized at its current
+  value.
+- **Read rules on a field inside a group misjudged drafts.** A rule such as
+  `seo.owner equals …` hid a draft that matched, and `not_exists` let one
+  through that didn't.
+- **Reading a draft with `locale = "all"` returned only the default locale's
+  value**; it now returns every locale's, as the published read does. An empty
+  group in a draft is kept as `{}`.
+
+- **Editing a timezone date in a draft kept the old timezone.** A draft save
+  recorded the date for its locale but not the timezone, so the draft read
+  showed the new date with the stored zone, and saving again reverted it.
+- **Array, blocks and has-many rows disappeared when a field became localized
+  under a hyphenated default locale.** Existing rows were given the column form
+  of the code (`en_US`) while reads look for `en-US`. New locale columns now
+  default to the code itself.
+- **A draft read in a locale without a value returned another locale's.** With
+  fallback off, reading a draft in a locale the draft has no value for returned
+  the value of the locale it was saved under; it now returns nothing, like the
+  published read.
+- **The startup check for canonical duplicates skipped unique indexes with a
+  number or checkbox column**, so startup then failed on the index with a raw
+  constraint error instead of naming the documents.
+- **An auth secret file that couldn't be read was replaced**, invalidating every
+  session, sealed TOTP secret and encrypted value; it is now an error. Processes
+  starting together could also each generate a different secret — generation
+  now runs under a lock file (`data/.jwt_secret.lock`) and re-reads the secret
+  once it holds it.
+- **`crap-cms trash empty` failed on collections with a localized field.**
+- **CLI commands could write while a restore replaced the database.** Every
+  command that opens the database (`init`, `import`, `export`, `user`, `trash`,
+  `jobs`, `images`, `migrate`, `db cleanup`, `db console`, `db backup`, `status`,
+  `bench`) now holds `data/crap.lock` shared, so `restore` and `migrate fresh`
+  refuse while one runs.
+- **A hidden or read-denied timezone date still returned its timezone** — for
+  `hidden = true` fields, fields inside array rows, and `locale = "all"` reads.
+- **The upload API answered `500` for a bearer token when the database pool
+  was exhausted**; it answers `503` like every other surface.
+- **`crap-cms restore` claimed to restore the auth secret when `[auth] secret`
+  is configured.** The configured secret takes precedence, and restore now warns
+  that the backup's secret isn't used. A secret set from an environment variable
+  that is unset or empty counts as not configured, and a backup no longer
+  carries an empty secret file.
+
+- **Locale codes with a hyphen (`pt-BR`) broke startup, drafts, restore and
+  import.** Their columns are named with an underscore (`title__pt_BR`), but
+  the one-time email and text rewrite, the draft save, the draft read, version
+  restore and `crap-cms import` built `title__pt-BR`: startup failed on a
+  missing column, a draft's translation was lost on read and restore, and an
+  import failed. Every path now uses the column form.
+- **A draft read returned every locale's timezone.** Reading a draft of a
+  localized timezone date gave the timezone of the locale the draft was saved
+  under and left each locale's `…_tz__xx` value in the document. The timezone
+  now follows the reading locale's date, and the per-locale values are dropped.
+- **The canonical email and text check missed duplicates in unique indexes.**
+  A unique index over several fields counts trashed documents, and indexes a
+  localized field by its default-locale column; the startup check skipped
+  trashed documents there and failed on a localized field. It now checks what
+  the index holds.
+- **Restoring a version stored email and text values as typed.** A snapshot
+  taken before values were stored in canonical form was validated and written
+  unchanged. Restore now brings the values into canonical form first, for
+  collections and globals.
+- **A custom page without an access rule was missing from the sidebar.** With
+  `[access] default_deny` on — the default — the sidebar hid it while its
+  route rendered it. `default_deny` applies to collections and globals, so the
+  page is listed.
+- **A localized field couldn't be imported with locales off.** Its export
+  holds a bare value, and the import demanded an object of locales.
+- **`crap-cms trash purge` needed two database connections.** It now runs on
+  one, so a pool sized to a single connection can purge.
+
+- **`crap-cms restore` could run while a worker or MCP process used the
+  database.** It only checked the server's PID file, and a stale PID could let
+  it swap the database under a live process. Server, worker and stdio MCP
+  processes and every other CLI command that opens the database now take a
+  lock file (`data/crap.lock`) before they open it and hold it until they exit; `restore` and `migrate fresh` take
+  it exclusively for the whole command, refuse while any of them runs, and
+  keep them from starting until they finish.
+
+- **`trash purge` deleted files of documents it failed to purge.** It deleted a
+  trashed upload's files before its transaction committed, so a purge that
+  failed on a later document restored the rows while their files were gone.
+  Files are now deleted once the purge commits.
+
+- **Purging trashed uploads of a collection with localized fields left their
+  files behind.** `trash purge` and the automatic trash retention read the row
+  without a locale, which fails on a localized collection: the CLI ignored the
+  error and left the files on disk, the automatic purge skipped the document
+  on every run.
+
+- **`crap-cms backup` gave misleading errors on Postgres and remote upload
+  storage.** It reported "Database file not found" for a Postgres database and
+  silently backed up nothing for S3 or custom upload storage. It now says to
+  use `pg_dump` for Postgres and that remote uploads need their own backup.
+
+- **Locale codes with capital letters broke Postgres queries.** A locale such
+  as `de-DE` names its columns `title__de_DE`; tables are created with quoted
+  names, but filters, sorting, cursor pagination and index statements used the
+  name unquoted, which Postgres folds to `title__de_de` — a column that doesn't
+  exist, so those queries and the startup index sync failed. Generated names
+  with capitals are now quoted everywhere they are used.
+
+- **Over-long index names were not rejected.** Postgres truncates identifiers
+  at 63 bytes; an index name built from a long collection, field and locale
+  name could be cut short and collide, or be dropped and recreated on every
+  start. Startup now rejects any index name over the limit, as it already did
+  for tables and columns.
+
+- **Access filters evaluated in memory disagreed with the database.** `contains`
+  compared case-sensitively where SQL `LIKE` / `ILIKE` fold ASCII case, a
+  `like` `%` did not match across line breaks, and an email or text operand was
+  compared as typed where SQL compares its stored form, so a document could
+  pass the database filter but fail the same rule checked in memory (live
+  events, population, draft snapshots), or the reverse — a `not_equals` on an
+  address typed with capitals let rows through that the database excluded.
+
+- **Index names could collide, silently skipping an index.** An index name
+  joins the collection and column names with `_`, so `index = true` on `title`
+  and a unique compound index on `title` — or collections `post` and `post_s`
+  indexing `s_title` and `title` — produced one name, and only the first index
+  was created: uniqueness could go unenforced. Startup now rejects colliding
+  index names, naming both sources. A stale index whose name needs quoting is
+  also dropped instead of failing startup.
+
+- **Text fields limited emoji below their `max_length`.** The admin form set
+  the browser's `maxlength`, which counts UTF-16 units, so each emoji counted
+  twice and a value within `max_length` characters could not be typed. The
+  limit is now enforced by server validation, which counts characters.
+
+- **Downloaded file names with non-ASCII characters were garbled.** The
+  `Content-Disposition` header carried the raw UTF-8 name; it now adds an RFC
+  6266 `filename*` with an ASCII fallback. Invisible bidi control characters,
+  which could make `fdp.exe` display as `exe.pdf`, are replaced like control
+  characters.
+
+- **MCP schemas did not match the stored document shape.** Block variants were
+  discriminated by `blockType` instead of the `_block_type` key that writes and
+  reads use, so a client following the schema had its block rows rejected.
+  Array and blocks rows had no `id`, so an update that followed the schema
+  replaced every row and lost the sub-fields it didn't send. Has-many text and
+  number fields were described as single values, timezone dates had no
+  `<name>_tz` property, and a polymorphic relationship didn't say its values
+  are `collection/id`. The schemas now describe all of these, and
+  `describe_collection` reports `timestamps` and `has_drafts` for globals too.
+
+- **gRPC `DescribeCollection` described every global without timestamps or
+  drafts.** A global's `timestamps` and `drafts` were always `false`, even for a
+  global with drafts enabled. A global now reports `timestamps: true` and its
+  real `drafts` setting.
+
+- **Generated Lua hook types named the wrong operations.** The per-collection
+  hook context left out `"delete"`, and the per-global one said `"get_global"`
+  where hooks receive `"get"`, so a hook branching on either got a type warning
+  for correct code. The generated read documents (`crap.doc.*`,
+  `crap.global_doc.*`) now mark every field optional — a draft may lack
+  required values, and field read access and `select` leave keys out — and
+  include `_status`, `_deleted_at` and timezone `<name>_tz` keys where the
+  collection has them.
+
+- **Backups lost the generated auth secret.** `crap-cms backup` saved the
+  database and uploads but not `data/.jwt_secret`, which is the key for
+  `crap.crypto` values, TOTP secrets, MFA codes and signed URLs when
+  `[auth] secret` is unset. Restoring on a new machine generated a new secret
+  and made that data unreadable. Backups now include the secret file, and
+  `restore` puts it back.
+
+- **Export → import did not round-trip.** Imported users had no password,
+  trashed documents were left out, timezone-enabled dates lost their zone,
+  array and blocks rows came back under new ids, a localized array, blocks or
+  has-many field exported only its default locale's rows (and import refused
+  it), a collection with a group inside a group, or an array or row inside a
+  group or tabs, failed to import, and a document referencing one later in the
+  file — collections import in slug order — failed the whole import on a fresh
+  database. Export now includes trashed documents, timezone values and every
+  locale's join rows; `export --include-credentials` adds each account's
+  password hash, lock, session version, verification and TOTP state (the file
+  is then sensitive); import writes all of them back, keeps row ids, settles
+  reference counts once every document exists, and warns about accounts left
+  without a password. Import now runs in one transaction, so a failure leaves
+  nothing imported.
+
+- **Restoring a version moved localized array, blocks and relationship rows
+  into the default locale.** A version snapshot held every locale's rows of a
+  localized join field in one list, and restore wrote that list back without a
+  locale: rows deleted since the snapshot were re-created in the default
+  locale, rows added since were removed from every locale, and a has-many
+  relationship linking the same target in two locales failed with a database
+  error. Snapshots now record each locale's rows separately and restore writes
+  each locale back on its own. A snapshot taken before this release carries no
+  per-locale rows, so restoring it leaves localized join fields as they are.
+
+- **A second draft save mixed up the locales of a field inside a group.**
+  Building on the latest draft moved a group field's per-locale keys into the
+  group object, so reading the draft in English showed a German edit and
+  restoring it skipped the group's localized array and blocks rows. They now
+  stay where the draft read and restore look for them.
+
+- **Timezone companions came back in the wrong place.** A localized timezone
+  date read with `locale = "all"` returned its date per locale but its
+  `<name>_tz` as flat `<name>_tz__en` keys, and a timezone date inside a group
+  returned its `<name>_tz` beside the group as `<group>__<name>_tz`. Both now
+  follow their date: a per-locale map, and a key inside the group.
+
+- **MCP rejected a partial update of a global.** The `update_global` input
+  schema kept the global's `required` fields, so an update sending only some
+  fields failed schema validation. Only a create requires fields now.
+
+- **`typegen proto` generated Rust that didn't compile for a timezone date
+  named with a leading digit.** Its `<name>_tz` companion was assigned under
+  the raw key; it now uses the same sanitized field name as the client struct.
+
+- **A draft saved in one locale deleted another locale's localized rows.** The
+  draft's rows replaced the shared list in the snapshot: reading the draft in
+  another locale showed them, and restoring or publishing it deleted that
+  locale's rows. A draft now changes only its own locale's rows.
+
+- **Saving a draft discarded earlier draft edits.** Every draft save started
+  from the published document instead of the pending draft, so a draft saved in
+  a second locale reverted the first locale's draft, and a draft update that
+  sent a single field (as API clients do) reset every other field's pending
+  edit. A draft save now builds on the latest draft when there is one.
 
 - **Admin: timezone dates in array rows shifted on every save.** The form
   showed the stored UTC value as if it were local time and saved it back as
@@ -4020,6 +4389,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`FieldInfo` describes polymorphic targets, value lists and timezone
+  dates.** gRPC `DescribeCollection` field info gained
+  `relationship_collections` (every target of a polymorphic relationship),
+  `has_many` (a text, number or select field holding a list) and `timezone` (a
+  date carrying its IANA zone in `<name>_tz`).
 
 - **`--password-stdin` for `crap-cms user create` and `user change-password`.**
   Reads the password from the first line of standard input, so provisioning

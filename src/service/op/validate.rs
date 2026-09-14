@@ -17,7 +17,7 @@
 use anyhow::Context as _;
 
 use crate::{
-    core::{DocumentFields, ValidationError, nest_group_fields},
+    core::{DocumentFields, ValidationError, canonicalize_text_values, nest_group_fields},
     db::{DbConnection, LocaleContext, query::helpers::global_table},
     service::{
         Def, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext, WriteInput,
@@ -73,12 +73,13 @@ fn run_validate(
         exclude_id: _,
     } = args;
 
-    // Canonicalize to nested groups BEFORE the access check — the real write
-    // bodies nest first too, so an access hook reading `ctx.data.seo.title`
-    // sees the same shape on the dry-run as on the write.
-    // (`validate_document` nests again internally; the operation is
+    // Canonicalize (nested groups, canonical email and text) BEFORE the access
+    // check — the real write bodies do so first too, so an access hook reading
+    // `ctx.data.seo.title` sees the same data on the dry-run as on the write.
+    // (`validate_document` canonicalizes again internally; both steps are
     // idempotent.)
-    let data = nest_group_fields(&data, vctx.fields);
+    let mut data = nest_group_fields(&data, vctx.fields);
+    canonicalize_text_values(&mut data, vctx.fields);
 
     if let Some(wh) = ctx.write_hooks {
         check_validate_access(ctx, wh, vctx, &data, locale_ctx.as_ref())?;

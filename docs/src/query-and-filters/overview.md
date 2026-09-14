@@ -10,7 +10,7 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 |----------|-----|-------------|-----|
 | Equals | `status = "published"` or `{ equals = "val" }` | `{"equals": "val"}` | `field = ?` |
 | Not equals | `{ not_equals = "val" }` | `{"not_equals": "val"}` | `field != ?` |
-| Like | `{ like = "pattern%" }` | `{"like": "pattern%"}` | `field LIKE ?` |
+| Like | `{ like = "pattern%" }` | `{"like": "pattern%"}` | `field LIKE ? ESCAPE '\'` |
 | Contains | `{ contains = "text" }` | `{"contains": "text"}` | `field LIKE '%text%' ESCAPE '\'` (wildcards `%` and `_` in the search text are escaped) |
 | Greater than | `{ greater_than = "10" }` | `{"greater_than": "10"}` | `field > ?` |
 | Less than | `{ less_than = "10" }` | `{"less_than": "10"}` | `field < ?` |
@@ -37,8 +37,10 @@ admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
 - **`like` / `contains` are case-insensitive** (for ASCII). `{ like = "john%" }`
   matches `"John Doe"`. (SQLite `LIKE` is ASCII-case-insensitive by default;
   Postgres uses `ILIKE` to match.) In a `like` pattern, `%` matches any run of
-  characters and `_` matches one character. `contains` escapes any `%`/`_` in
-  your text, so they match literally.
+  characters (line breaks included) and `_` matches one character; write `\%`,
+  `\_` or `\\` to match a literal `%`, `_` or backslash. A pattern that ends in
+  a lone backslash is rejected. `contains` escapes any `%`/`_` in your text, so
+  they match literally.
 - **Ordering (`greater_than`/`less_than`) follows the field's type.** Filter
   values are coerced to the column type from the field definition: a `number`
   field compares **numerically** (`"100" > "50"` is true), a `text` field

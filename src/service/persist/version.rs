@@ -42,13 +42,13 @@ pub fn persist_draft_version(
         locale_ctx,
     })?;
 
-    Ok(draft_document(&DraftDocumentArgs {
+    draft_document(&DraftDocumentArgs {
         id,
         snapshot: &snapshot,
         existing: &existing_doc,
         fields: &def.fields,
         locale_ctx,
-    }))
+    })
 }
 
 /// The document a draft save reports: the stored snapshot (the draft content),
@@ -61,7 +61,11 @@ pub fn persist_draft_version(
 /// the emitted event all carried the PRE-EDIT document: a published-only
 /// subscriber got an Update event for content that had not changed, while a
 /// draft subscriber got nothing.
-pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Document {
+///
+/// # Errors
+///
+/// Returns an error if a configured locale code has no column form.
+pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Result<Document> {
     let &DraftDocumentArgs {
         id,
         snapshot,
@@ -76,12 +80,12 @@ pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Document {
     // write was made under and drop the rest, so the response has the same
     // shape as any other write's — and doesn't hand back translations the
     // caller never asked for.
-    ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx);
+    ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
 
     doc.fields
         .insert("_status".to_string(), Value::String("draft".to_string()));
 
-    doc
+    Ok(doc)
 }
 
 /// Inputs for [`draft_document`]. Five fields, built at two call sites and

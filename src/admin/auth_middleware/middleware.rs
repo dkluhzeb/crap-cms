@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Arc};
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode, header::COOKIE},
+    http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
@@ -19,12 +19,12 @@ use crate::admin::{
     auth_middleware::{
         gate::{check_admin_gate, check_collection_admin_gate},
         pages::auth_required_response,
+        request::{bearer_token, session_cookie_token},
     },
     handlers::{
-        auth::{SESSION_COOKIE, append_cookies, clear_session_cookies, session_same_site},
+        auth::{append_cookies, clear_session_cookies, session_same_site},
         shared::paths,
     },
-    server::extract_cookie,
 };
 use crate::config::LocaleConfig;
 use crate::core::{AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface};
@@ -42,7 +42,7 @@ use crate::service::{
 /// evaluator's job in `activation_matches`. Preserving the
 /// original casing keeps the `ctx.headers` contract stable for
 /// existing Lua hooks that may use mixed-case lookups.
-fn headers_to_map(headers: &axum::http::HeaderMap) -> HashMap<String, String> {
+pub(crate) fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
     headers
         .iter()
         .filter_map(|(name, value)| {
@@ -232,28 +232,13 @@ pub(in crate::admin) async fn auth_middleware(
         return auth_required_response(&state);
     }
 
-    let cookie_header = request
-        .headers()
-        .get(COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let session_token = extract_cookie(cookie_header, SESSION_COOKIE).map(str::to_string);
-
-    let bearer_token = request
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
     let params = ResolveAuthParams {
         pool: state.infra.pool.clone(),
         registry: state.infra.registry.clone(),
         token_provider: state.infra.token_provider.clone(),
         hook_runner: state.infra.hook_runner.clone(),
-        bearer_token,
-        session_token,
+        bearer_token: bearer_token(request.headers()).map(str::to_string),
+        session_token: session_cookie_token(request.headers()).map(str::to_string),
         headers_map: headers_to_map(request.headers()),
         locale_config: state.config.locale.clone(),
     };

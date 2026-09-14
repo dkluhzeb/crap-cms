@@ -114,20 +114,27 @@ impl ClientPrinter for GoPrinter {
     }
 
     fn document(&mut self, def: &Document) {
-        let name = idents::go_exported(&def.name);
-        let comment = if def.is_global {
-            format!("// {name} represents the {} global.", def.slug)
+        let base = idents::go_exported(&def.name);
+        let name = if def.localized {
+            format!("{base}Localized")
         } else {
-            format!("// {name} represents a {} document.", def.slug)
+            base
+        };
+        let comment = match (def.localized, def.is_global) {
+            (true, _) => format!(
+                "// {name} is a {} document read with locale=all: localized fields hold one value per locale.",
+                def.slug
+            ),
+            (false, true) => format!("// {name} represents the {} global.", def.slug),
+            (false, false) => format!("// {name} represents a {} document.", def.slug),
         };
         self.w.line(&comment);
 
-        let fields = &def.fields;
-        let timestamps = def.timestamps;
+        let (fields, system, timestamps) = (&def.fields, &def.system, def.timestamps);
         self.struct_def(&name, |w| {
             w.line("ID        string  `json:\"id\"`");
             let mut seen = document_seen();
-            for f in fields {
+            for f in fields.iter().chain(system) {
                 emit_field(w, f, &mut seen);
             }
             if timestamps {
@@ -198,8 +205,9 @@ impl ClientPrinter for GoPrinter {
     }
 }
 
-/// Emit one struct field: an optional polymorphic-target comment, then the
-/// de-collided, alignment-padded name, type, and json struct tag.
+/// Emit one read struct field — every field is optional on read: an optional
+/// polymorphic-target comment, then the de-collided, alignment-padded name,
+/// type, and json struct tag.
 fn emit_field(w: &mut CodeWriter, field: &Field, seen: &mut HashSet<String>) {
     if let FieldTy::PolyRel { targets, .. } = &field.ty {
         w.line(&format!(
@@ -207,8 +215,15 @@ fn emit_field(w: &mut CodeWriter, field: &Field, seen: &mut HashSet<String>) {
             targets.join(", ")
         ));
     }
-    let go_name = idents::dedup(idents::go_exported(&to_pascal_case(field.name)), seen);
-    let (go_type, omitempty) = go_ty(&field.ty, field.optional);
+    // `_status` would PascalCase onto a `status` field's name.
+    let base = match field.name.as_ref() {
+        "_status" => "DraftStatus".to_string(),
+        // Go spells the initialism in capitals, as a document's `ID` does.
+        "id" => "ID".to_string(),
+        name => to_pascal_case(name),
+    };
+    let go_name = idents::dedup(idents::go_exported(&base), seen);
+    let (go_type, omitempty) = go_ty(&field.ty, true);
     let tag = if omitempty {
         format!("`json:\"{},omitempty\"`", field.name)
     } else {
@@ -231,7 +246,7 @@ fn go_ty(ty: &FieldTy, optional: bool) -> (String, bool) {
     match ty {
         FieldTy::Str => ptr_or_bare("string"),
         FieldTy::Num => ptr_or_bare("float64"),
-        FieldTy::Bool => ("bool".to_string(), true),
+        FieldTy::Bool => ptr_or_bare("bool"),
         FieldTy::Json => ("interface{}".to_string(), true),
         FieldTy::Map => ("map[string]interface{}".to_string(), true),
         FieldTy::StrList => ("[]string".to_string(), true),
@@ -280,12 +295,23 @@ fn go_ty(ty: &FieldTy, optional: bool) -> (String, bool) {
                 (n, false)
             }
         }
+        // A locale without a value reads as `null`, so a value that can't be
+        // nil is held by pointer.
+        FieldTy::Localized(inner) => {
+            let (inner_ty, nilable) = go_ty(inner, false);
+            let value_ty = if nilable {
+                inner_ty
+            } else {
+                format!("*{inner_ty}")
+            };
+            (format!("map[string]{value_ty}"), true)
+        }
         FieldTy::SubType { name, list } => {
             let n = idents::go_exported(name);
             if *list {
                 (format!("[]{n}"), true)
             } else {
-                (n, true)
+                ptr_or_bare(&n)
             }
         }
     }
@@ -302,6 +328,48 @@ mod tests {
 
     fn render(registry: &Registry) -> String {
         drive(registry, Box::new(GoPrinter::new()))
+    }
+
+    /// A relational array row's `id` is spelled `ID`, as a document's is.
+    #[test]
+    fn go_array_rows_spell_their_id_as_id() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        assert!(
+            out.contains("ID        *string `json:\"id,omitempty\"`"),
+            "{out}"
+        );
+        assert!(!out.contains("\tId "), "{out}");
+    }
+
+    /// Regression: a boolean and a single group were plain values on the read
+    /// structs, so an absent field decoded like `false` or an empty group.
+    #[test]
+    fn go_optional_bool_and_group_are_pointers() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition::builder("active", FieldType::Checkbox).build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("enabled", FieldType::Checkbox).build(),
+                ])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        assert!(out.contains("*bool `json:\"active,omitempty\"`"), "{out}");
+        assert!(out.contains("*PostsSeo `json:\"seo,omitempty\"`"), "{out}");
+        assert!(out.contains("*bool `json:\"enabled,omitempty\"`"), "{out}");
     }
 
     fn render_collection(out: &mut String, col: &CollectionDefinition) {
@@ -376,7 +444,7 @@ mod tests {
 
         assert!(out.contains("type Posts struct {"));
         assert!(out.contains("ID        string  `json:\"id\"`"));
-        assert!(out.contains("Title     string `json:\"title\"`"));
+        assert!(out.contains("Title     *string `json:\"title,omitempty\"`"));
         assert!(out.contains("Content   *string `json:\"content,omitempty\"`"));
         assert!(out.contains("CreatedAt *string `json:\"created_at,omitempty\"`"));
     }
@@ -472,7 +540,7 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("Price     float64 `json:\"price\"`"));
+        assert!(out.contains("Price     *float64 `json:\"price,omitempty\"`"));
         assert!(out.contains("*float64"));
     }
 
@@ -511,7 +579,7 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("type PostsItems struct {"));
-        assert!(out.contains("Label     string `json:\"label\"`"));
+        assert!(out.contains("Label     *string `json:\"label,omitempty\"`"));
         assert!(out.contains("[]PostsItems"));
     }
 
@@ -677,7 +745,7 @@ mod tests {
         render_collection(&mut out, &col);
         // Select references the generated named string type.
         assert!(
-            out.contains("Status    PostsStatus `json:\"status\"`"),
+            out.contains("Status    *PostsStatus `json:\"status,omitempty\"`"),
             "select → named type: {out}"
         );
         assert!(out.contains("type PostsStatus string"), "{out}");
@@ -699,7 +767,7 @@ mod tests {
         render_global(&mut out, &global);
         assert!(out.contains("type SiteSettings struct {"));
         assert!(out.contains("ID        string  `json:\"id\"`"));
-        assert!(out.contains("SiteName  string `json:\"site_name\"`"));
+        assert!(out.contains("SiteName  *string `json:\"site_name,omitempty\"`"));
         assert!(out.contains("CreatedAt *string `json:\"created_at,omitempty\"`"));
         assert!(out.contains("UpdatedAt *string `json:\"updated_at,omitempty\"`"));
     }
@@ -810,9 +878,9 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("Contact   string `json:\"contact\"`"));
+        assert!(out.contains("Contact   *string `json:\"contact,omitempty\"`"));
         assert!(out.contains("*string `json:\"published_at,omitempty\"`"));
-        assert!(out.contains("Body      string `json:\"body\"`"));
+        assert!(out.contains("Body      *string `json:\"body,omitempty\"`"));
         assert!(out.contains("*string `json:\"notes,omitempty\"`"));
     }
 
@@ -844,13 +912,13 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(
-            out.contains("Snippet   string `json:\"snippet\"`"),
-            "code required → string: {out}"
+            out.contains("Snippet   *string `json:\"snippet,omitempty\"`"),
+            "code → string: {out}"
         );
         assert!(out.contains("[]map[string]interface{}"), "join: {out}");
         assert!(
-            out.contains("Color     string `json:\"color\"`"),
-            "radio required → string: {out}"
+            out.contains("Color     *string `json:\"color,omitempty\"`"),
+            "radio → string: {out}"
         );
     }
 
@@ -926,7 +994,7 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(!out.contains("LayoutRow"), "row name not a field: {out}");
-        assert!(out.contains("FirstName string"), "row required sub: {out}");
+        assert!(out.contains("FirstName *string"), "row sub: {out}");
         assert!(out.contains("LastName  *string"), "row optional sub: {out}");
         assert!(
             !out.contains("Details"),
@@ -934,6 +1002,6 @@ mod tests {
         );
         assert!(out.contains("Bio       *string"), "collapsible sub: {out}");
         assert!(!out.contains("Sections"), "tabs name not a field: {out}");
-        assert!(out.contains("TabField  string"), "tabs sub: {out}");
+        assert!(out.contains("TabField  *string"), "tabs sub: {out}");
     }
 }

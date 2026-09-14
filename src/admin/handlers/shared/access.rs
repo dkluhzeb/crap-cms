@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 
-use crate::hooks::{AccessCheckInput, ConditionContext};
-
-use axum::{Extension, response::IntoResponse};
+use axum::{
+    Extension,
+    response::{IntoResponse, Response},
+};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tracing::{error, warn};
 
@@ -14,8 +16,11 @@ use crate::{
         AuthUser, Document, DocumentFields, FieldChildren, FieldDefinition, FieldDenial, HookRef,
         field_children,
     },
-    db::AccessResult,
-    hooks::{HookRunner, lifecycle::access::has_any_field_access},
+    db::{AccessResult, DbConnection},
+    hooks::{
+        AccessCheckInput, ConditionContext, DisplayConditionResult, HookRunner,
+        lifecycle::access::has_any_field_access,
+    },
 };
 
 use super::response::{forbidden, server_error};
@@ -35,7 +40,7 @@ pub fn check_access_or_forbid(
     data: Option<&DocumentFields>,
     operation: &str,
     collection: &str,
-) -> Result<AccessResult, Box<axum::response::Response>> {
+) -> Result<AccessResult, Box<Response>> {
     if access.is_none() {
         return if state.config.access.default_deny {
             Ok(AccessResult::Denied)
@@ -89,7 +94,7 @@ pub fn compute_denied_read_fields(
     fields: &[FieldDefinition],
     collection: &str,
     document: &DocumentFields,
-) -> Result<Vec<FieldDenial>, Box<axum::response::Response>> {
+) -> Result<Vec<FieldDenial>, Box<Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
         return Ok(Vec::new());
     }
@@ -156,7 +161,7 @@ pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashMap<&str, &Hook
 
 /// Request payload for evaluating field display conditions.
 /// Shared by collection and global evaluate-conditions endpoints.
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 pub struct EvaluateConditionsRequest {
     /// The current form data.
     pub form_data: DocumentFields,
@@ -183,8 +188,6 @@ pub fn evaluate_condition_results(
     req: &EvaluateConditionsRequest,
     cond_ctx: &ConditionContext<'_>,
 ) -> Map<String, Value> {
-    use crate::hooks::DisplayConditionResult;
-
     let by_field = collect_condition_refs(fields);
     let form_data = json!(req.form_data);
     let mut results = Map::new();
@@ -231,26 +234,70 @@ pub fn has_access_with_conn(
     state: &AdminState,
     access: Option<&HookRef>,
     user_doc: Option<&Document>,
-    conn: &dyn crate::db::DbConnection,
+    conn: &dyn DbConnection,
     operation: &str,
     collection: &str,
 ) -> bool {
+    let input = AccessCheckInput::builder(operation, collection)
+        .access(access)
+        .user(user_doc)
+        .build();
+
+    access_granted(state, conn, &input, grants_rows)
+}
+
+/// Whether a custom page's access rule lets the viewer see the page, against an
+/// existing connection — the sidebar checks every page in one transaction. A
+/// page without a rule is open (`default_deny` gates collections and globals,
+/// not pages), and a page has no rows for a filter table to narrow, so only an
+/// outright allow grants — exactly as the page route decides.
+pub fn has_page_access_with_conn(
+    state: &AdminState,
+    access: Option<&HookRef>,
+    user_doc: Option<&Document>,
+    conn: &dyn DbConnection,
+) -> bool {
     if access.is_none() {
+        return true;
+    }
+
+    let input = AccessCheckInput::builder("read", "")
+        .access(access)
+        .user(user_doc)
+        .build();
+
+    access_granted(state, conn, &input, grants_outright)
+}
+
+/// Whether `input`'s access rule grants, by the `grants` rule. A missing rule
+/// allows unless `default_deny` is configured.
+fn access_granted(
+    state: &AdminState,
+    conn: &dyn DbConnection,
+    input: &AccessCheckInput<'_>,
+    grants: fn(&AccessResult) -> bool,
+) -> bool {
+    if input.access.is_none() {
         return !state.config.access.default_deny;
     }
 
-    let result = state.infra.hook_runner.check_access(
-        &AccessCheckInput::builder(operation, collection)
-            .access(access)
-            .user(user_doc)
-            .build(),
-        conn,
-    );
+    state
+        .infra
+        .hook_runner
+        .check_access(input, conn)
+        .is_ok_and(|r| grants(&r))
+}
 
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
+/// An access result that lets the viewer see rows: an allow, or a filter
+/// table that narrows which ones.
+fn grants_rows(result: &AccessResult) -> bool {
+    matches!(result, AccessResult::Allowed | AccessResult::Constrained(_))
+}
+
+/// An access result that allows outright — for gates with no rows for a filter
+/// table to narrow.
+fn grants_outright(result: &AccessResult) -> bool {
+    matches!(result, AccessResult::Allowed)
 }
 
 /// Boolean access check for a single `operation`, opening its own transaction.
@@ -270,6 +317,30 @@ fn has_op_access(
         return !state.config.access.default_deny;
     }
 
+    with_own_tx(state, |conn| {
+        has_access_with_conn(state, access, user_doc, conn, operation, collection)
+    })
+}
+
+/// Whether a custom page's access rule lets the viewer see the page, opening
+/// its own transaction. See [`has_page_access_with_conn`].
+pub fn has_page_access(
+    state: &AdminState,
+    access: Option<&HookRef>,
+    user_doc: Option<&Document>,
+) -> bool {
+    if access.is_none() {
+        return true;
+    }
+
+    with_own_tx(state, |conn| {
+        has_page_access_with_conn(state, access, user_doc, conn)
+    })
+}
+
+/// Run one access `check` in a transaction of its own. Denies when no
+/// connection or transaction can be had.
+fn with_own_tx(state: &AdminState, check: impl FnOnce(&dyn DbConnection) -> bool) -> bool {
     let Ok(mut conn) = state.infra.pool.get() else {
         return false;
     };
@@ -278,13 +349,13 @@ fn has_op_access(
         return false;
     };
 
-    let allowed = has_access_with_conn(state, access, user_doc, &tx, operation, collection);
+    let granted = check(&tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
-    allowed
+    granted
 }
 
 /// Quick read-access check for dashboard/list visibility (operation `"read"`).
@@ -330,7 +401,7 @@ pub fn is_admin_visible_with_conn(
     read_access: Option<&HookRef>,
     admin_access: Option<&HookRef>,
     user_doc: Option<&Document>,
-    conn: &dyn crate::db::DbConnection,
+    conn: &dyn DbConnection,
     collection: &str,
 ) -> bool {
     if !has_access_with_conn(state, read_access, user_doc, conn, "read", collection) {

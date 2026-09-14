@@ -3,13 +3,13 @@
 use anyhow::{Result, bail};
 
 use crate::core::{
-    FieldType, parse_bool,
+    FieldType, canonical_operand, parse_bool,
     validate::{FieldError, ValidationError},
 };
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
     query::{
-        helpers::{like_escape, normalize_date_value},
+        helpers::{like_escape, normalize_date_value, sql_ident},
         is_valid_identifier,
     },
 };
@@ -32,6 +32,10 @@ use crate::db::{
 /// Text-only operators (`Like`, `Contains`) always bind as `DbValue::Text`
 /// regardless of the field type — no numeric/date casting is meaningful.
 ///
+/// Email and text values are compared in the canonical form they are stored
+/// in, so a value typed with other capitals (email) or a decomposed accent
+/// still matches.
+///
 /// # Errors
 ///
 /// Returns a [`ValidationError`] when `value` does not fit the field type.
@@ -41,6 +45,8 @@ pub(super) fn coerce_filter_value(
     op: &FilterOp,
     value: &str,
 ) -> Result<DbValue> {
+    let value: &str = &canonical_operand(field_type, value);
+
     if is_text_only_op(op) {
         return Ok(DbValue::Text(value.to_string()));
     }
@@ -68,6 +74,12 @@ pub(super) fn coerce_filter_value(
         FieldType::Date => Ok(DbValue::Text(normalize_date_value(value))),
         _ => Ok(DbValue::Text(value.to_string())),
     }
+}
+
+/// Whether a `like` pattern ends in an escape character with nothing left to
+/// escape.
+fn ends_with_lone_escape(pattern: &str) -> bool {
+    pattern.bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1
 }
 
 fn filter_type_error(field: &str, message: String) -> anyhow::Error {
@@ -120,9 +132,27 @@ pub(crate) fn build_op_condition(
     Ok(match op {
         FilterOp::Equals(v) => format!("{expr} = {}", bind(v)?),
         FilterOp::NotEquals(v) => format!("{expr} != {}", bind(v)?),
-        FilterOp::Like(v) => format!("{} {} {}", expr, conn.like_operator(), bind(v)?),
+        // Both pattern operators judge the operand in its stored form: an email
+        // pattern is trimmed there, which can leave a trailing escape.
+        FilterOp::Like(v) => {
+            let pattern = canonical_operand(field_type, v);
+
+            if ends_with_lone_escape(&pattern) {
+                return Err(filter_type_error(
+                    field,
+                    format!("like pattern '{v}' ends with an escape character"),
+                ));
+            }
+
+            format!(
+                "{} {} {} ESCAPE '\\'",
+                expr,
+                conn.like_operator(),
+                bind(&pattern)?
+            )
+        }
         FilterOp::Contains(v) => {
-            let escaped = like_escape(v);
+            let escaped = like_escape(&canonical_operand(field_type, v));
             let ph = bind(&format!("%{escaped}%"))?;
             format!("{} {} {} ESCAPE '\\'", expr, conn.like_operator(), ph)
         }
@@ -174,7 +204,7 @@ pub(crate) fn build_filter_condition(
             f.field
         );
     }
-    build_op_condition(conn, field, &f.field, &f.op, field_type, params)
+    build_op_condition(conn, field, &sql_ident(&f.field), &f.op, field_type, params)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -188,6 +218,29 @@ mod tests {
 
     fn conn() -> InMemoryConn {
         InMemoryConn::open()
+    }
+
+    /// A filter value is compared in the canonical form values are stored in,
+    /// so an address or a word typed another way still matches.
+    #[test]
+    fn filter_values_use_the_stored_canonical_form() {
+        let email = coerce_filter_value(
+            "email",
+            Some(&FieldType::Email),
+            &FilterOp::Equals(String::new()),
+            "Ange\u{300}LE@Example.com",
+        )
+        .unwrap();
+        assert_eq!(email, DbValue::Text("ang\u{e8}le@example.com".into()));
+
+        let text = coerce_filter_value(
+            "title",
+            Some(&FieldType::Text),
+            &FilterOp::Contains(String::new()),
+            "Cafe\u{301}",
+        )
+        .unwrap();
+        assert_eq!(text, DbValue::Text("Caf\u{e9}".into()));
     }
 
     #[test]
@@ -225,8 +278,38 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "title LIKE ?1");
+        assert_eq!(sql, "title LIKE ?1 ESCAPE '\\'");
         assert_eq!(params.len(), 1);
+    }
+
+    /// A `like` pattern ending in its escape character has nothing to escape;
+    /// Postgres rejects it and `SQLite` would match nothing, so it's refused.
+    #[test]
+    fn like_pattern_ending_in_an_escape_is_rejected() {
+        let c = conn();
+        let f = Filter {
+            field: "title".into(),
+            op: FilterOp::Like("50\\".into()),
+        };
+        let mut params: Vec<DbValue> = Vec::new();
+
+        assert!(build_filter_condition(&c, &f, &f.field, None, &mut params).is_err());
+    }
+
+    /// Regression: the escape check ran on the pattern as sent, while an email
+    /// pattern is bound trimmed — `foo\ ` passed the check and reached the
+    /// database ending in a lone escape.
+    #[test]
+    fn email_like_pattern_ending_in_an_escape_once_trimmed_is_rejected() {
+        let c = conn();
+        let f = Filter {
+            field: "email".into(),
+            op: FilterOp::Like("foo\\ ".into()),
+        };
+        let mut params: Vec<DbValue> = Vec::new();
+
+        let result = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Email), &mut params);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -405,7 +488,7 @@ mod tests {
             &mut params,
         )
         .unwrap();
-        assert_eq!(sql, "CAST(flag AS TEXT) LIKE ?2");
+        assert_eq!(sql, "CAST(flag AS TEXT) LIKE ?2 ESCAPE '\\'");
 
         let sql = build_op_condition(
             &c,
@@ -416,7 +499,10 @@ mod tests {
             &mut params,
         )
         .unwrap();
-        assert_eq!(sql, "title LIKE ?3", "text columns are not cast");
+        assert_eq!(
+            sql, "title LIKE ?3 ESCAPE '\\'",
+            "text columns are not cast"
+        );
     }
 
     #[test]

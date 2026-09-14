@@ -2,6 +2,7 @@
 
 mod access;
 mod breadcrumbs;
+mod db_error;
 mod document;
 pub(crate) mod hx;
 mod locale;
@@ -9,6 +10,9 @@ mod pagination;
 pub(crate) mod paths;
 pub(crate) mod response;
 mod versions;
+
+// database errors
+pub(crate) use db_error::db_error_status;
 
 // breadcrumb base-chains
 pub(crate) use breadcrumbs::{collection_base, collection_item_base, global_base};
@@ -28,8 +32,8 @@ pub(crate) use super::query::{
 // access
 pub(crate) use access::{
     EvaluateConditionsRequest, check_access_or_forbid, compute_denied_read_fields,
-    evaluate_condition_results, get_user_doc, has_access_with_conn, has_read_access,
-    is_admin_visible, is_admin_visible_with_conn,
+    evaluate_condition_results, get_user_doc, has_access_with_conn, has_page_access,
+    has_page_access_with_conn, is_admin_visible, is_admin_visible_with_conn,
 };
 
 // document

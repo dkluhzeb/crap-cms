@@ -8,7 +8,7 @@
 //!
 //! - **Leaf modules** (`auth`, `collection`, `condition`, `document`,
 //!   `document_fields`, `document_id`, `field`, `job`, `registry`,
-//!   `req_context`, `slug`, `timezone`, `validate`) -- one or two
+//!   `req_context`, `slug`, `text`, `timezone`, `validate`) -- one or two
 //!   tightly-coupled types each. Their public types are re-exported
 //!   flat at `crate::core::*`; external callers use the short path.
 //!   Builders stay one level deeper, accessed via `Type::builder()`.
@@ -59,6 +59,7 @@ pub mod registry;
 pub mod req_context;
 pub mod richtext;
 pub mod slug;
+pub mod text;
 pub mod timezone;
 pub mod upload;
 pub mod validate;
@@ -98,6 +99,9 @@ pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;
 pub use richtext::RichtextNodeDef;
 pub use slug::Slug;
+pub use text::{
+    canonical_operand, canonical_text, canonicalize_text_values, has_canonical_form, normalize_text,
+};
 pub use validate::{FieldError, ValidationError};
 pub(crate) use walk::{
     FieldChildren, SchemaStep, field_children, find_field, prefixed_name, walk_all_fields,

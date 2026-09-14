@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
-        nest_group_fields,
+        Document, DocumentFields, canonicalize_text_values, collection::GlobalDefinition,
+        event::EventOperation, nest_group_fields,
     },
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{
@@ -96,8 +96,10 @@ pub fn update_global_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
-    // Canonicalize incoming data to nested groups up front (idempotent).
+    // Canonicalize incoming data up front: nested groups, canonical email and
+    // text values.
     input.data = nest_group_fields(&input.data, &def.fields);
+    canonicalize_text_values(&mut input.data, &def.fields);
 
     // Same shared-field guard as collections: a non-default-locale write that
     // carries a locale-locked field is rejected, never silently skipped.
@@ -265,7 +267,7 @@ fn persist_global_update(
             existing: &existing_doc,
             fields: &def.fields,
             locale_ctx: input.locale_ctx,
-        }));
+        })?);
     }
     persist_global_published_update(conn, ctx, def, gtable, final_ctx, input)
 }

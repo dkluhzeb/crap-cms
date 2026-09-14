@@ -71,6 +71,7 @@ impl PasswordPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn password_policy_defaults() {
@@ -201,7 +202,7 @@ require_digit = true
 ",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.password_policy.min_length, 12);
         assert!(config.auth.password_policy.require_uppercase);
         assert!(config.auth.password_policy.require_digit);

@@ -3,7 +3,7 @@
 use anyhow::{Context as _, Result};
 
 use crate::{
-    core::{CollectionDefinition, Document, HashedPassword, auth::hash_password},
+    core::{CollectionDefinition, Document, HashedPassword, auth::hash_password, normalize_email},
     db::{
         DbConnection, DbValue,
         document::row_to_document,
@@ -33,12 +33,11 @@ pub fn find_by_email(
     include_deleted: bool,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Option<Document>> {
-    // Email is matched case-insensitively: addresses are case-insensitive in
-    // practice, and a user who registered as "Test@Example.com" must be able
-    // to log in / reset their password typing "test@example.com". Both sides
-    // are lowercased so the comparison is symmetric. (Preventing creation of
-    // case-variant duplicate accounts is a separate write-path/unique-index
-    // concern — see CHANGELOG.)
+    // Email values are stored in canonical form (trimmed, lowercased,
+    // NFC-composed), so the typed address is canonicalized and compared as is:
+    // any capitals or accent composition find the account. `LOWER(email)` is
+    // the identity on stored values and keeps the lookup on the auth
+    // collection's case-folded unique index.
     // Locale-aware column list: on a localized auth collection the bare
     // logical names (`title`) do not exist as columns — the same footgun the
     // read paths guard against.
@@ -55,7 +54,7 @@ pub fn find_by_email(
         sql.push_str(SOFT_DELETE_ACTIVE);
     }
 
-    let Some(row) = conn.query_one(&sql, &[DbValue::Text(email.to_lowercase())])? else {
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(normalize_email(email))])? else {
         return Ok(None);
     };
 
@@ -203,6 +202,27 @@ mod tests {
                 result.map(|d| d.id.to_string()),
                 Some("user1".to_string()),
                 "lookup must match regardless of case: {variant}"
+            );
+        }
+    }
+
+    /// An address typed with a decomposed accent or non-ASCII capitals finds
+    /// the account stored in canonical form.
+    #[test]
+    fn find_by_email_matches_every_unicode_spelling() {
+        let (_dir, conn) = setup();
+        conn.execute(
+            "INSERT INTO users (id, email, name) VALUES ('user2', 'ang\u{e8}le@example.com', 'A')",
+            &[],
+        )
+        .unwrap();
+
+        for variant in ["ANG\u{c8}LE@example.com", "Ange\u{300}le@Example.com"] {
+            let result = find_by_email(&conn, "users", &auth_def(), variant, false, None).unwrap();
+            assert_eq!(
+                result.map(|d| d.id.to_string()),
+                Some("user2".to_string()),
+                "lookup must match the canonical address: {variant:?}"
             );
         }
     }

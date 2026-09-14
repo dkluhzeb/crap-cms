@@ -116,6 +116,10 @@ pub(super) struct SubTypeField<'a> {
     pub field: &'a FieldDefinition,
     pub kind: SubTypeKind,
     pub parent_pascal: String,
+    /// A row of a relational array — a top-level array, or one inside groups —
+    /// which carries its junction `id`. Rows nested in another row are JSON and
+    /// carry none.
+    pub row_id: bool,
 }
 
 /// Recursively collect Array and Group fields that need sub-type definitions.
@@ -130,43 +134,51 @@ pub(super) fn collect_sub_type_fields<'a>(
     parent_pascal: &str,
 ) -> Vec<SubTypeField<'a>> {
     let mut result = Vec::new();
+    collect_sub_types_into(&mut result, fields, parent_pascal, true);
+    result
+}
+
+/// [`collect_sub_type_fields`] into `result`; `relational` while the walk is
+/// still outside every array row.
+fn collect_sub_types_into<'a>(
+    result: &mut Vec<SubTypeField<'a>>,
+    fields: &'a [FieldDefinition],
+    parent_pascal: &str,
+    relational: bool,
+) {
     for f in fields {
-        match field_children(f) {
-            FieldChildren::Array(sub) if !sub.is_empty() => {
-                let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
-                result.push(SubTypeField {
-                    field: f,
-                    kind: SubTypeKind::Array,
-                    parent_pascal: parent_pascal.to_string(),
-                });
-                result.extend(collect_sub_type_fields(sub, &inner_pascal));
-            }
-            FieldChildren::Group(sub) if !sub.is_empty() => {
-                let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
-                result.push(SubTypeField {
-                    field: f,
-                    kind: SubTypeKind::Group,
-                    parent_pascal: parent_pascal.to_string(),
-                });
-                result.extend(collect_sub_type_fields(sub, &inner_pascal));
-            }
+        let (kind, sub) = match field_children(f) {
+            FieldChildren::Array(sub) if !sub.is_empty() => (SubTypeKind::Array, sub),
+            FieldChildren::Group(sub) if !sub.is_empty() => (SubTypeKind::Group, sub),
             FieldChildren::Wrapper(sub) => {
-                result.extend(collect_sub_type_fields(sub, parent_pascal));
+                collect_sub_types_into(result, sub, parent_pascal, relational);
+                continue;
             }
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    result.extend(collect_sub_type_fields(&tab.fields, parent_pascal));
+                    collect_sub_types_into(result, &tab.fields, parent_pascal, relational);
                 }
+                continue;
             }
             // Empty Array/Group (guards above fell through), Blocks, and scalar
             // leaves need no named sub-type definition.
             FieldChildren::Array(_)
             | FieldChildren::Group(_)
             | FieldChildren::Blocks(_)
-            | FieldChildren::Leaf => {}
-        }
+            | FieldChildren::Leaf => continue,
+        };
+
+        let is_array = kind == SubTypeKind::Array;
+        result.push(SubTypeField {
+            field: f,
+            kind,
+            parent_pascal: parent_pascal.to_string(),
+            row_id: is_array && relational,
+        });
+
+        let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
+        collect_sub_types_into(result, sub, &inner_pascal, relational && !is_array);
     }
-    result
 }
 
 #[cfg(test)]
@@ -388,6 +400,11 @@ mod tests {
         // outer.PascalName`.
         let parents: Vec<&str> = result.iter().map(|s| s.parent_pascal.as_str()).collect();
         assert_eq!(parents, vec!["Test", "TestOuter", "Test", "TestGroup"]);
+
+        // Only arrays outside every array row are stored in their own table,
+        // where a row carries its `id`.
+        let row_ids: Vec<bool> = result.iter().map(|s| s.row_id).collect();
+        assert_eq!(row_ids, vec![true, false, false, true]);
     }
 
     #[test]

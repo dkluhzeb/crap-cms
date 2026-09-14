@@ -8,8 +8,8 @@ use axum::{
     http::{
         HeaderValue, Request, StatusCode,
         header::{
-            ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY,
-            CONTENT_TYPE, COOKIE, IF_MODIFIED_SINCE, IF_NONE_MATCH, RANGE, VARY,
+            ACCEPT, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
+            IF_MODIFIED_SINCE, IF_NONE_MATCH, RANGE, VARY,
         },
     },
     response::{IntoResponse, Response},
@@ -18,14 +18,13 @@ use tokio::task;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use std::path;
+use std::{fmt::Write as _, path};
 
-use crate::admin::handlers::shared::response::on_blocking_section;
+use crate::admin::handlers::shared::{db_error_status, response::on_blocking_section};
 use crate::{
     admin::{
         AdminState,
-        handlers::auth::SESSION_COOKIE,
-        server::{extract_cookie, load_auth_user},
+        server::{bearer_token, evaluate_admin_request, session_cookie_token},
     },
     config::LocaleConfig,
     core::{
@@ -34,7 +33,10 @@ use crate::{
     },
     db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::HookRunner,
-    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
+    service::{
+        FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, auth::Resolution,
+        find_documents,
+    },
 };
 
 /// Read a key off the async runtime. Local storage never reaches here (it
@@ -137,11 +139,13 @@ const CACHE_PRIVATE: &str = "private, no-store";
 /// `served_url` — the backend-agnostic proxy path the write path stores on every
 /// backend — and match it against those columns. (Using the backend's
 /// `public_url` here would 404 access-gated uploads on S3/custom, where the
-/// direct object/CDN URL differs from the stored proxy path.) Fail-closed: any
-/// error, an orphan (no owning doc), or a non-upload collection → not visible.
-fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
+/// direct object/CDN URL differs from the stored proxy path.) An orphan (no
+/// owning doc), a non-upload collection, or a refusing or failing read → not
+/// visible; a database error is returned, so the viewer is told to retry rather
+/// than that the file doesn't exist.
+fn upload_doc_visible(input: &UploadVisibilityInput) -> anyhow::Result<bool> {
     let Some(upload) = input.def.upload.as_ref() else {
-        return false;
+        return Ok(false);
     };
 
     // URL-bearing columns the upload schema injects: `url` + `{size}[_fmt]_url`.
@@ -163,12 +167,10 @@ fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
     };
 
     if or_clauses.is_empty() {
-        return false;
+        return Ok(false);
     }
 
-    let Ok(conn) = input.pool.get() else {
-        return false;
-    };
+    let conn = input.pool.get()?;
 
     let hooks = RunnerReadHooks::new(&input.runner, &conn, input.user_doc.as_ref(), None);
     let ctx = ServiceContext::collection(&input.slug, &input.def)
@@ -199,24 +201,38 @@ fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
         .locale_ctx(locale_ctx.as_ref())
         .build();
 
-    find_documents(&ctx, &find_input).is_ok_and(|r| !r.docs.is_empty())
+    visible_or_retry(find_documents(&ctx, &find_input), |r| !r.docs.is_empty())
+}
+
+/// Whether a read for the owning document shows it: a transient database error
+/// is returned, so the viewer is told to retry; any other failure — a refusing
+/// rule, a failing hook — means not visible.
+fn visible_or_retry<T>(
+    result: Result<T, ServiceError>,
+    shows: impl FnOnce(T) -> bool,
+) -> anyhow::Result<bool> {
+    match result {
+        Ok(found) => Ok(shows(found)),
+        Err(ServiceError::Transient(e)) => Err(e),
+        Err(_) => Ok(false),
+    }
 }
 
 /// Check that the viewer may read the upload document owning this file, returning
 /// the cache policy. Returns `None` (→ 404) when no document the viewer can see
 /// references the file — enforcing per-row constraints, draft, and trash on the
-/// served bytes (the same model every other upload surface uses).
+/// served bytes (the same model every other upload surface uses) — and the
+/// status to answer when the database can't say.
 async fn check_upload_access(
     state: &AdminState,
     collection_slug: &str,
     filename: &str,
     auth_user: Option<AuthUser>,
-) -> Option<&'static str> {
-    let def = state
-        .infra
-        .registry
-        .get_collection(collection_slug)?
-        .clone();
+) -> Result<Option<&'static str>, StatusCode> {
+    let Some(def) = state.infra.registry.get_collection(collection_slug) else {
+        return Ok(None);
+    };
+    let def = def.clone();
 
     // Fast public path: only when "no read hook" genuinely means ALLOW — i.e.
     // `default_deny` is off — and there is no draft/trash axis (no status- or
@@ -229,7 +245,7 @@ async fn check_upload_access(
         && !def.has_drafts()
         && !def.soft_delete
     {
-        return Some(CACHE_IMMUTABLE);
+        return Ok(Some(CACHE_IMMUTABLE));
     }
 
     let input = UploadVisibilityInput {
@@ -242,11 +258,13 @@ async fn check_upload_access(
         locale_config: state.config.locale.clone(),
     };
 
-    let visible = task::spawn_blocking(move || upload_doc_visible(&input))
-        .await
-        .unwrap_or(false);
+    let db_kind = state.infra.pool.kind().to_string();
 
-    visible.then_some(CACHE_PRIVATE)
+    match task::spawn_blocking(move || upload_doc_visible(&input)).await {
+        Ok(Ok(visible)) => Ok(visible.then_some(CACHE_PRIVATE)),
+        Ok(Err(e)) => Err(db_error_status(e, &db_kind, "Upload access check")),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 /// Serve an uploaded file, checking collection read access if configured.
@@ -280,11 +298,16 @@ pub async fn serve_upload(
         // Token validation + user load is synchronous DB work — run
         // it on the blocking pool. (The access gate below is already async
         // / `spawn_blocking` internally.)
-        let auth_user = on_blocking_section(|| extract_auth_user(&request, &state));
+        let auth_user = match on_blocking_section(|| extract_auth_user(&request, &state)) {
+            Ok(user) => user,
+            Err(status) => return status.into_response(),
+        };
 
-        let Some(cache) = check_upload_access(&state, &collection_slug, &filename, auth_user).await
-        else {
-            return StatusCode::NOT_FOUND.into_response();
+        let cache = match check_upload_access(&state, &collection_slug, &filename, auth_user).await
+        {
+            Ok(Some(cache)) => cache,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(status) => return status.into_response(),
         };
 
         cache.to_string()
@@ -302,45 +325,30 @@ pub async fn serve_upload(
     .await
 }
 
-/// Try to authenticate from a raw token string (cookie value or Bearer token).
-/// Routes through `state.infra.token_provider` (not the free `validate_token`
-/// function) so a future swap of the JWT backend / signing key flows
-/// here automatically — the older `jwt_secret`-direct form silently
-/// 401'd everything in that scenario.
-fn auth_from_token(token: &str, state: &AdminState) -> Option<AuthUser> {
-    let claims = state.infra.token_provider.validate_token(token).ok()?;
-    load_auth_user(
-        &state.infra.pool,
-        &state.infra.registry,
-        &claims,
-        &state.config.locale,
+/// Resolve the viewer of an upload through the shared auth evaluator (admin
+/// surface), so the collection's accepted methods, locked accounts and stale
+/// sessions decide exactly as they do for the admin UI. A credential that no
+/// longer authenticates is served like an anonymous visitor: the access gate
+/// decides, never the dead credential. A database error answers `503` or
+/// `500`, never an anonymous read.
+fn extract_auth_user(
+    request: &Request<Body>,
+    state: &AdminState,
+) -> Result<Option<AuthUser>, StatusCode> {
+    let headers = request.headers();
+
+    let resolution = evaluate_admin_request(
+        state,
+        headers,
+        bearer_token(headers),
+        session_cookie_token(headers),
     )
-}
+    .map_err(|e| db_error_status(e, state.infra.pool.kind(), "Upload serve auth"))?;
 
-fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<AuthUser> {
-    let cookie_header = request
-        .headers()
-        .get(COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if let Some(token) = extract_cookie(cookie_header, SESSION_COOKIE)
-        && let Some(user) = auth_from_token(token, state)
-    {
-        return Some(user);
-    }
-
-    let auth_header = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if let Some(token) = auth_header.strip_prefix("Bearer ") {
-        return auth_from_token(token, state);
-    }
-
-    None
+    Ok(match resolution {
+        Resolution::Authenticated(auth) => Some(auth.user),
+        Resolution::Anonymous | Resolution::Invalid(_) => None,
+    })
 }
 
 async fn serve_file(
@@ -466,6 +474,36 @@ fn build_serve_request(headers: &ConditionalHeaders) -> Request<Body> {
     builder.body(Body::empty()).expect("static request builder")
 }
 
+/// Invisible format characters that reorder or hide text: bidi embeddings,
+/// overrides and isolates, zero-width characters, and the byte-order mark.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Percent-encode a value for an RFC 5987 `ext-value`: `attr-char`s stay, every
+/// other UTF-8 byte becomes `%XX`.
+fn encode_rfc5987(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+
+    out
+}
+
 /// Determine Content-Disposition for a file based on its MIME type.
 ///
 /// Images (except SVG) are inline. SVGs and non-image files get attachment
@@ -480,21 +518,51 @@ fn content_disposition(mime: &str, filename: Option<&str>) -> String {
         .and_then(|n| n.find('_').map(|pos| &n[pos + 1..]))
         .filter(|n| !n.is_empty());
 
-    match original {
-        Some(name) => {
-            // Replace `"` (would break out of the quoted-string) and any control
-            // character (`\r`/`\n`/… — an invalid `HeaderValue` byte). Extensions
-            // are sanitized to alphanumerics on upload since alpha.10, but files
-            // stored by older versions can still carry raw bytes — keep this
-            // guard; without it the header build would panic.
-            let safe: String = name
-                .chars()
-                .map(|c| if c == '"' || c.is_control() { '_' } else { c })
-                .collect();
-            format!("attachment; filename=\"{safe}\"")
-        }
-        None => "attachment".to_string(),
+    let Some(name) = original else {
+        return "attachment".to_string();
+    };
+
+    let visible = visible_name(name);
+    let fallback = ascii_fallback(&visible);
+
+    if fallback == visible {
+        return format!("attachment; filename=\"{fallback}\"");
     }
+
+    format!(
+        "attachment; filename=\"{fallback}\"; filename*=UTF-8''{}",
+        encode_rfc5987(&visible)
+    )
+}
+
+/// `name` with every character that could break the header or disguise the name
+/// replaced: a control character (the extension is not sanitized upstream, so a
+/// crafted upload can smuggle a CRLF here) or an invisible bidi override, which
+/// can disguise the extension the user sees.
+fn visible_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_control() || is_invisible_format(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// The ASCII form of `name` the quoted `filename` parameter carries; a name that
+/// isn't ASCII travels in full in RFC 6266 `filename*`.
+fn ascii_fallback(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Apply shared security/caching headers to a response.
@@ -570,9 +638,27 @@ fn serve_bytes(data: Vec<u8>, cache_control: &str, varied: bool, mime: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::{body::Body, http::Request};
     use std::fs;
+
+    use anyhow::anyhow;
+    use axum::{body::Body, http::Request};
+
+    use super::*;
+
+    /// Regression: a database error while resolving the owning document answered
+    /// 404, telling a signed-in viewer under load that the file doesn't exist.
+    #[test]
+    fn a_transient_read_error_is_retryable_and_a_refusal_is_not_visible() {
+        let transient: Result<(), ServiceError> = Err(ServiceError::Transient(anyhow!(
+            "timed out waiting for connection"
+        )));
+        assert!(visible_or_retry(transient, |()| true).is_err());
+
+        let refused: Result<(), ServiceError> = Err(ServiceError::AccessDenied("no".into()));
+        assert!(!visible_or_retry(refused, |()| true).unwrap());
+
+        assert!(visible_or_retry(Ok(()), |()| true).unwrap());
+    }
 
     #[test]
     fn signed_query_params_extracts_pair() {
@@ -689,6 +775,23 @@ mod tests {
         let disposition = content_disposition("application/pdf", Some("nano123_photo.pd\r\nf"));
         assert_eq!(disposition, "attachment; filename=\"photo.pd__f\"");
         // Must be a valid header value (no panic on insert).
+        assert!(disposition.parse::<HeaderValue>().is_ok());
+    }
+
+    /// A non-ASCII download name travels in RFC 6266 `filename*`, with an
+    /// ASCII fallback; invisible bidi controls (U+202E can make `fdp.exe` read
+    /// as `exe.pdf`) are replaced like control characters.
+    #[test]
+    fn content_disposition_encodes_unicode_and_neutralizes_bidi_controls() {
+        let disposition = content_disposition(
+            "application/pdf",
+            Some("nano123_Bericht über\u{202E}fdp.exe"),
+        );
+
+        assert_eq!(
+            disposition,
+            "attachment; filename=\"Bericht _ber_fdp.exe\"; filename*=UTF-8''Bericht%20%C3%BCber_fdp.exe"
+        );
         assert!(disposition.parse::<HeaderValue>().is_ok());
     }
 

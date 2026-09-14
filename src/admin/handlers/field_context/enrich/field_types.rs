@@ -657,7 +657,7 @@ fn build_group_child_leaf(
 
     // Date sub-fields with stored timezone need their _tz companion
     // for `single_date`.
-    if nested_sf.field_type == FieldType::Date && nested_sf.timezone {
+    if nested_sf.has_tz_companion() {
         let tz_key = tz_column(&nested_sf.name);
         if let Some(tz_val) = group_obj
             .and_then(|v| v.as_object())

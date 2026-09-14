@@ -1,9 +1,17 @@
 //! Get a single job run by ID, gated by per-job read access.
 
+use serde_json::from_str;
+
 use crate::{
-    core::{JobRun, Registry},
+    core::{JobRun, Registry, job::SYSTEM_BULK_JOB},
     db::query,
-    service::{ServiceContext, ServiceError, jobs::access::can_read_job_runs},
+    service::{
+        ServiceContext, ServiceError,
+        jobs::{
+            access::can_read_job_runs,
+            bulk_queue::{BulkRunIdentity, can_read_bulk_run},
+        },
+    },
 };
 
 /// Retrieve a single job run by its ID, if `ctx.user` may read its job's runs.
@@ -32,15 +40,13 @@ pub fn get_job_run(
     // readable ONLY by the actor that queued them (or an override caller) —
     // the run's `data` carries the full request payload. Unparseable data
     // fails closed.
-    if run.slug == crate::core::job::SYSTEM_BULK_JOB {
+    if run.slug == SYSTEM_BULK_JOB {
         // Decode ONLY the identity, not the full `BulkJobData`: a finished
-        // run's payload is stripped down to `{"queued_by": …}` (frozen
+        // run's payload is stripped down to `{"queued_by": …, "collection": …}` (frozen
         // contract), and requiring the full shape here made every
         // completed run decode-fail → invisible to its own queuer.
-        let readable = serde_json::from_str::<super::bulk_queue::BulkRunIdentity>(&run.data)
-            .is_ok_and(|d| {
-                super::bulk_queue::can_read_bulk_run(&d.queued_by, ctx.user, ctx.override_access)
-            });
+        let readable = from_str::<BulkRunIdentity>(&run.data)
+            .is_ok_and(|d| can_read_bulk_run(&d.queued_by, ctx.user, ctx.override_access));
 
         return Ok(readable.then_some(run));
     }

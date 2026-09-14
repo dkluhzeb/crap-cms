@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, RequiredLocales,
-        collection::Hooks, nest_group_fields,
+        canonicalize_text_values, collection::Hooks, nest_group_fields,
     },
     db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
@@ -48,10 +48,12 @@ pub(super) fn strip_untrusted_upload_metadata(
 
 /// The single input-canonicalization step every persisting write path runs up
 /// front: nest group fields to the in-memory shape (idempotent — already-nested
-/// input passes through, the DB edge flattens back to columns), then strip
-/// server-derived upload columns from untrusted input.
+/// input passes through, the DB edge flattens back to columns), store email and
+/// text values in canonical form (so hooks, validation and uniqueness see the
+/// stored value), then strip server-derived upload columns from untrusted
+/// input.
 ///
-/// Both halves MUST happen together on every write. When the strip was bolted
+/// The steps MUST happen together on every write. When the strip was bolted
 /// on beside `nest_group_fields` at each call site instead, the bulk-update path
 /// was missed and a forged `url` bypassed the serve gate — so the two are fused
 /// here and the `write_paths_canonicalize_before_persist` guard test pins that
@@ -59,6 +61,7 @@ pub(super) fn strip_untrusted_upload_metadata(
 /// a future write path.
 pub(super) fn canonicalize_write_input(input: &mut WriteInput<'_>, def: &CollectionDefinition) {
     input.data = nest_group_fields(&input.data, &def.fields);
+    canonicalize_text_values(&mut input.data, &def.fields);
     strip_untrusted_upload_metadata(input, def);
 }
 
@@ -125,9 +128,10 @@ pub fn validate_document(
     // Note: collection-level access check is intentionally skipped here.
     // Validation endpoints already check access before calling this function.
 
-    // Canonicalize incoming data to nested groups up front (idempotent) so the
-    // dry-run pipeline matches the real write path.
+    // Canonicalize incoming data (nested groups, canonical email and text) up
+    // front so the dry-run pipeline matches the real write path.
     input.data = nest_group_fields(&input.data, ctx.fields);
+    canonicalize_text_values(&mut input.data, ctx.fields);
 
     let is_draft = input.draft && ctx.supports_drafts;
 
@@ -181,11 +185,74 @@ pub fn validate_document(
 
 #[cfg(test)]
 mod strip_tests {
-    use super::strip_untrusted_upload_metadata;
+    use super::{canonicalize_write_input, strip_untrusted_upload_metadata};
     use crate::core::upload::CollectionUpload;
-    use crate::core::{CollectionDefinition, DocumentFields};
+    use crate::core::{
+        BlockDefinition, CollectionDefinition, DocumentFields, FieldDefinition, FieldType,
+    };
     use crate::service::WriteInput;
     use serde_json::json;
+
+    fn people_def() -> CollectionDefinition {
+        let text = |name| FieldDefinition::builder(name, FieldType::Text).build();
+        let email = |name| FieldDefinition::builder(name, FieldType::Email).build();
+
+        let mut def = CollectionDefinition::new("people");
+        def.fields = vec![
+            email("email"),
+            FieldDefinition::builder("profile", FieldType::Group)
+                .fields(vec![text("bio")])
+                .build(),
+            FieldDefinition::builder("contacts", FieldType::Array)
+                .fields(vec![
+                    email("address"),
+                    FieldDefinition::builder("note", FieldType::Textarea).build(),
+                ])
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new("quote", vec![text("body")])])
+                .build(),
+        ];
+
+        def
+    }
+
+    /// Every write stores email and text in canonical form, at any depth, so
+    /// uniqueness, login and filters compare one spelling of each value.
+    #[test]
+    fn canonicalize_stores_canonical_email_and_text_at_any_depth() {
+        let data: DocumentFields = json!({
+            "email": " ANGE\u{300}LE@Example.com ",
+            "profile": { "bio": "Cafe\u{301}" },
+            "contacts": [{ "address": "J\u{dc}RGEN@Example.com", "note": "Cre\u{300}me" }],
+            "content": [{ "_block_type": "quote", "body": "Cafe\u{301}" }],
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .collect();
+
+        let mut input = WriteInput::builder(data).build();
+        canonicalize_write_input(&mut input, &people_def());
+
+        assert_eq!(
+            input.data.get("email"),
+            Some(&json!("ang\u{e8}le@example.com"))
+        );
+        assert_eq!(
+            input.data.get("profile"),
+            Some(&json!({ "bio": "Caf\u{e9}" }))
+        );
+        assert_eq!(
+            input.data.get("contacts"),
+            Some(&json!([{ "address": "j\u{fc}rgen@example.com", "note": "Cr\u{e8}me" }]))
+        );
+        assert_eq!(
+            input.data.get("content"),
+            Some(&json!([{ "_block_type": "quote", "body": "Caf\u{e9}" }]))
+        );
+    }
 
     fn upload_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("media");

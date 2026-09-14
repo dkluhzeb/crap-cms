@@ -18,6 +18,7 @@
 
 use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -37,6 +38,7 @@ use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
 use crap_cms::db::{DbConnection, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::service::{ServiceContext, auth::lock_user};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -246,8 +248,15 @@ async fn body_string(body: Body) -> String {
 }
 
 fn make_bearer_token(app: &TestApp, user_id: &str, email: &str) -> String {
+    // Match the user's current session version, as `make_auth_cookie` does:
+    // `update_password` bumps it, and a stale token is rejected.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
@@ -1399,6 +1408,119 @@ async fn upload_api_delete_returns_success() {
     let del_body = body_string(resp.into_body()).await;
     let del_json: serde_json::Value = serde_json::from_str(&del_body).unwrap();
     assert_eq!(del_json["success"], true);
+}
+
+/// Write `hooks/access.lua` into the app's config dir; hooks load lazily, so
+/// rules written after setup are picked up on first use.
+fn write_access_hooks(config_dir: &std::path::Path, functions: &str) {
+    let hooks = config_dir.join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    fs::write(
+        hooks.join("access.lua"),
+        format!("local M = {{}}\n{functions}\nreturn M\n"),
+    )
+    .unwrap();
+}
+
+/// A token whose account is locked is refused, not treated as an anonymous
+/// request the collection's access rules may still allow.
+#[tokio::test]
+async fn upload_api_rejects_a_locked_accounts_token() {
+    let app = setup_app(vec![make_users_def(), make_media_def()], vec![]);
+    let user_id = create_test_user(&app, "locked@test.com", "secret123");
+    let bearer = make_bearer_token(&app, &user_id, "locked@test.com");
+
+    // Lock the account the way every surface does: the flag plus a session
+    // version bump that retires the tokens it already holds.
+    {
+        let conn = app.pool.get().unwrap();
+        let ctx = ServiceContext::slug_only("users").conn(&conn).build();
+        lock_user(&ctx, &user_id).unwrap();
+    }
+
+    let png = tiny_png();
+    let (ct, body) = build_multipart_body("locked.png", "image/png", &png, &[]);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/api/upload/media")
+                .header("content-type", ct)
+                .header("authorization", &bearer)
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Under a delete rule that returns a filter, deleting an upload outside the
+/// filter and deleting one that doesn't exist answer alike — otherwise the
+/// response reveals which ids exist.
+#[tokio::test]
+async fn upload_api_delete_does_not_reveal_existence_under_a_filter_rule() {
+    let mut media = make_media_def();
+    media.access.delete = Some("hooks.access.no_match".into());
+    let app = setup_app(vec![make_users_def(), media], vec![]);
+    write_access_hooks(
+        app._tmp.path(),
+        "function M.no_match(ctx)\n    return { filename = \"never-matches\" }\nend",
+    );
+    let user_id = create_test_user(&app, "uploader@test.com", "secret123");
+    let bearer = make_bearer_token(&app, &user_id, "uploader@test.com");
+
+    let png = tiny_png();
+    let (ct, body) = build_multipart_body("kept.png", "image/png", &png, &[]);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/api/upload/media")
+                .header("content-type", ct)
+                .header("authorization", &bearer)
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created: serde_json::Value =
+        serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+    let existing = created["document"]["id"].as_str().unwrap().to_string();
+
+    let mut statuses = Vec::new();
+    for id in [existing.as_str(), "nonexistent-id"] {
+        let resp = app
+            .router
+            .clone()
+            .oneshot(
+                Request::delete(format!("/api/upload/media/{id}"))
+                    .header("authorization", &bearer)
+                    .header("Cookie", csrf_cookie())
+                    .header("X-CSRF-Token", TEST_CSRF)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        statuses.push(resp.status());
+    }
+
+    assert_ne!(
+        statuses[0],
+        StatusCode::OK,
+        "the filter excludes the upload"
+    );
+    assert_eq!(
+        statuses[0], statuses[1],
+        "an excluded upload and a missing one must answer alike"
+    );
 }
 
 #[tokio::test]

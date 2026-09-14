@@ -81,6 +81,7 @@ impl Default for CacheConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn cache_config_defaults() {
@@ -100,7 +101,7 @@ mod tests {
             "[cache]\nbackend = \"none\"\nmax_entries = 5000\nmax_age_secs = 60\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.cache.backend, CacheBackend::None);
         assert_eq!(config.cache.max_entries, 5000);
         assert_eq!(config.cache.max_age_secs, 60);
@@ -115,7 +116,7 @@ mod tests {
             "[auth]\nsecret = \"0123456789abcdef0123456789abcdef01234567\"\n[cache]\nbackend = \"redis\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.cache.backend, CacheBackend::Redis);
         assert_eq!(config.cache.max_entries, 10_000);
         assert_eq!(config.cache.redis_url.as_str(), "redis://127.0.0.1:6379");
@@ -124,7 +125,7 @@ mod tests {
 
     #[test]
     fn cache_max_entries_zero_warns_but_passes() {
-        let mut config = crate::config::CrapConfig::default();
+        let mut config = CrapConfig::default();
         config.cache.max_entries = 0;
         // Should warn but not error
         assert!(config.validate().is_ok());

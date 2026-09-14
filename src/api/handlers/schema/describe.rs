@@ -31,11 +31,12 @@ impl ContentService {
                     .plural
                     .as_ref()
                     .map(|ls| ls.resolve_default().to_string()),
-                timestamps: false,
+                // A global's table always carries timestamps.
+                timestamps: true,
                 auth: false,
                 fields: def.fields.iter().map(field_def_to_proto).collect(),
                 upload: false,
-                drafts: false,
+                drafts: def.has_drafts(),
             }));
         }
 

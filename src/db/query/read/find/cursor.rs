@@ -8,13 +8,19 @@
 
 use anyhow::{Result, bail};
 
-use crate::core::{
-    FieldType,
-    validate::{FieldError, ValidationError},
+use crate::{
+    core::{
+        FieldType,
+        validate::{FieldError, ValidationError},
+    },
+    db::{
+        DbConnection, DbValue,
+        query::{
+            cursor::{CursorData, SortDirection, SortValue},
+            helpers::{append_sql_condition, sql_ident},
+        },
+    },
 };
-use crate::db::query::cursor::{CursorData, SortDirection, SortValue};
-use crate::db::query::helpers::append_sql_condition;
-use crate::db::{DbConnection, DbValue};
 
 /// Reject a cursor whose sort value cannot bind to the sort column's type.
 ///
@@ -114,6 +120,8 @@ fn inner_keyset_clause(
     cursor_id: &str,
     params: &mut Vec<DbValue>,
 ) -> String {
+    let col = sql_ident(col);
+
     if matches!(sort_val, DbValue::Null) {
         let ph_id = conn.placeholder(params.len() + 1);
         params.push(DbValue::Text(cursor_id.to_string()));
@@ -173,7 +181,29 @@ mod tests {
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
     use crate::db::query::{SortValue, cursor::build_cursors, write::create};
-    use crate::db::{DbConnection, DbValue, Filter, FilterClause, FilterOp, FindQuery, pool};
+    use crate::db::{
+        DbConnection, DbValue, Filter, FilterClause, FilterOp, FindQuery, InMemoryConn, pool,
+    };
+
+    use super::inner_keyset_clause;
+
+    /// The keyset clause quotes a sort column whose locale code has capitals.
+    #[test]
+    fn keyset_quotes_an_uppercase_locale_column() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+
+        let clause = inner_keyset_clause(
+            &conn,
+            "title__de_DE",
+            ">",
+            DbValue::Text("a".into()),
+            "id1",
+            &mut params,
+        );
+
+        assert!(clause.contains("\"title__de_DE\" > ?1"), "{clause}");
+    }
 
     /// A text sort value on a numeric/boolean sort column is rejected up
     /// front as a validation error instead of reaching the backend.

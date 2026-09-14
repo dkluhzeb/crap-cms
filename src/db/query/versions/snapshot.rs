@@ -1,18 +1,23 @@
 //! Snapshot building and data extraction helpers.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::LocaleConfig;
-use crate::core::{
-    Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, field_children,
-    flatten_group_fields, prefixed_name, walk_leaf_fields,
-};
-use crate::db::{
-    DbConnection, DbValue,
-    query::{
-        LocaleContext, LocaleMode, get_locale_select_columns_full, helpers::tz_column,
-        join::hydrate_document,
+use crate::{
+    config::LocaleConfig,
+    core::{
+        Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, field_children,
+        flatten_group_fields, prefixed_name, walk_leaf_fields,
+    },
+    db::{
+        DbConnection, DbValue,
+        query::{
+            LocaleContext, LocaleMode, get_locale_select_columns_full,
+            helpers::{locale_column, parse_has_many_scalar, tz_column},
+            join::hydrate_document,
+        },
     },
 };
 
@@ -28,8 +33,22 @@ pub fn build_snapshot(
     doc: &Document,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<Value> {
+    let active_locales = locale_config.filter(|c| c.is_enabled());
+
+    // With locales on, join fields hydrate under the default locale, so a
+    // localized join field's bare key holds the default locale's rows — never a
+    // mix of every locale's. Each locale's own rows are recorded below.
+    let default_ctx = active_locales.map(|c| exact_locale_ctx(c, &c.default_locale));
+
     let mut hydrated = doc.clone();
-    hydrate_document(conn, slug, fields, &mut hydrated, None, None)?;
+    hydrate_document(
+        conn,
+        slug,
+        fields,
+        &mut hydrated,
+        None,
+        default_ctx.as_ref(),
+    )?;
 
     let mut data: Map<String, Value> = hydrated.fields.into_iter().collect();
 
@@ -38,6 +57,18 @@ pub fn build_snapshot(
     // writes the decorated `field__xx` columns back, and anything missing
     // there is written as NULL — losing the other locales' translations.
     add_locale_columns(conn, slug, fields, &doc.id, locale_config, &mut data)?;
+
+    // Each locale's rows of a localized join field under the key its column
+    // would have (`{key}__{locale}`, the locale code in column form): restore
+    // writes each locale back from its own key, and a draft read resolves the
+    // reading locale's rows from it.
+    if let Some(config) = active_locales {
+        for (key, by_locale) in locale_join_rows(conn, doc, JoinOwner::new(slug, fields), config)? {
+            for (locale, rows) in by_locale {
+                data.insert(locale_column(&key, &locale)?, rows);
+            }
+        }
+    }
 
     if let Some(ts) = &doc.created_at {
         data.insert("created_at".to_string(), Value::String(ts.clone()));
@@ -49,9 +80,94 @@ pub fn build_snapshot(
     Ok(Value::Object(data))
 }
 
+/// A single-locale context with fallback off: a snapshot records exactly the
+/// rows each locale holds, not the default locale's rows standing in for an
+/// empty one.
+fn exact_locale_ctx(config: &LocaleConfig, locale: &str) -> LocaleContext {
+    LocaleContext {
+        mode: LocaleMode::Single(locale.to_string()),
+        config: LocaleConfig {
+            fallback: false,
+            ..config.clone()
+        },
+    }
+}
+
+/// The collection a document belongs to: its slug and fields.
+#[derive(Clone, Copy)]
+pub(crate) struct JoinOwner<'a> {
+    pub slug: &'a str,
+    pub fields: &'a [FieldDefinition],
+}
+
+impl<'a> JoinOwner<'a> {
+    #[must_use]
+    pub(crate) fn new(slug: &'a str, fields: &'a [FieldDefinition]) -> Self {
+        Self { slug, fields }
+    }
+}
+
+/// Flat keys (`field`, `group__field`) of the localized join fields — array,
+/// blocks and has-many relationship fields whose rows are stored per locale in
+/// a join table. Join localization follows the field's own `localized` flag.
+pub(crate) fn localized_join_keys(fields: &[FieldDefinition]) -> Vec<String> {
+    let mut keys = Vec::new();
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.localized && !field.has_parent_column() && field.field_type != FieldType::Join {
+            keys.push(prefixed_name(prefix, &field.name));
+        }
+
+        Ok(())
+    });
+
+    keys
+}
+
+/// Every locale's rows of each localized join field of `doc` — the join-table
+/// counterpart of [`add_locale_columns`] — keyed by the field's flat key
+/// (`field`, `group__field`) and then by locale code. `owner` is the collection
+/// `doc` belongs to. Records exactly the rows each locale holds, never
+/// the default locale's standing in for an empty one.
+///
+/// # Errors
+///
+/// Returns a backend error if hydrating a locale's rows fails.
+pub(crate) fn locale_join_rows(
+    conn: &dyn DbConnection,
+    doc: &Document,
+    owner: JoinOwner<'_>,
+    config: &LocaleConfig,
+) -> Result<Vec<(String, Map<String, Value>)>> {
+    let JoinOwner { slug, fields } = owner;
+    let mut rows: Vec<(String, Map<String, Value>)> = localized_join_keys(fields)
+        .into_iter()
+        .map(|key| (key, Map::new()))
+        .collect();
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+
+    for locale in &config.locales {
+        let mut per_locale = doc.clone();
+        let ctx = exact_locale_ctx(config, locale);
+        hydrate_document(conn, slug, fields, &mut per_locale, None, Some(&ctx))?;
+
+        let flat = flatten_group_fields(&per_locale.fields, fields);
+        for (key, by_locale) in &mut rows {
+            if let Some(locale_rows) = flat.get(key) {
+                by_locale.insert(locale.clone(), locale_rows.clone());
+            }
+        }
+    }
+
+    Ok(rows)
+}
+
 /// Read the per-locale columns (`title__en`, `title__de`, …) of one row and
-/// merge them into `data` under their decorated names. No-op when
-/// localization is disabled or the collection has no localized field.
+/// merge them into `data` under their decorated names, typed as the published
+/// read types them. No-op when localization is disabled or the collection has
+/// no localized field.
 fn add_locale_columns(
     conn: &dyn DbConnection,
     slug: &str,
@@ -84,21 +200,50 @@ fn add_locale_columns(
         return Ok(());
     };
 
+    let lists = has_many_scalar_types(fields);
+
     for (i, name) in names.iter().enumerate() {
         if !name.contains("__") {
             continue;
         }
-        let value = row
-            .text_at(i)
-            .map_or(Value::Null, |t| Value::String(t.to_string()));
-        data.insert(name.clone(), value);
+
+        let value = row.get_value(i).map_or(Value::Null, DbValue::to_json);
+        data.insert(name.clone(), decode_locale_value(&lists, name, value));
     }
 
     Ok(())
 }
 
+/// The field type of every scalar has-many leaf, by column name.
+fn has_many_scalar_types(fields: &[FieldDefinition]) -> HashMap<String, FieldType> {
+    let mut types = HashMap::new();
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.is_has_many_scalar() {
+            types.insert(prefixed_name(prefix, &field.name), field.field_type.clone());
+        }
+
+        Ok(())
+    });
+
+    types
+}
+
+/// A per-locale column value as the published read returns it: a scalar
+/// has-many list parsed from its stored JSON text, anything else as stored.
+fn decode_locale_value(lists: &HashMap<String, FieldType>, column: &str, value: Value) -> Value {
+    match column
+        .rsplit_once("__")
+        .and_then(|(base, _)| lists.get(base))
+    {
+        Some(field_type) => parse_has_many_scalar(field_type, &value),
+        None => value,
+    }
+}
+
 /// Whether a snapshot JSON value is a scalar that maps to a column write.
-/// Arrays / objects are handled via join tables and skipped here.
+/// Arrays / objects are handled via join tables and skipped here — except a
+/// scalar has-many list, which its own column stores.
 fn is_scalar_snapshot_value(val: &Value) -> bool {
     !matches!(val, Value::Array(_) | Value::Object(_))
 }
@@ -111,8 +256,9 @@ fn is_scalar_snapshot_value(val: &Value) -> bool {
 /// accepts either shape and yields the canonical flat `group__sub` columns
 /// (idempotent), so extraction is a single flat-column pass over the schema via
 /// [`walk_leaf_fields`] — no bespoke nested/flat merge. Only scalar, non-localized
-/// columns that live on the parent row are taken; localized columns (separate
-/// locale columns), join-table data (arrays/blocks/has-many), and
+/// columns that live on the parent row are taken — a scalar has-many list among
+/// them; localized columns (separate locale columns), join-table data
+/// (arrays/blocks/has-many relationships), and
 /// `created_at`/`updated_at` are handled elsewhere. Date `__tz` companions ride
 /// along with their owning column.
 pub(super) fn extract_snapshot_data(
@@ -141,12 +287,12 @@ pub(super) fn extract_snapshot_data(
             let key = prefixed_name(prefix, &field.name);
 
             if let Some(val) = flat.get(&key)
-                && is_scalar_snapshot_value(val)
+                && (is_scalar_snapshot_value(val) || field.is_has_many_scalar())
             {
                 data.insert(key.clone(), val.clone());
             }
 
-            if field.field_type == FieldType::Date && field.timezone {
+            if field.has_tz_companion() {
                 let tz_key = tz_column(&key);
 
                 if let Some(tz_val) = flat.get(&tz_key)
@@ -218,6 +364,22 @@ mod tests {
         let data = extract_snapshot_data(&obj, &fields, false);
         assert_eq!(data.get("title"), Some(&json!("Hello")));
         assert_eq!(data.get("count"), Some(&json!(42)));
+    }
+
+    /// Regression: extraction skipped every array value, so restoring a version
+    /// left a scalar has-many list at its current value.
+    #[test]
+    fn extract_snapshot_data_keeps_a_scalar_has_many_list() {
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({"tags": ["a", "b"]})).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("tags"), Some(&json!(["a", "b"])));
     }
 
     #[test]

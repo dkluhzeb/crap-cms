@@ -6,6 +6,7 @@ mod console;
 mod manifest;
 mod migrate;
 mod restore;
+mod secret;
 
 pub use backup::backup;
 pub use cleanup::cleanup;

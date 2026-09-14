@@ -23,19 +23,23 @@
 
 use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
-use serde_json::{Value, json, to_string_pretty};
+use serde_json::{Value, from_str, json, to_string, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    config::McpJobTools,
-    core::job::JobRun,
+    config::{McpJobTools, parse_duration_string},
+    core::job::{JobRun, SYSTEM_BULK_JOB},
     db::query::PaginationCtx,
-    mcp::{protocol::ToolDefinition, schema, tools::ToolExecCtx},
+    mcp::{
+        protocol::ToolDefinition,
+        schema,
+        tools::{ToolExecCtx, dispatch::exposure_for_call, slug_exposed},
+    },
     service::{
-        self, ServiceContext,
+        self, ServiceContext, ServiceError,
         jobs::{
             ListJobRunsInput,
-            bulk_queue::{self, BulkJobData, BulkOpKind, QueuedBy},
+            bulk_queue::{self, BulkJobData, BulkOpKind, BulkRunIdentity, QueuedBy},
         },
     },
 };
@@ -153,7 +157,7 @@ pub(in crate::mcp::tools) fn queue_bulk_tool(
     };
 
     let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data)
-        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
+        .map_err(ServiceError::into_anyhow_scrubbed)?;
 
     info!(
         "MCP queued bulk {:?} {}: job {} [client={}]",
@@ -206,7 +210,7 @@ impl From<&JobRun> for JobRunView {
             result: run
                 .result
                 .as_deref()
-                .map(|r| serde_json::from_str(r).unwrap_or_else(|_| json!(r))),
+                .map(|r| from_str(r).unwrap_or_else(|_| json!(r))),
             error: run.error.clone(),
             created_at: run.created_at.clone(),
         }
@@ -293,6 +297,22 @@ fn exec_list_jobs(ctx: &ToolExecCtx<'_>) -> Result<String> {
     Ok(to_string_pretty(&json!({ "jobs": jobs }))?)
 }
 
+/// Whether MCP may see `run`: a queued bulk run only when it names a
+/// collection MCP exposes (a run that doesn't name one stays hidden).
+fn run_visible_to_mcp(run: &JobRun, ctx: &ToolExecCtx<'_>) -> bool {
+    if run.slug != SYSTEM_BULK_JOB {
+        return true;
+    }
+
+    let Ok(identity) = from_str::<BulkRunIdentity>(&run.data) else {
+        return false;
+    };
+
+    identity
+        .collection
+        .is_some_and(|slug| slug_exposed(&slug, &ctx.config.mcp, &exposure_for_call(ctx)))
+}
+
 fn exec_get_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let id = args
         .get("id")
@@ -303,7 +323,8 @@ fn exec_get_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let svc = job_ctx(&conn, ctx, "");
 
     let run = service::jobs::get_job_run(&svc, ctx.infra.registry.as_ref(), id)
-        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?
+        .map_err(ServiceError::into_anyhow_scrubbed)?
+        .filter(|run| run_visible_to_mcp(run, ctx))
         .with_context(|| format!("Job run '{id}' not found"))?;
 
     Ok(to_string_pretty(&JobRunView::from(&run))?)
@@ -336,7 +357,7 @@ fn exec_list_job_runs(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             offset,
         },
     )
-    .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
+    .map_err(ServiceError::into_anyhow_scrubbed)?;
 
     let runs: Vec<JobRunView> = page.docs.iter().map(JobRunView::from).collect();
 
@@ -355,8 +376,17 @@ fn exec_cancel_job_run(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
     let conn = ctx.infra.pool.get().context("DB connection")?;
     let svc = job_ctx(&conn, ctx, "");
 
-    let cancelled = service::jobs::cancel_job_run(&svc, ctx.infra.registry.as_ref(), id)
-        .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
+    let registry = ctx.infra.registry.as_ref();
+    let visible = service::jobs::get_job_run(&svc, registry, id)
+        .map_err(ServiceError::into_anyhow_scrubbed)?
+        .is_some_and(|run| run_visible_to_mcp(&run, ctx));
+
+    let cancelled = if visible {
+        service::jobs::cancel_job_run(&svc, registry, id)
+            .map_err(ServiceError::into_anyhow_scrubbed)?
+    } else {
+        false
+    };
 
     info!(
         "MCP cancel_job_run: {} -> {} [client={}]",
@@ -375,8 +405,9 @@ fn parse_delay_arg(delay: Option<&Value>) -> Result<u64> {
         Some(Value::Number(n)) => n
             .as_u64()
             .context("'delay' must be a non-negative integer of seconds"),
-        Some(Value::String(s)) => crate::config::parse_duration_string(s)
-            .with_context(|| format!("invalid 'delay' duration '{s}'")),
+        Some(Value::String(s)) => {
+            parse_duration_string(s).with_context(|| format!("invalid 'delay' duration '{s}'"))
+        }
         Some(other) => bail!(
             "'delay' must be an integer of seconds or a duration string like \"5m\" (got {other})"
         ),
@@ -397,7 +428,7 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
         .with_context(|| format!("Job '{slug}' not found"))?;
 
     let data_json = match args.get("data") {
-        Some(v) if !v.is_null() => serde_json::to_string(v)?,
+        Some(v) if !v.is_null() => to_string(v)?,
         _ => "{}".to_string(),
     };
 
@@ -435,7 +466,7 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             unique_key: unique_key.as_deref(),
         },
     )
-    .map_err(crate::service::ServiceError::into_anyhow_scrubbed)?;
+    .map_err(ServiceError::into_anyhow_scrubbed)?;
 
     info!(
         "MCP trigger_job: {} -> {} [client={}]",
@@ -565,7 +596,7 @@ mod tests {
         };
 
         let out = exec_job_tool(TOOL_GET_JOB_RUN, &json!({ "id": run.id }), &ctx).unwrap();
-        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let parsed: Value = from_str(&out).unwrap();
 
         assert_eq!(parsed["id"], json!(run.id));
         assert_eq!(parsed["slug"], json!(SYSTEM_BULK_JOB));
@@ -573,6 +604,37 @@ mod tests {
 
         // An unknown id is an error, not an empty success.
         assert!(exec_job_tool(TOOL_GET_JOB_RUN, &json!({ "id": "nope" }), &ctx).is_err());
+    }
+
+    /// A bulk run of a collection MCP doesn't expose stays hidden from the job
+    /// tools, and so does a finished run whose payload no longer names its
+    /// collection (fail closed).
+    #[test]
+    fn job_tools_hide_bulk_runs_of_collections_mcp_does_not_expose() {
+        let mut t = setup_with(McpJobTools::All);
+        t.config.mcp.exclude_collections = vec!["notes".to_string()];
+        let ctx = make_exec_ctx(&t.pool, &t.registry, &t.runner, &t.config, t.tmp.path());
+
+        let insert = |data: &str| {
+            let conn = t.pool.get().unwrap();
+            job_query::insert_job(&conn, SYSTEM_BULK_JOB, data, "admin", 1, "bulk", 0).unwrap()
+        };
+        let hidden = insert(
+            r#"{"op":"create_many","collection":"notes","queued_by":{"kind":"system"},"max_documents":0}"#,
+        );
+        let unnamed = insert(r#"{"queued_by":{"kind":"system"}}"#);
+
+        for run in [&hidden, &unnamed] {
+            assert!(
+                exec_job_tool(TOOL_GET_JOB_RUN, &json!({ "id": run.id }), &ctx).is_err(),
+                "{} must stay hidden",
+                run.data
+            );
+
+            let out = exec_job_tool(TOOL_CANCEL_JOB_RUN, &json!({ "id": run.id }), &ctx).unwrap();
+            let parsed: Value = from_str(&out).unwrap();
+            assert_eq!(parsed["cancelled"], json!(false), "{}", run.data);
+        }
     }
 
     /// Every job tool refuses at the `false` tier — the gate is enforced at
@@ -620,7 +682,7 @@ mod tests {
         let ctx = make_exec_ctx(&t.pool, &t.registry, &t.runner, &t.config, t.tmp.path());
 
         let out = exec_job_tool(TOOL_LIST_JOBS, &json!({}), &ctx).unwrap();
-        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let parsed: Value = from_str(&out).unwrap();
 
         assert!(parsed["jobs"].is_array(), "{parsed}");
     }

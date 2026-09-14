@@ -148,13 +148,13 @@ mod tests {
 
     #[test]
     fn stmt_cache_capacity_defaults_to_128() {
-        let config = crate::config::CrapConfig::default();
+        let config = CrapConfig::default();
         assert_eq!(config.database.stmt_cache_capacity, 128);
     }
 
     #[test]
     fn write_pool_max_size_defaults_to_4() {
-        let config = crate::config::CrapConfig::default();
+        let config = CrapConfig::default();
         assert_eq!(config.database.write_pool_max_size, 4);
     }
 

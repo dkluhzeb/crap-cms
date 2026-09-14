@@ -28,10 +28,10 @@ impl ContentService {
 
         let ok_response = Response::new(content::ForgotPasswordResponse {});
 
-        // Normalize the per-email limiter key (trim + lowercase) so casing/
-        // whitespace variants of one account share a bucket — `find_by_email` is
-        // case-insensitive, so a raw-email key would let an attacker sidestep the
-        // per-account reset-flood limit by rotating the spelling.
+        // Key the per-email limiter on the address in its stored form so
+        // spelling variants of one account share a bucket — `find_by_email`
+        // compares that form, so a raw-email key would let an attacker sidestep
+        // the per-account reset-flood limit by rotating the spelling.
         let email_key = normalize_email(&req.email);
 
         // Atomically record this attempt against both limiters and bail if

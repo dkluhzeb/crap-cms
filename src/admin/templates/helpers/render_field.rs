@@ -68,6 +68,33 @@ mod tests {
 
     use crate::admin::templates::helpers::test_helpers::test_hbs;
 
+    /// A browser's `maxlength`/`minlength` count UTF-16 units, so an emoji
+    /// counts twice and a value within `max_length` characters couldn't be
+    /// typed; the length is left to server validation, which counts characters.
+    #[test]
+    fn text_inputs_carry_no_browser_length_limits() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{render_field ctx}}}")
+            .unwrap();
+
+        for field_type in ["text", "textarea"] {
+            let html = hbs
+                .render(
+                    "t",
+                    &json!({"ctx": {
+                        "field_type": field_type,
+                        "name": "title",
+                        "min_length": 2,
+                        "max_length": 5,
+                    }}),
+                )
+                .unwrap();
+
+            assert!(!html.contains("maxlength"), "{field_type}: {html}");
+            assert!(!html.contains("minlength"), "{field_type}: {html}");
+        }
+    }
+
     #[test]
     fn renders_text_field() {
         let mut hbs = test_hbs();

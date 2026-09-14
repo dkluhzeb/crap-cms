@@ -123,6 +123,11 @@ pub struct AuthConfig {
     /// a reminder, not a block.
     #[serde(default = "default_session_absolute_max_age", with = "serde_duration")]
     pub session_absolute_max_age: u64,
+    /// Whether `secret` was generated into `data/.jwt_secret` because none was
+    /// configured — set when the config loads, after environment substitution;
+    /// never read from `crap.toml`.
+    #[serde(skip)]
+    pub secret_generated: bool,
 }
 
 fn default_session_absolute_max_age() -> u64 {
@@ -150,13 +155,17 @@ impl Default for AuthConfig {
             password_policy: PasswordPolicy::default(),
             session_cookie_samesite: SessionCookieSameSite::default(),
             session_absolute_max_age: default_session_absolute_max_age(),
+            secret_generated: false,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn auth_config_defaults() {
@@ -167,15 +176,33 @@ mod tests {
         assert_eq!(auth.reset_token_expiry, 3600);
     }
 
+    /// Regression: restore judged a secret configured from `crap.toml`'s text,
+    /// so `secret = "${VAR:-}"` with the variable unset — a generated secret —
+    /// counted as configured.
+    #[test]
+    fn a_secret_substituted_empty_is_generated() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[auth]\nsecret = \"${CRAP_TEST_SECRET_NEVER_SET:-}\"\n",
+        )
+        .unwrap();
+
+        let config = CrapConfig::load(tmp.path()).unwrap();
+
+        assert!(config.auth.secret_generated);
+        assert!(!config.auth.secret.is_empty());
+    }
+
     #[test]
     fn auth_reset_token_expiry_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\nreset_token_expiry = 1800\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.reset_token_expiry, 1800);
     }
 
@@ -189,12 +216,12 @@ mod tests {
     #[test]
     fn session_cookie_samesite_parses_from_toml_lowercase() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\nsession_cookie_samesite = \"strict\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(
             config.auth.session_cookie_samesite,
             SessionCookieSameSite::Strict
@@ -205,13 +232,13 @@ mod tests {
     #[test]
     fn session_cookie_samesite_rejects_invalid_value() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\nsession_cookie_samesite = \"bogus\"\n",
         )
         .unwrap();
-        let err = crate::config::CrapConfig::load(tmp.path())
-            .expect_err("bogus samesite value must fail to parse");
+        let err =
+            CrapConfig::load(tmp.path()).expect_err("bogus samesite value must fail to parse");
 
         // Walk the full error chain -- the top-level anyhow wrapper is a
         // generic "failed to deserialize" string; the specific variant /

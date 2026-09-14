@@ -8,8 +8,8 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        Document, DocumentFields, FieldChildren, FieldDefinition, FieldType, event::EventOperation,
-        field_children,
+        Document, DocumentFields, FieldChildren, FieldDefinition, canonicalize_text_values,
+        event::EventOperation, field_children,
     },
     db::{
         AccessResult, LocaleContext, query,
@@ -22,6 +22,16 @@ use crate::{
         versions::gate::versions_gate_decision,
     },
 };
+
+/// Bring a snapshot's email and text values into the canonical form every
+/// write stores. A snapshot taken before values were stored that way holds
+/// them as typed, and uniqueness validation and the restored row must see the
+/// stored form.
+fn canonicalize_snapshot(snapshot: &mut Value, fields: &[FieldDefinition]) {
+    if let Some(obj) = snapshot.as_object_mut() {
+        canonicalize_text_values(obj, fields);
+    }
+}
 
 /// Convert a snapshot JSON object into a `DocumentFields` suitable
 /// for `validate_fields`. The snapshot's top-level keys are field names
@@ -70,7 +80,7 @@ fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSe
                 out.insert(key.clone());
                 out.insert(f.name.clone());
 
-                if f.field_type == FieldType::Date && f.timezone {
+                if f.has_tz_companion() {
                     out.insert(tz_column(&key));
                     out.insert(tz_column(&f.name));
                 }
@@ -330,6 +340,8 @@ pub(crate) fn restore_collection_version_core(
         None,
     );
 
+    canonicalize_snapshot(&mut snapshot, &def.fields);
+
     // Re-run schema validation against the restored data, so a snapshot
     // saved before a schema tightening (e.g. a field gained `required = true`
     // or a stricter regex) is rejected rather than silently overwriting
@@ -475,6 +487,8 @@ pub(crate) fn restore_global_version_core(
         None,
     );
 
+    canonicalize_snapshot(&mut snapshot, &def.fields);
+
     // Re-run schema validation against the restored data — see the
     // collection variant above for the full rationale.
     let validation_data = snapshot_to_validation_data(&snapshot);
@@ -513,12 +527,41 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{collect_known_keys, restore_collection_version, warn_on_snapshot_drift};
+    use super::{
+        canonicalize_snapshot, collect_known_keys, restore_collection_version,
+        warn_on_snapshot_drift,
+    };
     use crate::{
         config::LocaleConfig,
         core::{CollectionDefinition, FieldDefinition, FieldType},
         service::{ServiceContext, ServiceError},
     };
+
+    /// Regression: a restore validated and wrote a snapshot's email and text
+    /// values as typed, so a snapshot taken before values were stored
+    /// canonically slipped past uniqueness and stored a form no lookup matches.
+    #[test]
+    fn a_restored_snapshot_is_brought_into_canonical_form() {
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Email).build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let mut snapshot = json!({
+            "email": " Bob@Example.com",
+            "seo": { "title": "Cafe\u{301}" },
+        });
+
+        canonicalize_snapshot(&mut snapshot, &fields);
+
+        assert_eq!(
+            snapshot,
+            json!({ "email": "bob@example.com", "seo": { "title": "Caf\u{e9}" } })
+        );
+    }
 
     /// Regression: the `has_versions` gate lives in the service chokepoint —
     /// previously only the gRPC codec checked, so MCP/Lua hit the missing

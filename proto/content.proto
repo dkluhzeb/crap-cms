@@ -1258,7 +1258,7 @@ message DescribeCollectionResponse {
   // Human-readable plural label.
   optional string plural_label = 3;
 
-  // True if the collection has timestamp columns. Always false for globals.
+  // True if the collection has timestamp columns. Always true for globals.
   bool timestamps = 4;
 
   // True if the collection is an auth collection. Always false for globals.
@@ -1272,7 +1272,7 @@ message DescribeCollectionResponse {
   // True if the collection is an upload collection. Always false for globals.
   bool upload = 7;
 
-  // True if draft/versioning is enabled for the collection.
+  // True if drafts are enabled for the collection or global.
   bool drafts = 8;
 }
 
@@ -1320,6 +1320,18 @@ message FieldInfo {
 
   // True if this field stores locale-specific values.
   bool localized = 11;
+
+  // For polymorphic relationship fields: every target collection slug. A value
+  // is then written and read as `collection/id`. Empty for single-target and
+  // non-relationship fields (see relationship_collection).
+  repeated string relationship_collections = 12;
+
+  // True if a text, number or select field holds a list of values.
+  bool has_many = 13;
+
+  // True if a date field stores the IANA timezone its value was entered in,
+  // under the `<name>_tz` companion key.
+  bool timezone = 14;
 }
 
 // BlockInfo describes a single block type within a blocks field.

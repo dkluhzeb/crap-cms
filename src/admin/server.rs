@@ -2,7 +2,9 @@
 
 // Auth middleware and user loading are in `auth_middleware.rs`.
 use super::auth_middleware::auth_middleware;
-pub(crate) use super::auth_middleware::load_auth_user;
+pub(crate) use super::auth_middleware::{
+    bearer_token, evaluate_admin_request, headers_to_map, load_auth_user, session_cookie_token,
+};
 
 use std::{
     future::Future,

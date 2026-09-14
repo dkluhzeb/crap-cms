@@ -24,6 +24,10 @@ struct Harness {
     locale: LocaleConfig,
 }
 
+fn slide_fields() -> Vec<FieldDefinition> {
+    vec![FieldDefinition::builder("caption", FieldType::Text).build()]
+}
+
 fn make_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("pages");
     def.timestamps = true;
@@ -32,6 +36,10 @@ fn make_def() -> CollectionDefinition {
             .localized(true)
             .build(),
         FieldDefinition::builder("slug", FieldType::Text).build(),
+        FieldDefinition::builder("slides", FieldType::Array)
+            .localized(true)
+            .fields(slide_fields())
+            .build(),
     ];
     def.versions = Some(VersionsConfig::new(true, 0));
     def
@@ -321,4 +329,168 @@ fn restoring_a_bulk_update_version_keeps_every_locale() {
         "restoring a bulk-update version must not wipe the German title"
     );
     assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Hello v2"));
+}
+
+/// Captions of one locale's `slides` rows, read straight from the join table.
+fn slides_in(h: &Harness, id: &str, locale: &str) -> Vec<String> {
+    let conn = h.pool.get().unwrap();
+
+    query::find_array_rows(&conn, "pages", "slides", id, &slide_fields(), Some(locale))
+        .unwrap()
+        .iter()
+        .filter_map(|row| {
+            row.get("caption")
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Captions of `slides` in a document returned by a read.
+fn captions(doc: &crap_cms::core::Document) -> Vec<String> {
+    doc.fields
+        .get("slides")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| {
+                    r.get("caption")
+                        .and_then(|c| c.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn slides(captions: &[&str]) -> DocumentFields {
+    let rows: Vec<serde_json::Value> = captions.iter().map(|c| json!({ "caption": c })).collect();
+
+    [("slides".to_string(), json!(rows))].into_iter().collect()
+}
+
+fn write(h: &Harness, id: &str, locale: &str, data: DocumentFields, draft: bool) {
+    let ctx = service_ctx(h);
+    let locale_ctx = ctx_for(h, locale);
+
+    update_document(
+        &ctx,
+        id,
+        WriteInput::builder(data)
+            .locale_ctx(Some(&locale_ctx))
+            .draft(draft)
+            .build(),
+    )
+    .expect("write");
+}
+
+fn read_draft(h: &Harness, id: &str, locale: &str) -> crap_cms::core::Document {
+    let conn = h.pool.get().unwrap();
+    let hooks = RunnerReadHooks::new(&h.runner, &conn, None, None);
+    let read_ctx = ServiceContext::collection("pages", &h.def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .locale_config(Some(&h.locale))
+        .build();
+    let locale_ctx = ctx_for(h, locale);
+
+    find_document_by_id(
+        &read_ctx,
+        &FindByIdInput::builder(id)
+            .locale_ctx(Some(&locale_ctx))
+            .use_draft(true)
+            .build(),
+    )
+    .expect("read")
+    .expect("document")
+}
+
+fn restore_latest(h: &Harness, id: &str) {
+    restore_nth_newest(h, id, 0);
+}
+
+/// Restore the version at `index` in newest-first order (0 = latest).
+fn restore_nth_newest(h: &Harness, id: &str, index: usize) {
+    let conn = h.pool.get().unwrap();
+    let versions = query::list_versions(&conn, "pages", id, false, None, None).expect("versions");
+    let version = versions.get(index).expect("that version").id.clone();
+    drop(conn);
+
+    restore_collection_version(&service_ctx(h), id, &version, &h.locale).expect("restore");
+}
+
+/// A snapshot keeps each locale's rows of a localized array apart, and a
+/// restore writes them back to their own locale — not all into the default.
+/// The German rows change after the snapshot, so the restore has real work to
+/// do: re-create the snapshot's German row and drop the later one.
+#[test]
+fn restoring_keeps_each_locales_array_rows() {
+    let h = setup();
+    let id = seed(&h);
+
+    write(&h, &id, "en", slides(&["A", "B"]), false);
+    write(&h, &id, "de", slides(&["X"]), false);
+    write(&h, &id, "de", slides(&["Y"]), false);
+
+    // Newest first: [de Y, de X, en A B] → restore the `de X` version.
+    restore_nth_newest(&h, &id, 1);
+
+    assert_eq!(slides_in(&h, &id, "en"), ["A", "B"]);
+    assert_eq!(slides_in(&h, &id, "de"), ["X"]);
+}
+
+/// A draft of a localized array saved under `de` changes only the German rows:
+/// an English draft read still shows the English rows, and restoring the draft
+/// version leaves the English rows in place.
+#[test]
+fn a_german_draft_of_localized_rows_leaves_english_rows_alone() {
+    let h = setup();
+    let id = seed(&h);
+
+    write(&h, &id, "en", slides(&["A", "B"]), false);
+    write(&h, &id, "de", slides(&["X"]), false);
+    write(&h, &id, "de", slides(&["X2"]), true);
+
+    assert_eq!(captions(&read_draft(&h, &id, "en")), ["A", "B"]);
+    assert_eq!(captions(&read_draft(&h, &id, "de")), ["X2"]);
+
+    restore_latest(&h, &id);
+
+    assert_eq!(slides_in(&h, &id, "en"), ["A", "B"]);
+    assert_eq!(slides_in(&h, &id, "de"), ["X2"]);
+}
+
+/// A draft saved under a second locale builds on the pending draft, so the
+/// first locale's draft edit survives.
+#[test]
+fn a_second_locales_draft_keeps_the_first_locales_draft_edit() {
+    let h = setup();
+    let id = seed(&h);
+
+    write(&h, &id, "en", fields(&[("title", "Hello draft")]), true);
+    write(&h, &id, "de", fields(&[("title", "Hallo Entwurf")]), true);
+
+    assert_eq!(
+        read_draft(&h, &id, "en").get_str("title"),
+        Some("Hello draft")
+    );
+    assert_eq!(
+        read_draft(&h, &id, "de").get_str("title"),
+        Some("Hallo Entwurf")
+    );
+}
+
+/// A partial draft update (one field, as an API client sends it) keeps the
+/// earlier draft edits of every other field.
+#[test]
+fn a_partial_draft_update_keeps_earlier_draft_edits() {
+    let h = setup();
+    let id = seed(&h);
+
+    write(&h, &id, "en", fields(&[("title", "Hello draft")]), true);
+    write(&h, &id, "en", fields(&[("slug", "draft-slug")]), true);
+
+    let draft = read_draft(&h, &id, "en");
+    assert_eq!(draft.get_str("title"), Some("Hello draft"));
+    assert_eq!(draft.get_str("slug"), Some("draft-slug"));
 }

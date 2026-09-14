@@ -34,7 +34,7 @@ func (r Rel[T]) MarshalJSON() ([]byte, error) {
 // N2fa represents a 2fa document.
 type N2fa struct {
 	ID        string  `json:"id"`
-	Type      string `json:"type"`
+	Type      *string `json:"type,omitempty"`
 	N2fa      *string `json:"2fa,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -43,44 +43,81 @@ type N2fa struct {
 // Media represents a media document.
 type Media struct {
 	ID        string  `json:"id"`
-	Filename  string `json:"filename"`
+	Filename  *string `json:"filename,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
 
 // PostsSeo represents the seo group field.
 type PostsSeo struct {
-	MetaTitle string `json:"meta_title"`
+	MetaTitle *string `json:"meta_title,omitempty"`
 	MetaDesc  *string `json:"meta_desc,omitempty"`
 }
 
 // PostsItems represents a row in the items array field.
 type PostsItems struct {
-	Label     string `json:"label"`
-	Meta      PostsItemsMeta `json:"meta,omitempty"`
+	ID        *string `json:"id,omitempty"`
+	Label     *string `json:"label,omitempty"`
+	Meta      *PostsItemsMeta `json:"meta,omitempty"`
 }
 
 // PostsItemsMeta represents the meta group field.
 type PostsItemsMeta struct {
-	Key       string `json:"key"`
+	Key       *string `json:"key,omitempty"`
 }
 
 // Posts represents a posts document.
 type Posts struct {
 	ID        string  `json:"id"`
-	Title     string `json:"title"`
-	Status    PostsStatus `json:"status"`
+	Title     *string `json:"title,omitempty"`
+	Summary   *string `json:"summary,omitempty"`
+	PublishedAt *string `json:"published_at,omitempty"`
+	PublishedAtTz *string `json:"published_at_tz,omitempty"`
+	Status    *PostsStatus `json:"status,omitempty"`
 	Author    *Rel[Users] `json:"author,omitempty"`
 	Tags      []Rel[Tags] `json:"tags,omitempty"`
 	Cover     *Rel[Media] `json:"cover,omitempty"`
 	// Polymorphic relationship — targets: users, tags
 	Related   []interface{} `json:"related,omitempty"`
-	Seo       PostsSeo `json:"seo,omitempty"`
+	Seo       *PostsSeo `json:"seo,omitempty"`
 	Items     []PostsItems `json:"items,omitempty"`
 	Content   []map[string]interface{} `json:"content,omitempty"`
 	Scores    []float64 `json:"scores,omitempty"`
-	Active    bool `json:"active,omitempty"`
+	Active    *bool `json:"active,omitempty"`
 	Data      interface{} `json:"data,omitempty"`
+	DraftStatus *string `json:"_status,omitempty"`
+	DeletedAt *string `json:"_deleted_at,omitempty"`
+	CreatedAt *string `json:"created_at,omitempty"`
+	UpdatedAt *string `json:"updated_at,omitempty"`
+}
+
+// PostsSeoLocalized represents the seo group field.
+type PostsSeoLocalized struct {
+	MetaTitle map[string]*string `json:"meta_title,omitempty"`
+	MetaDesc  map[string]*string `json:"meta_desc,omitempty"`
+}
+
+// PostsLocalized is a posts document read with locale=all: localized fields hold one value per locale.
+type PostsLocalized struct {
+	ID        string  `json:"id"`
+	Title     *string `json:"title,omitempty"`
+	Summary   map[string]*string `json:"summary,omitempty"`
+	PublishedAt *string `json:"published_at,omitempty"`
+	PublishedAtTz *string `json:"published_at_tz,omitempty"`
+	Status    *PostsStatus `json:"status,omitempty"`
+	Author    *Rel[Users] `json:"author,omitempty"`
+	Tags      []Rel[Tags] `json:"tags,omitempty"`
+	Cover     *Rel[Media] `json:"cover,omitempty"`
+	// Polymorphic relationship — targets: users, tags
+	Related   []interface{} `json:"related,omitempty"`
+	Seo       *PostsSeoLocalized `json:"seo,omitempty"`
+	Items     []PostsItems `json:"items,omitempty"`
+	Content   []map[string]interface{} `json:"content,omitempty"`
+	Scores    []float64 `json:"scores,omitempty"`
+	Active    *bool `json:"active,omitempty"`
+	Data      interface{} `json:"data,omitempty"`
+	DraftStatus *string `json:"_status,omitempty"`
+	DeletedAt *string `json:"_deleted_at,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -88,7 +125,7 @@ type Posts struct {
 // Tags represents a tags document.
 type Tags struct {
 	ID        string  `json:"id"`
-	Name      string `json:"name"`
+	Name      *string `json:"name,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -96,7 +133,7 @@ type Tags struct {
 // Users represents a users document.
 type Users struct {
 	ID        string  `json:"id"`
-	Name      string `json:"name"`
+	Name      *string `json:"name,omitempty"`
 	Email     *string `json:"email,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
@@ -104,14 +141,15 @@ type Users struct {
 
 // SettingsNav represents a row in the nav array field.
 type SettingsNav struct {
-	Label     string `json:"label"`
-	Url       string `json:"url"`
+	ID        *string `json:"id,omitempty"`
+	Label     *string `json:"label,omitempty"`
+	Url       *string `json:"url,omitempty"`
 }
 
 // Settings represents the settings global.
 type Settings struct {
 	ID        string  `json:"id"`
-	SiteName  string `json:"site_name"`
+	SiteName  *string `json:"site_name,omitempty"`
 	Nav       []SettingsNav `json:"nav,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`

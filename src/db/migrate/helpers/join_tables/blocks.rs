@@ -5,8 +5,8 @@ use tracing::info;
 
 use crate::config::LocaleConfig;
 use crate::db::DbConnection;
-use crate::db::migrate::helpers::column_specs::ensure_locale_column;
-use crate::db::migrate::helpers::introspection::{sanitize_locale, table_exists};
+use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
+use crate::db::migrate::helpers::introspection::table_exists;
 use crate::db::query::helpers::join_table;
 
 /// Sync a blocks join table (create or ensure locale column).
@@ -21,8 +21,10 @@ pub(super) fn sync_blocks_table(
 
     if !table_exists(conn, &table_name)? {
         let locale_col = if has_locale_col {
-            let default_loc = sanitize_locale(&locale_config.default_locale)?;
-            format!(", _locale TEXT NOT NULL DEFAULT '{default_loc}'")
+            format!(
+                ", {}",
+                locale_column_definition(&locale_config.default_locale)
+            )
         } else {
             String::new()
         };

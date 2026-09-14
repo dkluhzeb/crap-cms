@@ -11,8 +11,11 @@ use chrono::Local;
 
 use crate::{
     cli::{self, Spinner},
-    commands::db::manifest::BackupManifest,
-    config::CrapConfig,
+    commands::{
+        db::{manifest::BackupManifest, secret::backup_secret},
+        helpers::hold_instance_lock,
+    },
+    config::{CrapConfig, DatabaseBackend, UploadStorage},
     db::{DbConnection, pool},
 };
 
@@ -29,6 +32,8 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    ensure_file_database(&cfg)?;
+    let _instance_lock = hold_instance_lock(&config_dir)?;
     let db_path = cfg.db_path(&config_dir);
 
     if !db_path.exists() {
@@ -48,11 +53,16 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
     let backup_dir = create_backup_dir(&config_dir, output)?;
     let db_size = backup_database(&config_dir, &cfg, &backup_dir)?;
 
-    let uploads_size = if include_uploads {
-        backup_uploads(&config_dir, &backup_dir)
-    } else {
-        None
-    };
+    let includes_secret = backup_secret(&config_dir, &backup_dir)?;
+    if includes_secret {
+        cli::info(
+            "Included the generated auth secret — keep this backup as private as the secret.",
+        );
+    }
+
+    let uploads_size = include_uploads
+        .then(|| backup_local_uploads(&cfg, &config_dir, &backup_dir))
+        .flatten();
 
     write_backup_manifest(&WriteManifestParams {
         backup_dir: &backup_dir,
@@ -61,9 +71,38 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         db_size,
         uploads_size,
         include_uploads,
+        includes_secret,
     })?;
 
     cli::success(&format!("Backup complete: {}", backup_dir.display()));
+
+    Ok(())
+}
+
+/// Archive the uploads when they live in this project. Uploads kept in another
+/// storage are backed up with that service, so they are skipped with a note.
+fn backup_local_uploads(cfg: &CrapConfig, config_dir: &Path, backup_dir: &Path) -> Option<u64> {
+    let storage = cfg.upload.storage;
+
+    if !matches!(storage, UploadStorage::Local) {
+        cli::info(&format!(
+            "Uploads are kept in {storage:?} storage, not in this project — back them up \
+             with that service. Skipping."
+        ));
+        return None;
+    }
+
+    backup_uploads(config_dir, backup_dir)
+}
+
+/// `backup` copies the `SQLite` database file; a Postgres database is backed up
+/// with its own tooling.
+fn ensure_file_database(cfg: &CrapConfig) -> Result<()> {
+    if cfg.database.backend != DatabaseBackend::Sqlite {
+        bail!(
+            "`backup` copies the SQLite database file — back up a Postgres database with pg_dump"
+        );
+    }
 
     Ok(())
 }
@@ -194,9 +233,9 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
     }
 }
 
-/// Args for [`write_backup_manifest`]. Path triple + sizes +
-/// the `--include-uploads` flag — declarative call site instead
-/// of 6 positional args at the single dispatch site.
+/// Args for [`write_backup_manifest`]. Path triple + sizes + what the
+/// backup includes — declarative call site instead of positional args at
+/// the single dispatch site.
 struct WriteManifestParams<'a> {
     backup_dir: &'a Path,
     db_path: &'a Path,
@@ -204,6 +243,7 @@ struct WriteManifestParams<'a> {
     db_size: u64,
     uploads_size: Option<u64>,
     include_uploads: bool,
+    includes_secret: bool,
 }
 
 /// Write the backup manifest.json with metadata about the backup.
@@ -218,6 +258,7 @@ fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
         include_uploads: p.include_uploads,
         source_db: p.db_path.to_string_lossy().into_owned(),
         source_config: p.config_dir.to_string_lossy().into_owned(),
+        includes_secret: p.includes_secret,
     };
 
     fs::write(
@@ -229,7 +270,42 @@ fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::preflight_writable;
+    use super::{backup_local_uploads, ensure_file_database, preflight_writable};
+    use crate::config::{CrapConfig, DatabaseBackend, UploadStorage};
+
+    /// Uploads kept outside the project aren't archived, even when asked for.
+    #[test]
+    fn backup_skips_uploads_kept_in_another_storage() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let uploads = config_dir.path().join("uploads").join("media");
+        std::fs::create_dir_all(&uploads).unwrap();
+        std::fs::write(uploads.join("stale-local-copy.png"), b"x").unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+
+        let mut cfg = CrapConfig::default();
+        cfg.upload.storage = UploadStorage::S3;
+
+        assert_eq!(
+            backup_local_uploads(&cfg, config_dir.path(), backup_dir.path()),
+            None
+        );
+        assert_eq!(
+            std::fs::read_dir(backup_dir.path()).unwrap().count(),
+            0,
+            "nothing is archived for uploads in another storage"
+        );
+    }
+
+    #[test]
+    fn backup_explains_that_a_postgres_database_needs_pg_dump() {
+        let mut cfg = CrapConfig::default();
+        assert!(ensure_file_database(&cfg).is_ok());
+
+        cfg.database.backend = DatabaseBackend::Postgres;
+        let err = ensure_file_database(&cfg).unwrap_err().to_string();
+        assert!(err.contains("pg_dump"), "{err}");
+    }
+
     #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]

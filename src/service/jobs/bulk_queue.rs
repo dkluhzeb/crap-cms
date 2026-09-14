@@ -22,6 +22,7 @@ use crate::{
     service::{ServiceError, collections::delete_scope},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{from_str, to_string};
 
 /// Which bulk operation a `_system_bulk` run executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,9 +65,24 @@ pub enum QueuedBy {
 /// visibility rule ([`can_read_bulk_run`]) needs. `GetJobRun` decodes
 /// this, never the full struct, so stripping can't hide a run from its
 /// queuer.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct BulkRunIdentity {
     pub queued_by: QueuedBy,
+    /// The collection the run operates on. `None` for a run finished before
+    /// the stripped payload kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+}
+
+/// The payload a finished run keeps in place of its stored data: its
+/// [`BulkRunIdentity`] — all the visibility rules read — and nothing of the
+/// request. Data that doesn't decode keeps nothing.
+#[must_use]
+pub fn finished_payload(data: &str) -> String {
+    from_str::<BulkRunIdentity>(data)
+        .ok()
+        .and_then(|identity| to_string(&identity).ok())
+        .unwrap_or_else(|| "{}".to_string())
 }
 
 /// The stored `_system_bulk` job payload — everything needed to rebuild

@@ -30,7 +30,25 @@ pub fn migrate(config_dir: &Path, action: &MigrateAction) -> Result<()> {
         return scaffold::make_migration(&config_dir, name);
     }
 
+    if let MigrateAction::Fresh { confirm: false } = action {
+        bail!(
+            "migrate fresh is destructive — it drops ALL tables and recreates them.\n\
+             Pass --confirm to proceed."
+        );
+    }
+
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+
+    // Held before the Lua VM and the pool open the database, and for the whole
+    // command: exclusively for `fresh`, which drops every table, and shared
+    // otherwise, so a restore can't replace the database underneath.
+    let _instance_lock = match action {
+        MigrateAction::Fresh { .. } => {
+            helpers::hold_exclusive_instance_lock(&config_dir, "migrate fresh")?
+        }
+        _ => helpers::hold_instance_lock(&config_dir)?,
+    };
+
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
@@ -39,9 +57,7 @@ pub fn migrate(config_dir: &Path, action: &MigrateAction) -> Result<()> {
         MigrateAction::Up => migrate_up(&config_dir, &cfg, &registry, &pool),
         MigrateAction::Down { steps } => migrate_down(&config_dir, &cfg, &registry, &pool, *steps),
         MigrateAction::List => migrate_list(&config_dir, &pool),
-        MigrateAction::Fresh { confirm } => {
-            migrate_fresh(&config_dir, &cfg, &registry, &pool, *confirm)
-        }
+        MigrateAction::Fresh { .. } => migrate_fresh(&config_dir, &cfg, &registry, &pool),
     }
 }
 
@@ -162,24 +178,15 @@ fn migrate_list(config_dir: &Path, pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
-/// Drop all tables, recreate schema from Lua definitions, and run all migrations.
+/// Drop all tables, recreate schema from Lua definitions, and run all
+/// migrations. The caller holds the instance lock.
 #[cfg(not(tarpaulin_include))]
 fn migrate_fresh(
     config_dir: &Path,
     cfg: &CrapConfig,
     registry: &Arc<Registry>,
     pool: &DbPool,
-    confirm: bool,
 ) -> Result<()> {
-    if !confirm {
-        bail!(
-            "migrate fresh is destructive — it drops ALL tables and recreates them.\n\
-             Pass --confirm to proceed."
-        );
-    }
-
-    helpers::refuse_if_server_running(config_dir, "migrate fresh")?;
-
     let spin = Spinner::new("Dropping all tables...");
     db_migrate::drop_all_tables(pool)?;
     spin.finish_success("Tables dropped");

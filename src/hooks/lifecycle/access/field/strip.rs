@@ -13,7 +13,7 @@ use super::walk::{
 use crate::core::{
     Document, DocumentFields, FieldChildren, FieldDefinition, HookRef, field_children,
 };
-use crate::db::AccessResult;
+use crate::db::{AccessResult, query::helpers::tz_column};
 use crate::hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua};
 
 /// Data-aware field-**read** strip using an already-held `&Lua`. Walks `level`
@@ -101,9 +101,15 @@ pub(crate) fn strip_read_access_with_lua(
         };
 
         locale_map.retain(|loc, _| !denied_at(hook, &snapshot, Some(loc.as_str())));
+        let kept: Vec<String> = locale_map.keys().cloned().collect();
 
-        if locale_map.is_empty() {
+        if kept.is_empty() {
             level.remove(&field.name);
+        }
+
+        // A timezone date's per-locale zones go with the locales it keeps.
+        if field.has_tz_companion() {
+            retain_locales(level, &tz_column(&field.name), &kept);
         }
 
         handled.push(field.name.clone());
@@ -125,6 +131,20 @@ pub(crate) fn strip_read_access_with_lua(
             .collect();
 
         strip_read_access_data_aware(&remaining, level, &is_denied);
+    }
+}
+
+/// Keep only the `kept` locales of the per-locale map at `key`, removing the key
+/// when none survive.
+fn retain_locales(level: &mut Map<String, Value>, key: &str, kept: &[String]) {
+    let Some(Value::Object(map)) = level.get_mut(key) else {
+        return;
+    };
+
+    map.retain(|loc, _| kept.contains(loc));
+
+    if map.is_empty() {
+        level.remove(key);
     }
 }
 

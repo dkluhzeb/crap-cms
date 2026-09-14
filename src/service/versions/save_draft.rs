@@ -1,16 +1,22 @@
 //! Draft version save: merge data onto existing doc, snapshot, prune.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
     core::{
         Document, DocumentFields, FieldChildren, FieldDefinition, FieldType,
-        collection::VersionsConfig, field_children, flatten_group_fields, walk_leaf_fields,
+        collection::VersionsConfig, field_children, flatten_group_fields, nest_group_fields,
+        walk_leaf_fields,
     },
     db::{
         DbConnection, LocaleContext, query,
-        query::{helpers::prefixed_name, locale_locked_field_names},
+        query::{
+            helpers::{locale_column, prefixed_name, tz_column},
+            locale_locked_field_names,
+        },
     },
 };
 
@@ -29,8 +35,9 @@ pub(crate) struct SaveDraftArgs<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
 }
 
-/// Save a draft-only version: merge incoming hook-processed data onto existing doc,
-/// create a version snapshot, and prune.
+/// Save a draft-only version: merge incoming hook-processed data onto the
+/// latest draft (or, without one, the existing doc), create a version snapshot,
+/// and prune.
 ///
 /// Returns the stored snapshot — the DRAFT content. Callers hand that back to
 /// hooks, the response, and the event, so a draft save reports what was
@@ -42,12 +49,10 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
         parent_id,
         fields,
         versions,
-        existing_doc,
+        existing_doc: _,
         data: final_ctx_data,
         locale_ctx,
     } = *args;
-
-    let mut snapshot_fields = existing_doc.fields.clone();
 
     // Locale-locked shared fields must not enter the snapshot from a non-default
     // locale edit — otherwise the canonical default-locale value would be
@@ -58,40 +63,41 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     // incoming hook data can arrive with nested group objects (`seo: { title }`)
     // from the gRPC/MCP/admin surfaces. Flatten before overlaying so an edited
     // sub-field overwrites the matching flat key instead of leaving a duplicate
-    // nested object behind — `build_snapshot`'s hydration would otherwise rebuild
-    // the group from the stale flat column and silently drop the edit.
+    // nested object behind.
     let mut flattened = flatten_group_fields(final_ctx_data, fields);
 
     // Drop locale-locked fields (scalar columns AND join fields) so neither the
-    // scalar overlay below nor the join re-merge can bake a non-default-locale
-    // edit of a shared field into the snapshot.
+    // overlay nor the join re-merge can bake a non-default-locale edit of a
+    // shared field into the snapshot.
     flattened.retain(|k, _| !locked.contains(k));
 
-    for (k, v) in &flattened {
-        snapshot_fields.insert(k.clone(), v.clone());
-    }
+    // A localized join field's edit belongs to the saving locale only: it is
+    // written under that locale's snapshot key, never over the rows the other
+    // locales keep.
+    let localized_joins = localized_join_edits(fields, locale_ctx);
+    let mut overlay = flattened.clone();
+    overlay.retain(|k, _| !localized_joins.contains(k));
 
-    let snapshot_doc = Document::builder(parent_id)
-        .fields(snapshot_fields)
-        .created_at(existing_doc.created_at.as_deref())
-        .updated_at(existing_doc.updated_at.as_deref())
-        .build();
+    // A pending draft is the base of the next draft save, so a second save — in
+    // another locale, or sending a single field — keeps the earlier edits. Only
+    // without one does the draft start from the stored document.
+    let prior_draft = query::find_latest_version(conn, table, parent_id)?
+        .filter(|v| v.status == "draft")
+        .and_then(|v| v.snapshot.as_object().cloned());
 
-    let mut snapshot = query::build_snapshot(
-        conn,
-        table,
-        fields,
-        &snapshot_doc,
-        locale_ctx.map(|c| &c.config),
-    )?;
+    let mut snapshot = match prior_draft {
+        Some(prior) => overlay_on_draft(prior, fields, &overlay, locale_ctx)?,
+        None => snapshot_from_stored(args, &overlay)?,
+    };
 
-    // `build_snapshot` rebuilds join data (arrays/blocks/has-many) from the DB —
-    // the pre-edit state — so re-overlay the edited join values from the
-    // flattened incoming data. `flattened` keys a group-nested join child as
-    // `group__child`, which the merge resolves into the nested group object.
     if let Some(obj) = snapshot.as_object_mut() {
-        merge_join_data_into_snapshot(obj, fields, &flattened);
-        stamp_write_locale_columns(obj, fields, locale_ctx);
+        merge_join_data_into_snapshot(obj, fields, &overlay);
+
+        if let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) {
+            merge_localized_join_rows(obj, &localized_joins, &flattened, ctx)?;
+        }
+
+        stamp_write_locale_columns(obj, fields, &overlay, locale_ctx)?;
     }
 
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
@@ -101,38 +107,197 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     Ok(snapshot)
 }
 
-/// Write the draft's own value into the per-locale column for the locale the
-/// draft was saved under.
-///
-/// Same reason the join data is re-overlaid above: `build_snapshot` reads the
-/// decorated `title__xx` columns straight from the main table, which a draft
-/// save never touches. Left alone, the snapshot would hold the draft edit
-/// under the bare key and the PUBLISHED text under `title__<write locale>` —
-/// and since restore writes the decorated columns, and a draft read resolves
-/// from them, both would quietly serve the published text back. The other
-/// locales' columns stay as read: the draft did not touch them.
-fn stamp_write_locale_columns(
-    snapshot: &mut Map<String, Value>,
+/// Flat keys of the localized join fields, when this save is locale-scoped.
+fn localized_join_edits(
     fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
-) {
+) -> Vec<String> {
+    if locale_ctx.is_some_and(|c| c.config.is_enabled()) {
+        query::localized_join_keys(fields)
+    } else {
+        Vec::new()
+    }
+}
+
+/// The first draft of a stored document: the document with the edit overlaid,
+/// snapshotted with every locale's columns and join rows read from the database.
+/// `build_snapshot` rebuilds join data from the DB — the pre-edit state — so the
+/// caller re-overlays the edited join values afterwards.
+fn snapshot_from_stored(args: &SaveDraftArgs<'_>, overlay: &DocumentFields) -> Result<Value> {
+    let existing_doc = args.existing_doc;
+    let mut snapshot_fields = existing_doc.fields.clone();
+
+    for (k, v) in overlay {
+        snapshot_fields.insert(k.clone(), v.clone());
+    }
+
+    let snapshot_doc = Document::builder(args.parent_id)
+        .fields(snapshot_fields)
+        .created_at(existing_doc.created_at.as_deref())
+        .updated_at(existing_doc.updated_at.as_deref())
+        .build();
+
+    query::build_snapshot(
+        args.conn,
+        args.table,
+        args.fields,
+        &snapshot_doc,
+        args.locale_ctx.map(|c| &c.config),
+    )
+}
+
+/// Overlay the edit on the latest draft snapshot. Snapshots store groups nested
+/// while the edit is flat, so the snapshot is flattened, overlaid and nested
+/// again — an edited group sub-field replaces its value instead of sitting
+/// beside a stale nested one. Every other key (the other locales' columns and
+/// rows, fields the edit did not send) keeps its drafted value.
+fn overlay_on_draft(
+    prior: Map<String, Value>,
+    fields: &[FieldDefinition],
+    overlay: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Value> {
+    let (prior, per_locale) = split_per_locale_keys(prior, fields, locale_ctx)?;
+    let mut flat = flatten_group_fields(&prior, fields);
+
+    for (k, v) in overlay {
+        flat.insert(k.clone(), v.clone());
+    }
+
+    let mut snapshot: Map<String, Value> = nest_group_fields(&flat, fields)
+        .into_inner()
+        .into_iter()
+        .collect();
+    snapshot.extend(per_locale);
+
+    Ok(Value::Object(snapshot))
+}
+
+/// Split off a draft snapshot's per-locale keys (`title__de`,
+/// `seo__title__de`, `gallery__slides__de`). They live flat at the snapshot
+/// root, where the draft read and restore look them up; nesting groups would
+/// move a group field's keys into the group object.
+fn split_per_locale_keys(
+    prior: Map<String, Value>,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(DocumentFields, Map<String, Value>)> {
     let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
-        return;
+        return Ok((prior.into_iter().collect(), Map::new()));
     };
-    let locale = ctx.access_locale();
+
+    let mut per_locale_keys = HashSet::new();
+    for base in per_locale_bases(fields) {
+        for locale in &ctx.config.locales {
+            per_locale_keys.insert(locale_column(&base, locale)?);
+        }
+    }
+
+    let mut rest = DocumentFields::new();
+    let mut per_locale = Map::new();
+
+    for (key, value) in prior {
+        if per_locale_keys.contains(&key) {
+            per_locale.insert(key, value);
+        } else {
+            rest.insert(key, value);
+        }
+    }
+
+    Ok((rest, per_locale))
+}
+
+/// The flat keys a snapshot records per locale: localized columns — with a
+/// timezone date's companion — and localized join fields.
+fn per_locale_bases(fields: &[FieldDefinition]) -> HashSet<String> {
+    let mut bases: HashSet<String> = query::localized_join_keys(fields).into_iter().collect();
 
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
-        if !(field.localized || inherited) {
-            return Ok(());
-        }
+        if (field.localized || inherited) && field.has_parent_column() {
+            let name = prefixed_name(prefix, &field.name);
 
-        let name = prefixed_name(prefix, &field.name);
-        if let Some(value) = snapshot.get(&name).cloned() {
-            snapshot.insert(format!("{name}__{locale}"), value);
+            if field.has_tz_companion() {
+                bases.insert(tz_column(&name));
+            }
+            bases.insert(name);
         }
 
         Ok(())
     });
+
+    bases
+}
+
+/// Write the edited rows of each localized join field under the saving locale's
+/// snapshot key (`{key}__{locale}`, the locale code in column form), and under a
+/// top-level field's bare key when saving the default locale. The other
+/// locales' keys keep their rows.
+fn merge_localized_join_rows(
+    obj: &mut Map<String, Value>,
+    keys: &[String],
+    data: &DocumentFields,
+    ctx: &LocaleContext,
+) -> Result<()> {
+    let locale = ctx.access_locale();
+
+    for key in keys {
+        let Some(rows) = data.get(key) else {
+            continue;
+        };
+
+        obj.insert(locale_column(key, locale)?, rows.clone());
+
+        // Field names cannot contain `__`, so a key without it is top-level and
+        // its bare key sits at the snapshot root.
+        if locale == ctx.config.default_locale && !key.contains("__") {
+            obj.insert(key.clone(), rows.clone());
+        }
+    }
+
+    Ok(())
+}
+
+/// Write the draft's own value into the per-locale column for the locale the
+/// draft was saved under.
+///
+/// Same reason the join data is re-overlaid: `build_snapshot` reads the
+/// decorated `title__xx` columns straight from the main table, which a draft
+/// save never touches. Only fields this save sent are stamped: an unsent field
+/// keeps its drafted per-locale value, and the bare key may hold another
+/// locale's edit. Join fields carry their per-locale rows separately (see
+/// [`merge_localized_join_rows`]).
+fn stamp_write_locale_columns(
+    snapshot: &mut Map<String, Value>,
+    fields: &[FieldDefinition],
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
+        return Ok(());
+    };
+    let locale = ctx.access_locale();
+
+    walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
+        if !(field.localized || inherited) || !field.has_parent_column() {
+            return Ok(());
+        }
+
+        let name = prefixed_name(prefix, &field.name);
+        if let Some(value) = data.get(&name) {
+            snapshot.insert(locale_column(&name, locale)?, value.clone());
+        }
+
+        // A timezone date's zone is stamped beside it: the draft read resolves
+        // the companion from its per-locale key too.
+        let tz = tz_column(&name);
+        if field.has_tz_companion()
+            && let Some(value) = data.get(&tz)
+        {
+            snapshot.insert(locale_column(&tz, locale)?, value.clone());
+        }
+
+        Ok(())
+    })
 }
 
 /// Overlay join-table data (arrays, blocks, has-many relationships) from the
@@ -213,9 +378,143 @@ fn merge_join_data_prefixed(
 mod tests {
     use serde_json::json;
 
-    use crate::core::field::RelationshipConfig;
+    use crate::{config::LocaleConfig, core::field::RelationshipConfig, db::LocaleMode};
 
     use super::*;
+
+    /// Regression: overlaying an edit on a draft nested the per-locale keys of
+    /// a field inside a group (`seo__title__en`) into the group object, so the
+    /// draft read in one locale found another locale's edit and a restore
+    /// missed the group's localized rows. Per-locale keys stay at the root.
+    #[test]
+    fn per_locale_keys_of_a_group_field_stay_at_the_snapshot_root() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text)
+                        .localized(true)
+                        .build(),
+                    FieldDefinition::builder("slides", FieldType::Array)
+                        .localized(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        };
+        let prior = json!({
+            "seo": { "title": "A" },
+            "seo__title__en": "A",
+            "seo__slides__en": [{ "id": "r1" }],
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let mut overlay = DocumentFields::new();
+        overlay.insert("seo__title".into(), json!("B"));
+
+        let snapshot = overlay_on_draft(prior, &fields, &overlay, Some(&ctx)).unwrap();
+
+        assert_eq!(snapshot["seo__title__en"], json!("A"), "{snapshot}");
+        assert_eq!(
+            snapshot["seo__slides__en"],
+            json!([{ "id": "r1" }]),
+            "{snapshot}"
+        );
+        assert_eq!(snapshot["seo"], json!({ "title": "B" }), "{snapshot}");
+    }
+
+    /// A hyphenated locale's per-locale snapshot keys take the column form
+    /// (`title__pt_BR`) — the form `build_snapshot` records and the draft read
+    /// and restore look up. The draft save wrote `title__pt-BR`, which nothing
+    /// reads, and didn't recognise `title__pt_BR` as per-locale on a later save.
+    #[test]
+    fn a_hyphenated_locale_uses_the_column_form_of_its_snapshot_keys() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text)
+                        .localized(true)
+                        .build(),
+                ])
+                .build(),
+            FieldDefinition::builder("slides", FieldType::Array)
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("pt-BR".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "pt-BR".to_string()],
+                fallback: false,
+            },
+        };
+
+        let prior = json!({ "seo": { "title": "A" }, "seo__title__pt_BR": "A" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut edit = DocumentFields::new();
+        edit.insert("seo__title".into(), json!("B"));
+        edit.insert("slides".into(), json!([{ "id": "r1" }]));
+
+        let mut overlay = edit.clone();
+        overlay.remove("slides");
+        let snapshot = overlay_on_draft(prior, &fields, &overlay, Some(&ctx)).unwrap();
+        let mut obj = snapshot.as_object().unwrap().clone();
+        assert_eq!(obj["seo__title__pt_BR"], json!("A"), "{snapshot}");
+
+        stamp_write_locale_columns(&mut obj, &fields, &overlay, Some(&ctx)).unwrap();
+        merge_localized_join_rows(&mut obj, &["slides".to_string()], &edit, &ctx).unwrap();
+
+        assert_eq!(obj["seo__title__pt_BR"], json!("B"), "{obj:?}");
+        assert_eq!(obj["slides__pt_BR"], json!([{ "id": "r1" }]), "{obj:?}");
+        assert!(
+            !obj.keys().any(|k| k.contains('-')),
+            "no key names the locale code itself: {obj:?}"
+        );
+    }
+
+    /// Regression: a draft save stamped a localized timezone date's per-locale
+    /// value but not its zone's, so the draft read — which resolves the zone
+    /// from its per-locale key — showed the stored zone instead of the edit.
+    #[test]
+    fn a_localized_timezone_date_stamps_its_zone_under_the_saving_locale() {
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        };
+        let mut snapshot = json!({ "starts_tz__de": "Europe/Berlin" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut edit = DocumentFields::new();
+        edit.insert("starts".into(), json!("2026-01-01T10:00:00.000Z"));
+        edit.insert("starts_tz".into(), json!("America/New_York"));
+
+        stamp_write_locale_columns(&mut snapshot, &fields, &edit, Some(&ctx)).unwrap();
+
+        assert_eq!(snapshot["starts__de"], json!("2026-01-01T10:00:00.000Z"));
+        assert_eq!(snapshot["starts_tz__de"], json!("America/New_York"));
+    }
 
     #[test]
     fn copies_join_field_values_recurses_layout_ignores_scalars_and_groups() {

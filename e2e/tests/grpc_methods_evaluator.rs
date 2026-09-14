@@ -66,6 +66,7 @@ use crap_cms::{
         collection::*,
         field::{FieldDefinition, FieldType, LocalizedString},
     },
+    db::DbConnection as _,
 };
 use crap_cms_e2e::{spawn_grpc_server, spawn_grpc_server_with_lua};
 
@@ -608,6 +609,119 @@ async fn strategy_returning_locked_user_is_refused() {
         status.code(),
         status.message()
     );
+
+    ctx.shutdown.cancel();
+    let _ = ctx.server_handle.await;
+}
+
+/// Regression: a strategy that looks the user up through the API returns a
+/// document without `_locked`, so a locked account authenticated anyway. The
+/// evaluator now reads the lock from the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn strategy_returning_a_user_locked_in_the_database_is_refused() {
+    let ctx = spawn_grpc_server_with_lua(
+        vec![
+            users_def_with_api_key_strategy(),
+            posts_def_anonymous_read_denied(),
+        ],
+        vec![],
+        &[
+            ("hooks/api_key.lua", ANY_USER_STRATEGY),
+            ("hooks/deny_anonymous.lua", DENY_ANONYMOUS_READ),
+        ],
+    )
+    .await;
+    let mut client = ContentApiClient::new(ctx.channel.clone());
+
+    client
+        .create(CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(proto_struct(&[
+                ("email", "locked-row@x.com"),
+                ("name", "Locked Row"),
+                ("password", "password-12345"),
+            ])),
+            ..Default::default()
+        })
+        .await
+        .expect("create user");
+
+    ctx.pool
+        .get()
+        .expect("connection")
+        .execute("UPDATE users SET _locked = 1", &[])
+        .expect("lock user");
+
+    let req = with_api_key(
+        Request::new(FindRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }),
+        "some-key-value",
+    );
+    let status = client
+        .find(req)
+        .await
+        .expect_err("a locked user must not authenticate via strategy");
+    assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+
+    ctx.shutdown.cancel();
+    let _ = ctx.server_handle.await;
+}
+
+/// Regression: a strategy's user of a collection that requires verification
+/// was refused even when verified — the check read `_verified` off a document
+/// that never carries it. The evaluator now reads it from the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn strategy_authenticates_a_verified_user_of_a_verify_email_collection() {
+    let mut users = users_def_with_api_key_strategy();
+    users.auth = users
+        .auth
+        .map(|auth| auth.map_password_login(|login| login.verify_email(true)));
+
+    let ctx = spawn_grpc_server_with_lua(
+        vec![users, posts_def_anonymous_read_denied()],
+        vec![],
+        &[
+            ("hooks/api_key.lua", ANY_USER_STRATEGY),
+            ("hooks/deny_anonymous.lua", DENY_ANONYMOUS_READ),
+        ],
+    )
+    .await;
+    let mut client = ContentApiClient::new(ctx.channel.clone());
+
+    client
+        .create(CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(proto_struct(&[
+                ("email", "verified@x.com"),
+                ("name", "Verified"),
+                ("password", "password-12345"),
+            ])),
+            ..Default::default()
+        })
+        .await
+        .expect("create user");
+
+    ctx.pool
+        .get()
+        .expect("connection")
+        .execute("UPDATE users SET _verified = 1", &[])
+        .expect("verify user");
+
+    let req = with_api_key(
+        Request::new(FindRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }),
+        "some-key-value",
+    );
+    client
+        .find(req)
+        .await
+        .expect("a verified user must authenticate via strategy");
 
     ctx.shutdown.cancel();
     let _ = ctx.server_handle.await;

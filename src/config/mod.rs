@@ -49,6 +49,7 @@ mod types;
 mod validate;
 pub mod webhook_headers;
 
+pub(crate) use auth::write_new_owner_only;
 pub use auth::{AuthConfig, PasswordPolicy, RateLimitBackend, SessionCookieSameSite};
 pub use cors::CorsConfig;
 pub use features::{

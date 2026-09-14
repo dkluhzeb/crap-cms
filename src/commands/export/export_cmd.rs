@@ -1,21 +1,156 @@
 //! `export` command — dump collection data to JSON.
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
 
-use anyhow;
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use chrono::Utc;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, to_string_pretty, to_value};
 
 use crate::{
     cli,
-    commands::{export::file::ExportFile, load_config_and_sync},
-    config::CrapConfig,
-    db::query,
+    commands::{
+        Project,
+        export::file::{EXPORT_FORMAT_VERSION, ExportFile},
+        open_project,
+    },
+    config::LocaleConfig,
+    core::{CollectionDefinition, Document, Registry, flatten_group_fields, nest_group_fields},
+    db::{DbConnection, LocaleContext, query},
 };
+
+/// One collection an export reads.
+struct ExportTarget<'a> {
+    slug: &'a str,
+    def: &'a CollectionDefinition,
+    /// Carry each account's credentials as a `_credentials` object.
+    include_credentials: bool,
+}
+
+/// Export one collection's documents, trashed ones included, as a JSON array.
+/// With `include_credentials`, each account of an auth collection carries its
+/// credentials as a `_credentials` object.
+fn export_collection(
+    conn: &dyn DbConnection,
+    target: &ExportTarget<'_>,
+    locale: &LocaleConfig,
+) -> Result<Value> {
+    let (slug, def) = (target.slug, target.def);
+
+    // Read in "all locales" mode so localized fields export as
+    // `{ "<locale>": value }` objects — lossless across every translation,
+    // and required at all: a bare-column read on a localized collection is
+    // a SQL error (the columns are `title__en`, not `title`).
+    let locale_ctx = LocaleContext::from_locale_string(Some("all"), locale)
+        .map_err(|e| anyhow!("locale context: {e}"))?;
+
+    let find_query = query::FindQuery::builder().include_deleted(true).build();
+    let mut docs = query::find(conn, slug, def, &find_query, locale_ctx.as_ref())?;
+
+    for doc in &mut docs {
+        query::hydrate_document(conn, slug, &def.fields, doc, None, locale_ctx.as_ref())?;
+        localize_join_rows(conn, target, doc, locale)?;
+    }
+
+    let credentials = if target.include_credentials && def.is_auth_collection() {
+        query::read_credentials(conn, slug)?
+    } else {
+        HashMap::new()
+    };
+
+    let docs_json = docs
+        .into_iter()
+        .map(|doc| {
+            let creds = credentials.get(&doc.id.to_string()).cloned();
+            let mut value = to_value(doc)?;
+
+            if let (Some(obj), Some(creds)) = (value.as_object_mut(), creds) {
+                obj.insert("_credentials".to_string(), Value::Object(creds));
+            }
+
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Value::Array(docs_json))
+}
+
+/// Replace each localized join field's rows — read under the default locale —
+/// with every locale's own rows, as `{ "<locale>": rows }` like a localized
+/// column.
+fn localize_join_rows(
+    conn: &dyn DbConnection,
+    target: &ExportTarget<'_>,
+    doc: &mut Document,
+    locale: &LocaleConfig,
+) -> Result<()> {
+    if !locale.is_enabled() {
+        return Ok(());
+    }
+
+    let fields = &target.def.fields;
+    let rows = query::locale_join_rows(
+        conn,
+        doc,
+        query::JoinOwner::new(target.slug, fields),
+        locale,
+    )?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut flat = flatten_group_fields(&doc.fields, fields);
+    for (key, by_locale) in rows {
+        flat.insert(key, Value::Object(by_locale));
+    }
+    doc.fields = nest_group_fields(&flat, fields);
+
+    Ok(())
+}
+
+/// The collections to export: the one `collection_filter` names, or all of
+/// them in slug order.
+fn export_slugs(registry: &Registry, collection_filter: Option<&str>) -> Result<Vec<String>> {
+    if let Some(slug) = collection_filter {
+        if registry.get_collection(slug).is_none() {
+            bail!("Collection '{slug}' not found");
+        }
+
+        return Ok(vec![slug.to_string()]);
+    }
+
+    let mut slugs: Vec<String> = registry
+        .collections
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    slugs.sort();
+
+    Ok(slugs)
+}
+
+/// Write the export to `output`, or print it when there is none.
+fn write_export(export_file: &ExportFile, output: Option<PathBuf>) -> Result<()> {
+    let content = to_string_pretty(export_file)?;
+
+    let Some(path) = output else {
+        println!("{content}");
+        return Ok(());
+    };
+
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+
+    cli::success(&format!(
+        "Exported {} collection(s) to {}",
+        export_file.collections.len(),
+        path.display()
+    ));
+
+    Ok(())
+}
 
 /// Export collection data to JSON.
 ///
@@ -28,78 +163,36 @@ pub fn export(
     config_dir: &Path,
     collection_filter: Option<&str>,
     output: Option<PathBuf>,
+    include_credentials: bool,
 ) -> Result<()> {
-    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-    let (pool, registry) = load_config_and_sync(config_dir)?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool,
+    } = open_project(config_dir)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 
-    // Read in "all locales" mode so localized fields export as
-    // `{ "<locale>": value }` objects — lossless across every translation,
-    // and required at all: a bare-column read on a localized collection is
-    // a SQL error (the columns are `title__en`, not `title`).
-    let locale_ctx = query::LocaleContext::from_locale_string(Some("all"), &cfg.locale)
-        .map_err(|e| anyhow::anyhow!("locale context: {e}"))?;
+    let mut collections = Map::new();
 
-    let mut collections_data = Map::new();
+    for slug in export_slugs(&registry, collection_filter)? {
+        let target = ExportTarget {
+            slug: &slug,
+            def: &registry.collections[slug.as_str()],
+            include_credentials,
+        };
+        let docs = export_collection(&conn, &target, &cfg.locale)?;
 
-    let slugs: Vec<String> = if let Some(slug) = collection_filter {
-        if registry.get_collection(slug).is_none() {
-            bail!("Collection '{slug}' not found");
-        }
-        vec![slug.to_string()]
-    } else {
-        let mut s: Vec<String> = registry
-            .collections
-            .keys()
-            .map(std::string::ToString::to_string)
-            .collect();
-        s.sort();
-        s
-    };
-
-    for slug in &slugs {
-        let def = &registry.collections[slug.as_str()];
-        let find_query = query::FindQuery::default();
-
-        let mut docs = query::find(&conn, slug, def, &find_query, locale_ctx.as_ref())?;
-
-        for doc in &mut docs {
-            query::hydrate_document(&conn, slug, &def.fields, doc, None, locale_ctx.as_ref())?;
-        }
-
-        let docs_json: Vec<Value> = docs
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        collections_data.insert(slug.clone(), Value::Array(docs_json));
+        collections.insert(slug.clone(), docs);
     }
 
-    let output_file = ExportFile {
-        format_version: crate::commands::export::file::EXPORT_FORMAT_VERSION,
+    let export_file = ExportFile {
+        format_version: EXPORT_FORMAT_VERSION,
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: Utc::now().to_rfc3339(),
-        collections: collections_data,
+        collections,
     };
 
-    match output {
-        Some(path) => {
-            let content = serde_json::to_string_pretty(&output_file)?;
-
-            fs::write(&path, content)
-                .with_context(|| format!("Failed to write {}", path.display()))?;
-
-            cli::success(&format!(
-                "Exported {} collection(s) to {}",
-                slugs.len(),
-                path.display()
-            ));
-        }
-        None => {
-            println!("{}", serde_json::to_string_pretty(&output_file)?);
-        }
-    }
-
-    Ok(())
+    write_export(&export_file, output)
 }

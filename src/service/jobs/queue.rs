@@ -1,11 +1,13 @@
 //! Queue a job run with optional access control.
 
+use serde_json::{Value, from_str, from_value};
+
 use crate::{
     core::{
         DocumentFields,
         job::{JobDefinition, JobRun},
     },
-    db::{AccessResult, query},
+    db::{AccessResult, DbConnection, query},
     hooks::AccessCheckInput,
     service::{ServiceContext, ServiceError},
 };
@@ -59,60 +61,29 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
     // Fail at queue time, not at execution: a payload that is not valid
     // JSON used to be stored verbatim (gRPC sends a raw string) and only
     // blew up when the handler ran, long after the caller was gone.
-    let payload_value: Option<serde_json::Value> =
-        match input.data {
-            None => None,
-            Some(s) => Some(serde_json::from_str(s).map_err(|e| {
-                ServiceError::HookError(format!("job data must be valid JSON: {e}"))
-            })?),
-        };
+    let payload = parse_payload(input.data);
 
     if input.job_def.access.is_some() {
-        // Expose the queued payload to the access fn as `ctx.data`, so it can
-        // gate on *what* is being queued, not only *who* is queuing. A
-        // non-object payload is an error here — silently dropping it to nil
-        // (the old behavior) would let a data-gating rule evaluate against
-        // nothing while the job still queued with that payload.
-        let payload: Option<DocumentFields> = match payload_value {
-            None => None,
-            Some(v) => Some(serde_json::from_value(v).map_err(|_| {
-                ServiceError::HookError(
-                    "job data must be a JSON object so the job's access rule can inspect it"
-                        .to_string(),
-                )
-            })?),
+        let fields = match &payload {
+            Ok(value) => payload_fields(value.clone()),
+            Err(_) => Ok(None),
         };
 
-        let access_input = AccessCheckInput::builder("trigger", ctx.slug)
-            .access(input.job_def.access.as_ref())
-            .user(ctx.user)
-            .data(payload.as_ref())
-            .build();
+        // The rule runs before the payload is rejected — against no data when
+        // it is unreadable — so a malformed payload is reported only to a
+        // caller the rule lets through, and can't tell a denied caller that
+        // the job exists.
+        check_trigger_access(
+            ctx,
+            conn,
+            input,
+            fields.as_ref().ok().and_then(Option::as_ref),
+        )?;
 
-        // One rule, two evaluators — the same split every CRUD path uses. A
-        // context carrying `write_hooks` evaluates through them
-        // (`LuaWriteHooks` runs in the CALLER's VM, so `crap.jobs.queue`
-        // inside a hook never re-enters the VM pool); otherwise the runner
-        // is used directly, which is what gRPC and MCP do.
-        let result = match ctx.write_hooks {
-            Some(hooks) => hooks.check_access(&access_input),
-            None => ctx.runner()?.check_access(&access_input, conn),
-        }
-        .map_err(ServiceError::Internal)?;
-
-        if matches!(result, AccessResult::Denied) {
-            return Err(ServiceError::AccessDenied(
-                "Trigger access denied".to_string(),
-            ));
-        }
-
-        if matches!(result, AccessResult::Constrained(_)) {
-            return Err(ServiceError::HookError(format!(
-                "Access hook for job '{}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead.",
-                ctx.slug
-            )));
-        }
+        fields?;
     }
+
+    payload?;
 
     let inserted = query::jobs::insert_job_with(
         conn,
@@ -130,4 +101,63 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
     .map_err(ServiceError::Internal)?;
 
     Ok(inserted.into_inner())
+}
+
+/// The queued payload as JSON — `None` without data.
+fn parse_payload(data: Option<&str>) -> Result<Option<Value>, ServiceError> {
+    data.map(from_str::<Value>)
+        .transpose()
+        .map_err(|e| ServiceError::HookError(format!("job data must be valid JSON: {e}")))
+}
+
+/// The payload as the fields an access rule reads as `ctx.data`. A non-object
+/// payload is an error: dropping it to nil would let a data-gating rule
+/// evaluate against nothing while the job still queued with that payload.
+fn payload_fields(value: Option<Value>) -> Result<Option<DocumentFields>, ServiceError> {
+    value
+        .map(from_value::<DocumentFields>)
+        .transpose()
+        .map_err(|_| {
+            ServiceError::HookError(
+                "job data must be a JSON object so the job's access rule can inspect it"
+                    .to_string(),
+            )
+        })
+}
+
+/// Run the job's access rule for `ctx.user`, with the queued payload exposed as
+/// `ctx.data` so it can gate on *what* is queued, not only *who* queues it.
+fn check_trigger_access(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    input: &QueueJobInput,
+    payload: Option<&DocumentFields>,
+) -> Result<(), ServiceError> {
+    let access_input = AccessCheckInput::builder("trigger", ctx.slug)
+        .access(input.job_def.access.as_ref())
+        .user(ctx.user)
+        .data(payload)
+        .build();
+
+    // One rule, two evaluators — the same split every CRUD path uses. A
+    // context carrying `write_hooks` evaluates through them
+    // (`LuaWriteHooks` runs in the CALLER's VM, so `crap.jobs.queue`
+    // inside a hook never re-enters the VM pool); otherwise the runner
+    // is used directly, which is what gRPC and MCP do.
+    let result = match ctx.write_hooks {
+        Some(hooks) => hooks.check_access(&access_input),
+        None => ctx.runner()?.check_access(&access_input, conn),
+    }
+    .map_err(ServiceError::Internal)?;
+
+    match result {
+        AccessResult::Allowed => Ok(()),
+        AccessResult::Denied => Err(ServiceError::AccessDenied(
+            "Trigger access denied".to_string(),
+        )),
+        AccessResult::Constrained(_) => Err(ServiceError::HookError(format!(
+            "Access hook for job '{}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        ))),
+    }
 }

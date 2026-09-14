@@ -144,7 +144,7 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
 /// must be `type = "email"` and `unique = true`. A `text`-typed email would
 /// dodge the case-insensitive unique check (scoped to the Email field type),
 /// and a non-unique one allows duplicate accounts — both collide as one
-/// account at login, where `find_by_email` is `LOWER() = LOWER()`.
+/// account at login, which compares addresses in their lowercased stored form.
 fn ensure_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition>) -> Result<()> {
     let Some(a) = auth else { return Ok(()) };
     if !a.enabled {

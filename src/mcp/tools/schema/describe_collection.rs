@@ -31,6 +31,8 @@ enum DescribeResponse<'a> {
     Global {
         slug: &'a str,
         label: String,
+        timestamps: bool,
+        has_drafts: bool,
         schema: Value,
     },
 }
@@ -73,6 +75,9 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
         let response = DescribeResponse::Global {
             slug,
             label: def.display_name().to_string(),
+            // A global's table always carries timestamps.
+            timestamps: true,
+            has_drafts: def.has_drafts(),
             schema: global_input_schema(def, CrudOp::Update),
         };
 
@@ -113,6 +118,8 @@ mod tests {
         assert_eq!(parsed["slug"], "settings");
         assert_eq!(parsed["type"], "global");
         assert!(parsed["schema"].is_object());
+        assert_eq!(parsed["timestamps"], true, "a global always has timestamps");
+        assert_eq!(parsed["has_drafts"], false);
     }
 
     #[test]

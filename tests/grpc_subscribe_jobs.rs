@@ -17,10 +17,11 @@
 )]
 
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 
 use tokio_stream::StreamExt;
-use tonic::Request;
+use tonic::{Code, Request};
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
@@ -621,6 +622,63 @@ async fn list_jobs_authenticated() {
     assert_eq!(resp.jobs[0].slug, "cleanup");
     assert_eq!(resp.jobs[0].queue, "maintenance");
     assert_eq!(resp.jobs[0].retries, 3);
+}
+
+/// A job the caller may not trigger answers like one that doesn't exist, so
+/// `TriggerJob` can't be used to discover job slugs — a malformed payload
+/// included, which is reported only to a caller the rule lets through.
+#[tokio::test]
+async fn trigger_job_denied_reads_as_not_found() {
+    let job = JobDefinitionBuilder::new("secret", "hooks.jobs.secret")
+        .queue("default")
+        .access("hooks.access.deny_all")
+        .build();
+    let ts = setup_service_with_jobs(vec![make_posts_def(), make_users_def()], vec![], vec![job]);
+
+    let hooks = ts._tmp.path().join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    fs::write(
+        hooks.join("access.lua"),
+        "local M = {}\nfunction M.deny_all(ctx)\n    return false\nend\nreturn M\n",
+    )
+    .unwrap();
+
+    let token = create_user_and_login(&ts).await;
+    let trigger = |slug: &str, data: Option<&str>| {
+        let mut req = Request::new(content::TriggerJobRequest {
+            slug: slug.to_string(),
+            data: data.map(str::to_string),
+            priority: None,
+            delay: None,
+            unique: None,
+        });
+        add_auth(&mut req, &token);
+        req
+    };
+
+    let denied = ts
+        .service
+        .trigger_job(trigger("secret", None))
+        .await
+        .unwrap_err();
+    let denied_bad_data = ts
+        .service
+        .trigger_job(trigger("secret", Some("not json")))
+        .await
+        .unwrap_err();
+    let unknown = ts
+        .service
+        .trigger_job(trigger("no_such_job", None))
+        .await
+        .unwrap_err();
+
+    assert_eq!(denied.code(), Code::NotFound, "{denied:?}");
+    assert_eq!(
+        denied_bad_data.code(),
+        Code::NotFound,
+        "{denied_bad_data:?}"
+    );
+    assert_eq!(unknown.code(), Code::NotFound, "{unknown:?}");
 }
 
 #[tokio::test]

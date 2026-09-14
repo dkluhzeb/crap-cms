@@ -286,11 +286,11 @@ pub struct FieldDefinition {
     #[serde(default)]
     #[lua(applies_to = "array, blocks", optional)]
     pub max_rows: Option<usize>,
-    /// Minimum string length. Validated server-side + HTML minlength.
+    /// Minimum string length in characters, validated server-side.
     #[serde(default)]
     #[lua(applies_to = "text, textarea", optional)]
     pub min_length: Option<usize>,
-    /// Maximum string length. Validated server-side + HTML maxlength.
+    /// Maximum string length in characters, validated server-side.
     #[serde(default)]
     #[lua(applies_to = "text, textarea", optional)]
     pub max_length: Option<usize>,
@@ -438,6 +438,13 @@ impl FieldDefinition {
         } else {
             self.localized
         }
+    }
+
+    /// Whether the field stores a timezone companion (`{name}_tz`) beside its
+    /// value — a Date with `timezone` enabled.
+    #[must_use]
+    pub fn has_tz_companion(&self) -> bool {
+        self.field_type == FieldType::Date && self.timezone
     }
 }
 

@@ -1,9 +1,6 @@
 //! Shared helper functions for auth handlers.
 
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-};
+use std::net::{IpAddr, SocketAddr};
 
 use axum::{
     http::{HeaderMap, header::COOKIE},
@@ -26,10 +23,15 @@ use crate::{
             auth::{MFA_PENDING_COOKIE, append_cookies, session_cookies, session_same_site},
             shared::render_auth_page,
         },
-        server::extract_cookie,
+        server::{extract_cookie, load_auth_user},
     },
     config::ServerConfig,
-    core::{CollectionDefinition, Document, Registry, Slug, auth::ClaimsBuilder, email},
+    core::{
+        CollectionDefinition, Document, Registry, Slug,
+        auth::{Claims, ClaimsBuilder},
+        email,
+    },
+    service::auth::{TotpProvisioning, totp_challenge},
 };
 
 /// Extract the client IP from the request, honoring `X-Forwarded-For`
@@ -248,14 +250,6 @@ pub(in crate::admin::handlers) fn render_resend_verification(
     render_auth_page(state, "auth/resend_verification", &ctx)
 }
 
-/// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.
-pub(in crate::admin::handlers) fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
-        .collect()
-}
-
 /// The single auth collection's slug, or `None` when there are zero or 2+.
 ///
 /// The legacy un-scoped OAuth callback (`/admin/auth/callback/{name}`) can only
@@ -398,7 +392,7 @@ pub(in crate::admin::handlers) fn render_mfa_form(
     state: &AdminState,
     error: Option<&str>,
     totp: bool,
-    provisioning: Option<&crate::service::auth::TotpProvisioning>,
+    provisioning: Option<&TotpProvisioning>,
 ) -> Response {
     let ctx = MfaPage {
         base: AuthBasePageContext::for_state(
@@ -426,17 +420,14 @@ pub(in crate::admin::handlers) fn is_totp_collection(state: &AdminState, slug: &
 
 /// Blocking body: resolve the TOTP page state for the pending user — the
 /// mode flag plus provisioning material while enrollment is unconfirmed.
-fn totp_state_blocking(
-    state: &AdminState,
-    claims: &crate::core::auth::Claims,
-) -> (bool, Option<crate::service::auth::TotpProvisioning>) {
+fn totp_state_blocking(state: &AdminState, claims: &Claims) -> (bool, Option<TotpProvisioning>) {
     let slug: &str = claims.collection.as_ref();
 
     if !is_totp_collection(state, slug) {
         return (false, None);
     }
 
-    let Some(auth_user) = crate::admin::server::load_auth_user(
+    let Some(auth_user) = load_auth_user(
         &state.infra.pool,
         &state.infra.registry,
         claims,
@@ -447,7 +438,7 @@ fn totp_state_blocking(
 
     let secret: &str = state.config.auth.secret.as_ref();
 
-    match crate::service::auth::totp_challenge(&state.infra, secret, slug, &auth_user.user_doc) {
+    match totp_challenge(&state.infra, secret, slug, &auth_user.user_doc) {
         Ok(p) => (true, p),
         Err(e) => {
             tracing::error!("TOTP challenge: {e:?}");
@@ -460,7 +451,7 @@ fn totp_state_blocking(
 /// enrollment lookup (and first-challenge secret generation) hits the DB.
 pub(in crate::admin::handlers) async fn render_mfa(
     state: &AdminState,
-    claims: &crate::core::auth::Claims,
+    claims: &Claims,
     error: Option<&str>,
 ) -> Response {
     let s = state.clone();

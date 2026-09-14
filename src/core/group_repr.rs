@@ -13,7 +13,7 @@
 //! Both are **idempotent**: `flatten(flat) == flat`, `nest(nested) == nested`,
 //! and `flatten(nest(flat)) == flat` (round-trip). Only `Group` fields nest;
 //! non-group object values (a `Json` field, an array/blocks value) and companion
-//! columns (a `Date` field's `__tz` sibling) pass through untouched.
+//! columns (a `Date` field's `_tz` sibling) pass through untouched.
 
 use serde_json::{Map, Value};
 
@@ -51,9 +51,9 @@ pub(crate) fn flatten_group_fields(
 /// Flatten a group object into `prefix__key` pairs, recursing ONLY into nested
 /// `Group` sub-fields. A non-group object value (a `Json` field, an array) is
 /// kept whole — recursing would flatten it onto a non-existent
-/// `prefix__sub__key` column and drop it on persist. A `Date` field's `__tz`
+/// `prefix__sub__key` column and drop it on persist. A `Date` field's `_tz`
 /// companion key has no field definition, so it passes through as a flat sibling
-/// (`prefix__date__tz`), round-tripping with [`nest_group_fields`].
+/// (`prefix__date_tz`), round-tripping with [`nest_group_fields`].
 fn flatten_group_obj(
     prefix: &str,
     obj: &Map<String, Value>,
@@ -98,8 +98,8 @@ pub(crate) fn nest_group_fields(
 /// nesting path) plus the remaining key placed at that level. A segment is part
 /// of the path only if it names a `Group` field *and* is not the final segment
 /// (a group is always addressed through a sub-field). Non-group leading segments
-/// (e.g. a `Date` field's `date__tz` companion, or a plain key) yield an empty
-/// path and the whole key as the leaf, so they pass through unchanged.
+/// (a plain key, or a top-level `Date` field's `date_tz` companion) yield an
+/// empty path and the whole key as the leaf, so they pass through unchanged.
 fn group_prefix_path(key: &str, fields: &[FieldDefinition]) -> (Vec<String>, String) {
     let segs: Vec<&str> = key.split("__").collect();
     let mut path = Vec::new();
@@ -233,9 +233,9 @@ mod tests {
 
     #[test]
     fn date_tz_companion_passes_through_both_ways() {
-        // A Date field with a `__tz` companion column: `published__tz` is NOT a
-        // group path (`published` is a leaf), so it stays a flat sibling inside
-        // its group level and round-trips.
+        // A Date field with a `_tz` companion column: `published_tz` names no
+        // field, so it stays a flat sibling inside its group level and
+        // round-trips.
         let f = vec![group(
             "meta",
             vec![FieldDefinition::builder("published", FieldType::Date).build()],
@@ -244,16 +244,19 @@ mod tests {
         // Nested form carries the tz as a flat sibling within the group object.
         let nested = fields_from(&[(
             "meta",
-            json!({ "published": "2026-01-01", "published__tz": "+02:00" }),
+            json!({ "published": "2026-01-01", "published_tz": "Europe/Berlin" }),
         )]);
         let flat = flatten_group_fields(&nested, &f);
         assert_eq!(flat.get("meta__published"), Some(&json!("2026-01-01")));
-        assert_eq!(flat.get("meta__published__tz"), Some(&json!("+02:00")));
+        assert_eq!(
+            flat.get("meta__published_tz"),
+            Some(&json!("Europe/Berlin"))
+        );
 
         let renested = nest_group_fields(&flat, &f);
         assert_eq!(
             renested.get("meta"),
-            Some(&json!({ "published": "2026-01-01", "published__tz": "+02:00" }))
+            Some(&json!({ "published": "2026-01-01", "published_tz": "Europe/Berlin" }))
         );
     }
 
@@ -262,13 +265,13 @@ mod tests {
         let f = vec![FieldDefinition::builder("published", FieldType::Date).build()];
         let flat = fields_from(&[
             ("published", json!("2026-01-01")),
-            ("published__tz", json!("+02:00")),
+            ("published_tz", json!("Europe/Berlin")),
             ("unknown", json!(1)),
         ]);
 
         let nested = nest_group_fields(&flat, &f);
         assert_eq!(nested.get("published"), Some(&json!("2026-01-01")));
-        assert_eq!(nested.get("published__tz"), Some(&json!("+02:00")));
+        assert_eq!(nested.get("published_tz"), Some(&json!("Europe/Berlin")));
         assert_eq!(nested.get("unknown"), Some(&json!(1)));
     }
 

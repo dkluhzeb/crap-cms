@@ -48,6 +48,7 @@ impl Default for LoggingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn logging_config_defaults() {
@@ -66,7 +67,7 @@ mod tests {
             "[logging]\nfile = true\npath = \"logs\"\nrotation = \"hourly\"\nmax_files = 7\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.logging.file);
         assert_eq!(config.logging.path, "logs");
         assert_eq!(config.logging.rotation, LogRotation::Hourly);
@@ -77,7 +78,7 @@ mod tests {
     fn logging_config_partial_toml_uses_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[logging]\nfile = true\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.logging.file);
         assert_eq!(config.logging.path, "data/logs");
         assert_eq!(config.logging.rotation, LogRotation::Daily);
@@ -92,7 +93,7 @@ mod tests {
             "[logging]\nfile = true\nrotation = \"never\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.logging.rotation, LogRotation::Never);
     }
 }

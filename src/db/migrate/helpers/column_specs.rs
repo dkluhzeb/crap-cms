@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::introspection::{get_table_columns, sanitize_locale};
+use super::introspection::get_table_columns;
 
 /// A column specification derived from a field definition.
 /// Used by migration code to generate CREATE TABLE / ALTER TABLE statements.
@@ -74,7 +74,7 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
                 companion_text: false,
             });
 
-            if field.field_type == FieldType::Date && field.timezone {
+            if field.has_tz_companion() {
                 specs.push(ColumnSpec {
                     col_name: tz_column(&col_name),
                     field,
@@ -102,6 +102,16 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
     specs
 }
 
+/// The `_locale` column definition of a junction table. Rows written before the
+/// column existed belong to the default locale, stored as its code — the value
+/// every read and write filters on, not the column form of the code.
+pub(in crate::db::migrate) fn locale_column_definition(default_locale: &str) -> String {
+    format!(
+        "_locale TEXT NOT NULL DEFAULT '{}'",
+        default_locale.replace('\'', "''")
+    )
+}
+
 /// Ensure a `_locale` column exists on a junction table (for ALTER TABLE on existing tables).
 pub(in crate::db::migrate) fn ensure_locale_column(
     conn: &dyn DbConnection,
@@ -112,9 +122,9 @@ pub(in crate::db::migrate) fn ensure_locale_column(
 
     if !existing.contains("_locale") {
         let sql = format!(
-            "ALTER TABLE \"{}\" ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE \"{}\" ADD COLUMN {}",
             table_name,
-            sanitize_locale(default_locale)?
+            locale_column_definition(default_locale)
         );
         info!("Adding _locale column to {}", table_name);
         conn.execute_ddl(&sql, &[])
@@ -306,6 +316,33 @@ mod tests {
         assert_eq!(specs[0].col_name, "meta__example");
         assert_eq!(specs[1].col_name, "meta__example_lang");
         assert!(specs[1].companion_text);
+    }
+
+    /// Regression: the `_locale` default was the column form of the code
+    /// (`en_US`) while reads and writes filter on the code itself (`en-US`), so
+    /// rows present before a field became localized vanished from every read.
+    #[test]
+    fn rows_before_localization_belong_to_the_default_locale_code() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "CREATE TABLE test_join (parent_id TEXT, related_id TEXT)",
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO test_join (parent_id, related_id) VALUES ('p1', 'r1')",
+            &[],
+        )
+        .unwrap();
+
+        ensure_locale_column(&conn, "test_join", "en-US").unwrap();
+
+        let row = conn
+            .query_one("SELECT _locale FROM test_join", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("_locale").unwrap(), "en-US");
     }
 
     #[test]

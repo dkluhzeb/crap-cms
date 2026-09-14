@@ -121,6 +121,26 @@ of the API.
 - **API clients: timezone dates inside blocks and nested rows come back as
   UTC**, like every other timezone date; existing rows are converted at
   startup (item 32).
+- **Duplicate emails or unique text values block startup.** Email and text
+  values are now stored in one canonical form; if two values of a unique field
+  or unique index become identical, startup lists them so you can resolve the
+  duplicate (item 33).
+- **Backups and exports carry more.** `crap-cms backup` includes the generated
+  auth secret — keep backups private — and exports include trashed documents;
+  add `--include-credentials` to move users between installations (item 34).
+- **Typed clients: regenerate `typegen client`.** Every field of a generated
+  read document is optional now, read documents gained `_status`,
+  `_deleted_at` and `<name>_tz`, and localized collections get a
+  `locale = "all"` read type (see Generated client types).
+- **Filter authors: a backslash escapes `%` and `_` in `like`.** Double a
+  literal backslash; a pattern ending in a lone backslash is rejected (see
+  Behavior changes).
+- **CLI scripts: `crap-cms user delete` trashes users of a soft-delete
+  collection**; on other collections it refuses users other documents still
+  reference (see Behavior changes).
+- **Operators: keep `data/` on a filesystem with file locks.** `serve`, `work`,
+  `mcp` and every CLI command that opens the database stop at startup when they
+  can't take `data/crap.lock` (see Behavior changes).
 
 ## Required action items
 
@@ -537,8 +557,8 @@ subscriber that filtered to `["update"]` explicitly will no longer receive
 lifecycle mutations — add the new names if you want them.
 
 Related gRPC detail: `Me` now resolves through the shared auth evaluator, so
-its error details changed (locked-account token → `UNAUTHENTICATED`
-"Session invalidated"; deleted user → `UNAUTHENTICATED` instead of
+its error details changed (locked-account token → `PERMISSION_DENIED`
+"Account locked"; deleted user → `UNAUTHENTICATED` instead of
 `NOT_FOUND`).
 
 ### 17. Custom storage: `url` handler and `public_url_base` removed
@@ -926,6 +946,66 @@ existing rows are converted once at the first startup.
 - Large databases: the first startup walks every blocks and array join table
   once.
 
+### 33. Email and text are stored in canonical form
+
+Email fields are now stored **trimmed, NFC-normalized and lowercased**, and
+Text, Textarea and Email values are NFC-normalized on every write (including
+`crap-cms import`). Logins, password resets, verification, uniqueness and
+filters on these fields all compare that canonical form. This fixes accounts
+with non-ASCII capital letters that could not log in on SQLite, and duplicates
+that differed only by case or Unicode form.
+
+Stored email and text values are converted at startup: their columns,
+localized columns, array rows, and values inside blocks and nested rows. The
+conversion runs again for a collection or global whose email or text fields
+change — a field added, or retyped to `email` — so no stored value is left in
+another form. Version snapshots keep the form they were taken in; restoring an
+older version stores its values in canonical form.
+
+**Action:**
+
+- **If startup stops with "Email and text values in '…' are now compared in
+  one canonical form":** two live documents hold the same value, once compared
+  this way, in a unique field or unique index (for example `ÄRGER@example.com`
+  and `ärger@example.com`, or a title typed with a combining accent and one
+  without). The message lists the field or index, the value and the document
+  ids. Merge the documents or change one value with the previous version or
+  directly in the database, then start again. A trashed document counts
+  toward a unique index spanning several fields, but not toward a unique
+  field.
+- Clients that compared stored email values case-sensitively will now see
+  lowercase addresses.
+- If a hook or filter matched an email with different casing, match the
+  lowercase form.
+
+### 34. Backups and exports: secret, credentials and trash
+
+- **`crap-cms backup` now includes `data/.jwt_secret`** (when present), and
+  `restore` writes it back. Keep backups as private as the secret itself.
+  Backups made by earlier versions don't contain it: if you rely on a
+  generated secret, copy `data/.jwt_secret` alongside those backups yourself.
+- **`crap-cms export --include-credentials`** adds each account's password
+  hash, lock, session version, verification and TOTP state to the export.
+  Without the flag, exports stay credential-free and `import` warns about
+  accounts left without a password. Treat an export made with the flag like a
+  database dump.
+- **Exports now include trashed documents**, timezone companions, and every
+  locale's rows of a localized array, blocks or has-many field (as
+  `{ "<locale>": rows }`); `import` restores them.
+- **`import` runs in one transaction.** A failure leaves nothing imported,
+  where it used to keep the collections imported before the failing one.
+
+**Action:**
+
+- To move users between installations with an export, add
+  `--include-credentials`.
+- Accounts with TOTP enrollment only import into an installation that uses the
+  same auth secret: `import` refuses them otherwise, naming the accounts. Copy
+  the secret over first (a backup carries a generated one), or export without
+  `--include-credentials` and have those users enroll again.
+- Scripts that imported collection by collection to recover from a partial
+  failure can import the whole file again after fixing the cause.
+
 ## Admin UI behavior
 
 ### Navigation now partial-swaps `#main`
@@ -981,6 +1061,29 @@ continue to work.
 
 ## Security fixes
 
+- **The upload API returns `401` for an unusable token.** A token of a locked
+  account, a revoked session or a deleted user used to upload as an anonymous
+  caller when the collection allowed that. If a client relied on it, log the
+  user in again.
+- **gRPC `TriggerJob` returns `NOT_FOUND` when the caller may not trigger the
+  job** (was `PERMISSION_DENIED`), even when the payload is malformed. Treat
+  both as "not available to this caller". The job's access rule now runs
+  before a malformed payload is rejected, with `ctx.data` set to `nil` — if
+  the rule reads `ctx.data`, guard against `nil`.
+- **A locked account's token answers "Account locked".** Every request now
+  reads the lock from the stored account, so a token issued before a lock is
+  refused as locked — gRPC `PERMISSION_DENIED`, upload API `401` — where it used
+  to answer "Session invalidated" (`UNAUTHENTICATED`). A client that recovered
+  only from `UNAUTHENTICATED` should treat both as "log in again".
+- **Custom auth strategies:** a locked account no longer signs in through a
+  strategy, and a verified account of a collection with `verify_email` now
+  does. Strategy hooks don't have to copy `_locked` / `_verified` onto the
+  document they return.
+- **Custom page access rules must return `true`.** A rule that returns a filter
+  table now denies the page and hides it from the sidebar; return
+  `true`/`false` instead.
+- **MCP job tools no longer show bulk runs of collections hidden from MCP**,
+  including bulk runs that finished before the upgrade.
 - **gRPC `Login` no longer bypasses MFA — and gRPC now completes it.** The
   RPC previously minted a full JWT on the password alone, silently bypassing
   the second factor the admin login enforces. On a collection with
@@ -1120,6 +1223,13 @@ continue to work.
   included) on first startup — expect it once; no manual action. The
   `ALTER` takes an exclusive lock per table, so very large tables make
   that first startup correspondingly slower. SQLite is unaffected.
+- **Restoring an old version leaves localized rows alone.** Version snapshots
+  now keep each locale's array, blocks and has-many relationship rows apart, so
+  a restore puts every locale's rows back where they belong. Snapshots taken
+  before this release don't carry that split: restoring one restores the
+  document's fields but leaves localized array, blocks and relationship rows as
+  they currently are, rather than mixing every locale's rows into the default
+  locale as before. No action needed.
 - **Old SQLite timestamps are rewritten once.** Databases created by early
   versions stored some timestamps as `YYYY-MM-DD HH:MM:SS`, which sorted and
   filtered incorrectly against current ISO 8601 values. The first startup
@@ -1325,6 +1435,13 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   (mirrors `FindRequest.trash`). Non-breaking.
 - **Additive:** `GetGlobalRequest.draft` reads the unpublished draft of an
   unpublished global (mirrors `FindByIdRequest.draft`). Non-breaking.
+- **`DescribeCollection` for a global reports `timestamps: true`** and the
+  global's real `drafts` setting (both were always `false`). If your client
+  skipped `created_at`/`updated_at` for globals because of that flag, read
+  them.
+- **Additive:** `FieldInfo.relationship_collections`, `FieldInfo.has_many` and
+  `FieldInfo.timezone` describe polymorphic targets, value lists and timezone
+  dates. Non-breaking.
 - **Doc-only:** `Create`/`Update` now document that a UNIQUE-constraint
   conflict maps to `ALREADY_EXISTS` (the runtime mapping was already
   `ALREADY_EXISTS`; only the proto comment was stale).
@@ -1384,6 +1501,33 @@ What changed:
   `#[serde(tag = "collection")]` ref enum, TS/Python a union of the target
   documents, Go `interface{}`.
 
+- **Every field of a read document is optional.** A draft read can return a
+  `required` field empty, and field read access and `select` leave keys out,
+  so the generated read types no longer mark any field as always present —
+  groups and array rows included. A TypeScript read field is `?: T | null`,
+  since an empty value reads as `null`. In TypeScript `…Document` no longer extends
+  `…Data`; `…Data` keeps its required fields as the input for creating (an
+  update accepts `Partial<…Data>`), and each group and array row type has a
+  `…Data` input variant that keeps its required fields too (`PostsSeoData`
+  beside the read type `PostsSeo`); the row type of an array stored in its own table
+  (not nested inside another row) gains an optional `id` — send it back on update
+  to keep the stored row. Rust fields become `Option<T>`, Go fields
+  pointers or nil-able values — booleans and single groups included (`*bool`,
+  `*PostsSeo`) — and Python fields `Optional[...] = None`. Handle the absent
+  case where your code relied on a required field; in Go, dereference booleans
+  and single groups.
+
+- **Read documents carry `_status`, `_deleted_at` and `<name>_tz`** when the
+  collection has drafts, soft delete or timezone dates.
+
+- **New `locale = "all"` read types.** A collection or global with localized
+  fields also gets `…LocalizedDocument` (TypeScript) / `…Localized` (Rust, Go,
+  Python), where each localized field is a per-locale map whose value is `null`
+  for a locale without one (`Localized<T>` — `{ [locale: string]: T | null }` —
+  in TypeScript, `HashMap<String, Option<T>>` in Rust, `map[string]*T` in Go,
+  `dict[str, Optional[T]]` in Python). Use it to decode `locale = "all"`
+  responses, and handle the locales a document has no value for.
+
 - **New `CollectionSlug` type** enumerating the known slugs (Rust/Go a named
   type with constants, TS/Python a string-literal union).
 
@@ -1425,6 +1569,16 @@ if you use versions on a localized collection.
 - **Undelete works on a localized soft-delete collection**, and **searching
   the trash view returns results** — both previously failed or returned
   nothing for the same bare-column reason.
+- **MCP schemas match the documents the server stores.** Block rows are named
+  by `_block_type` (the schema said `blockType`, which writes rejected), array
+  and blocks rows carry their `id`, has-many text and number fields are lists,
+  timezone dates have a `<name>_tz` property, and polymorphic references are
+  `collection/id`. Agents that cached a schema should fetch it again.
+- **Generated Lua hook types name the operations hooks receive** (`"delete"`
+  for collections, `"get"` for global reads), and `crap.doc.*` marks every
+  field optional with `_status`, `_deleted_at` and `<name>_tz` where they
+  exist. `types/hooks.lua` regenerates on the next dev-mode start or
+  `crap-cms typegen lua`.
 - **Version history shows dates.** `created_at` was stored but no query
   selected it, so every version rendered an empty date. Existing rows have
   the data; they just start displaying it.
@@ -1552,6 +1706,42 @@ if you use versions on a localized collection.
 
 ## Behavior changes (likely no action)
 
+- **`crap-cms user delete` goes through the service layer.** On a soft-delete
+  auth collection the user is moved to the trash (empty it with
+  `crap-cms trash purge`, which refuses a user other documents still
+  reference); on other collections such a user is refused right away; delete
+  hooks run. Scripts that relied on an immediate hard delete should purge the
+  trash afterwards.
+- **`crap-cms restore` and `migrate fresh` refuse while a server, worker, stdio
+  MCP process or another CLI command uses the database**, not only the server,
+  and those refuse to start while either runs. They share the lock file
+  `data/crap.lock`; don't delete it while they run. **Action:** keep the data
+  directory on a filesystem that supports file locks — a local disk does; NFS
+  needs its lock service. Without them, these processes stop at startup with
+  "Failed to take the instance lock". A read-only data directory works once
+  `data/crap.lock` exists, except for `restore` and `migrate fresh`, which need
+  it writable.
+- **Two indexes with the same name stop startup.** Index names are built as
+  `idx_{slug}_{fields}`, so an index of one collection could get the name of
+  another's — within one collection, or across two whose slugs and field names
+  join the same way — and one silently replaced the other. Startup now names
+  both. **Action:** if it stops, rename a field or collection so the names
+  differ.
+- **A backslash escapes `%` and `_` in `like` filters.** `like` now uses
+  `ESCAPE '\'` on every backend: `\%`, `\_` and `\\` match a literal `%`, `_`
+  and backslash, and a pattern ending in a lone backslash is rejected. If a
+  `like` value (in a filter, access constraint or saved admin URL) contains a
+  literal backslash, double it.
+- **A timezone date's `<name>_tz` follows its date in reads.** Read with
+  `locale = "all"`, a localized timezone date's `<name>_tz` is now a
+  per-locale map like the date (it used to come back as flat
+  `<name>_tz__en` keys); inside a group, `<name>_tz` is a key of the group
+  object (it used to sit beside the group as `<group>__<name>_tz`). If a
+  client read those flat keys, read the new places instead.
+- **Text inputs no longer carry the browser `maxlength`/`minlength`
+  attributes.** Length is checked by server validation, which counts
+  characters. If a custom template or script relied on those attributes, read
+  `data-max-length`/`data-min-length` or the field definition instead.
 - **Bulk writes are gated by the write-side access rule, uniformly.**
   `update_many` is gated by `access.update`, `delete_many` by
   `access.trash`/`access.delete` (trash falls back to `update`), evaluated

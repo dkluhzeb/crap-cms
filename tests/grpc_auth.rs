@@ -506,15 +506,11 @@ async fn me_valid_token() {
     assert_eq!(get_proto_field(&user, "name").as_deref(), Some("Carol"));
 }
 
-/// Pin the `Me` outcome for a locked account. Locking bumps
-/// `session_version`, so a token issued before the lock hits the shared
-/// evaluator's stale-session mapping: `UNAUTHENTICATED` ("Session
-/// invalidated") — previously `Me` answered `UNAUTHENTICATED` ("Account is
-/// locked") from its own check. The `Locked → PERMISSION_DENIED` mapping
-/// (reachable only while the session version still matches) is pinned by
-/// the `auth_failure_status` unit table.
+/// Pin the `Me` outcome for a locked account: the shared evaluator reads the
+/// lock from the row before it compares session versions, so a token issued
+/// before the lock answers `PERMISSION_DENIED` ("Account locked").
 #[tokio::test]
-async fn me_locked_account_token_is_invalidated() {
+async fn me_locked_account_token_is_refused_as_locked() {
     let ts = setup_service(vec![make_users_def()], vec![]);
 
     let created = ts
@@ -561,8 +557,64 @@ async fn me_locked_account_token_is_invalidated() {
         .me(Request::new(content::MeRequest { token }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
-    assert!(err.message().contains("Session invalidated"), "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    assert!(err.message().contains("Account locked"), "{err}");
+}
+
+/// Regression: an account locked in the database without its session version
+/// moving — as direct SQL or an import leaves it — kept its live tokens,
+/// because the lock was checked on the user document, which never carries
+/// `_locked`. The evaluator now reads the lock from the row.
+#[tokio::test]
+async fn me_refuses_a_token_of_an_account_locked_without_a_session_bump() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    let created = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "rowlocked@example.com"),
+                ("password", "pw123456"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .expect("created doc");
+
+    let token = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "rowlocked@example.com".to_string(),
+            password: "pw123456".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token;
+
+    {
+        let conn = ts.pool.get().unwrap();
+        conn.execute(
+            "UPDATE users SET _locked = 1 WHERE id = ?1",
+            &[DbValue::Text(created.id.clone())],
+        )
+        .unwrap();
+    }
+
+    let err = ts
+        .service
+        .me(Request::new(content::MeRequest { token }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    assert!(err.message().contains("Account locked"), "{err}");
 }
 
 /// Regression: `Me` used to validate the JWT directly and answer even when

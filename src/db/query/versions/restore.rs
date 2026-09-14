@@ -7,16 +7,17 @@ use crate::{
     config::LocaleConfig,
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType,
-        collection::GlobalDefinition,
+        collection::GlobalDefinition, flatten_group_fields,
     },
     db::{
         DbConnection, DbValue,
         query::{
             LocaleContext, LocaleMode,
+            fts::fts_upsert,
             global::update_global,
             helpers::{
-                global_table, locale_column, prefixed_name, quote_ident, tz_column,
-                walk_leaf_fields,
+                coerce_has_many_scalar, coerce_json_value, global_table, locale_column,
+                prefixed_name, quote_ident, tz_column, walk_leaf_fields,
             },
             join::save_join_table_data,
             ref_count,
@@ -27,7 +28,7 @@ use crate::{
 
 use super::{
     crud::{create_version, set_document_status},
-    snapshot::{collect_join_data_from_snapshot, extract_snapshot_data},
+    snapshot::{collect_join_data_from_snapshot, extract_snapshot_data, localized_join_keys},
 };
 
 /// Build a default-locale context when locales are enabled, or None otherwise.
@@ -41,10 +42,11 @@ fn default_locale_ctx(locale_config: &LocaleConfig) -> Option<LocaleContext> {
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
 ///
-/// When `locale_config` indicates locales are enabled, localized fields are handled
-/// specially: ALL locale columns are cleared, then the snapshot value is written to
-/// the default locale column. This ensures stale translations from later edits don't
-/// persist after restoring an older version.
+/// When `locale_config` indicates locales are enabled, every locale column of a
+/// localized field takes the snapshot's value for that locale, and a locale the
+/// snapshot has no value for is cleared — so translations from later edits don't
+/// survive restoring an older version. A field the snapshot carries no value for
+/// at all keeps its stored columns.
 ///
 /// # Errors
 ///
@@ -81,7 +83,7 @@ pub fn restore_version(
     ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
 
     // Re-sync the FTS index to the restored content.
-    crate::db::query::fts::fts_upsert(conn, slug, parent_id, def, locale_config)?;
+    fts_upsert(conn, slug, parent_id, def, locale_config)?;
 
     // `_status` only exists when the collection has drafts — an audit-trail
     // collection (`versions = { drafts = false }`) has no such column, and
@@ -145,6 +147,37 @@ pub fn restore_global_version(
     Ok(doc)
 }
 
+/// The row a restore writes back to.
+struct RestoreRow<'a> {
+    conn: &'a dyn DbConnection,
+    table: &'a str,
+    parent_id: &'a str,
+    fields: &'a [FieldDefinition],
+}
+
+/// The SET clauses of one UPDATE and the values they bind.
+struct SetClauses<'a> {
+    conn: &'a dyn DbConnection,
+    clauses: Vec<String>,
+    params: Vec<DbValue>,
+}
+
+impl SetClauses<'_> {
+    /// Set `column` to `value`, or to NULL without one.
+    fn push(&mut self, column: &str, value: Option<DbValue>) {
+        let quoted = quote_ident(column);
+
+        let Some(value) = value else {
+            self.clauses.push(format!("{quoted} = NULL"));
+            return;
+        };
+
+        let placeholder = self.conn.placeholder(self.params.len() + 1);
+        self.clauses.push(format!("{quoted} = {placeholder}"));
+        self.params.push(value);
+    }
+}
+
 /// Restore locale columns and join table data from a snapshot.
 /// Group fields are always expanded to `field__subfield` sub-columns.
 fn restore_locale_and_join_data(
@@ -155,41 +188,124 @@ fn restore_locale_and_join_data(
     obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let locales_enabled = locale_config.is_enabled();
+    let row = RestoreRow {
+        conn,
+        table,
+        parent_id,
+        fields,
+    };
 
-    if locales_enabled {
-        let mut set_clauses = Vec::new();
-        let mut params: Vec<DbValue> = Vec::new();
-        let mut idx = 1;
-
-        collect_locale_restore_fields(
-            conn,
-            fields,
-            obj,
-            locale_config,
-            &mut set_clauses,
-            &mut params,
-            &mut idx,
-        )?;
-
-        if !set_clauses.is_empty() {
-            let sql = format!(
-                "UPDATE \"{table}\" SET {} WHERE id = {}",
-                set_clauses.join(", "),
-                conn.placeholder(idx)
-            );
-            params.push(DbValue::Text(parent_id.to_string()));
-            conn.execute(&sql, &params)
-                .context("Failed to restore locale columns")?;
-        }
+    if locale_config.is_enabled() {
+        restore_locale_values(&row, obj, locale_config)?;
     }
 
-    // Restore join table data from snapshot
-    let mut join_data = DocumentFields::new();
-    collect_join_data_from_snapshot(fields, obj, &mut join_data);
+    restore_join_rows(&row, obj, locale_config)
+}
+
+/// Write every localized column back from the snapshot in one UPDATE.
+fn restore_locale_values(
+    row: &RestoreRow<'_>,
+    obj: &Map<String, Value>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut set = SetClauses {
+        conn: row.conn,
+        clauses: Vec::new(),
+        params: Vec::new(),
+    };
+
+    collect_locale_restore_fields(&mut set, row.fields, obj, locale_config)?;
+
+    if set.clauses.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "UPDATE \"{}\" SET {} WHERE id = {}",
+        row.table,
+        set.clauses.join(", "),
+        row.conn.placeholder(set.params.len() + 1)
+    );
+    set.params.push(DbValue::Text(row.parent_id.to_string()));
+
+    row.conn
+        .execute(&sql, &set.params)
+        .context("Failed to restore locale columns")?;
+
+    Ok(())
+}
+
+/// Restore join table data from the snapshot. Localized join fields are left
+/// to the per-locale pass: written here without a locale, every locale's rows
+/// would land in the default locale.
+fn restore_join_rows(
+    row: &RestoreRow<'_>,
+    obj: &Map<String, Value>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut collected = DocumentFields::new();
+    collect_join_data_from_snapshot(row.fields, obj, &mut collected);
+    let mut join_data = flatten_group_fields(&collected, row.fields);
+
+    let localized_keys = if locale_config.is_enabled() {
+        localized_join_keys(row.fields)
+    } else {
+        Vec::new()
+    };
+    for key in &localized_keys {
+        join_data.remove(key);
+    }
 
     if !join_data.is_empty() {
-        save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
+        save_join_table_data(
+            row.conn,
+            row.table,
+            row.fields,
+            row.parent_id,
+            &join_data,
+            None,
+        )?;
+    }
+
+    restore_localized_join_rows(row, obj, locale_config, &localized_keys)
+}
+
+/// Write each locale's rows of every localized join field back from its
+/// `{key}__{locale}` snapshot entry (the locale code in column form), scoped to
+/// that locale. A snapshot without the entry for a field — taken before
+/// snapshots recorded localized rows per locale — leaves that field's live rows
+/// untouched rather than guessing.
+fn restore_localized_join_rows(
+    row: &RestoreRow<'_>,
+    obj: &Map<String, Value>,
+    locale_config: &LocaleConfig,
+    keys: &[String],
+) -> Result<()> {
+    for locale in &locale_config.locales {
+        let mut data = DocumentFields::new();
+
+        for key in keys {
+            if let Some(rows) = obj.get(&locale_column(key, locale)?) {
+                data.insert(key.clone(), rows.clone());
+            }
+        }
+
+        if data.is_empty() {
+            continue;
+        }
+
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single(locale.clone()),
+            config: locale_config.clone(),
+        };
+        save_join_table_data(
+            row.conn,
+            row.table,
+            row.fields,
+            row.parent_id,
+            &data,
+            Some(&ctx),
+        )?;
     }
 
     Ok(())
@@ -215,57 +331,82 @@ fn resolve_snapshot_value<'a>(
     })
 }
 
+/// Where a localized value sits in a snapshot: its flat column name
+/// (`group__field`), the group prefix (`group`, empty at the top level) and the
+/// field's own name.
+type SnapshotKey<'k> = (&'k str, &'k str, &'k str);
+
+/// A snapshot's per-locale values.
+struct LocaleSnapshot<'a> {
+    obj: &'a Map<String, Value>,
+    config: &'a LocaleConfig,
+}
+
+impl<'a> LocaleSnapshot<'a> {
+    fn new(obj: &'a Map<String, Value>, config: &'a LocaleConfig) -> Self {
+        Self { obj, config }
+    }
+
+    /// The value of `key` for `locale`. EVERY locale prefers the decorated key
+    /// the snapshot carries — `{key}__{locale}`, the locale code in column
+    /// form. The bare key is only the default locale's fallback, for snapshots
+    /// written before snapshots recorded every locale: it holds whichever
+    /// locale the write that produced it was made under, so preferring it would
+    /// copy (say) a German edit into the English column on restore.
+    fn value(
+        &self,
+        (base, prefix, field): SnapshotKey<'_>,
+        locale: &str,
+    ) -> Result<Option<&'a Value>> {
+        let decorated_base = locale_column(base, locale)?;
+        let decorated_field = locale_column(field, locale)?;
+
+        if let Some(value) =
+            resolve_snapshot_value(self.obj, &decorated_base, prefix, &decorated_field)
+        {
+            return Ok(Some(value));
+        }
+
+        if locale != self.config.default_locale {
+            return Ok(None);
+        }
+
+        Ok(resolve_snapshot_value(self.obj, base, prefix, field))
+    }
+
+    /// Whether the snapshot carries a value of `key` for any locale.
+    fn carries(&self, key: SnapshotKey<'_>) -> Result<bool> {
+        for locale in &self.config.locales {
+            if self.value(key, locale)?.is_some() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+}
+
 /// Collect locale fields to restore using `walk_leaf_fields` to handle
 /// Group/Row/Collapsible/Tabs recursion uniformly.
 fn collect_locale_restore_fields(
-    conn: &dyn DbConnection,
+    set: &mut SetClauses<'_>,
     fields: &[FieldDefinition],
     obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
-    set_clauses: &mut Vec<String>,
-    params: &mut Vec<DbValue>,
-    idx: &mut usize,
 ) -> Result<()> {
+    let snapshot = LocaleSnapshot::new(obj, locale_config);
+
     walk_leaf_fields(
         fields,
         "",
         false,
         &mut |field, prefix, inherited_localized| {
-            let is_localized = field.localized || inherited_localized;
-
-            if !is_localized || !field.has_parent_column() {
+            if !(field.localized || inherited_localized) || !field.has_parent_column() {
                 return Ok(());
             }
 
             let base = prefixed_name(prefix, &field.name);
-
-            let val = if prefix.is_empty() {
-                obj.get(&field.name)
-            } else {
-                resolve_snapshot_value(obj, &base, prefix, &field.name)
-            };
-
-            // Per-locale snapshot lookup: EVERY locale prefers the decorated
-            // `key__xx` column the snapshot carries. The bare key is only the
-            // default locale's fallback, for snapshots written before
-            // snapshots recorded every locale — it holds whichever locale the
-            // write that produced it was made under, so preferring it would
-            // copy (say) a German edit into the English column on restore.
-            let value_for = |locale: &str| {
-                let decorated_base = format!("{base}__{locale}");
-                let decorated = if prefix.is_empty() {
-                    obj.get(&decorated_base)
-                } else {
-                    let decorated_field = format!("{}__{locale}", field.name);
-                    resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
-                };
-
-                match decorated {
-                    Some(v) => Some(v),
-                    None if *locale == locale_config.default_locale => val,
-                    None => None,
-                }
-            };
+            let key = (base.as_str(), prefix, field.name.as_str());
 
             // A field the snapshot carries no value for at all — no bare key and
             // no locale column — was either removed from the restore (the
@@ -273,69 +414,24 @@ fn collect_locale_restore_fields(
             // was taken. Leave its stored columns alone, exactly as a missing
             // non-localized field is left alone, instead of NULLing every
             // translation.
-            let carried = locale_config
-                .locales
-                .iter()
-                .any(|locale| value_for(locale).is_some());
-            if !carried {
+            if !snapshot.carries(key)? {
                 return Ok(());
             }
 
-            restore_locale_columns(
-                conn,
-                &base,
-                locale_config,
-                set_clauses,
-                params,
-                idx,
-                &value_for,
-            )?;
+            restore_locale_columns(set, &snapshot, key, |v| locale_column_value(field, v))?;
 
             // A timezone-enabled Date carries a `{base}_tz` companion, localized
             // the same way and present in the snapshot (the locale SELECT emits
-            // it). Restore its per-locale values too — otherwise restoring an
-            // old version leaves the timezone(s) at the current post-edit value.
-            if field.field_type == FieldType::Date && field.timezone {
-                let tz_base = tz_column(&base);
-                let tz_field = tz_column(&field.name);
+            // it). Restore its per-locale values too, with the same lookup
+            // order — otherwise restoring an old version leaves the timezone(s)
+            // at the current post-edit value.
+            if field.has_tz_companion() {
+                let (tz_base, tz_field) = (tz_column(&base), tz_column(&field.name));
+                let tz_key = (tz_base.as_str(), prefix, tz_field.as_str());
 
-                let tz_val = if prefix.is_empty() {
-                    obj.get(&tz_field)
-                } else {
-                    resolve_snapshot_value(obj, &tz_base, prefix, &tz_field)
-                };
-
-                // Same lookup order as the value above: EVERY locale prefers its
-                // decorated `_tz__xx` column. The bare `_tz` key holds whichever
-                // locale the snapshotted write was made under, so returning it
-                // first for the default locale copied (say) a German edit's
-                // timezone onto the English date. It survives only as the default
-                // locale's fallback, for snapshots older than per-locale timezones.
-                let tz_value_for = |locale: &str| {
-                    let decorated_base = format!("{tz_base}__{locale}");
-                    let decorated = if prefix.is_empty() {
-                        obj.get(&decorated_base)
-                    } else {
-                        let decorated_field = format!("{tz_field}__{locale}");
-                        resolve_snapshot_value(obj, &decorated_base, prefix, &decorated_field)
-                    };
-
-                    match decorated {
-                        Some(v) => Some(v),
-                        None if *locale == locale_config.default_locale => tz_val,
-                        None => None,
-                    }
-                };
-
-                restore_locale_columns(
-                    conn,
-                    &tz_base,
-                    locale_config,
-                    set_clauses,
-                    params,
-                    idx,
-                    &tz_value_for,
-                )?;
+                restore_locale_columns(set, &snapshot, tz_key, |v| {
+                    coerce_json_value(&FieldType::Text, v)
+                })?;
             }
 
             Ok(())
@@ -344,40 +440,40 @@ fn collect_locale_restore_fields(
 }
 
 /// Emit SET clauses restoring every locale column of a field from the
-/// snapshot: each locale takes the snapshot's value for that locale
-/// (`value_for(locale)`), and a locale the snapshot has no value for is set
-/// to NULL. Restoring used to NULL every non-default locale even though
-/// snapshots carry the decorated `__xx` values — wiping translations.
-fn restore_locale_columns<'a>(
-    conn: &dyn DbConnection,
-    field_name: &str,
-    locale_config: &LocaleConfig,
-    set_clauses: &mut Vec<String>,
-    params: &mut Vec<DbValue>,
-    idx: &mut usize,
-    value_for: &dyn Fn(&str) -> Option<&'a Value>,
+/// snapshot: each locale takes the snapshot's value for that locale, and a
+/// locale the snapshot has no value for is set to NULL. Restoring used to NULL
+/// every non-default locale even though snapshots carry the decorated `__xx`
+/// values — wiping translations.
+fn restore_locale_columns(
+    set: &mut SetClauses<'_>,
+    snapshot: &LocaleSnapshot<'_>,
+    key: SnapshotKey<'_>,
+    column_value: impl Fn(&Value) -> DbValue,
 ) -> Result<()> {
-    for locale in &locale_config.locales {
-        let col = locale_column(field_name, locale)?;
+    for locale in &snapshot.config.locales {
+        let col = locale_column(key.0, locale)?;
 
-        let db_val = match value_for(locale) {
-            Some(Value::String(s)) => Some(DbValue::Text(s.clone())),
-            Some(Value::Number(n)) => Some(DbValue::Text(n.to_string())),
-            Some(Value::Bool(b)) => Some(DbValue::Integer(i64::from(*b))),
-            _ => None,
-        };
+        let db_val = snapshot
+            .value(key, locale)?
+            .map(&column_value)
+            .filter(|v| !v.is_null());
 
-        let quoted = quote_ident(&col);
-        if let Some(val) = db_val {
-            set_clauses.push(format!("{quoted} = {}", conn.placeholder(*idx)));
-            params.push(val);
-            *idx += 1;
-        } else {
-            set_clauses.push(format!("{quoted} = NULL"));
-        }
+        set.push(&col, db_val);
     }
 
     Ok(())
+}
+
+/// A localized column's value from its snapshot value, coerced as a write
+/// coerces it — a scalar has-many list to its JSON text, anything else by type.
+/// A snapshot taken before email and text were stored canonically holds the
+/// value as typed; the restore writes the stored form.
+fn locale_column_value(field: &FieldDefinition, value: &Value) -> DbValue {
+    if field.is_has_many_scalar() {
+        return coerce_has_many_scalar(&field.field_type, value);
+    }
+
+    coerce_json_value(&field.field_type, value)
 }
 
 #[cfg(test)]
@@ -390,7 +486,10 @@ mod tests {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::{CollectionDefinition, FieldDefinition, FieldTab, FieldType, VersionsConfig};
     use crate::db::query::join::{find_array_rows, set_array_rows};
-    use crate::db::{BoxedConnection, pool, query::versions::crud::count_versions};
+    use crate::db::{
+        BoxedConnection, pool,
+        query::versions::{build_snapshot, crud::count_versions},
+    };
     use tempfile::TempDir;
 
     fn setup_conn() -> (TempDir, BoxedConnection) {
@@ -420,7 +519,8 @@ mod tests {
                 parent_id TEXT,
                 _order INTEGER,
                 _block_type TEXT,
-                data TEXT
+                data TEXT,
+                _locale TEXT
             );
             CREATE TABLE _versions_posts (
                 id TEXT PRIMARY KEY,
@@ -460,6 +560,13 @@ mod tests {
             "title": "Restored Title",
             "content": [
                 {"_block_type": "hero", "heading": "Welcome back"}
+            ],
+            "content__en": [
+                {"_block_type": "hero", "heading": "Welcome back"}
+            ],
+            "content__de": [
+                {"_block_type": "hero", "heading": "Willkommen zurück"},
+                {"_block_type": "hero", "heading": "Nochmals"}
             ]
         });
 
@@ -484,16 +591,19 @@ mod tests {
         let title = row.get_string("title__en").unwrap();
         assert_eq!(title, "Restored Title");
 
-        // Verify blocks were restored to join table
-        let row = conn
-            .query_one(
-                "SELECT COUNT(*) AS cnt FROM posts_content WHERE parent_id = 'p1'",
-                &[],
+        // Verify each locale's blocks were restored to the join table
+        let count_blocks = |locale: &str| {
+            conn.query_one(
+                "SELECT COUNT(*) AS cnt FROM posts_content WHERE parent_id = 'p1' AND _locale = ?1",
+                &[DbValue::Text(locale.to_string())],
             )
             .unwrap()
-            .unwrap();
-        let block_count = row.get_i64("cnt").unwrap();
-        assert_eq!(block_count, 1, "blocks from snapshot should be restored");
+            .unwrap()
+            .get_i64("cnt")
+            .unwrap()
+        };
+        assert_eq!(count_blocks("en"), 1, "english blocks should be restored");
+        assert_eq!(count_blocks("de"), 2, "german blocks should be restored");
 
         // Verify a version was created for the restore
         let version_count = count_versions(&conn, "posts", "p1", false).unwrap();
@@ -783,6 +893,233 @@ mod tests {
             row.get_string("start_date_tz__de").unwrap(),
             "Europe/Berlin",
             "the non-default-locale _tz companion must be restored"
+        );
+    }
+
+    /// Regression: restoring a snapshot taken before email values were stored
+    /// canonically wrote a localized address back as typed, so a lookup of the
+    /// stored form missed it.
+    #[test]
+    fn restore_version_stores_a_localized_email_in_canonical_form() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE people (
+                id TEXT PRIMARY KEY,
+                work__en TEXT,
+                work__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_people (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO people (id) VALUES ('p1');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("people");
+        def.fields = vec![
+            FieldDefinition::builder("work", FieldType::Email)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let snapshot = json!({
+            "work": "Bob@Example.com",
+            "work__de": "J\u{dc}RGEN@Example.com",
+        });
+        create_version(&conn, "people", "p1", "published", &snapshot).unwrap();
+
+        restore_version(&conn, "people", &def, "p1", &snapshot, "published", &locale).unwrap();
+
+        let row = conn
+            .query_one("SELECT work__en, work__de FROM people WHERE id = 'p1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("work__en").unwrap(), "bob@example.com");
+        assert_eq!(
+            row.get_string("work__de").unwrap(),
+            "j\u{fc}rgen@example.com"
+        );
+    }
+
+    /// Regression: a snapshot recorded every per-locale column as text — a
+    /// localized number or checkbox read back as a string, or not at all where
+    /// the backend won't read a number as text — and restore cleared a
+    /// localized scalar has-many list.
+    #[test]
+    fn restore_writes_typed_localized_values_back() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                price__en REAL,
+                price__de REAL,
+                done__en INTEGER,
+                done__de INTEGER,
+                tags__en TEXT,
+                tags__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_items (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO items (id, price__de, done__de, tags__de)
+                VALUES ('i1', 12.5, 1, '[\"a\",\"b\"]');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("items");
+        def.fields = vec![
+            FieldDefinition::builder("price", FieldType::Number)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("done", FieldType::Checkbox)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let doc = Document::builder("i1").build();
+        let snapshot = build_snapshot(&conn, "items", &def.fields, &doc, Some(&locale)).unwrap();
+        assert_eq!(snapshot["price__de"], json!(12.5));
+        assert_eq!(snapshot["done__de"], json!(1));
+        assert_eq!(snapshot["tags__de"], json!(["a", "b"]));
+
+        conn.execute(
+            "UPDATE items SET price__de = NULL, done__de = 0, tags__de = NULL",
+            &[],
+        )
+        .unwrap();
+        restore_version(&conn, "items", &def, "i1", &snapshot, "published", &locale).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT price__de, done__de, tags__de FROM items WHERE id = 'i1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(row.get_value(0), Some(DbValue::Real(p)) if (p - 12.5).abs() < 1e-9));
+        assert!(matches!(row.get_value(1), Some(DbValue::Integer(1))));
+        assert_eq!(row.get_string("tags__de").unwrap(), r#"["a","b"]"#);
+    }
+
+    /// A hyphenated locale's snapshot keys carry the column form (`title__pt_BR`,
+    /// `content__pt_BR`). Restore looked them up as `title__pt-BR`, found
+    /// nothing, and cleared the translation and left its rows untouched.
+    #[test]
+    fn restore_reads_a_hyphenated_locales_snapshot_keys() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title__en TEXT,
+                title__pt_BR TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE posts_content (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                _block_type TEXT,
+                data TEXT,
+                _locale TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO posts (id, title__en, title__pt_BR) VALUES ('p1', 'Now', 'Agora');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "pt-BR".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let snapshot = json!({
+            "title": "Then",
+            "title__en": "Then",
+            "title__pt_BR": "Antes",
+            "content__en": [{ "_block_type": "hero", "heading": "Hi" }],
+            "content__pt_BR": [{ "_block_type": "hero", "heading": "Oi" }],
+        });
+
+        restore_version(&conn, "posts", &def, "p1", &snapshot, "published", &locale).unwrap();
+
+        let row = conn
+            .query_one("SELECT title__pt_BR FROM posts WHERE id = 'p1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("title__pt_BR").unwrap(), "Antes");
+
+        let rows = conn
+            .query_one(
+                "SELECT COUNT(*) AS cnt FROM posts_content WHERE _locale = 'pt-BR'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rows.get_i64("cnt").unwrap(),
+            1,
+            "the pt-BR rows are restored"
         );
     }
 

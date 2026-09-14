@@ -876,6 +876,19 @@ end
         StatusCode::NOT_FOUND,
         "a non-owner must not serve the file"
     );
+
+    // A credential that no longer authenticates is served like an anonymous
+    // visitor: once the owner's account is locked, their cookie serves nothing.
+    let owner_cookie = make_auth_cookie(&app, &owner_id, "owner@test.com");
+    {
+        let conn = app.pool.get().unwrap();
+        query::auth::lock_user(&conn, "users", &owner_id).unwrap();
+    }
+    assert_eq!(
+        serve(Some(owner_cookie)).await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "a locked owner's cookie must not serve the file"
+    );
 }
 
 /// Regression (F1): the serve gate honors the draft view, not just published.

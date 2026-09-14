@@ -6,10 +6,8 @@ use tracing::info;
 use crate::config::LocaleConfig;
 use crate::core::FieldDefinition;
 use crate::db::DbConnection;
-use crate::db::migrate::helpers::column_specs::ensure_locale_column;
-use crate::db::migrate::helpers::introspection::{
-    get_table_columns, sanitize_locale, table_exists,
-};
+use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
+use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
 use crate::db::query::helpers::join_table;
 
 /// Sync a has-many relationship junction table.
@@ -41,7 +39,7 @@ pub(super) fn sync_relationship_table(
                     conn,
                     &table_name,
                     collection_slug,
-                    has_locale_col,
+                    has_locale_col.then_some(locale_config.default_locale.as_str()),
                 )?;
             }
         }
@@ -86,13 +84,13 @@ fn create_junction_table(
                 related_id TEXT NOT NULL, \
                 {}\
                 _order INTEGER NOT NULL DEFAULT 0, \
-                _locale TEXT NOT NULL DEFAULT '{}', \
+                {}, \
                 PRIMARY KEY (parent_id, related_id{}, _locale)\
             )",
             table_name,
             collection_slug,
             poly_col,
-            sanitize_locale(&locale_config.default_locale)?,
+            locale_column_definition(&locale_config.default_locale),
             poly_pk
         )
     } else {
@@ -114,12 +112,13 @@ fn create_junction_table(
     Ok(())
 }
 
-/// Rebuild a junction table to add `related_collection` column with correct PRIMARY KEY.
+/// Rebuild a junction table to add `related_collection` column with correct
+/// PRIMARY KEY. `default_locale` is set when the table keeps rows per locale.
 fn rebuild_junction_table_for_polymorphic(
     conn: &dyn DbConnection,
     table_name: &str,
     collection_slug: &str,
-    has_locale: bool,
+    default_locale: Option<&str>,
 ) -> Result<()> {
     let temp = format!("_{table_name}_migrate");
 
@@ -127,8 +126,14 @@ fn rebuild_junction_table_for_polymorphic(
         "ALTER TABLE \"{table_name}\" RENAME TO \"{temp}\""
     ))?;
 
-    let locale_col = if has_locale { ", _locale TEXT" } else { "" };
-    let locale_pk = if has_locale { ", _locale" } else { "" };
+    let locale_col = default_locale.map_or_else(String::new, |locale| {
+        format!(", {}", locale_column_definition(locale))
+    });
+    let locale_pk = if default_locale.is_some() {
+        ", _locale"
+    } else {
+        ""
+    };
 
     conn.execute_batch_ddl(&format!(
         "CREATE TABLE \"{table_name}\" (\
@@ -140,7 +145,7 @@ fn rebuild_junction_table_for_polymorphic(
         )"
     ))?;
 
-    if has_locale {
+    if default_locale.is_some() {
         conn.execute_batch(&format!(
             "INSERT INTO \"{table_name}\" (parent_id, related_id, related_collection, _order, _locale) \
              SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM \"{temp}\""
@@ -445,6 +450,23 @@ mod tests {
         let cols = get_table_columns(&conn, "posts_related").unwrap();
         assert!(cols.contains("related_collection"));
         assert!(cols.contains("_locale"));
+
+        // Regression: the rebuilt `_locale` column lost its default, so a row
+        // written without a locale was stored with none.
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, related_collection, _order) \
+             VALUES ('p1', 'r2', 'tags', 1)",
+            &[],
+        )
+        .unwrap();
+        let row = conn
+            .query_one(
+                "SELECT _locale FROM posts_related WHERE related_id = 'r2'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("_locale").unwrap(), "en");
     }
 
     #[test]
@@ -482,7 +504,7 @@ mod tests {
         .unwrap();
 
         // Rebuild for polymorphic upgrade
-        rebuild_junction_table_for_polymorphic(&conn, "posts_tags", "posts", false).unwrap();
+        rebuild_junction_table_for_polymorphic(&conn, "posts_tags", "posts", None).unwrap();
 
         // Verify columns
         let cols = get_table_columns(&conn, "posts_tags").unwrap();

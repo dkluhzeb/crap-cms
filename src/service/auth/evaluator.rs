@@ -30,14 +30,14 @@ use tracing::{debug, warn};
 
 use crate::config::LocaleConfig;
 use crate::core::{
-    AuthUser, Claims, Document, Registry, Slug,
+    AuthUser, Claims, Document, Registry, Slug, StrategyEntry,
     auth::{ClaimsBuilder, TokenProvider},
     collection::{Auth, Surface},
     parse_truthy,
 };
 use crate::db::{DbConnection, LocaleContext, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
-use crate::service::{self, AppInfra, ServiceContext};
+use crate::service::{self, AppInfra, ServiceContext, ServiceError};
 
 /// Per-request inputs for [`evaluate`].
 ///
@@ -343,11 +343,12 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
 
 /// Try a single strategy entry against the current request. Returns
 /// `Some(Resolution::Authenticated)` on a hit, `None` to keep
-/// iterating. Mirrors the per-strategy `is_locked` / verify-email
-/// guard the bearer / cookie paths apply in `resolve_token`, so the
-/// strategy path can't be used to bypass account-state checks.
+/// iterating. A locked account — or an unverified one where the
+/// collection requires verification — is refused, so the strategy path
+/// can't be used to bypass the account-state checks the bearer / cookie
+/// paths apply.
 fn try_strategy(
-    entry: &crate::core::StrategyEntry,
+    entry: &StrategyEntry,
     request: &AuthRequest<'_>,
     deps: &EvaluateDeps<'_>,
 ) -> Option<Resolution> {
@@ -362,72 +363,94 @@ fn try_strategy(
         password: None,
         remote_addr: None,
     };
-    match deps
-        .hook_runner
-        .run_auth_strategy(&entry.authenticate, &strategy_input, deps.conn)
-    {
-        Ok(Some(doc)) => {
-            if is_locked(&doc) {
-                debug!(
+
+    let doc =
+        match deps
+            .hook_runner
+            .run_auth_strategy(&entry.authenticate, &strategy_input, deps.conn)
+        {
+            Ok(Some(doc)) => doc,
+            Ok(None) => return None,
+            Err(e) => {
+                warn!(
                     collection = %entry.slug,
                     strategy = %entry.name,
-                    user = %doc.id,
-                    "strategy returned locked user; refusing"
+                    error = ?e,
+                    "auth strategy returned error; continuing to next method"
                 );
                 return None;
             }
-            if auth.requires_verify_email() && !is_verified(&doc) {
-                debug!(
-                    collection = %entry.slug,
-                    strategy = %entry.name,
-                    user = %doc.id,
-                    "strategy returned unverified user (verify_email required); refusing"
-                );
-                return None;
-            }
-            let user = build_strategy_authuser(doc, &entry.slug, auth.token_expiry)?;
-            Some(Resolution::Authenticated(Box::new(
-                AuthenticatedResolution {
-                    user,
-                    via: ResolvedMethod::Strategy {
-                        collection: entry.slug.clone(),
-                        name: entry.name.clone(),
-                    },
-                },
-            )))
-        }
-        Ok(None) => None,
-        Err(e) => {
-            warn!(
-                collection = %entry.slug,
-                strategy = %entry.name,
-                error = ?e,
-                "auth strategy returned error; continuing to next method"
-            );
-            None
-        }
+        };
+
+    if let Some(state) = strategy_refusal(&doc, &entry.slug, auth, deps.conn) {
+        debug!(
+            collection = %entry.slug,
+            strategy = %entry.name,
+            user = %doc.id,
+            "strategy returned {state} user; refusing"
+        );
+        return None;
     }
+
+    let user = build_strategy_authuser(doc, &entry.slug, auth.token_expiry)?;
+
+    Some(Resolution::Authenticated(Box::new(
+        AuthenticatedResolution {
+            user,
+            via: ResolvedMethod::Strategy {
+                collection: entry.slug.clone(),
+                name: entry.name.clone(),
+            },
+        },
+    )))
 }
 
-/// Historical activation-matching helper. The runtime evaluator no
-/// longer calls it — the precomputed `header_strategies` /
-/// `always_strategies` indexes on `Registry` answer the same
-/// question without iterating. Kept for the existing unit tests
-/// that pin the case-insensitive matching semantics; if those tests
-/// move to exercising the precomputed maps directly, this can go.
-#[cfg(test)]
-fn activation_matches(
-    activation: &crate::core::collection::Activation,
-    headers: &HashMap<String, String>,
-) -> bool {
-    use crate::core::collection::Activation;
-    match activation {
-        Activation::Always { .. } => true,
-        Activation::Header { header } => {
-            let want = header.as_str();
-            headers.keys().any(|k| k.eq_ignore_ascii_case(want))
-        }
+/// The account state that refuses a strategy's user, if any: `"a locked"`,
+/// `"an unverified"` where the collection requires verification, or
+/// `"an unreadable"` when the stored state can't be read. The stored row
+/// decides — a document read through the API never carries `_locked` or
+/// `_verified` — and a flag set on the document the hook returns counts too.
+fn strategy_refusal(
+    doc: &Document,
+    slug: &str,
+    auth: &Auth,
+    conn: &dyn DbConnection,
+) -> Option<&'static str> {
+    let ctx = ServiceContext::slug_only(slug).conn(conn).build();
+
+    let locked = bool_flag(doc, "_locked")
+        || match service::auth::is_locked(&ctx, &doc.id) {
+            Ok(locked) => locked,
+            Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
+        };
+    if locked {
+        return Some("a locked");
     }
+
+    if !auth.requires_verify_email() {
+        return None;
+    }
+
+    let verified = bool_flag(doc, "_verified")
+        || match service::auth::is_verified(&ctx, &doc.id) {
+            Ok(verified) => verified,
+            Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
+        };
+
+    (!verified).then_some("an unverified")
+}
+
+/// Log an account-state lookup that failed for a strategy's user, who is
+/// refused.
+fn unreadable_account(slug: &str, id: &str, e: &ServiceError) -> &'static str {
+    warn!(
+        collection = %slug,
+        user = %id,
+        error = %e,
+        "account state lookup failed; refusing the strategy's user"
+    );
+
+    "an unreadable"
 }
 
 enum TokenOutcome {
@@ -489,34 +512,35 @@ where
         }
     };
 
-    if is_locked(&doc) {
-        return TokenOutcome::Invalid(AuthFailure::Locked);
-    }
-
-    let ctx = ServiceContext::slug_only(&claims.collection)
-        .conn(deps.conn)
-        .build();
-    let Ok(db_session_version) = service::auth::get_session_version(&ctx, &claims.sub) else {
-        debug!(user = %claims.sub, "session version lookup failed");
-        return TokenOutcome::Invalid(AuthFailure::Lookup);
-    };
-    if claims.session_version != db_session_version {
-        return TokenOutcome::Invalid(AuthFailure::StaleSession);
+    if let Err(failure) = check_account(deps.conn, &claims) {
+        return TokenOutcome::Invalid(failure);
     }
 
     TokenOutcome::Authenticated(Box::new((AuthUser::new(claims, doc), def.slug.clone())))
 }
 
-fn is_locked(doc: &Document) -> bool {
-    bool_flag(doc, "_locked")
-}
+/// Whether the account a token names may still use it: not locked, and on the
+/// session version the token was issued under. Both are read from the row in
+/// one query — a user document never carries `_locked`.
+fn check_account(conn: &dyn DbConnection, claims: &Claims) -> Result<(), AuthFailure> {
+    let (locked, db_session_version) =
+        query::lock_and_session_version(conn, &claims.collection, &claims.sub)
+            .inspect_err(|e| debug!(user = %claims.sub, error = ?e, "account lookup failed"))
+            .map_err(|_| AuthFailure::Lookup)?;
 
-fn is_verified(doc: &Document) -> bool {
-    bool_flag(doc, "_verified")
+    if locked {
+        return Err(AuthFailure::Locked);
+    }
+
+    if claims.session_version != db_session_version {
+        return Err(AuthFailure::StaleSession);
+    }
+
+    Ok(())
 }
 
 /// Defensive reader for the `_locked` / `_verified` integer flags
-/// on a user document. Accepts:
+/// on a document a strategy hook returns. Accepts:
 /// - `i64` (the canonical DB-backed shape: 0 = false, anything else = true)
 /// - `bool` (in case a Lua hook returns a boolean directly)
 /// - string-coercible-to-i64 ("0", "1", etc.) — strategy hooks
@@ -553,9 +577,9 @@ fn bool_flag(doc: &Document, key: &str) -> bool {
 /// user a moment ago; a stale lookup here is genuinely unexpected
 /// rather than user-visible.
 ///
-/// Shared between [`resolve_token`] and the admin middleware's
-/// `load_auth_user` so the locked / stale-session checks stay in
-/// one place.
+/// Shared by [`reload_authenticated_user`] and the admin `load_auth_user` so
+/// the locked / stale-session checks stay in one place; [`resolve_token`]
+/// applies the same checks to a presented token.
 #[cfg(not(tarpaulin_include))]
 pub fn load_authenticated_user(
     claims: &Claims,
@@ -575,17 +599,7 @@ pub fn load_authenticated_user(
     .ok()
     .flatten()?;
 
-    if is_locked(&doc) {
-        return None;
-    }
-
-    let ctx = ServiceContext::slug_only(&claims.collection)
-        .conn(conn)
-        .build();
-    let db_session_version = service::auth::get_session_version(&ctx, &claims.sub).ok()?;
-    if claims.session_version != db_session_version {
-        return None;
-    }
+    check_account(conn, claims).ok()?;
 
     Some(AuthUser::new(claims.clone(), doc))
 }
@@ -647,7 +661,51 @@ fn build_strategy_authuser(doc: Document, slug: &Slug, token_expiry: u64) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{Activation, Auth, AuthMethod, SurfaceSet};
+    use crate::{
+        core::collection::{Activation, AuthMethod, SurfaceSet},
+        db::InMemoryConn,
+    };
+
+    /// Regression: a failed lock lookup refused a strategy's user as "locked",
+    /// with nothing logged, so an unreachable table read as a locked account.
+    #[test]
+    fn a_failed_account_lookup_refuses_with_its_own_reason() {
+        // No `members` table: every lookup fails.
+        let conn = InMemoryConn::open();
+        let doc = Document::builder("m1").build();
+
+        assert_eq!(
+            strategy_refusal(&doc, "members", &Auth::new(true), &conn),
+            Some("an unreadable")
+        );
+    }
+
+    /// A lock flag on the document the hook returns refuses without a lookup.
+    #[test]
+    fn a_locked_flag_on_the_strategy_document_refuses() {
+        let conn = InMemoryConn::open();
+        let mut doc = Document::builder("m1").build();
+        doc.fields
+            .insert("_locked".to_string(), serde_json::json!(1));
+
+        assert_eq!(
+            strategy_refusal(&doc, "members", &Auth::new(true), &conn),
+            Some("a locked")
+        );
+    }
+
+    /// Activation matching as the precomputed `header_strategies` /
+    /// `always_strategies` indexes on `Registry` answer it — pins the
+    /// case-insensitive header semantics.
+    fn activation_matches(activation: &Activation, headers: &HashMap<String, String>) -> bool {
+        match activation {
+            Activation::Always { .. } => true,
+            Activation::Header { header } => {
+                let want = header.as_str();
+                headers.keys().any(|k| k.eq_ignore_ascii_case(want))
+            }
+        }
+    }
 
     #[test]
     fn activation_always_always_fires() {
@@ -712,57 +770,49 @@ mod tests {
     }
 
     #[test]
-    fn is_locked_reads_dunder_locked_field() {
+    fn bool_flag_reads_integer_flags() {
         let mut doc = Document::new("u1".to_string());
-        assert!(!is_locked(&doc));
+        assert!(!bool_flag(&doc, "_locked"));
         doc.fields
             .insert("_locked".to_string(), serde_json::json!(1));
-        assert!(is_locked(&doc));
+        assert!(bool_flag(&doc, "_locked"));
         doc.fields
             .insert("_locked".to_string(), serde_json::json!(0));
-        assert!(!is_locked(&doc));
-    }
-
-    #[test]
-    fn is_verified_reads_dunder_verified_field() {
-        let mut doc = Document::new("u1".to_string());
-        assert!(!is_verified(&doc));
+        assert!(!bool_flag(&doc, "_locked"));
         doc.fields
             .insert("_verified".to_string(), serde_json::json!(1));
-        assert!(is_verified(&doc));
+        assert!(bool_flag(&doc, "_verified"));
     }
 
     /// Defensive parsing: a strategy hook synthesizing a doc with
     /// `_locked = "1"` (string) or `_locked = true` (bool) must
-    /// still register as locked — otherwise the lock check is a
-    /// silent no-op for that path.
+    /// still register as locked — otherwise the flag on the returned
+    /// document would be a silent no-op.
     #[test]
     fn bool_flag_accepts_string_and_bool_shapes() {
         let mut doc = Document::new("u1".to_string());
         // String "1" / "true" — locked.
         doc.fields
             .insert("_locked".to_string(), serde_json::json!("1"));
-        assert!(is_locked(&doc));
+        assert!(bool_flag(&doc, "_locked"));
         doc.fields
             .insert("_locked".to_string(), serde_json::json!("true"));
-        assert!(is_locked(&doc));
+        assert!(bool_flag(&doc, "_locked"));
         // Bool true — locked.
         doc.fields
             .insert("_locked".to_string(), serde_json::json!(true));
-        assert!(is_locked(&doc));
-        // String "0" / "false" / "" — not locked.
+        assert!(bool_flag(&doc, "_locked"));
+        // String "0" / "false" — not locked.
         doc.fields
             .insert("_locked".to_string(), serde_json::json!("0"));
-        assert!(!is_locked(&doc));
+        assert!(!bool_flag(&doc, "_locked"));
         doc.fields
             .insert("_locked".to_string(), serde_json::json!("false"));
-        assert!(!is_locked(&doc));
-        // Other types fall back to false (the safe default for
-        // `is_locked`; the strategy gets through, but a separate
-        // check via DB query would catch a real lock).
+        assert!(!bool_flag(&doc, "_locked"));
+        // Other types read as unset; the stored row still decides a real lock.
         doc.fields
             .insert("_locked".to_string(), serde_json::json!(null));
-        assert!(!is_locked(&doc));
+        assert!(!bool_flag(&doc, "_locked"));
     }
 
     #[test]

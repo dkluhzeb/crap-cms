@@ -92,7 +92,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     (
         "src/mcp/schema.rs",
-        "field_to_json_schema — per-type JSON Schema (value map)",
+        "field_schema — per-type JSON Schema (value map)",
     ),
     (
         "src/admin/handlers/field_context/builder/single.rs",

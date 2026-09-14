@@ -7,9 +7,7 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     cli,
-    config::CrapConfig,
-    db::{migrate, pool},
-    hooks,
+    commands::{Project, open_project},
 };
 
 use super::{check, display};
@@ -26,11 +24,12 @@ pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
-    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
-
-    migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
+    let Project {
+        lock: _instance_lock,
+        config: cfg,
+        registry,
+        pool,
+    } = open_project(&config_dir)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 

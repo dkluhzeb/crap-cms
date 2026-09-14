@@ -21,8 +21,8 @@ use crate::db::{
 };
 
 use super::helpers::{
-    JunctionTarget, delete_junction_rows_except, existing_junction_ids, select_junction_rows,
-    select_junction_rows_batch,
+    JunctionTarget, RowIds, delete_junction_rows_except, existing_junction_ids, plan_row_id,
+    select_junction_rows, select_junction_rows_batch,
 };
 
 /// Coerce one flattened array sub-field to its DB value (and, for a
@@ -34,7 +34,7 @@ fn coerce_array_field(
 ) -> (DbValue, Option<DbValue>) {
     let value = row.get(&sf.name).cloned().unwrap_or(Value::Null);
 
-    if sf.field_type == FieldType::Date && sf.timezone {
+    if sf.has_tz_companion() {
         let tz_key = tz_column(&sf.name);
         let db_val = coerce_date_value_json(
             &sf.field_type,
@@ -186,47 +186,57 @@ pub fn set_array_rows(
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = join_table(collection, field_name);
-    let flat_subs = flatten_array_sub_fields(sub_fields);
-
-    // A degenerate array with no scalar columns has nothing to preserve or
-    // diff — clear the parent's rows, matching the historical behavior.
-    if flat_subs.is_empty() {
-        return delete_junction_rows_except(conn, &table_name, parent_id, locale, &HashSet::new());
-    }
-
-    let existing_ids = existing_junction_ids(conn, &table_name, parent_id, locale)?;
-
-    // Plan each row's identity: reuse the id when it names an existing row of
-    // this parent[+locale] and hasn't already been claimed this write (→ UPDATE),
-    // else mint a fresh id (→ INSERT). Row indices saturate at i64::MAX for the
-    // unreachable case of >9.2e18 rows.
-    let mut keep: HashSet<String> = HashSet::with_capacity(rows.len());
-    let mut planned: Vec<(String, bool, i64)> = Vec::with_capacity(rows.len());
-    for (order, row) in rows.iter().enumerate() {
-        let order_i64 = i64::try_from(order).unwrap_or(i64::MAX);
-        let (id, is_update) = match row.get("id").and_then(Value::as_str) {
-            Some(cid) if existing_ids.contains(cid) && !keep.contains(cid) => {
-                (cid.to_string(), true)
-            }
-            _ => (nanoid::nanoid!(), false),
-        };
-        keep.insert(id.clone());
-        planned.push((id, is_update, order_i64));
-    }
-
-    delete_junction_rows_except(conn, &table_name, parent_id, locale, &keep)?;
-
     let target = JunctionTarget {
         table_name: &table_name,
         parent_id,
         locale,
     };
 
-    for ((id, is_update, order), row) in planned.into_iter().zip(rows.iter()) {
+    write_array_rows(conn, &target, rows, sub_fields, RowIds::Existing)
+}
+
+/// [`set_array_rows`] with an explicit [`RowIds`] policy for incoming row ids.
+pub(super) fn write_array_rows(
+    conn: &dyn DbConnection,
+    target: &JunctionTarget<'_>,
+    rows: &[HashMap<String, Value>],
+    sub_fields: &[FieldDefinition],
+    row_ids: RowIds,
+) -> Result<()> {
+    let JunctionTarget {
+        table_name,
+        parent_id,
+        locale,
+    } = *target;
+    let flat_subs = flatten_array_sub_fields(sub_fields);
+
+    // A degenerate array with no scalar columns has nothing to preserve or
+    // diff — clear the parent's rows, matching the historical behavior.
+    if flat_subs.is_empty() {
+        return delete_junction_rows_except(conn, table_name, parent_id, locale, &HashSet::new());
+    }
+
+    let existing_ids = existing_junction_ids(conn, table_name, parent_id, locale)?;
+
+    let mut keep: HashSet<String> = HashSet::with_capacity(rows.len());
+    let mut planned: Vec<(String, bool)> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let incoming = row.get("id").and_then(Value::as_str);
+        let (id, is_update) = plan_row_id(incoming, |id| existing_ids.contains(id), &keep, row_ids);
+        keep.insert(id.clone());
+        planned.push((id, is_update));
+    }
+
+    delete_junction_rows_except(conn, table_name, parent_id, locale, &keep)?;
+
+    // Row indices saturate at i64::MAX for the unreachable case of >9.2e18 rows.
+    for (order, ((id, is_update), row)) in planned.into_iter().zip(rows).enumerate() {
+        let order = i64::try_from(order).unwrap_or(i64::MAX);
+
         if is_update {
-            update_array_row(conn, &table_name, &id, order, row, &flat_subs)?;
+            update_array_row(conn, table_name, &id, order, row, &flat_subs)?;
         } else {
-            insert_array_row(conn, &target, &id, order, row, &flat_subs)?;
+            insert_array_row(conn, target, &id, order, row, &flat_subs)?;
         }
     }
 
@@ -254,7 +264,7 @@ pub fn find_array_rows(
     let mut select_col_names: Vec<String> = Vec::new();
     for sf in &flat_subs {
         select_col_names.push(sf.name.clone());
-        if sf.field_type == FieldType::Date && sf.timezone {
+        if sf.has_tz_companion() {
             select_col_names.push(tz_column(&sf.name));
         }
     }
@@ -309,7 +319,7 @@ pub fn find_array_rows_batch(
     let mut select_col_names: Vec<String> = Vec::new();
     for sf in &flat_subs {
         select_col_names.push(sf.name.clone());
-        if sf.field_type == FieldType::Date && sf.timezone {
+        if sf.has_tz_companion() {
             select_col_names.push(tz_column(&sf.name));
         }
     }
@@ -399,7 +409,7 @@ pub(crate) fn reconstruct_array_row(
         };
         map.insert(sf.name.clone(), json_val);
 
-        if sf.field_type == FieldType::Date && sf.timezone {
+        if sf.has_tz_companion() {
             let tz_val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
             col_idx += 1;
 
@@ -434,7 +444,7 @@ pub(crate) fn find_all_array_rows_with_parent(
     let mut select_col_names: Vec<String> = Vec::new();
     for sf in &flat_subs {
         select_col_names.push(sf.name.clone());
-        if sf.field_type == FieldType::Date && sf.timezone {
+        if sf.has_tz_companion() {
             select_col_names.push(tz_column(&sf.name));
         }
     }

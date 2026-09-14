@@ -11,12 +11,15 @@ use crate::{
             SYSTEM_IMAGE_CONVERT_JOB,
         },
     },
-    db::{DbConnection, DbPool, query::jobs as job_query},
+    db::{
+        DbConnection, DbPool,
+        query::{helpers::global_table, jobs as job_query},
+    },
 };
 
 use super::{
-    backfill_ref_counts, checkbox_columns, collection, global, identifier_check, legacy_timestamps,
-    nested_timezone_dates,
+    backfill_ref_counts, canonical_text, checkbox_columns, collection, global, identifier_check,
+    legacy_timestamps, nested_timezone_dates,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -50,9 +53,11 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     // any table — on every backend, so it surfaces in SQLite development.
     for (slug, def) in &registry.collections {
         identifier_check::check_identifiers(slug, &def.fields, locale_config)?;
+        identifier_check::check_index_names(slug, def, locale_config)?;
     }
+    identifier_check::check_index_name_collisions(registry, locale_config)?;
     for (slug, def) in &registry.globals {
-        let table = crate::db::query::helpers::global_table(slug);
+        let table = global_table(slug);
         identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
     }
 
@@ -68,6 +73,7 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     checkbox_columns::migrate_if_needed(&tx, registry)?;
     legacy_timestamps::normalize_if_needed(&tx, registry)?;
     nested_timezone_dates::convert_if_needed(&tx, registry)?;
+    canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
 
     tx.commit()
         .context("Failed to commit migration transaction")?;

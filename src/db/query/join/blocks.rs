@@ -1,15 +1,22 @@
 //! Blocks field join table operations.
 
-use anyhow::Result;
-use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
-use crate::core::BLOCK_TYPE_KEY;
-use crate::db::query::helpers::join_table;
-use crate::db::{DbConnection, DbValue};
+use anyhow::{Result, anyhow};
+use serde_json::{Map, Value};
 
-use super::helpers::{
-    JunctionTarget, delete_junction_rows_except, select_junction_rows, select_junction_rows_batch,
+use crate::{
+    core::BLOCK_TYPE_KEY,
+    db::{
+        DbConnection, DbValue,
+        query::{
+            helpers::join_table,
+            join::helpers::{
+                JunctionTarget, RowIds, delete_junction_rows_except, plan_row_id,
+                select_junction_rows, select_junction_rows_batch,
+            },
+        },
+    },
 };
 
 /// Split a block row into `(_block_type, data_json)` for INSERT.
@@ -21,7 +28,7 @@ fn split_block_row(row: &Value, order: usize) -> Result<(String, String)> {
     let block_type = row
         .get(BLOCK_TYPE_KEY)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
+        .ok_or_else(|| anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
         .to_string();
 
     let mut data_map = row.as_object().cloned().unwrap_or_default();
@@ -51,7 +58,7 @@ fn merged_block_data(
     let block_type = row
         .get(BLOCK_TYPE_KEY)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
+        .ok_or_else(|| anyhow!("Block row at index {order} is missing '{BLOCK_TYPE_KEY}'"))?
         .to_string();
 
     let same_type = stored
@@ -177,45 +184,57 @@ pub fn set_block_rows(
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = join_table(collection, field_name);
-
-    // Stored rows keyed by id, so a matched row can merge its preserved fields.
-    let stored: HashMap<String, Value> =
-        find_block_rows(conn, collection, field_name, parent_id, locale)?
-            .into_iter()
-            .filter_map(|v| {
-                let id = v.get("id")?.as_str()?.to_string();
-                Some((id, v))
-            })
-            .collect();
-
-    let mut keep: HashSet<String> = HashSet::with_capacity(rows.len());
-    let mut planned: Vec<(String, bool, usize)> = Vec::with_capacity(rows.len());
-    for (order, row) in rows.iter().enumerate() {
-        let (id, is_update) = match row.get("id").and_then(Value::as_str) {
-            Some(cid) if stored.contains_key(cid) && !keep.contains(cid) => (cid.to_string(), true),
-            _ => (nanoid::nanoid!(), false),
-        };
-        keep.insert(id.clone());
-        planned.push((id, is_update, order));
-    }
-
-    delete_junction_rows_except(conn, &table_name, parent_id, locale, &keep)?;
-
     let target = JunctionTarget {
         table_name: &table_name,
         parent_id,
         locale,
     };
 
-    for ((id, is_update, order), row) in planned.into_iter().zip(rows.iter()) {
+    write_block_rows(conn, &target, rows, RowIds::Existing)
+}
+
+/// [`set_block_rows`] with an explicit [`RowIds`] policy for incoming row ids.
+pub(super) fn write_block_rows(
+    conn: &dyn DbConnection,
+    target: &JunctionTarget<'_>,
+    rows: &[Value],
+    row_ids: RowIds,
+) -> Result<()> {
+    let JunctionTarget {
+        table_name,
+        parent_id,
+        locale,
+    } = *target;
+
+    // Stored rows keyed by id, so a matched row can merge its preserved fields.
+    let stored: HashMap<String, Value> = find_rows_in(conn, target)?
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.get("id")?.as_str()?.to_string();
+            Some((id, v))
+        })
+        .collect();
+
+    let mut keep: HashSet<String> = HashSet::with_capacity(rows.len());
+    let mut planned: Vec<(String, bool)> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let incoming = row.get("id").and_then(Value::as_str);
+        let (id, is_update) = plan_row_id(incoming, |id| stored.contains_key(id), &keep, row_ids);
+        keep.insert(id.clone());
+        planned.push((id, is_update));
+    }
+
+    delete_junction_rows_except(conn, table_name, parent_id, locale, &keep)?;
+
+    for (order, ((id, is_update), row)) in planned.into_iter().zip(rows).enumerate() {
         let order_i64 = i64::try_from(order).unwrap_or(i64::MAX);
 
         if is_update {
             let (block_type, data_json) = merged_block_data(row, stored.get(&id), order)?;
-            update_block_row(conn, &table_name, &id, order_i64, &block_type, &data_json)?;
+            update_block_row(conn, table_name, &id, order_i64, &block_type, &data_json)?;
         } else {
             let (block_type, data_json) = split_block_row(row, order)?;
-            insert_block_row(conn, &target, &id, order_i64, &block_type, &data_json)?;
+            insert_block_row(conn, target, &id, order_i64, &block_type, &data_json)?;
         }
     }
 
@@ -236,12 +255,23 @@ pub fn find_block_rows(
     locale: Option<&str>,
 ) -> Result<Vec<Value>> {
     let table_name = join_table(collection, field_name);
-    let (sql, params) = select_junction_rows(
-        conn,
-        &table_name,
-        "id, _block_type, data",
+    let target = JunctionTarget {
+        table_name: &table_name,
         parent_id,
         locale,
+    };
+
+    find_rows_in(conn, &target)
+}
+
+/// The block rows of one junction target, ordered.
+fn find_rows_in(conn: &dyn DbConnection, target: &JunctionTarget<'_>) -> Result<Vec<Value>> {
+    let (sql, params) = select_junction_rows(
+        conn,
+        target.table_name,
+        "id, _block_type, data",
+        target.parent_id,
+        target.locale,
     );
 
     let db_rows = conn.query_all(&sql, &params)?;

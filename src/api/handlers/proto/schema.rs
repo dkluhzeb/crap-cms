@@ -52,6 +52,19 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
             })
             .collect(),
         localized: field.localized,
+        relationship_collections: field
+            .relationship
+            .as_ref()
+            .filter(|r| r.is_polymorphic())
+            .map(|r| {
+                r.all_collections()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        has_many: field.is_has_many_scalar(),
+        timezone: field.has_tz_companion(),
     }
 }
 
@@ -64,6 +77,36 @@ mod tests {
     };
     fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, field_type).build()
+    }
+
+    /// A client can see a polymorphic relationship's targets, a scalar list
+    /// and a timezone date from the schema alone.
+    #[test]
+    fn field_def_to_proto_describes_targets_lists_and_timezones() {
+        let mut rc = RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".into(), "pages".into()];
+        let subject = field_def_to_proto(
+            &FieldDefinition::builder("subject", FieldType::Relationship)
+                .relationship(rc)
+                .build(),
+        );
+        assert_eq!(subject.relationship_collections, vec!["posts", "pages"]);
+
+        let tags = field_def_to_proto(
+            &FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build(),
+        );
+        assert!(tags.has_many);
+        assert!(!tags.timezone);
+        assert!(tags.relationship_collections.is_empty());
+
+        let starts = field_def_to_proto(
+            &FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .build(),
+        );
+        assert!(starts.timezone);
     }
 
     #[test]

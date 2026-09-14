@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, FieldDefinition},
     db::query::helpers::{locale_column, prefixed_name, quote_ident, tz_column, walk_leaf_fields},
 };
 
@@ -199,7 +199,7 @@ fn collect_locale_columns(
 
             push_column(select_exprs, result_names, &base, is_localized, locale_ctx)?;
 
-            if field.field_type == FieldType::Date && field.timezone {
+            if field.has_tz_companion() {
                 push_column(
                     select_exprs,
                     result_names,
@@ -291,23 +291,37 @@ pub(crate) fn group_locale_fields(
             }
 
             let base = prefixed_name(prefix, &field.name);
-            let mut locale_map = Map::new();
+            regroup_by_locale(doc, &base, locale_config)?;
 
-            for locale in &locale_config.locales {
-                let col = locale_column(&base, locale)?;
-
-                if let Some(val) = doc.fields.remove(&col) {
-                    locale_map.insert(locale.clone(), val);
-                }
-            }
-
-            if !locale_map.is_empty() {
-                doc.fields.insert(base, Value::Object(locale_map));
+            // A timezone date's `<name>_tz` companion is localized with it.
+            if field.has_tz_companion() {
+                regroup_by_locale(doc, &tz_column(&base), locale_config)?;
             }
 
             Ok(())
         },
     )
+}
+
+/// Move the per-locale columns of `base` (`title__en`, `title__de`) into one
+/// `{ en, de }` object under `base`.
+fn regroup_by_locale(doc: &mut Document, base: &str, locale_config: &LocaleConfig) -> Result<()> {
+    let mut locale_map = Map::new();
+
+    for locale in &locale_config.locales {
+        let col = locale_column(base, locale)?;
+
+        if let Some(val) = doc.fields.remove(&col) {
+            locale_map.insert(locale.clone(), val);
+        }
+    }
+
+    if !locale_map.is_empty() {
+        doc.fields
+            .insert(base.to_string(), Value::Object(locale_map));
+    }
+
+    Ok(())
 }
 
 /// Map a flat field name to the actual locale-suffixed column name for writes.
@@ -418,7 +432,7 @@ pub(crate) fn locale_locked_field_names(
             // non-default locale, so the snapshot drop-set must drop BOTH halves —
             // otherwise a non-default-locale edit of the tz survives into the
             // snapshot and clobbers the canonical tz on restore.
-            if field.has_parent_column() && field.field_type == FieldType::Date && field.timezone {
+            if field.has_parent_column() && field.has_tz_companion() {
                 locked.insert(tz_column(&name));
             }
 
@@ -692,6 +706,36 @@ mod tests {
         assert_eq!(title.get("de").and_then(|v| v.as_str()), Some("Hallo"));
         assert!(!doc.fields.contains_key("title__en"));
         assert!(!doc.fields.contains_key("title__de"));
+    }
+
+    /// Regression: a localized timezone date read with every locale came back
+    /// as a per-locale map while its `<name>_tz` companion stayed as flat
+    /// `starts_tz__en` keys, which the generated types don't carry.
+    #[test]
+    fn group_locale_fields_regroups_a_timezone_companion() {
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        let mut doc = Document::new("id1".to_string());
+        for (key, value) in [
+            ("starts__en", "2026-01-01T09:00:00.000Z"),
+            ("starts__de", "2026-01-01T10:00:00.000Z"),
+            ("starts_tz__en", "Europe/London"),
+            ("starts_tz__de", "Europe/Berlin"),
+        ] {
+            doc.fields.insert(key.to_string(), json!(value));
+        }
+
+        group_locale_fields(&mut doc, &fields, &make_locale_config()).unwrap();
+
+        assert_eq!(
+            doc.fields.get("starts_tz"),
+            Some(&json!({ "en": "Europe/London", "de": "Europe/Berlin" }))
+        );
+        assert!(!doc.fields.contains_key("starts_tz__en"));
     }
 
     #[test]

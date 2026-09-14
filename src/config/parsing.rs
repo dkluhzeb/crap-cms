@@ -263,6 +263,7 @@ pub(crate) mod serde_filesize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     // -- parse_duration_string tests --
 
@@ -382,7 +383,7 @@ mod tests {
             "[upload]\nmax_file_size = 52428800\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 52_428_800);
     }
 
@@ -394,7 +395,7 @@ mod tests {
             "[upload]\nmax_file_size = \"50MB\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 50 * 1024 * 1024);
     }
 
@@ -406,7 +407,7 @@ mod tests {
             "[upload]\nmax_file_size = \"1GB\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 1024 * 1024 * 1024);
     }
 
@@ -418,7 +419,7 @@ mod tests {
             "[auth]\ntoken_expiry = 7200\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.token_expiry, 7200);
     }
 
@@ -430,7 +431,7 @@ mod tests {
             "[auth]\ntoken_expiry = \"2h\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.token_expiry, 7200);
     }
 
@@ -442,7 +443,7 @@ mod tests {
             "[auth]\nlogin_lockout_seconds = \"5m\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.login_lockout_seconds, 300);
     }
 
@@ -454,7 +455,7 @@ mod tests {
             "[database]\nbusy_timeout = \"30s\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.busy_timeout, 30000);
     }
 
@@ -466,7 +467,7 @@ mod tests {
             "[database]\nbusy_timeout = 15000\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.busy_timeout, 15000);
     }
 
@@ -478,7 +479,7 @@ mod tests {
             "[database]\nconnection_timeout = \"10s\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.connection_timeout, 10);
     }
 
@@ -490,7 +491,7 @@ mod tests {
             "[jobs]\nauto_purge = \"7d\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(7 * 86400));
     }
 
@@ -498,7 +499,7 @@ mod tests {
     fn serde_duration_option_integer() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = 86400\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(86400));
     }
 
@@ -506,7 +507,7 @@ mod tests {
     fn serde_duration_option_absent_uses_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nmax_concurrent = 5\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(30 * 86400)); // default 30 days
     }
 
@@ -516,7 +517,7 @@ mod tests {
     fn serde_duration_option_false_disables() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = false\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, None);
     }
 
@@ -526,10 +527,7 @@ mod tests {
     fn serde_duration_option_empty_string_is_rejected() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = \"\"\n").unwrap();
-        let err = format!(
-            "{:#}",
-            crate::config::CrapConfig::load(tmp.path()).unwrap_err()
-        );
+        let err = format!("{:#}", CrapConfig::load(tmp.path()).unwrap_err());
         assert!(
             err.contains("false"),
             "error should point at `false`, got: {err}"

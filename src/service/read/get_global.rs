@@ -3,13 +3,21 @@
 use serde_json::Value;
 
 use crate::{
-    core::{Document, HookRef, collection::GlobalDefinition},
+    core::{Document, FieldDefinition, HookRef, collection::GlobalDefinition},
     db::{AccessResult, DbConnection, LocaleContext, ops, query, query::helpers::global_table},
     hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
     service::{GetGlobalInput, ReadHooks, ServiceContext, ServiceError, helpers},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// What a global read may see and in which locale, for [`resolve_global_doc`].
+#[derive(Clone, Copy)]
+struct GlobalView<'a> {
+    include_drafts: bool,
+    published_visible: bool,
+    locale_ctx: Option<&'a LocaleContext>,
+}
 
 /// Resolve the global document to serve, applying draft visibility identically
 /// to the collection `find_by_id` path so the two behave the same:
@@ -26,10 +34,14 @@ fn resolve_global_doc(
     conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
-    include_drafts: bool,
-    published_visible: bool,
-    locale_ctx: Option<&LocaleContext>,
+    view: GlobalView<'_>,
 ) -> anyhow::Result<Option<Document>> {
+    let GlobalView {
+        include_drafts,
+        published_visible,
+        locale_ctx,
+    } = view;
+
     if !def.has_drafts() {
         return query::get_global(conn, slug, def, locale_ctx).map(Some);
     }
@@ -41,6 +53,10 @@ fn resolve_global_doc(
             && version.status == "draft"
             && let Some(mut doc) = ops::document_from_snapshot("default", &version.snapshot)
         {
+            // A snapshot carries every locale's value: resolve the reading one,
+            // as the collection overlay does.
+            ops::resolve_snapshot_locale(&mut doc, &def.fields, locale_ctx)?;
+
             // The row is the authority on `_status` — snapshots can carry a
             // stale value (see the collection overlay in `db::ops`). A
             // draft-only global must read as "draft".
@@ -67,7 +83,7 @@ fn resolve_global_doc(
     let main = query::get_global(conn, slug, def, locale_ctx)?;
 
     if main.fields.get("_status").and_then(Value::as_str) == Some("draft") {
-        return published_global_or_empty(conn, &gtable).map(Some);
+        return published_global_or_empty(conn, &gtable, &def.fields, locale_ctx).map(Some);
     }
 
     Ok(Some(main))
@@ -75,12 +91,20 @@ fn resolve_global_doc(
 
 /// The published content to serve when an unpublished global is read without a
 /// draft opt-in: the most recent `published` version snapshot, or an empty
-/// global when nothing was ever published. `gtable` is the `_global_{slug}`
-/// table name (the version-table base for globals).
-fn published_global_or_empty(conn: &dyn DbConnection, gtable: &str) -> anyhow::Result<Document> {
+/// global when nothing was ever published, resolved for the reading locale.
+/// `gtable` is the `_global_{slug}` table name (the version-table base for
+/// globals).
+fn published_global_or_empty(
+    conn: &dyn DbConnection,
+    gtable: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> anyhow::Result<Document> {
     if let Some(version) = query::find_latest_published_version(conn, gtable, "default")?
-        && let Some(doc) = ops::document_from_snapshot("default", &version.snapshot)
+        && let Some(mut doc) = ops::document_from_snapshot("default", &version.snapshot)
     {
+        ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
+
         return Ok(doc);
     }
 
@@ -160,15 +184,12 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     // Resolve the document with draft visibility applied identically to the
     // collection `find_by_id` path (see `resolve_global_doc`). `draft_visible`
     // is the downgraded opt-in: a denied draft view falls back to published.
-    let Some(mut doc) = resolve_global_doc(
-        conn,
-        ctx.slug,
-        def,
-        draft_visible,
+    let view = GlobalView {
+        include_drafts: draft_visible,
         published_visible,
-        input.locale_ctx,
-    )?
-    else {
+        locale_ctx: input.locale_ctx,
+    };
+    let Some(mut doc) = resolve_global_doc(conn, ctx.slug, def, view)? else {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     };
 
@@ -201,10 +222,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        config::LocaleConfig,
         core::{
             Document, FieldDefinition, FieldType, GlobalDefinition, HookRef, Hooks, ReqContext,
             collection::VersionsConfig,
         },
+        db::LocaleMode,
         hooks::lifecycle::AfterReadCtx,
         service::hooks::ReadHooks,
     };
@@ -453,5 +476,70 @@ mod tests {
             Some("Published Main"),
             "a published global serves its main row to non-draft readers"
         );
+    }
+
+    /// Regression: a global's draft snapshot was served without resolving the
+    /// reading locale, so a reader got the last save's value next to every
+    /// locale's key.
+    #[test]
+    fn a_draft_global_reads_in_the_reading_locale() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_settings (
+                id TEXT PRIMARY KEY,
+                title__en TEXT,
+                title__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions__global_settings (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT,
+                created_at TEXT
+            );
+            INSERT INTO _global_settings (id, title__en, title__de)
+                VALUES ('default', 'Hello', 'Hallo');
+            INSERT INTO _versions__global_settings
+                (id, _parent, _version, _status, _latest, snapshot)
+             VALUES ('v1', 'default', 1, 'draft', 1,
+                '{\"title\": \"Hallo neu\", \"title__en\": \"Hello new\", \"title__de\": \"Hallo neu\"}');",
+        )
+        .unwrap();
+
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 0));
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".into(), "de".into()],
+                fallback: false,
+            },
+        };
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = GetGlobalInput::new(Some(&locale_ctx), None).include_drafts(true);
+        let doc = get_global_document(&ctx, &input).unwrap();
+
+        assert_eq!(
+            doc.fields.get("title").and_then(Value::as_str),
+            Some("Hello new")
+        );
+        assert!(!doc.fields.contains_key("title__de"), "{:?}", doc.fields);
     }
 }

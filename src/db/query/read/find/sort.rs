@@ -14,7 +14,7 @@ use anyhow::{Result, bail};
 use crate::core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children};
 use crate::db::query::cursor::SortDirection;
 use crate::db::query::filter::resolve_filter_column;
-use crate::db::query::helpers::prefixed_name;
+use crate::db::query::helpers::{prefixed_name, sql_ident};
 use crate::db::query::{self, resolve_sort as resolve_order};
 use crate::db::{FindQuery, LocaleContext};
 
@@ -79,7 +79,8 @@ pub(super) fn apply_order_by(
     } else {
         sort_dir
     };
-    let resolved = resolve_filter_column(sort_col, def, locale_ctx)?;
+    let column = resolve_filter_column(sort_col, def, locale_ctx)?;
+    let resolved = sql_ident(&column);
 
     let prepend_status = query::cursor::cursor_status_active(def.has_drafts(), sort_col);
     let status_dir = if using_before {
@@ -155,11 +156,45 @@ pub(super) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LocaleConfig;
     use crate::core::CollectionDefinition;
     use crate::core::field::*;
-    use crate::db::FindQuery;
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
+    use crate::db::{FindQuery, LocaleMode};
+
+    /// A sort on a column whose locale code has capitals quotes it, so
+    /// Postgres doesn't fold it to a column that doesn't exist.
+    #[test]
+    fn uppercase_locale_sort_column_is_quoted() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de-DE".into()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de-DE".to_string()],
+                fallback: true,
+            },
+        };
+
+        let mut sql = String::new();
+        apply_order_by(
+            "title",
+            SortDirection::Asc,
+            false,
+            &def,
+            Some(&ctx),
+            &mut sql,
+        )
+        .unwrap();
+
+        assert!(sql.contains("\"title__de_DE\" ASC NULLS FIRST"), "{sql}");
+    }
 
     /// Regression: the sort column's ORDER BY must pin NULL placement
     /// explicitly (`NULLS FIRST` on ASC, `NULLS LAST` on DESC) so Postgres

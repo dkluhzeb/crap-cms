@@ -26,7 +26,8 @@ impl<T> Rel<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct N2fa {
     pub id: String,
-    pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
     #[serde(rename = "2fa", skip_serializing_if = "Option::is_none")]
     pub n2fa: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +39,8 @@ pub struct N2fa {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Media {
     pub id: String,
-    pub filename: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,28 +49,41 @@ pub struct Media {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostsSeo {
-    pub meta_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_desc: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostsItems {
-    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<PostsItemsMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostsItemsMeta {
-    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Posts {
     pub id: String,
-    pub title: String,
-    pub status: PostsStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at_tz: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<PostsStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<Rel<Users>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +106,63 @@ pub struct Posts {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub _status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _deleted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostsSeoLocalized {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta_title: Option<std::collections::HashMap<String, Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta_desc: Option<std::collections::HashMap<String, Option<String>>>,
+}
+
+/// The `posts` document read with `locale = "all"`: localized fields hold one value per locale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostsLocalized {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<std::collections::HashMap<String, Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at_tz: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<PostsStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<Rel<Users>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<Rel<Tags>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<Rel<Media>>,
+    /// Polymorphic relationship — targets: users, tags
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related: Option<Vec<PostsRelated>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seo: Option<PostsSeoLocalized>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<PostsItems>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scores: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _deleted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
@@ -99,7 +171,8 @@ pub struct Posts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tags {
     pub id: String,
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +182,8 @@ pub struct Tags {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Users {
     pub id: String,
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,14 +194,19 @@ pub struct Users {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingsNav {
-    pub label: String,
-    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub id: String,
-    pub site_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nav: Option<Vec<SettingsNav>>,
     #[serde(skip_serializing_if = "Option::is_none")]

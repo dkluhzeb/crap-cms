@@ -1,13 +1,21 @@
 //! `restore` subcommand: replace database and uploads from a backup.
 
-use std::{fs, io::ErrorKind, path::Path, process};
+use std::{
+    fs,
+    io::{self, ErrorKind},
+    path::{Path, PathBuf},
+    process,
+};
 
 use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli::{self, Spinner},
     commands::{
-        db::manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+        db::{
+            manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+            secret::{configured_secret_overrides, has_generated_secret, restore_secret},
+        },
         helpers,
     },
     config::CrapConfig,
@@ -34,22 +42,30 @@ pub fn restore(
         );
     }
 
-    helpers::refuse_if_server_running(config_dir, "restore")?;
-
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-    let backup_dir = backup_dir
-        .canonicalize()
-        .unwrap_or_else(|_| backup_dir.to_path_buf());
+    let config_dir = canonical(config_dir);
+    let backup_dir = canonical(backup_dir);
 
     validate_backup_dir(&backup_dir)?;
     read_and_display_manifest(&backup_dir)?;
 
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let (cfg, had_secret) = load_project(&config_dir)?;
     let db_path = cfg.db_path(&config_dir);
 
+    // Before anything is replaced, and for the whole command.
+    let _instance_lock = helpers::hold_exclusive_instance_lock(&config_dir, "restore")?;
+
     restore_database(&config_dir, &cfg, &backup_dir, &db_path)?;
+
+    if !cfg.auth.secret_generated
+        && configured_secret_overrides(&backup_dir, cfg.auth.secret.as_ref())
+    {
+        cli::warning(
+            "`[auth] secret` is set in crap.toml, so the auth secret restored from the backup \
+             is not used: its sessions, TOTP secrets and encrypted data stay unreadable until \
+             crap.toml sets that secret.",
+        );
+    }
+    restore_secret(&config_dir, &backup_dir, had_secret)?;
 
     if include_uploads {
         restore_uploads(&config_dir, &backup_dir)?;
@@ -58,6 +74,31 @@ pub fn restore(
     cli::success("Restore complete.");
 
     Ok(())
+}
+
+/// `path` made absolute, or unchanged when it can't be resolved.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Load the project's config. Loading a directory's config writes into it (a
+/// generated auth secret), so a directory that isn't a project is refused
+/// first. Also returns whether the project had a generated secret before the
+/// load: one the load generates holds nothing the backup's doesn't replace, so
+/// it isn't kept aside.
+#[cfg(not(tarpaulin_include))]
+fn load_project(config_dir: &Path) -> Result<(CrapConfig, bool)> {
+    if !config_dir.join("crap.toml").is_file() {
+        bail!(
+            "{} is not a crap-cms project (no crap.toml)",
+            config_dir.display()
+        );
+    }
+
+    let had_secret = has_generated_secret(config_dir);
+    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
+
+    Ok((cfg, had_secret))
 }
 
 /// Validate that the backup directory contains required files.
@@ -199,7 +240,7 @@ fn checkpoint_and_list_sidecars(
     config_dir: &Path,
     cfg: &CrapConfig,
     db_path: &Path,
-) -> Result<Vec<std::path::PathBuf>> {
+) -> Result<Vec<PathBuf>> {
     let pool = pool::create_pool(config_dir, cfg).context("Failed to create database pool")?;
     let conn = pool.get().context("Failed to get DB connection")?;
 
@@ -220,7 +261,7 @@ fn checkpoint_and_list_sidecars(
 /// Classify a `tar` invocation result. `Ok(())` = the archive extracted; `Err`
 /// names why it did not (non-zero exit, or `tar` missing/unspawnable). A missing
 /// backup archive is handled by the caller before this point, never here.
-fn classify_tar_status(status: std::io::Result<process::ExitStatus>) -> Result<()> {
+fn classify_tar_status(status: io::Result<process::ExitStatus>) -> Result<()> {
     match status {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => bail!("tar exited with status {s}"),
@@ -272,20 +313,21 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+
     use super::*;
 
     #[cfg(unix)]
     #[test]
     fn tar_status_success_is_ok_failure_is_err() {
-        use std::os::unix::process::ExitStatusExt;
-
         assert!(classify_tar_status(Ok(process::ExitStatus::from_raw(0))).is_ok());
 
         // Exit code 1 → wait-status 256 on unix.
         let failed = classify_tar_status(Ok(process::ExitStatus::from_raw(256)));
         assert!(failed.is_err());
 
-        let spawn_err = classify_tar_status(Err(std::io::Error::from(ErrorKind::NotFound)));
+        let spawn_err = classify_tar_status(Err(io::Error::from(ErrorKind::NotFound)));
         assert!(spawn_err.is_err());
     }
 }

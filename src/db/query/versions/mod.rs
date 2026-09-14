@@ -11,5 +11,6 @@ pub use crud::{
 };
 
 pub use snapshot::build_snapshot;
+pub(crate) use snapshot::{JoinOwner, locale_join_rows, localized_join_keys};
 
 pub use restore::{restore_global_version, restore_version};

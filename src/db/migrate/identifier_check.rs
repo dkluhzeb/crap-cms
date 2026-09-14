@@ -9,15 +9,17 @@
 //! runs on **every** backend during migration so the problem surfaces in
 //! development, and it errors rather than silently truncating.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Result, bail};
 
 use crate::{
     config::LocaleConfig,
-    core::{FieldDefinition, FieldType},
+    core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
     db::query::helpers::{join_table, locale_column, prefixed_name, walk_leaf_fields},
 };
 
-use super::helpers::collect_column_specs;
+use super::{collection::managed_index_names, helpers::collect_column_specs};
 
 /// Postgres truncates identifiers at `NAMEDATALEN - 1` = 63 bytes.
 const MAX_IDENTIFIER_BYTES: usize = 63;
@@ -88,13 +90,122 @@ pub(super) fn check_identifiers(
     Ok(())
 }
 
+/// Validate the name of every index a collection's table gets. An index name
+/// joins the slug, column and locale names, so it can overflow the limit while
+/// each of them fits.
+pub(super) fn check_index_names(
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut names: Vec<String> = managed_index_names(slug, def, locale_config)?
+        .into_iter()
+        .collect();
+    names.sort();
+
+    for name in names {
+        check_ident("index name", &name, "collection, field or locale name")?;
+    }
+
+    Ok(())
+}
+
+/// Reject two collections whose index names coincide. An index name is unique
+/// across the database and joins the slug and column names with `_`, so `post`
+/// indexing `s_title` and `post_s` indexing `title` would share one — and the
+/// second `CREATE … IF NOT EXISTS` would silently skip its index.
+///
+/// # Errors
+///
+/// Returns an error naming both collections and the index.
+pub(super) fn check_index_name_collisions(
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut slugs: Vec<String> = registry
+        .collections
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    slugs.sort();
+
+    let mut owners: BTreeMap<String, String> = BTreeMap::new();
+
+    for slug in slugs {
+        let def = &registry.collections[slug.as_str()];
+
+        for name in managed_index_names(&slug, def, locale_config)? {
+            if let Some(other) = owners.insert(name.clone(), slug.clone()) {
+                bail!(
+                    "Collections '{other}' and '{slug}' would both create an index named \
+                     '{name}' — index names are shared across the database. Rename a collection \
+                     or field."
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::core::{FieldDefinition, FieldType};
 
+    /// An index name is an identifier too: `idx_{slug}_{column}` can overflow
+    /// the limit while the table and the column names fit.
+    #[test]
+    fn overlong_index_name_rejected() {
+        let slug = "c".repeat(30);
+        let mut def = CollectionDefinition::new(slug.as_str());
+        def.fields = vec![
+            FieldDefinition::builder("f".repeat(30), FieldType::Text)
+                .index(true)
+                .build(),
+        ];
+
+        assert!(check_identifiers(&slug, &def.fields, &cfg()).is_ok());
+
+        let err = check_index_names(&slug, &def, &cfg())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("index name"), "{err}");
+    }
+
     fn cfg() -> LocaleConfig {
         LocaleConfig::default()
+    }
+
+    /// Regression: index names are shared across the database, and `post` +
+    /// `s_title` and `post_s` + `title` both make `idx_post_s_title`, so the
+    /// second collection's index was silently never created.
+    #[test]
+    fn index_names_colliding_across_collections_rejected() {
+        let mut post = CollectionDefinition::new("post");
+        post.fields = vec![
+            FieldDefinition::builder("s_title", FieldType::Text)
+                .index(true)
+                .build(),
+        ];
+        let mut post_s = CollectionDefinition::new("post_s");
+        post_s.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .index(true)
+                .build(),
+        ];
+
+        let mut registry = Registry::new();
+        registry.register_collection(post);
+        registry.register_collection(post_s);
+
+        let err = check_index_name_collisions(&registry, &cfg())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("idx_post_s_title") && err.contains("'post'") && err.contains("'post_s'"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -178,7 +178,10 @@ async fn describe_global_returns_fields() {
         .into_inner();
 
     assert_eq!(resp.slug, "settings");
-    assert!(!resp.timestamps, "globals are always timestamps=false");
+    assert!(
+        resp.timestamps,
+        "a global's table always carries timestamps"
+    );
     assert!(!resp.auth, "globals are always auth=false");
 
     let field_names: Vec<&str> = resp.fields.iter().map(|f| f.name.as_str()).collect();

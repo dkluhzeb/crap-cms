@@ -276,7 +276,7 @@ fn jobs_trigger_and_status() {
 fn jobs_cancel() {
     let (_tmp, config_dir) = setup_with_job();
 
-    // Trigger initializes the DB via init_stack()
+    // Trigger initializes the DB via open_project()
     run_ok_in(&config_dir, &["jobs", "trigger", "cleanup"]);
 
     // Cancel it

@@ -84,7 +84,7 @@ Because the rule is evaluated against each level, an array/blocks field rule run
 
 ## Introspection
 
-`crap.access.field_read_denied(collection [, document])` and `crap.access.field_write_denied(collection, operation [, document])` return the names of fields the current user cannot read/write. They are for **UI gating**, not enforcement (enforcement is the per-document strip described above).
+`crap.access.field_read_denied(collection [, document])` and `crap.access.field_write_denied(collection, operation [, document])` return the names of fields the current user cannot read/write — a denied timezone date is listed with its `<name>_tz` companion (`starts`, `starts_tz`; `items.starts`, `items.starts_tz` inside rows). They are for **UI gating**, not enforcement (enforcement is the per-document strip described above).
 
 The optional `document` controls how data-dependent rules are evaluated:
 

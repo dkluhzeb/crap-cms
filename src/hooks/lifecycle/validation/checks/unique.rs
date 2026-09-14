@@ -28,11 +28,11 @@ pub(crate) fn check_unique(
     };
 
     // Email identity fields are compared case-insensitively so uniqueness
-    // matches the case-insensitive login lookup (`find_by_email` uses
-    // `LOWER(email) = LOWER(?)`). Without this, `Victim@x.com` and `victim@x.com`
-    // both pass uniqueness, then collide as one account at login. Scoped to the
-    // `Email` field *type* — a definition-level signal, not a name heuristic —
-    // so case-sensitive unique fields (slugs, codes) are unaffected.
+    // matches the login lookup, which compares addresses in their lowercased
+    // stored form. Without this, `Victim@x.com` and `victim@x.com` both pass
+    // uniqueness, then collide as one account at login. Scoped to the `Email`
+    // field *type* — a definition-level signal, not a name heuristic — so
+    // case-sensitive unique fields (slugs, codes) are unaffected.
     let case_insensitive = matches!(field.field_type, FieldType::Email);
 
     match query::count_where_field_eq(
@@ -407,9 +407,9 @@ mod tests {
     }
 
     /// Regression (cross-surface harmonization): a unique `Email` field must be
-    /// checked case-insensitively, matching the case-insensitive login lookup
-    /// (`find_by_email` = `LOWER(email)=LOWER(?)`). Otherwise `Victim@x.com` and
-    /// `victim@x.com` both pass uniqueness and then collide as one account.
+    /// checked case-insensitively, matching the login lookup, which compares
+    /// the lowercased stored form. Otherwise `Victim@x.com` and `victim@x.com`
+    /// both pass uniqueness and then collide as one account.
     #[test]
     fn test_validate_unique_email_field_is_case_insensitive() {
         let lua = mlua::Lua::new();
