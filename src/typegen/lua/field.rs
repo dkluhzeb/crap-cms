@@ -5,7 +5,6 @@
 use std::slice::from_ref;
 
 use crate::core::{FieldDefinition, FieldType, flatten_array_sub_fields};
-use crate::db::query::helpers::tz_column;
 
 use super::super::helpers::{is_optional, rel_has_many, to_pascal_case, w};
 
@@ -55,9 +54,10 @@ fn write_field_inner(
     };
     w!(out, "---@field {}{opt} {lua_type}", field.name);
 
-    // A timezone date's IANA zone travels in its `{name}_tz` companion key.
-    if field.has_tz_companion() {
-        w!(out, "---@field {}? string", tz_column(&field.name));
+    // Each companion (a date's `{name}_tz` zone, a code field's `{name}_lang`
+    // language pick) travels as an optional string key beside the value.
+    for column in field.companion_columns(&field.name) {
+        w!(out, "---@field {column}? string");
     }
 }
 

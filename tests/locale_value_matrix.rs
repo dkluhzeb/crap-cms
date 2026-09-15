@@ -11,7 +11,7 @@ use crap_cms::{
     core::{
         DocumentFields, Registry,
         collection::{CollectionDefinition, VersionsConfig},
-        field::{FieldDefinition, FieldType},
+        field::{BlockDefinition, FieldDefinition, FieldType},
     },
     db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query},
     hooks::lifecycle::HookRunner,
@@ -38,7 +38,7 @@ struct Harness {
 /// One leaf of every value shape, named with `prefix`.
 fn leaves(prefix: &str, localized: bool) -> Vec<FieldDefinition> {
     let leaf = |name: &str, field_type| {
-        FieldDefinition::builder(&format!("{prefix}{name}"), field_type).localized(localized)
+        FieldDefinition::builder(format!("{prefix}{name}"), field_type).localized(localized)
     };
 
     vec![
@@ -75,7 +75,23 @@ fn make_def() -> CollectionDefinition {
             .localized(true)
             .fields(vec![
                 FieldDefinition::builder("caption", FieldType::Text).build(),
+                FieldDefinition::builder("tags", FieldType::Text)
+                    .has_many(true)
+                    .build(),
+                FieldDefinition::builder("count", FieldType::Number).build(),
             ])
+            .build(),
+    );
+
+    fields.push(
+        FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "hero",
+                vec![
+                    FieldDefinition::builder("checked", FieldType::Checkbox).build(),
+                    FieldDefinition::builder("n", FieldType::Number).build(),
+                ],
+            )])
             .build(),
     );
 
@@ -143,7 +159,10 @@ fn leaf_values(locale: &str, n: i64) -> Vec<(&'static str, Value)> {
         ("email", json!(format!("{locale}{n}@example.com"))),
         ("number", json!(n * 10 + 1)),
         ("checkbox", json!(n % 2 == 1)),
-        ("tags", json!([format!("{locale}-a{n}"), format!("{locale}-b")])),
+        (
+            "tags",
+            json!([format!("{locale}-a{n}"), format!("{locale}-b")]),
+        ),
         ("scores", json!([n, n + 1])),
         ("starts", json!(format!("2026-0{n}-01T09:00"))),
         ("starts_tz", json!("Europe/Berlin")),
@@ -156,15 +175,17 @@ fn leaf_values(locale: &str, n: i64) -> Vec<(&'static str, Value)> {
         .collect()
 }
 
-/// A write of every field for `locale`. Shared fields are included under every
-/// locale; a non-default locale's write leaves them alone.
+/// A write of every field for `locale`. Shared fields exist only under the
+/// default locale, so only its writes carry them.
 fn document(locale: &str, n: i64) -> DocumentFields {
     let mut data = DocumentFields::new();
     let mut group = Map::new();
 
     for (name, value) in leaf_values(locale, n) {
         data.insert(format!("l_{name}"), value.clone());
-        data.insert(format!("p_{name}"), value.clone());
+        if locale == "en" {
+            data.insert(format!("p_{name}"), value.clone());
+        }
         group.insert(name.to_string(), value);
     }
 
@@ -172,8 +193,17 @@ fn document(locale: &str, n: i64) -> DocumentFields {
     data.insert("lg".to_string(), Value::Object(group));
     data.insert(
         "rows".to_string(),
-        json!([{ "caption": format!("{locale} row {n}") }]),
+        json!([{ "caption": format!("{locale} row {n}"), "tags": [format!("{locale}-r{n}"), "x"], "count": n }]),
     );
+
+    // Blocks are shared: only the default locale writes them — as the admin form
+    // sends nested values, as strings.
+    if locale == "en" {
+        data.insert(
+            "content".to_string(),
+            json!([{ "_block_type": "hero", "checked": "on", "n": format!("{n}") }]),
+        );
+    }
 
     data
 }
@@ -186,11 +216,28 @@ fn service_ctx(h: &Harness) -> ServiceContext<'_> {
         .build()
 }
 
-/// Create (without `id`) or update the document under `locale`, returning its id.
-fn write(h: &Harness, id: Option<&str>, locale: &str, data: DocumentFields, draft: bool) -> String {
+/// One write: every field's values for a locale.
+struct Edit<'a> {
+    locale: &'a str,
+    data: DocumentFields,
+}
+
+impl<'a> Edit<'a> {
+    /// The values of write number `n` under `locale`.
+    fn new(locale: &'a str, n: i64) -> Self {
+        Self {
+            locale,
+            data: document(locale, n),
+        }
+    }
+}
+
+/// Create (without `id`) or update the document under the edit's locale,
+/// returning its id.
+fn write(h: &Harness, id: Option<&str>, edit: Edit<'_>, draft: bool) -> String {
     let ctx = service_ctx(h);
-    let locale_ctx = locale_ctx(h, &LocaleMode::Single(locale.to_string()));
-    let input = WriteInput::builder(data)
+    let locale_ctx = locale_ctx(h, &LocaleMode::Single(edit.locale.to_string()));
+    let input = WriteInput::builder(edit.data)
         .locale_ctx(Some(&locale_ctx))
         .draft(draft)
         .build();
@@ -204,7 +251,8 @@ fn write(h: &Harness, id: Option<&str>, locale: &str, data: DocumentFields, draf
 }
 
 /// The document's fields read in `mode`, without the bookkeeping a draft and a
-/// published read legitimately differ on (timestamps, status, row ids).
+/// published read legitimately differ on (timestamps, status, the ids of array
+/// and block rows).
 fn read(h: &Harness, id: &str, mode: &LocaleMode, draft: bool) -> DocumentFields {
     let conn = h.pool.get().unwrap();
     let hooks = RunnerReadHooks::new(&h.runner, &conn, None, None);
@@ -229,22 +277,26 @@ fn read(h: &Harness, id: &str, mode: &LocaleMode, draft: bool) -> DocumentFields
     for key in ["created_at", "updated_at", "_status"] {
         fields.remove(key);
     }
-    strip_row_ids(fields.get_mut("rows"));
+    for join_field in ["rows", "content"] {
+        if let Some(rows) = fields.get_mut(join_field) {
+            strip_row_ids(rows);
+        }
+    }
 
     fields
 }
 
 /// Drop `id` from array rows, at any locale nesting.
-fn strip_row_ids(value: Option<&mut Value>) {
+fn strip_row_ids(value: &mut Value) {
     match value {
-        Some(Value::Array(rows)) => {
+        Value::Array(rows) => {
             for row in rows.iter_mut().filter_map(Value::as_object_mut) {
                 row.remove("id");
             }
         }
-        Some(Value::Object(by_locale)) => {
+        Value::Object(by_locale) => {
             for rows in by_locale.values_mut() {
-                strip_row_ids(Some(rows));
+                strip_row_ids(rows);
             }
         }
         _ => {}
@@ -260,58 +312,109 @@ fn restore_nth_newest(h: &Harness, id: &str, index: usize) {
     restore_collection_version(&service_ctx(h), id, &version, &h.locale).expect("restore");
 }
 
-/// A draft saved with the published values reads as the published document, in
-/// every locale mode, with fallback on and off.
+/// A draft saved with the published values — in a non-default and in the default
+/// locale — reads as the published document, in every locale mode, with
+/// fallback on and off.
 #[test]
 fn a_fresh_draft_reads_as_the_published_document() {
     for fallback in [true, false] {
         let h = setup(fallback);
-        let id = write(&h, None, "en", document("en", 1), false);
-        write(&h, Some(&id), "de", document("de", 1), false);
+        let id = write(&h, None, Edit::new("en", 1), false);
+        write(&h, Some(&id), Edit::new("de", 1), false);
 
         let published: Vec<DocumentFields> =
             modes().iter().map(|m| read(&h, &id, m, false)).collect();
 
-        write(&h, Some(&id), "de", document("de", 1), true);
+        // A draft in each locale: a non-default locale writes its own keys, the
+        // default locale also the shared fields and bare keys.
+        for locale in ["de", "en"] {
+            write(&h, Some(&id), Edit::new(locale, 1), true);
 
-        for (mode, expected) in modes().iter().zip(published) {
-            assert_eq!(
-                read(&h, &id, mode, true),
-                expected,
-                "draft read differs: fallback {fallback}, mode {mode:?}"
-            );
+            for (mode, expected) in modes().iter().zip(&published) {
+                assert_eq!(
+                    &read(&h, &id, mode, true),
+                    expected,
+                    "draft read differs: {locale} draft, fallback {fallback}, mode {mode:?}"
+                );
+            }
         }
     }
 }
 
-/// Every locale's values read back as written, in an all-locales read — the
-/// read the restore check compares.
+/// Nested block values read typed however they were sent, and an all-locales
+/// read takes join rows from the default locale, their sub-fields typed.
 #[test]
-fn an_all_locales_read_returns_each_locales_values() {
+fn nested_values_read_typed() {
     let h = setup(false);
-    let id = write(&h, None, "en", document("en", 1), false);
-    write(&h, Some(&id), "de", document("de", 1), false);
+    let id = write(&h, None, Edit::new("en", 1), false);
+    write(&h, Some(&id), Edit::new("de", 1), false);
 
     let fields = read(&h, &id, &LocaleMode::All, false);
 
-    assert_eq!(fields.get("l_tags"), Some(&json!({ "en": ["en-a1", "en-b"], "de": ["de-a1", "de-b"] })));
-    assert_eq!(fields.get("l_scores"), Some(&json!({ "en": [1, 2], "de": [1, 2] })));
+    assert_eq!(fields["content"][0]["checked"], json!(true));
+    assert_eq!(fields["content"][0]["n"], json!(1));
+
+    assert_eq!(
+        fields.get("rows"),
+        Some(&json!([{ "caption": "en row 1", "tags": ["en-r1", "x"], "count": 1 }]))
+    );
+}
+
+/// Every locale's localized values read back as written, in an all-locales
+/// read.
+#[test]
+fn an_all_locales_read_returns_each_locales_values() {
+    let h = setup(false);
+    let id = write(&h, None, Edit::new("en", 1), false);
+    write(&h, Some(&id), Edit::new("de", 1), false);
+
+    let fields = read(&h, &id, &LocaleMode::All, false);
+
+    assert_eq!(
+        fields.get("l_tags"),
+        Some(&json!({ "en": ["en-a1", "en-b"], "de": ["de-a1", "de-b"] }))
+    );
+    assert_eq!(
+        fields.get("l_scores"),
+        Some(&json!({ "en": [1, 2], "de": [1, 2] }))
+    );
     assert_eq!(fields.get("l_number"), Some(&json!({ "en": 11, "de": 11 })));
 }
 
-/// Restoring a version writes every locale's values back as they were.
+/// The locale modes a restore check compares: an all-locales read, plus a
+/// single-locale read per locale — join rows resolve to one locale per read, so
+/// only the single-locale reads see each locale's rows.
+fn restore_check_modes() -> Vec<LocaleMode> {
+    vec![
+        LocaleMode::All,
+        LocaleMode::Single("en".to_string()),
+        LocaleMode::Single("de".to_string()),
+    ]
+}
+
+/// Restoring a version writes every locale's values back as they were — the
+/// German join rows included.
 #[test]
 fn restoring_a_version_reproduces_every_locale() {
     let h = setup(false);
-    let id = write(&h, None, "en", document("en", 1), false);
-    write(&h, Some(&id), "de", document("de", 1), false);
-    let before = read(&h, &id, &LocaleMode::All, false);
+    let id = write(&h, None, Edit::new("en", 1), false);
+    write(&h, Some(&id), Edit::new("de", 1), false);
+    let before: Vec<DocumentFields> = restore_check_modes()
+        .iter()
+        .map(|m| read(&h, &id, m, false))
+        .collect();
 
-    write(&h, Some(&id), "en", document("en", 2), false);
-    write(&h, Some(&id), "de", document("de", 2), false);
+    write(&h, Some(&id), Edit::new("en", 2), false);
+    write(&h, Some(&id), Edit::new("de", 2), false);
 
     // Newest first: the German and English second writes, then the German first.
     restore_nth_newest(&h, &id, 2);
 
-    assert_eq!(read(&h, &id, &LocaleMode::All, false), before);
+    for (mode, expected) in restore_check_modes().iter().zip(&before) {
+        assert_eq!(
+            &read(&h, &id, mode, false),
+            expected,
+            "restored read differs in mode {mode:?}"
+        );
+    }
 }

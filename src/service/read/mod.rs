@@ -14,7 +14,7 @@ mod validate_filters;
 
 pub use count::{CollectionStats, collection_stats, count_documents};
 pub use find::find_documents;
-pub use find_by_id::find_document_by_id;
+pub use find_by_id::{find_document_by_id, read_own_document};
 pub use get_global::get_global_document;
 pub use search::search_documents;
 pub use validate_filters::{

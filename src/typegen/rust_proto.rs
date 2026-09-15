@@ -8,7 +8,6 @@ use crate::core::{
     CollectionDefinition, FieldDefinition, Registry, collection::GlobalDefinition,
     flatten_array_sub_fields,
 };
-use crate::db::query::helpers::tz_column;
 
 use super::client::{FieldTy, resolve_ty};
 use super::helpers::{
@@ -339,12 +338,11 @@ fn render_field_extractions(
             extraction
         );
 
-        if f.has_tz_companion() {
-            let tz = tz_column(&f.name);
-            let ident = idents::rust_field(&tz).ident;
+        for column in f.companion_columns(&f.name) {
+            let ident = idents::rust_field(&column).ident;
             w!(
                 out,
-                "            {ident}: get_str_opt({doc_var}, \"{tz}\"),"
+                "            {ident}: get_str_opt({doc_var}, \"{column}\"),"
             );
         }
     }
@@ -562,12 +560,11 @@ fn render_sub_type_from_struct(
             extraction
         );
 
-        if f.has_tz_companion() {
-            let tz = tz_column(&f.name);
-            let ident = idents::rust_field(&tz).ident;
+        for column in f.companion_columns(&f.name) {
+            let ident = idents::rust_field(&column).ident;
             w!(
                 out,
-                "            {ident}: s.fields.get(\"{tz}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }}),"
+                "            {ident}: s.fields.get(\"{column}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }}),"
             );
         }
     }
@@ -687,7 +684,7 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldType, LocalizedString, RelationshipConfig, SelectOption};
+    use crate::core::{FieldAdmin, FieldType, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
@@ -798,6 +795,54 @@ mod tests {
             out.contains(&format!("{ident}: get_str_opt(doc, \"2fa_tz\")")),
             "{out}"
         );
+    }
+
+    /// A code field with a language allow-list.
+    fn code_with_languages(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
+    /// A code field's `<name>_lang` companion is decoded under a sanitized
+    /// ident, the lookup keeping the raw key.
+    #[test]
+    fn proto_language_companion_uses_a_sanitized_ident() {
+        let col = make_col("snippets", vec![code_with_languages("2fa")]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        let ident = idents::rust_field("2fa_lang").ident;
+        assert_ne!(ident, "2fa_lang");
+        assert!(
+            out.contains(&format!("{ident}: get_str_opt(doc, \"2fa_lang\")")),
+            "{out}"
+        );
+    }
+
+    /// An array row's `from_struct` decodes a code sub-field's `<name>_lang`
+    /// companion; a code field without an allow-list has none.
+    #[test]
+    fn proto_array_row_decodes_the_language_companion() {
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                code_with_languages("example"),
+                FieldDefinition::builder("plain", FieldType::Code).build(),
+            ])
+            .build();
+        let col = make_col("snippets", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("example_lang: s.fields.get(\"example_lang\")"),
+            "{out}"
+        );
+        assert!(!out.contains("plain_lang"), "{out}");
     }
 
     #[test]

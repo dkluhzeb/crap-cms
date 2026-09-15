@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, from_str};
+use serde_json::Value;
 
 use crate::{
     admin::{
@@ -19,11 +19,12 @@ use crate::{
         },
         handlers::field_context::{
             MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-            count_errors_in_field_contexts, locale_locked_display, safe_template_id,
+            count_errors_in_field_contexts, date_picker_values, locale_locked_display,
+            safe_template_id, tag_values,
         },
     },
-    core::{FieldDefinition, FieldType, prefixed_name, timezone::TIMEZONE_OPTIONS},
-    db::query::helpers::{lang_column, tz_column, utc_to_local},
+    core::{FieldDefinition, FieldType, parse_truthy, prefixed_name, timezone::TIMEZONE_OPTIONS},
+    db::query::helpers::{lang_column, tz_column},
 };
 
 /// Resolve the full form name for a field, accounting for layout transparency.
@@ -193,7 +194,7 @@ fn construct_field_variant(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCon
 // ── Scalars ───────────────────────────────────────────────────────
 
 fn construct_text_tags(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
-    let tags: Vec<String> = from_str(fc.value).unwrap_or_default();
+    let tags = tag_values(fc.value);
     base.value = Value::String(tags.join(","));
 
     FieldContext::Text(TextField {
@@ -233,7 +234,7 @@ fn construct_number(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 }
 
 fn construct_number_tags(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
-    let tags: Vec<String> = from_str(fc.value).unwrap_or_default();
+    let tags = tag_values(fc.value);
     base.value = Value::String(tags.join(","));
 
     FieldContext::Number(NumberField {
@@ -319,33 +320,8 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         .map_or("", std::string::String::as_str)
         .trim();
 
-    let display_value = if !tz_value.is_empty() && !fc.value.is_empty() {
-        utc_to_local(fc.value, tz_value).unwrap_or_else(|| fc.value.to_string())
-    } else {
-        fc.value.to_string()
-    };
-
-    let (date_only_value, datetime_local_value) = match appearance.as_str() {
-        "dayOnly" => (
-            Some(
-                display_value
-                    .get(..10)
-                    .unwrap_or(&display_value)
-                    .to_string(),
-            ),
-            None,
-        ),
-        "dayAndTime" => (
-            None,
-            Some(
-                display_value
-                    .get(..16)
-                    .unwrap_or(&display_value)
-                    .to_string(),
-            ),
-        ),
-        _ => (None, None),
-    };
+    let (date_only_value, datetime_local_value) =
+        date_picker_values(fc.value, tz_value, &appearance);
 
     let (timezone_enabled, default_timezone, timezone_options, timezone_value) =
         if fc.field.timezone {
@@ -399,7 +375,7 @@ fn construct_checkbox(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext 
             .and_then(Value::as_bool)
             .unwrap_or(false)
     } else {
-        matches!(fc.value, "1" | "true" | "on" | "yes")
+        parse_truthy(fc.value)
     };
 
     FieldContext::Checkbox(CheckboxField { base, checked })

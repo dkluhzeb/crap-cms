@@ -8,7 +8,6 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -19,8 +18,8 @@ use crate::{
             page::collections::{CollectionCreatePage, UploadFormContext},
         },
         handlers::shared::{
-            EnrichOptions, PageRequest, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, collection_base,
+            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+            build_locale_template_data, check_access_or_forbid, collection_base, editor_locale_ctx,
             enrich_field_contexts, extract_editor_locale, forbidden, get_user_doc,
             is_non_default_locale, render_page, require_collection, split_sidebar_fields,
         },
@@ -42,6 +41,7 @@ fn prepare_create_fields(
 
     let mut fields = build_field_contexts(&def.fields, &empty, &empty, true, non_default_locale);
 
+    let locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale);
     enrich_field_contexts(
         &mut fields,
         &def.fields,
@@ -51,6 +51,7 @@ fn prepare_create_fields(
             .filter_hidden(true)
             .non_default_locale(non_default_locale)
             .user(get_user_doc(auth_user))
+            .locale_ctx(locale_ctx.as_ref())
             .build(),
     );
 

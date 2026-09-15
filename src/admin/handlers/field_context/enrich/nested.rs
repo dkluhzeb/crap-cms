@@ -409,11 +409,7 @@ fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: 
         return;
     };
 
-    if let Some(ref uc) = related_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut doc, uc);
-    }
+    upload::shape_read_document(related_def, &mut doc);
 
     let item = build_upload_item(&doc, title_field.as_ref(), admin_thumbnail.as_ref(), true);
     let label = item.label.clone();

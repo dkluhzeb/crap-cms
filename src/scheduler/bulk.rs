@@ -301,9 +301,7 @@ fn load_queuing_user(
 
     // A localized auth collection needs a locale context or the SELECT
     // references bare logical columns and errors.
-    let locale_ctx = LocaleContext::from_locale_string(None, &infra.locale_config)
-        .ok()
-        .flatten();
+    let locale_ctx = LocaleContext::default_for(&infra.locale_config);
 
     query::find_by_id(&conn, collection, def, id, locale_ctx.as_ref())
         .map_err(|e| abandoned(format!("find_by_id: {e}")))?

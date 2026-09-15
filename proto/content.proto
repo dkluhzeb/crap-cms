@@ -1332,6 +1332,13 @@ message FieldInfo {
   // True if a date field stores the IANA timezone its value was entered in,
   // under the `<name>_tz` companion key.
   bool timezone = 14;
+
+  // The companion keys the field carries next to its value, as suffixes of
+  // the field name: `_tz` for a timezone date (`starts_tz`), `_lang` for a
+  // code field with a language picker (`snippet_lang`). Each is an optional
+  // string key in Document.fields (a per-locale map when read with
+  // locale = "all"). Empty for fields without companions.
+  repeated string companions = 15;
 }
 
 // BlockInfo describes a single block type within a blocks field.

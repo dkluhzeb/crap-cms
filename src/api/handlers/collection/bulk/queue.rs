@@ -75,14 +75,8 @@ impl ContentService {
                 .ok_or_else(|| QueueError::UnknownCollection(data.collection.clone()))?;
 
             if matches!(data.queued_by, QueuedBy::User { .. }) {
-                bulk_queue::check_queue_access(
-                    &infra.hook_runner,
-                    &conn,
-                    &infra.registry,
-                    def,
-                    &data,
-                )
-                .map_err(QueueError::Service)?;
+                bulk_queue::check_queue_access(&infra, &conn, def, &data)
+                    .map_err(QueueError::Service)?;
             }
 
             drop(conn);

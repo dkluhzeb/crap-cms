@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        BlockDefinition, Builder, DocumentFields, FieldChildren, FieldDefinition, field_children,
+        Builder, DocumentFields, FieldChildren, FieldDefinition, field_children,
         flatten_group_fields,
     },
     db::{
@@ -20,7 +20,7 @@ use crate::{
                 blocks::write_block_rows,
                 helpers::{JunctionTarget, RowIds},
                 hydrate::locale::resolve_join_locale,
-                nested_dates::convert_block_rows,
+                nested_values::store_rows,
                 relationships::{set_polymorphic_related, set_related_ids},
             },
             poly_ref,
@@ -188,8 +188,8 @@ fn save_join_field(
             Some(val) => save_array_field(save, field, &field_key, sub, val),
             None => Ok(()),
         },
-        FieldChildren::Blocks(defs) => match data.get(&field_key) {
-            Some(val) => save_blocks_field(save, field, &field_key, defs, val),
+        FieldChildren::Blocks(_) => match data.get(&field_key) {
+            Some(val) => save_blocks_field(save, field, &field_key, val),
             None => Ok(()),
         },
         // Relationship/Upload has-many are leaves that write their own
@@ -226,7 +226,6 @@ fn save_blocks_field(
     save: &JoinSave<'_>,
     field: &FieldDefinition,
     field_key: &str,
-    defs: &[BlockDefinition],
     val: &Value,
 ) -> Result<()> {
     let mut rows = match val {
@@ -234,9 +233,9 @@ fn save_blocks_field(
         _ => Vec::new(),
     };
 
-    // Block rows are stored as JSON: convert their timezone dates to UTC like
-    // every column-stored date.
-    convert_block_rows(defs, &mut rows);
+    // Block rows are stored as JSON: their values take their typed form, as a
+    // column's value does.
+    store_rows(field, &mut rows);
 
     let table_name = join_table(save.slug, field_key);
     let locale = resolve_join_locale(field, save.locale_ctx);

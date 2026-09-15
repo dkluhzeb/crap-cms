@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow, bail};
 use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, find_field};
 use crate::db::query::helpers::join_table;
 use crate::db::query::is_valid_identifier;
-use crate::db::{DbConnection, LocaleContext, LocaleMode};
+use crate::db::{DbConnection, LocaleContext};
 
 use super::blocks::walk_block_fields;
 use super::lookup::lookup_column_field_type;
@@ -97,16 +97,11 @@ struct SubFilterCtx<'a> {
     locale_constraint: Option<String>,
 }
 
-/// Pick the locale string to use as a `_locale = ?` constraint for a subquery.
-///
-/// `Single(loc)` → use that locale. `Default` → use the configured default.
-/// `All` → `None` (match across all locales).
+/// Pick the locale string to use as a `_locale = ?` constraint for a subquery:
+/// the locale a single-locale read takes, or `None` for an all-locales read
+/// (match across all locales).
 fn subquery_locale(ctx: &LocaleContext) -> Option<String> {
-    match &ctx.mode {
-        LocaleMode::Single(l) => Some(l.clone()),
-        LocaleMode::Default => Some(ctx.config.default_locale.clone()),
-        LocaleMode::All => None,
-    }
+    ctx.read_locale().map(|read| read.locale.to_string())
 }
 
 fn resolve_array_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {

@@ -151,7 +151,9 @@ mod tests {
     use super::*;
     use crate::{
         config::CrapConfig,
-        core::{FieldDefinition, FieldType, collection::CollectionDefinition},
+        core::{
+            FieldAdmin, FieldDefinition, FieldTab, FieldType, collection::CollectionDefinition,
+        },
         db::{BoxedConnection, pool},
     };
     use tempfile::TempDir;
@@ -335,7 +337,7 @@ mod tests {
                 "posts",
                 vec![
                     FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![crate::core::FieldTab::new(
+                        .tabs(vec![FieldTab::new(
                             "Content",
                             vec![
                                 FieldDefinition::builder("row", FieldType::Row)
@@ -358,5 +360,52 @@ mod tests {
             orphans.is_empty(),
             "nested Group→Row→Tabs columns should not be orphans: {orphans:?}"
         );
+    }
+
+    fn code_lang_field(name: &str, localized: bool) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .localized(localized)
+            .build()
+    }
+
+    /// Regression: a code field's `_lang` companion columns were missing from
+    /// the expected column set, so cleanup reported them as orphans and
+    /// `--confirm` dropped every stored language pick.
+    #[test]
+    fn code_language_companion_columns_not_orphans() {
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
+            "CREATE TABLE snippets (id TEXT, snippet TEXT, snippet_lang TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE notes (id TEXT, body__en TEXT, body__de TEXT, body_lang__en TEXT, body_lang__de TEXT, created_at TEXT, updated_at TEXT);",
+        )
+        .unwrap();
+
+        let mut reg = Registry::default();
+        reg.collections.insert(
+            "snippets".into(),
+            Arc::new(simple_collection(
+                "snippets",
+                vec![code_lang_field("snippet", false)],
+            )),
+        );
+
+        let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
+        assert!(orphans.is_empty(), "shared _lang column: {orphans:?}");
+
+        reg.collections.insert(
+            "notes".into(),
+            Arc::new(simple_collection(
+                "notes",
+                vec![code_lang_field("body", true)],
+            )),
+        );
+
+        let orphans = find_orphan_columns(&conn, &reg, &locale_en_de()).unwrap();
+        assert!(orphans.is_empty(), "per-locale _lang columns: {orphans:?}");
     }
 }

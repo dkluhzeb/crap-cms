@@ -374,9 +374,6 @@ fn auth_invalidation_is_derived_from_the_action() {
 /// Reviewed offline-admin CLI write paths: `(path suffix, write call)`.
 /// Every entry documents which invariants the site maintains by hand.
 const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
-    // Offline trash purge: ref-count guard + before_hard_delete +
-    // fts_delete + upload-file cleanup, mirroring service delete.
-    ("commands/trash.rs", "query::delete("),
     // Bootstrap user creation: password policy + ref_count::after_create
     // + fts_upsert, mirroring service create.
     ("commands/user/create.rs", "query::create("),

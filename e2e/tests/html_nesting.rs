@@ -2694,7 +2694,8 @@ async fn deep_blocks_nesting_crud_roundtrip() {
     let items_arr = items.as_array().expect("items should be array");
     assert_eq!(items_arr.len(), 1);
     assert_eq!(items_arr[0]["name"], "Item1");
-    assert_eq!(items_arr[0]["qty"], "5");
+    // Values inside JSON-stored rows are stored typed: the form's "5" is a number.
+    assert_eq!(items_arr[0]["qty"], 5.0);
 
     // Block 0 → inner[0] → footer
     let footer = inner_arr[0]

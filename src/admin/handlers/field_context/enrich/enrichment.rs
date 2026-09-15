@@ -13,20 +13,10 @@ use crate::{
             },
         },
     },
+    config::LocaleConfig,
     core::{DocumentFields, FieldDefinition, RelationshipConfig},
-    db::{DbConnection, LocaleContext},
+    db::{DbConnection, LocaleContext, query::poly_ref},
 };
-
-/// Parse a "collection/id" composite string into a (collection, id) pair.
-fn parse_composite_ref(s: &str) -> Option<(String, String)> {
-    let (col, id) = s.split_once('/')?;
-
-    if col.is_empty() || id.is_empty() {
-        return None;
-    }
-
-    Some((col.to_string(), id.to_string()))
-}
 
 /// Extract polymorphic "collection/id" refs from a field value.
 fn extract_polymorphic_refs(
@@ -38,13 +28,13 @@ fn extract_polymorphic_refs(
         match doc_fields.get(field_name) {
             Some(Value::Array(arr)) => arr
                 .iter()
-                .filter_map(|v| v.as_str().and_then(parse_composite_ref))
+                .filter_map(|v| v.as_str().and_then(poly_ref::parse))
                 .collect(),
             _ => Vec::new(),
         }
     } else {
         match doc_fields.get(field_name) {
-            Some(Value::String(s)) if !s.is_empty() => parse_composite_ref(s).into_iter().collect(),
+            Some(Value::String(s)) if !s.is_empty() => poly_ref::parse(s).into_iter().collect(),
             _ => Vec::new(),
         }
     }
@@ -71,7 +61,7 @@ fn resolve_polymorphic_ref(
         .to_string();
 
     Some(RelationshipSelectedItem {
-        id: format!("{}/{}", col, doc.id),
+        id: poly_ref::format(col, &doc.id),
         label,
         collection: Some(col.to_string()),
         ..Default::default()
@@ -192,6 +182,14 @@ fn enrich_nested_aligned(
     }
 }
 
+/// The locale relationship labels are read in: the editor's, else the default
+/// locale — `None` when localization is off.
+fn relationship_locale_ctx(opts: &EnrichOptions, config: &LocaleConfig) -> Option<LocaleContext> {
+    opts.locale_ctx
+        .cloned()
+        .or_else(|| LocaleContext::default_for(config))
+}
+
 /// Enrich field contexts with data that requires DB access:
 /// - Relationship fields: fetch available options from related collection
 /// - Array fields: populate existing rows from hydrated document data
@@ -211,8 +209,7 @@ pub fn enrich_field_contexts(
         return;
     };
 
-    let rel_locale_ctx =
-        LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
+    let rel_locale_ctx = relationship_locale_ctx(opts, &state.config.locale);
 
     let enrich_ctx = EnrichCtx {
         state,
@@ -252,7 +249,38 @@ mod tests {
             BlockDefinition, CollectionDefinition, DocumentFields, FieldTab, FieldType,
             LocalizedString, Registry, RelationshipConfig,
         },
+        db::LocaleMode,
     };
+
+    /// Regression: relationship labels were always read in the default locale,
+    /// while the list and edit views read in the editor's locale.
+    #[test]
+    fn relationship_labels_read_in_the_editor_locale() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: config.clone(),
+        };
+        let errors = HashMap::new();
+
+        let editor = EnrichOptions::builder(&errors)
+            .locale_ctx(Some(&de))
+            .build();
+        assert_eq!(
+            relationship_locale_ctx(&editor, &config).map(|c| c.access_locale().to_string()),
+            Some("de".to_string())
+        );
+
+        let none = EnrichOptions::builder(&errors).build();
+        assert_eq!(
+            relationship_locale_ctx(&none, &config).map(|c| c.access_locale().to_string()),
+            Some("en".to_string())
+        );
+    }
 
     /// Regression: blocks inside Tabs were not populated from `doc_fields`
     /// because [`enrich_field_contexts`] delegated to `enrich_nested_fields`

@@ -1,7 +1,7 @@
 //! Shared `_crap_meta` key/value accessors for versioned one-time migrations.
 //!
-//! One-time migrations (the ref-count backfill, the checkbox retype, the
-//! legacy-timestamp rewrite) gate
+//! Versioned migrations (the ref-count backfill, and the one-time conversions
+//! listed in [`super::one_time`]) gate
 //! themselves on a version stored as the meta *value* under a stable key — see
 //! [`super::backfill_ref_counts`] and [`super::checkbox_columns`]. Each reads the
 //! current value to decide whether to run and, on completion, writes the current
@@ -26,15 +26,23 @@ pub(super) fn get(conn: &dyn DbConnection, key: &str) -> Result<Option<String>> 
     Ok(row.and_then(|r| r.text_at(0).map(str::to_string)))
 }
 
-/// Upsert a `_crap_meta` key via DELETE + INSERT (backend-agnostic), so a stale
-/// value from an earlier run is replaced cleanly rather than left behind or
-/// duplicated.
-pub(super) fn upsert(conn: &dyn DbConnection, key: &str, value: &str) -> Result<()> {
+/// Delete a `_crap_meta` key — a no-op when it is absent. Removes the gate of a
+/// migration that no longer exists.
+pub(super) fn delete(conn: &dyn DbConnection, key: &str) -> Result<()> {
     let p1 = conn.placeholder(1);
     conn.execute(
         &format!("DELETE FROM _crap_meta WHERE key = {p1}"),
         &[DbValue::Text(key.to_string())],
     )?;
+
+    Ok(())
+}
+
+/// Upsert a `_crap_meta` key via DELETE + INSERT (backend-agnostic), so a stale
+/// value from an earlier run is replaced cleanly rather than left behind or
+/// duplicated.
+pub(super) fn upsert(conn: &dyn DbConnection, key: &str, value: &str) -> Result<()> {
+    delete(conn, key)?;
 
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
@@ -51,9 +59,11 @@ pub(super) fn upsert(conn: &dyn DbConnection, key: &str, value: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
-    use crate::core::Registry;
-    use crate::db::{DbPool, migrate, pool};
+    use crate::{
+        config::{CrapConfig, DatabaseConfig, LocaleConfig},
+        core::Registry,
+        db::{DbPool, migrate, pool},
+    };
 
     fn setup_db() -> (tempfile::TempDir, DbPool) {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -87,6 +97,23 @@ mod tests {
 
         upsert(&conn, "k", "1").unwrap();
         assert_eq!(get(&conn, "k").unwrap().as_deref(), Some("1"));
+    }
+
+    /// Delete removes the key and leaves the others; deleting an absent key
+    /// succeeds.
+    #[test]
+    fn delete_removes_only_its_key() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+
+        upsert(&conn, "gone", "1").unwrap();
+        upsert(&conn, "kept", "1").unwrap();
+
+        delete(&conn, "gone").unwrap();
+        delete(&conn, "never_there").unwrap();
+
+        assert_eq!(get(&conn, "gone").unwrap(), None);
+        assert_eq!(get(&conn, "kept").unwrap().as_deref(), Some("1"));
     }
 
     /// The reason this is a shared chokepoint: upsert must REPLACE a stale value

@@ -93,6 +93,7 @@ pub use collections::{
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
     delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
+pub(crate) use document_info::version_missing_relations;
 pub(crate) use email::{
     ResendVerificationInput, VerificationEmailInput, VerificationMailer, resend_verification_email,
     send_verification_email,
@@ -102,23 +103,24 @@ pub(crate) use globals::{check_global_update_access, stored_global_fields_for_up
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
-    LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+    FieldReadStrip, LuaReadHooks, LuaWriteHooks, ReadHooks, ReadStripArgs, RunnerReadHooks,
+    RunnerWriteHooks, WriteHooks,
 };
 pub(crate) use orchestrate::run_pool_write;
 pub(crate) use persist::persist_bulk_update;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
     CollectionStats, collection_stats, count_documents, find_document_by_id, find_documents,
-    get_global_document, search_documents, validate_access_constraint_locales,
+    get_global_document, read_own_document, search_documents, validate_access_constraint_locales,
     validate_access_constraints, validate_user_filters,
 };
-pub(crate) use versions::unpublish_with_snapshot;
+pub(crate) use versions::{find_stored_version, read_version_snapshot, unpublish_with_snapshot};
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
 pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 pub(crate) use write::{
-    check_create_access, check_update_access, delete_document_in_conn,
+    check_create_access, check_update_access, delete_document_in_conn, purge_document,
     stored_fields_for_update_rules, update_document_in_conn, update_many_single_in_conn,
 };
 

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        Document, DocumentFields,
+        CollectionDefinition, Document, DocumentFields,
         upload::{
             CollectionUpload, ImageConvertJobData, ProcessedUpload, QueuedConversion,
             key_from_served_url, queue_image_conversion, storage::StorageBackend,
@@ -90,6 +90,22 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
         let value = serde_json::to_value(&sizes).expect("ImageSizeEntry serialize");
         doc.fields.insert("sizes".to_string(), value);
     }
+}
+
+/// Shape a document of `def` the way every read returns it.
+///
+/// Today that is one step — an upload collection's per-size columns folded into
+/// the nested `sizes` object ([`assemble_sizes_object`]) — but it is the single
+/// place every read surface goes through: a find, the document a write reports,
+/// a populated relationship target, an admin label lookup. A collection with no
+/// upload config, or one whose upload is disabled, is a no-op, so no caller
+/// re-derives that check (and a new read-shape step lands everywhere at once).
+pub fn shape_read_document(def: &CollectionDefinition, doc: &mut Document) {
+    let Some(upload) = def.upload.as_ref().filter(|u| u.enabled) else {
+        return;
+    };
+
+    assemble_sizes_object(doc, upload);
 }
 
 /// Collect format variant URLs (webp, avif) from document fields.
@@ -444,6 +460,51 @@ mod tests {
         );
         // No formats since format_options is default (None)
         assert!(thumb.get("formats").is_none());
+    }
+
+    /// The read-shape chokepoint folds an upload collection's sizes, and does
+    /// nothing at all for a collection that is not an upload one (or whose
+    /// upload is switched off) — so no caller has to check that itself.
+    #[test]
+    fn shape_read_document_folds_sizes_only_for_an_enabled_upload() {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(upload_with_thumb_webp());
+
+        let mut doc = Document::new(DocumentId::new("id1"));
+        doc.fields
+            .insert("thumb_url".into(), json!("/uploads/m/t.png"));
+
+        shape_read_document(&def, &mut doc);
+
+        assert!(doc.fields.contains_key("sizes"), "{:?}", doc.fields);
+        assert!(!doc.fields.contains_key("thumb_url"));
+
+        // Upload disabled: the document is returned exactly as read.
+        let mut off = CollectionDefinition::new("media");
+        let mut disabled = upload_with_thumb_webp();
+        disabled.enabled = false;
+        off.upload = Some(disabled);
+
+        let mut doc = Document::new(DocumentId::new("id1"));
+        doc.fields
+            .insert("thumb_url".into(), json!("/uploads/m/t.png"));
+
+        shape_read_document(&off, &mut doc);
+
+        assert!(!doc.fields.contains_key("sizes"));
+        assert_eq!(
+            doc.fields.get("thumb_url"),
+            Some(&json!("/uploads/m/t.png"))
+        );
+
+        // No upload config at all: also a no-op.
+        let mut doc = Document::new(DocumentId::new("id1"));
+        doc.fields
+            .insert("thumb_url".into(), json!("/uploads/m/t.png"));
+
+        shape_read_document(&CollectionDefinition::new("posts"), &mut doc);
+
+        assert!(!doc.fields.contains_key("sizes"));
     }
 
     #[test]

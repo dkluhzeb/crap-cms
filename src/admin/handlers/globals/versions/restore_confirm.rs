@@ -6,7 +6,6 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -15,9 +14,9 @@ use crate::{
             page::globals::GlobalRestoreConfirmPage,
         },
         handlers::shared::{
-            PageRequest, check_access_or_forbid, extract_editor_locale, forbidden, global_base,
-            load_version_with_missing_relations, paths, redirect_response, render_page,
-            require_global, server_error,
+            HxNav, PageRequest, check_access_or_forbid, extract_editor_locale, forbidden,
+            global_base, load_version_with_missing_relations, paths, redirect_response,
+            render_page, require_global, server_error,
         },
     },
     core::{
@@ -46,16 +45,18 @@ fn load_restore_data(
         return Err("Database error");
     };
 
-    // `find_version_by_id` (called by `load_version_with_missing_relations`)
-    // runs an access check that requires `ServiceContext.read_hooks`.
+    // The version read runs an access check that requires
+    // `ServiceContext.read_hooks`. The locale config lets the missing-relations
+    // check read every locale the version records.
     let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
     let ctx = service::ServiceContext::global(slug, def)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
+        .locale_config(Some(&state.infra.locale_config))
         .build();
 
-    load_version_with_missing_relations(&ctx, &conn, &state.infra.registry, version_id, &def.fields)
+    load_version_with_missing_relations(&ctx, &state.infra.registry, version_id)
 }
 
 /// GET /`admin/globals/{slug}/versions/{version_id}/restore` — confirmation page

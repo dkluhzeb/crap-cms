@@ -29,7 +29,9 @@ use crate::core::{
     collection::{Activation, AuthMethod, MfaMode, Surface},
     walk_all_fields,
 };
-use crate::db::query::helpers::{global_table, join_table, prefixed_name, walk_leaf_fields};
+use crate::db::query::helpers::{
+    global_table, join_table, locale_column, prefixed_name, walk_leaf_fields,
+};
 use crate::hooks::lifecycle::resolve_hook_function;
 use crate::hooks::lua_api::routes::ROUTES_KEY;
 use crate::service::op::wire::{self, WireSurfaces};
@@ -576,7 +578,10 @@ fn walk_fields_for_collisions(
 ) {
     walk_all_fields(fields, &mut Vec::new(), &mut |f, _| {
         for loc in locales {
-            let suffix = format!("__{loc}");
+            // The column form of the locale, as the generated column spells it.
+            let Ok(suffix) = locale_column("", loc) else {
+                continue;
+            };
             if f.name.ends_with(&suffix) && f.name.len() > suffix.len() {
                 out.push(format!(
                     "{source} field '{}': ends with locale suffix '{}'",
@@ -1209,6 +1214,22 @@ mod tests {
         assert!(msg.contains("title__en"), "expected field name: {msg}");
         assert!(msg.contains("__en"), "expected locale suffix: {msg}");
         assert!(msg.contains("posts"), "expected slug: {msg}");
+    }
+
+    /// Regression: the collision check spelled the suffix with the raw locale
+    /// code (`__de-DE`) while locale columns use its column form (`__de_DE`),
+    /// so a collision under a hyphenated locale was never found.
+    #[test]
+    fn locale_field_collisions_use_the_column_form_of_a_locale() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("title__de_DE", FieldType::Text).build()];
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+
+        let locales = vec!["en".to_string(), "de-DE".to_string()];
+        let err =
+            validate_locale_field_collisions(&registry.read().unwrap(), &locales).unwrap_err();
+        assert!(format!("{err:#}").contains("title__de_DE"));
     }
 
     /// Locale collisions are skipped entirely when no locales are configured.

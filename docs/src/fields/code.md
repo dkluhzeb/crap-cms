@@ -59,7 +59,17 @@ crap.fields.code({
 The companion column is named `<field>_lang` (e.g. `snippet_lang`) and is
 created automatically on the next migration. For code fields nested inside
 groups, the prefixed naming applies — `meta__snippet` gets a sibling
-`meta__snippet_lang`.
+`meta__snippet_lang`. A code field inside an array row gets the column on
+the row's table.
+
+Through the API the pick is the key `<field>_lang` next to the value:
+`snippet_lang` at the top level, `example_lang` inside the group object or
+array row. A localized code field keeps one pick per locale, so a read with
+`locale = "all"` returns `snippet_lang` as a per-locale map. Versions record
+the pick and a restore writes it back. An update that doesn't send
+`<field>_lang` keeps the stored pick; send it (or `null`) to change it. The
+pick follows its field's access: a field a reader can't read has no
+`<field>_lang` either.
 
 When `admin.languages` is empty or absent, the language is fixed to
 `admin.language` and no picker, hidden input, or companion column is

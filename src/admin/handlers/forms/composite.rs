@@ -3,9 +3,10 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::{BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldType};
-
-use crate::core::field::flatten_array_sub_fields;
+use crate::core::{
+    BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+    flatten_array_sub_fields,
+};
 
 use super::select_has_many::canonical_json_array;
 /// Collect form entries into indexed rows, splitting each key into sub-key + value.
@@ -135,7 +136,66 @@ fn parse_row(entries: Vec<(String, String)>, flat_defs: &[&FieldDefinition]) -> 
         obj.insert(base_key, value);
     }
 
+    fill_missing_checkboxes(&mut obj, flat_defs);
+
     Value::Object(obj)
+}
+
+/// Whether `field`'s subtree holds a checkbox, so a group that submitted
+/// nothing still has to be materialized. Stops at an array/blocks boundary: a
+/// row the form never submitted is no row at all, not a row of unchecked boxes.
+fn holds_checkbox(field: &FieldDefinition) -> bool {
+    if field.field_type == FieldType::Checkbox {
+        return true;
+    }
+
+    match field_children(field) {
+        FieldChildren::Group(subs) | FieldChildren::Wrapper(subs) => {
+            subs.iter().any(holds_checkbox)
+        }
+        FieldChildren::Tabs(tabs) => tabs.iter().any(|tab| tab.fields.iter().any(holds_checkbox)),
+        FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => false,
+    }
+}
+
+/// Give every checkbox in a submitted row an explicit value. An HTML checkbox
+/// submits nothing when unchecked, so one missing from a submitted row is
+/// unchecked — here, and only here, where the form's absence means that.
+/// Storage keeps a missing value missing.
+///
+/// Descends into nested groups and materializes one that submitted no key at
+/// all: a group whose fields are all unchecked checkboxes sends nothing, and
+/// without the group object the row carries no edit for it and the stored
+/// `true` survives the uncheck.
+fn fill_missing_checkboxes(obj: &mut Map<String, Value>, defs: &[&FieldDefinition]) {
+    for def in defs {
+        if def.field_type == FieldType::Checkbox {
+            obj.entry(def.name.clone())
+                .or_insert_with(|| Value::String("0".to_string()));
+
+            continue;
+        }
+
+        let FieldChildren::Group(subs) = field_children(def) else {
+            continue;
+        };
+
+        if !subs.iter().any(holds_checkbox) {
+            continue;
+        }
+
+        // A group present as anything but an object is a malformed submission —
+        // leave it for validation to reject rather than reshaping it here.
+        let Some(group) = obj
+            .entry(def.name.clone())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+        else {
+            continue;
+        };
+
+        fill_missing_checkboxes(group, &flatten_array_sub_fields(subs));
+    }
 }
 
 /// Recursively parse composite form data from flat form keys.
@@ -214,6 +274,116 @@ mod tests {
         assert_eq!(result[0]["caption"], "Cap 1");
         assert_eq!(result[1]["title"], "Second");
         assert_eq!(result[1]["caption"], "Cap 2");
+    }
+
+    /// An unchecked checkbox submits nothing: a submitted row without the
+    /// checkbox reads it as unchecked, not as missing.
+    #[test]
+    fn a_missing_checkbox_in_a_row_is_unchecked() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let sub_defs = vec![
+            make_field("title", FieldType::Text),
+            make_field("done", FieldType::Checkbox),
+        ];
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert_eq!(result[0]["done"], "0");
+    }
+
+    /// Regression: a group inside a row whose only fields are unchecked
+    /// checkboxes submits no keys at all, so the group never reached `parse_row`
+    /// and the row carried no edit for it — the stored `true` survived the
+    /// uncheck. The group is materialized with its boxes explicitly unchecked.
+    #[test]
+    fn a_group_of_only_unchecked_checkboxes_is_materialized() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let mut flags = make_field("flags", FieldType::Group);
+        flags.fields = vec![
+            make_field("done", FieldType::Checkbox),
+            make_field("pinned", FieldType::Checkbox),
+        ];
+        let sub_defs = vec![make_field("title", FieldType::Text), flags];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert_eq!(result[0]["flags"]["done"], "0");
+        assert_eq!(result[0]["flags"]["pinned"], "0");
+    }
+
+    /// The same through a wrapper and one group deeper: a checkbox anywhere
+    /// under an unsubmitted group still reads as unchecked.
+    #[test]
+    fn an_unsubmitted_group_is_filled_through_wrappers_and_nesting() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let mut inner = make_field("inner", FieldType::Group);
+        inner.fields = vec![make_field("done", FieldType::Checkbox)];
+        let mut outer = make_field("outer", FieldType::Group);
+        outer.fields = vec![
+            FieldDefinition::builder("wrap", FieldType::Row)
+                .fields(vec![inner])
+                .build(),
+        ];
+        let sub_defs = vec![make_field("title", FieldType::Text), outer];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert_eq!(result[0]["outer"]["inner"]["done"], "0");
+    }
+
+    /// A submitted group keeps its values and only its missing boxes are
+    /// filled — the fill must not reset a checked one.
+    #[test]
+    fn a_submitted_group_keeps_its_values() {
+        let mut form = HashMap::new();
+        form.insert("items[0][flags][0][done]".to_string(), "on".to_string());
+
+        let mut flags = make_field("flags", FieldType::Group);
+        flags.fields = vec![
+            make_field("done", FieldType::Checkbox),
+            make_field("pinned", FieldType::Checkbox),
+        ];
+        let result = parse_composite_form_data(&form, "items", &[flags]);
+
+        assert_eq!(result[0]["flags"]["done"], "on");
+        assert_eq!(result[0]["flags"]["pinned"], "0");
+    }
+
+    /// A group holding no checkbox stays absent when the form submitted nothing
+    /// for it — materializing it would write an empty object over stored data.
+    #[test]
+    fn a_group_without_checkboxes_stays_absent() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let mut meta = make_field("meta", FieldType::Group);
+        meta.fields = vec![make_field("author", FieldType::Text)];
+        let sub_defs = vec![make_field("title", FieldType::Text), meta];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert!(result[0].get("meta").is_none(), "{:?}", result[0]);
+    }
+
+    /// A checkbox inside a *nested array* is not filled from the parent row: an
+    /// unsubmitted array row is no row, not a row of unchecked boxes.
+    #[test]
+    fn an_unsubmitted_nested_array_stays_absent() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let mut tags = make_field("tags", FieldType::Array);
+        tags.fields = vec![make_field("done", FieldType::Checkbox)];
+        let sub_defs = vec![make_field("title", FieldType::Text), tags];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert!(result[0].get("tags").is_none(), "{:?}", result[0]);
     }
 
     #[test]

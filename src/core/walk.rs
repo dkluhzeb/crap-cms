@@ -218,18 +218,19 @@ pub fn walk_nested<'a, R, V>(
 /// `visit` returns a [`VisitAction`] that is applied before recursion. A field
 /// the visitor `Remove`s (or `Replace`s with a shape the container no longer
 /// matches) is not recursed into. Generic over the root map ([`JsonRoot`]) just
-/// like [`walk_nested`].
+/// like [`walk_nested`]. `visit` receives the object that holds the field, so it
+/// can read the field's value and its siblings — a timezone date's `_tz`.
 pub fn walk_nested_mut<'a, R, V>(
     obj: &mut R,
     fields: &'a [FieldDefinition],
     path: &mut Vec<NestStep<'a>>,
     visit: &mut V,
 ) where
-    R: JsonRoot + ?Sized,
-    V: FnMut(&'a FieldDefinition, Option<&Value>, &[NestStep<'a>]) -> VisitAction,
+    R: JsonRoot,
+    V: FnMut(&'a FieldDefinition, &dyn JsonRoot, &[NestStep<'a>]) -> VisitAction,
 {
     for field in fields {
-        match visit(field, obj.root_get(&field.name), path) {
+        match visit(field, &*obj, path) {
             VisitAction::Keep => {}
             VisitAction::Remove => {
                 obj.root_remove(&field.name);
@@ -302,7 +303,7 @@ fn walk_block_instances_mut<'a, V>(
     path: &mut Vec<NestStep<'a>>,
     visit: &mut V,
 ) where
-    V: FnMut(&'a FieldDefinition, Option<&Value>, &[NestStep<'a>]) -> VisitAction,
+    V: FnMut(&'a FieldDefinition, &dyn JsonRoot, &[NestStep<'a>]) -> VisitAction,
 {
     for block in blocks.iter_mut() {
         let Value::Object(block_obj) = block else {
@@ -583,7 +584,8 @@ mod tests {
         let mut obj = value.as_object().unwrap().clone();
         let mut seen = Vec::new();
         let mut path = Vec::new();
-        walk_nested_mut(&mut obj, fields, &mut path, &mut |field, val, path| {
+        walk_nested_mut(&mut obj, fields, &mut path, &mut |field, level, path| {
+            let val = level.root_get(&field.name);
             seen.push((dotted(field, path), val.cloned().unwrap_or(Value::Null)));
             VisitAction::Keep
         });

@@ -38,6 +38,9 @@ impl WireSurfaces {
     /// Lua-only (e.g. `override_access`, `hooks` on single reads — trusted
     /// in-process surface options).
     pub const LUA_ONLY: WireSurfaces = WireSurfaces(0b100);
+    /// MCP-only — for an option whose effect is visible only in the MCP
+    /// response shape.
+    pub const MCP_ONLY: WireSurfaces = WireSurfaces(0b010);
     /// Everything except Lua.
     pub const GRPC_MCP: WireSurfaces = WireSurfaces(0b011);
     /// Everything except gRPC (wire-schema gaps that are decisions, not bugs).
@@ -455,6 +458,14 @@ pub static COLLECTION_OPS: &[OpWire] = &[
             req("id", WireKind::Id, "Document ID to list versions for"),
             f("limit", WireKind::Int, "Max versions to return"),
             f("offset", WireKind::Int, "Number of versions to skip"),
+            // A version's snapshot CONTENT reaches only the MCP surface;
+            // gRPC's `VersionInfo` and Lua's `crap.VersionSummary` carry a
+            // summary row (id, version, status, latest, created_at), so a
+            // locale selector on those two would select nothing.
+            on(
+                WireSurfaces::MCP_ONLY,
+                f("locale", WireKind::Locale, LOCALE_READ_DOC),
+            ),
         ],
     },
     OpWire {
@@ -660,6 +671,26 @@ mod tests {
                 w.op
             );
         }
+    }
+
+    /// A version read takes a locale like any other read, and it is spelled
+    /// on the one surface that returns snapshot content. Dropping it would
+    /// pin every MCP client to the default locale's values again.
+    #[test]
+    fn list_versions_exposes_a_locale_on_the_snapshot_surface() {
+        let w = collection_op("list_versions").expect("list_versions is modeled");
+        let locale = w
+            .fields
+            .iter()
+            .find(|f| f.name == "locale")
+            .expect("list_versions takes a locale");
+
+        assert_eq!(locale.kind, WireKind::Locale);
+        assert!(locale.surfaces.contains(WireSurfaces::MCP));
+
+        // gRPC and Lua return version summaries, not snapshot content.
+        assert!(!locale.surfaces.contains(WireSurfaces::GRPC));
+        assert!(!locale.surfaces.contains(WireSurfaces::LUA));
     }
 
     /// Every field is exposed on at least one surface — a zero-surface field

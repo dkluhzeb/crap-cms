@@ -129,11 +129,8 @@ fn emit_rel<'a, V>(
     };
 
     if rc.is_polymorphic() {
-        if let Some((coll, id)) = s.split_once('/')
-            && !coll.is_empty()
-            && !id.is_empty()
-        {
-            visit(field, stack, coll, id, true);
+        if let Some((coll, id)) = poly_ref::parse(s) {
+            visit(field, stack, &coll, &id, true);
         }
     } else if !s.is_empty() {
         visit(field, stack, collection, s, false);

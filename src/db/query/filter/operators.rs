@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 
 use crate::core::{
-    FieldType, canonical_operand, parse_bool,
+    FieldType, canonical_operand, parse_bool, parse_number,
     validate::{FieldError, ValidationError},
 };
 use crate::db::{
@@ -56,8 +56,8 @@ pub(super) fn coerce_filter_value(
     };
 
     match ft {
-        FieldType::Number => match value.parse::<f64>() {
-            Ok(n) if n.is_finite() => Ok(DbValue::Real(n)),
+        FieldType::Number => match parse_number(value) {
+            Some(n) if n.is_finite() => Ok(DbValue::Real(n)),
             _ => Err(filter_type_error(
                 field,
                 format!("filter value '{value}' is not a valid number"),

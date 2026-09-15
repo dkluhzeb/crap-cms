@@ -81,7 +81,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         .insert("_status".to_string(), Value::String("draft".into()));
 
     // Hydrate join fields BEFORE after-change hooks so they see nested data.
-    query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
+    helpers::hydrate_reported(ctx, &mut doc, locale_ctx.as_ref())?;
 
     run_after_change_hooks(
         write_hooks,
@@ -97,8 +97,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         conn,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
-    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
+    helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
     Ok(doc)
 }

@@ -4,7 +4,7 @@
 
 use crate::{
     config::LocaleConfig,
-    db::{LocaleContext, query},
+    db::LocaleContext,
     hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, ServiceContext, WriteInput, WriteResult, persist_bulk_update,
@@ -15,7 +15,7 @@ use crate::{
 use super::ServiceError;
 use super::update::reject_locale_locked_fields;
 use super::validate::canonicalize_write_input;
-use crate::service::helpers::collect_api_hidden_field_names;
+use crate::service::helpers::{hydrate_reported, strip_reported};
 use crate::service::write::{check_update_access, stored_fields_for_update_rules};
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -92,22 +92,17 @@ pub(crate) fn update_many_single_in_conn(
     // A draft bulk update routes to the version table (main row untouched),
     // exactly like the single-document update path — otherwise `draft = true`
     // would silently publish the change by writing the main row.
+    // A draft save reports its snapshot with its own rows; a published write
+    // reports the stored row, hydrated BEFORE after-change hooks so they see
+    // nested data.
     let mut doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
     } else {
         let final_data = final_ctx.to_value_map();
-        persist_bulk_update(ctx, id, &final_data, input.locale_ctx, locale_config)?
+        let mut doc = persist_bulk_update(ctx, id, &final_data, input.locale_ctx, locale_config)?;
+        hydrate_reported(ctx, &mut doc, input.locale_ctx)?;
+        doc
     };
-
-    // Hydrate join fields BEFORE after-change hooks so they see nested data.
-    query::hydrate_document(
-        conn,
-        ctx.slug,
-        &def.fields,
-        &mut doc,
-        None,
-        input.locale_ctx,
-    )?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -129,9 +124,7 @@ pub(crate) fn update_many_single_in_conn(
         conn,
     )?;
 
-    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
-    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
+    strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
     Ok((doc, after_ctx))
 }
@@ -148,9 +141,9 @@ mod tests {
             CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Hooks,
             ValidationError, collection::VersionsConfig,
         },
-        db::{AccessResult, DbConnection},
+        db::{AccessResult, DbConnection, query},
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
-        service::hooks::WriteHooks,
+        service::{FieldReadStrip, hooks::WriteHooks},
     };
 
     struct NoopWriteHooks;
@@ -200,6 +193,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl FieldReadStrip for NoopWriteHooks {}
 
     fn versioned_collection() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();

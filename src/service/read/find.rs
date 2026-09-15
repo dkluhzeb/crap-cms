@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::post_process::post_process_docs;
+use super::post_process::{PostProcessCall, post_process_docs};
 use super::validate_filters::{
     QueryFieldRefs, reject_unreadable_query_fields, validate_user_filters, validate_user_select,
 };
@@ -127,7 +127,8 @@ pub fn find_documents(
 
     let cursor_has_more = helpers::finish_cursor_overfetch(&mut fq, &mut docs, overfetch, total);
 
-    post_process_docs(ctx, conn, &mut docs, input, req_context);
+    let call = PostProcessCall::builder(input, "find", req_context).build();
+    post_process_docs(ctx, conn, &mut docs, call);
 
     let pagination = helpers::build_pagination(&helpers::PaginationInputs {
         docs: &docs,

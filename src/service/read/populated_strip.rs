@@ -91,18 +91,15 @@ impl<'a> EmbeddedDocStripper<'a> {
     /// of any relationship/upload/join leaf. The container recursion
     /// (group/array/blocks at any depth) is the canonical [`walk_nested_mut`]'s;
     /// this only acts on relationship leaves.
-    fn strip_embedded<R: JsonRoot + ?Sized>(
-        &self,
-        root: &mut R,
-        fields: &[FieldDefinition],
-        depth: usize,
-    ) {
+    fn strip_embedded<R: JsonRoot>(&self, root: &mut R, fields: &[FieldDefinition], depth: usize) {
         if depth == 0 {
             return;
         }
 
         let mut path: Vec<NestStep<'_>> = Vec::new();
-        walk_nested_mut(root, fields, &mut path, &mut |field, value, _path| {
+        walk_nested_mut(root, fields, &mut path, &mut |field, level, _path| {
+            let value = level.root_get(&field.name);
+
             // The embedding leaf types — a populated value is an embedded doc (or
             // array of them) whose own field-read denials must be stripped. Join
             // is included: its populated value is an array of embedded target
@@ -233,7 +230,11 @@ mod tests {
         CollectionDefinition, FieldType, HookRef, Hooks, JoinConfig, RelationshipConfig, ReqContext,
     };
     use crate::db::AccessResult;
-    use crate::hooks::{AccessCheckInput, lifecycle::AfterReadCtx};
+    use crate::hooks::{
+        AccessCheckInput,
+        lifecycle::{AfterReadCtx, access::strip_read_access_data_aware},
+    };
+    use crate::service::FieldReadStrip;
 
     /// Mock that denies reads on any field carrying an `access.read` hook —
     /// mirroring the real `field_read_denied`, but without a live Lua VM.
@@ -257,23 +258,21 @@ mod tests {
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
+    }
 
+    impl FieldReadStrip for DenyAccessReadHooks {
         /// Data-aware strip mock: deny every field carrying an `access.read`
         /// hook, at any depth (mirrors the real walker with a constant-deny rule).
         fn strip_read_access_map(
             &self,
             fields: &[FieldDefinition],
-            level: &mut serde_json::Map<String, Value>,
+            level: &mut Map<String, Value>,
             _document: &DocumentFields,
             _collection: &str,
             _user: Option<&Document>,
             _locale: Option<&str>,
         ) {
-            crate::hooks::lifecycle::access::strip_read_access_data_aware(
-                fields,
-                level,
-                &|_hook, _data| true,
-            );
+            strip_read_access_data_aware(fields, level, &|_hook, _data| true);
         }
     }
 

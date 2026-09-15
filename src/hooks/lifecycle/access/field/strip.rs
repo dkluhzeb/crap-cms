@@ -13,7 +13,7 @@ use super::walk::{
 use crate::core::{
     Document, DocumentFields, FieldChildren, FieldDefinition, HookRef, field_children,
 };
-use crate::db::{AccessResult, query::helpers::tz_column};
+use crate::db::AccessResult;
 use crate::hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua};
 
 /// Data-aware field-**read** strip using an already-held `&Lua`. Walks `level`
@@ -107,9 +107,10 @@ pub(crate) fn strip_read_access_with_lua(
             level.remove(&field.name);
         }
 
-        // A timezone date's per-locale zones go with the locales it keeps.
-        if field.has_tz_companion() {
-            retain_locales(level, &tz_column(&field.name), &kept);
+        // A companion's per-locale map (a date's zones, a code field's
+        // languages) keeps exactly the locales its field keeps.
+        for column in field.companion_columns(&field.name) {
+            retain_locales(level, &column, &kept);
         }
 
         handled.push(field.name.clone());
@@ -221,7 +222,7 @@ pub(crate) fn strip_write_access_with_lua(
 mod tests {
     use super::super::super::test_helpers::*;
     use super::*;
-    use crate::core::{FieldAccess, FieldDefinition, FieldType};
+    use crate::core::{FieldAccess, FieldAdmin, FieldDefinition, FieldType};
     use serde_json::json;
 
     // ── Data-aware strip via a real Lua VM (ctx.data / ctx.document) ─────────
@@ -332,6 +333,66 @@ mod tests {
             !secret.contains_key("de"),
             "the denied locale's value is stripped"
         );
+    }
+
+    /// Regression: an `all`-locale read trimmed a localized field's per-locale
+    /// map to the allowed locales, but of its companions only a timezone date's
+    /// `_tz` map followed — a localized code field's `snippet_lang` map kept the
+    /// denied `de` language. Every companion keeps exactly its field's locales.
+    #[test]
+    fn strip_read_access_all_locale_companion_maps_follow_their_field() {
+        let lua = setup_lua();
+        let only_en = || FieldAccess {
+            read: Some("test_access.check_locale".into()),
+            ..Default::default()
+        };
+        let fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .localized(true)
+                .access(only_en())
+                .build(),
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .access(only_en())
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "snippet": { "en": "console.log(1)", "de": "print(1)" },
+            "snippet_lang": { "en": "javascript", "de": "python" },
+            "starts": { "en": "2026-01-01T10:00:00.000Z", "de": "2026-01-02T10:00:00.000Z" },
+            "starts_tz": { "en": "Europe/London", "de": "Europe/Berlin" },
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
+
+        assert_eq!(doc["snippet"], json!({ "en": "console.log(1)" }));
+        assert_eq!(
+            doc["snippet_lang"],
+            json!({ "en": "javascript" }),
+            "the denied locale's language is stripped with its value"
+        );
+        assert_eq!(doc["starts_tz"], json!({ "en": "Europe/London" }));
     }
 
     /// A real Lua rule keyed on the FULL document (`ctx.document`) keeps the

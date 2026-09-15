@@ -6,7 +6,7 @@ use crate::{
     core::{Document, FieldDefinition, HookRef, collection::GlobalDefinition},
     db::{AccessResult, DbConnection, LocaleContext, ops, query, query::helpers::global_table},
     hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
-    service::{GetGlobalInput, ReadHooks, ServiceContext, ServiceError, helpers},
+    service::{GetGlobalInput, ReadHooks, ReadStripArgs, ServiceContext, ServiceError, helpers},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -51,12 +51,11 @@ fn resolve_global_doc(
     if include_drafts {
         if let Some(version) = query::find_latest_version(conn, &gtable, "default")?
             && version.status == "draft"
-            && let Some(mut doc) = ops::document_from_snapshot("default", &version.snapshot)
+            // A snapshot carries every locale's value: it is read for the reading
+            // locale, as the collection overlay reads it.
+            && let Some(mut doc) =
+                ops::snapshot_read_document("default", &version.snapshot, &def.fields, locale_ctx)?
         {
-            // A snapshot carries every locale's value: resolve the reading one,
-            // as the collection overlay does.
-            ops::resolve_snapshot_locale(&mut doc, &def.fields, locale_ctx)?;
-
             // The row is the authority on `_status` — snapshots can carry a
             // stale value (see the collection overlay in `db::ops`). A
             // draft-only global must read as "draft".
@@ -101,10 +100,9 @@ fn published_global_or_empty(
     locale_ctx: Option<&LocaleContext>,
 ) -> anyhow::Result<Document> {
     if let Some(version) = query::find_latest_published_version(conn, gtable, "default")?
-        && let Some(mut doc) = ops::document_from_snapshot("default", &version.snapshot)
+        && let Some(doc) =
+            ops::snapshot_read_document("default", &version.snapshot, fields, locale_ctx)?
     {
-        ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
-
         return Ok(doc);
     }
 
@@ -195,8 +193,14 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
 
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
 
-    hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
-    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
+    helpers::strip_unreadable(
+        hooks,
+        &ReadStripArgs::builder(&def.fields, ctx.slug)
+            .user(ctx.user)
+            .locale(access_locale)
+            .build(),
+        &mut doc,
+    );
 
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,
@@ -229,7 +233,7 @@ mod tests {
         },
         db::LocaleMode,
         hooks::lifecycle::AfterReadCtx,
-        service::hooks::ReadHooks,
+        service::{FieldReadStrip, hooks::ReadHooks},
     };
 
     struct NoopReadHooks;
@@ -259,6 +263,8 @@ mod tests {
             })
         }
     }
+
+    impl FieldReadStrip for DraftOnlyReadHooks {}
 
     /// A viewer granted only the draft view, reading a published global with
     /// no pending draft, must not be handed the published content.
@@ -324,6 +330,8 @@ mod tests {
             Ok(AccessResult::Allowed)
         }
     }
+
+    impl FieldReadStrip for NoopReadHooks {}
 
     /// Build a drafts-enabled global whose main row is unpublished
     /// (`_status = 'draft'`), optionally with a prior published version snapshot.

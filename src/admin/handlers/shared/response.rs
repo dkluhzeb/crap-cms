@@ -1,8 +1,6 @@
 //! Response helpers — error pages, redirects, HTMX-aware responses, toast rendering.
 
-use std::sync::Arc;
-
-use std::fmt::Write as _;
+use std::{fmt::Write as _, sync::Arc};
 
 use axum::{
     Extension, Json,
@@ -11,6 +9,10 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::{Value, json, to_value};
+use tokio::{
+    runtime::{Handle, RuntimeFlavor},
+    task::{JoinError, block_in_place, spawn_blocking},
+};
 use tracing::error;
 
 use crate::{
@@ -18,8 +20,9 @@ use crate::{
         AdminState,
         context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
         handlers::shared::hx::HxNav,
+        state::render_template,
+        templates::render_scope::RenderScope,
     },
-    admin::{state::render_template, templates::render_scope::RenderScope},
     core::{
         CollectionDefinition, GlobalDefinition, auth::AuthUser, richtext::renderer::html_escape,
     },
@@ -66,10 +69,8 @@ fn render_error_page(state: &AdminState, template: &str, data: Value) -> Result<
 /// Shared by the auth/error page renders and other admin handlers that
 /// do inline Lua/DB work in an `async fn` body.
 pub(crate) fn on_blocking_section<T>(f: impl FnOnce() -> T) -> T {
-    use tokio::runtime::{Handle, RuntimeFlavor};
-
     match Handle::try_current() {
-        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => block_in_place(f),
         _ => f(),
     }
 }
@@ -184,7 +185,7 @@ async fn render_blocking(
     let handlebars = Arc::clone(&state.handlebars);
     let info = RenderInfo::from_context(&template, &data);
 
-    let rendered = tokio::task::spawn_blocking(move || {
+    let rendered = spawn_blocking(move || {
         let data = infra.hook_runner.run_before_render(RenderParams {
             context: data,
             info,
@@ -603,7 +604,7 @@ pub fn service_error_to_admin_response(
 /// Convert a [`tokio::task::JoinError`] into a generic admin HTML 500
 /// response. Tokio task failures generally indicate a panic in the
 /// `spawn_blocking` body and are not user-facing. Logged at `error!`.
-pub fn task_join_error_response(state: &AdminState, err: &tokio::task::JoinError) -> Response {
+pub fn task_join_error_response(state: &AdminState, err: &JoinError) -> Response {
     error!("spawn_blocking task error: {}", err);
     server_error(state, "An internal error occurred.")
 }

@@ -7,20 +7,17 @@ use serde_json::{Map, Value};
 use crate::{
     core::{
         Builder, Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks,
-        nest_group_fields,
     },
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
         lifecycle::{
             AccessCheckInput, AfterReadCtx, HookContext, HookEvent,
-            access::{
-                ReadStripInput, check_collection_access, has_any_field_access,
-                strip_read_access_with_lua,
-            },
+            access::{ReadStripInput, check_collection_access, strip_read_access_with_lua},
             apply_after_read_inner, run_hooks_inner,
         },
     },
+    service::hooks::FieldReadStrip,
 };
 
 /// Trait for executing read hooks, abstracting over VM acquisition strategy.
@@ -28,7 +25,10 @@ use crate::{
 /// Two implementations exist:
 /// - [`RunnerReadHooks`]: acquires a Lua VM from the pool (admin, gRPC, MCP)
 /// - [`LuaReadHooks`]: uses the current Lua VM inline (Lua CRUD hooks)
-pub trait ReadHooks {
+///
+/// The data-aware field-read strip lives in [`FieldReadStrip`], shared with the
+/// write surface so both strip a returned document the same way.
+pub trait ReadHooks: FieldReadStrip {
     /// Fire `before_read` hooks. Returns error to abort the read.
     ///
     /// # Errors
@@ -66,108 +66,6 @@ pub trait ReadHooks {
     ///
     /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult>;
-
-    /// Data-aware field-**read** strip: remove read-denied fields from `level`
-    /// in place, evaluating each `access.read` rule with `ctx.data` = the field's
-    /// own immediate level (the row, for fields inside an array/blocks row) and
-    /// `ctx.document` = `document` (the full document). The universal `Map` form
-    /// covers documents, version snapshots, populated targets, and live events.
-    ///
-    /// Default no-op so the many lightweight test/override `ReadHooks` impls that
-    /// don't enforce field access keep their behavior; the real surfaces
-    /// ([`RunnerReadHooks`], [`LuaReadHooks`]) override it.
-    fn strip_read_access_map(
-        &self,
-        fields: &[FieldDefinition],
-        level: &mut Map<String, Value>,
-        document: &DocumentFields,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        let _ = (fields, level, document, collection, user, locale);
-    }
-
-    /// Convenience over [`strip_read_access_map`](Self::strip_read_access_map):
-    /// strip read-denied fields from a [`Document`] in place, capturing the full
-    /// pre-strip document as `ctx.document`.
-    fn strip_read_access_doc(
-        &self,
-        fields: &[FieldDefinition],
-        doc: &mut Document,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        // Skip the per-document clone + map round-trip entirely when no field
-        // configures read access (the common case) — the read hot path pays nothing.
-        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
-            return;
-        }
-
-        let document = doc.fields.clone();
-        let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
-            .into_inner()
-            .into_iter()
-            .collect();
-
-        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
-
-        doc.fields = level.into_iter().collect();
-    }
-
-    /// Batched form of [`strip_read_access_doc`](Self::strip_read_access_doc)
-    /// for a list read. The default loops per document; [`RunnerReadHooks`]
-    /// overrides it to acquire the Lua VM **once** for the whole batch (the
-    /// per-query perf model) instead of once per document. Each document is
-    /// still stripped against its own `ctx.document` / per-row `ctx.data`.
-    fn strip_read_access_docs(
-        &self,
-        fields: &[FieldDefinition],
-        docs: &mut [Document],
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        for doc in docs.iter_mut() {
-            self.strip_read_access_doc(fields, doc, collection, user, locale);
-        }
-    }
-
-    /// Convenience over [`strip_read_access_map`](Self::strip_read_access_map):
-    /// strip read-denied fields from a version-snapshot `Value::Object` in place
-    /// (no-op for a non-object snapshot). The snapshot is its own `ctx.document`.
-    fn strip_read_access_value(
-        &self,
-        fields: &[FieldDefinition],
-        snapshot: &mut Value,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
-            return;
-        }
-
-        let Some(obj) = snapshot.as_object() else {
-            return;
-        };
-
-        // Legacy snapshots may be stored in the flat `group__sub` column form,
-        // but the data-aware strip walks the canonical nested shape (group data
-        // is a nested object at every level). Normalize first so a read-denied
-        // group sub-field is stripped regardless of how the snapshot was stored;
-        // `nest_group_fields` is idempotent for the nested snapshots current code
-        // writes. Without this, an `access.read`-denied group sub-field leaked out
-        // of legacy flat snapshots.
-        let nested = nest_group_fields(&obj.clone().into_iter().collect(), fields);
-        let mut level: Map<String, Value> = nested.into_inner().into_iter().collect();
-
-        let document: DocumentFields = level.clone().into_iter().collect();
-        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
-
-        *snapshot = Value::Object(level);
-    }
 }
 
 /// Pool-based hook execution for admin, gRPC, and MCP surfaces.
@@ -241,7 +139,9 @@ impl ReadHooks for RunnerReadHooks<'_> {
         }
         self.runner.check_access(input, self.conn)
     }
+}
 
+impl FieldReadStrip for RunnerReadHooks<'_> {
     fn strip_read_access_map(
         &self,
         fields: &[FieldDefinition],
@@ -362,7 +262,9 @@ impl ReadHooks for LuaReadHooks<'_> {
 
         apply_after_read_inner(self.lua, ctx, doc)
     }
+}
 
+impl FieldReadStrip for LuaReadHooks<'_> {
     fn strip_read_access_map(
         &self,
         fields: &[FieldDefinition],
@@ -392,6 +294,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{FieldType, collection::Hooks},
+        db::ops,
         hooks::lifecycle::access::strip_read_access_data_aware,
     };
 
@@ -414,7 +317,9 @@ mod tests {
         fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
+    }
 
+    impl FieldReadStrip for DenyMarkedFields {
         fn strip_read_access_map(
             &self,
             fields: &[FieldDefinition],
@@ -445,22 +350,33 @@ mod tests {
         ]
     }
 
+    /// A version snapshot read as a document, then stripped like one.
+    fn strip_snapshot(fields: &[FieldDefinition], snapshot: &Value) -> Value {
+        let mut doc = ops::snapshot_read_document("d1", snapshot, fields, None)
+            .unwrap()
+            .unwrap();
+        DenyMarkedFields.strip_read_access_doc(fields, &mut doc, "posts", None, None);
+
+        Value::Object(doc.fields.into_iter().collect())
+    }
+
     /// Regression: a read-denied group sub-field must be stripped from a LEGACY
     /// FLAT (`group__sub`) snapshot, not just a nested one. The data-aware strip
-    /// walks the canonical nested shape, so `strip_read_access_value` normalizes
-    /// the snapshot first. Before the fix, `seo__token` survived (the walker
-    /// looked for a nested `seo` object that flat storage doesn't have), leaking
-    /// the denied field out of old snapshots.
+    /// walks the canonical nested shape, and reading the snapshot as a document
+    /// nests it first. Before the fix, `seo__token` survived (the walker looked
+    /// for a nested `seo` object that flat storage doesn't have), leaking the
+    /// denied field out of old snapshots.
     #[test]
-    fn strip_read_access_value_strips_denied_subfield_from_flat_snapshot() {
+    fn a_denied_group_subfield_is_stripped_from_a_flat_snapshot() {
         let fields = group_schema();
-        let mut flat = json!({
-            "title": "Hello",
-            "seo__token": "secret",
-            "seo__public": "ok"
-        });
-
-        DenyMarkedFields.strip_read_access_value(&fields, &mut flat, "posts", None, None);
+        let flat = strip_snapshot(
+            &fields,
+            &json!({
+                "title": "Hello",
+                "seo__token": "secret",
+                "seo__public": "ok"
+            }),
+        );
 
         // Normalized to nested, denied sub-field gone, siblings preserved.
         assert_eq!(
@@ -470,16 +386,17 @@ mod tests {
         );
     }
 
-    /// The same strip is idempotent on the nested snapshots current code writes.
+    /// The same strip holds on the nested snapshots current code writes.
     #[test]
-    fn strip_read_access_value_strips_denied_subfield_from_nested_snapshot() {
+    fn a_denied_group_subfield_is_stripped_from_a_nested_snapshot() {
         let fields = group_schema();
-        let mut nested = json!({
-            "title": "Hello",
-            "seo": { "token": "secret", "public": "ok" }
-        });
-
-        DenyMarkedFields.strip_read_access_value(&fields, &mut nested, "posts", None, None);
+        let nested = strip_snapshot(
+            &fields,
+            &json!({
+                "title": "Hello",
+                "seo": { "token": "secret", "public": "ok" }
+            }),
+        );
 
         assert_eq!(
             nested,

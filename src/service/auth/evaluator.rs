@@ -33,7 +33,7 @@ use crate::core::{
     AuthUser, Claims, Document, Registry, Slug, StrategyEntry,
     auth::{ClaimsBuilder, TokenProvider},
     collection::{Auth, Surface},
-    parse_truthy,
+    json_truthy,
 };
 use crate::db::{DbConnection, LocaleContext, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
@@ -539,33 +539,17 @@ fn check_account(conn: &dyn DbConnection, claims: &Claims) -> Result<(), AuthFai
     Ok(())
 }
 
-/// Defensive reader for the `_locked` / `_verified` integer flags
-/// on a document a strategy hook returns. Accepts:
-/// - `i64` (the canonical DB-backed shape: 0 = false, anything else = true)
-/// - `bool` (in case a Lua hook returns a boolean directly)
-/// - string-coercible-to-i64 ("0", "1", etc.) — strategy hooks
-///   synthesizing docs occasionally end up with stringy values.
+/// Defensive reader for the `_locked` / `_verified` flags on a document a
+/// strategy hook returns: the shared checkbox rule ([`json_truthy`]) — the
+/// canonical DB-backed integer (0 = false, anything else = true), a bool a Lua
+/// hook returned directly, and the stringy spellings (`"1"`, `"on"`, `"true"`,
+/// case-insensitive) a hook-synthesized document ends up with.
 ///
-/// Anything else parses as `false` (the safe default: don't grant
-/// special-case access on the missing-true side; do refuse on the
-/// locked/unverified side only when we can prove it).
+/// Anything else reads as `false` (the safe default: don't grant special-case
+/// access on the missing-true side; do refuse on the locked/unverified side
+/// only when we can prove it).
 fn bool_flag(doc: &Document, key: &str) -> bool {
-    let Some(value) = doc.fields.get(key) else {
-        return false;
-    };
-    if let Some(i) = value.as_i64() {
-        return i != 0;
-    }
-    if let Some(b) = value.as_bool() {
-        return b;
-    }
-    if let Some(s) = value.as_str() {
-        // Shared truthy set (`1/true/yes/on`, case-insensitive). The old ad-hoc
-        // set here missed `on` and only case-folded `true`, so a `_locked = "on"`
-        // read as NOT locked — a fail-open. Route through the one chokepoint.
-        return parse_truthy(s);
-    }
-    false
+    doc.fields.get(key).is_some_and(json_truthy)
 }
 
 /// Materialize an [`AuthUser`] from already-validated [`Claims`]:
@@ -782,6 +766,10 @@ mod tests {
         doc.fields
             .insert("_verified".to_string(), serde_json::json!(1));
         assert!(bool_flag(&doc, "_verified"));
+        // The shared checkbox rule: any non-zero number, not integers only.
+        doc.fields
+            .insert("_locked".to_string(), serde_json::json!(0.5));
+        assert!(bool_flag(&doc, "_locked"));
     }
 
     /// Defensive parsing: a strategy hook synthesizing a doc with

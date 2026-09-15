@@ -41,6 +41,21 @@ freeze is unconditional.
   stored as a JSON **object** (`{…}`), not a one-element array — the block form
   parser selects a row's sub-field defs from its `_block_type` so the group is
   recognized as a single-object composite.
+- **Values inside JSON-stored rows have one typed form.** In a blocks row, and in
+  any group, array or blocks nested inside a row, a value is stored the same way
+  whichever surface wrote it:
+  - a checkbox is `true`/`false` — a truthy spelling (`1`, `true`, `yes`, `on`,
+    trimmed, any case) or a number other than `0` is checked;
+  - any other blank string is `null`;
+  - a number, date, text, textarea, email or scalar has-many list is what its
+    column would hold — a number as a number (surrounding whitespace ignored), a
+    timezone date as UTC, a list as a typed array; a value the column can't hold
+    stays as sent (validation rejects it);
+  - every other type — JSON, rich text, code, select, radio and references — is
+    stored as sent.
+
+  A missing value stays missing: only the admin form reads a checkbox absent
+  from a submitted row as unchecked, because HTML omits unchecked boxes.
 - **Timestamp write format is one ISO-8601 `…Z` shape on every backend.** Both
   the app-side clock (`utc_now()`, bound as a parameter) and the SQL "current
   time" expression (`DbConnection::now_expr()`, plus `date_offset_expr()` for job
@@ -247,7 +262,9 @@ changing a representation is a breaking change to every consumer.
 
 - **`FieldInfo` field metadata** carries `relationship_collections` (the
   targets of a polymorphic relationship), `has_many` (a text, number or select
-  value list) and `timezone` (a date with a `<name>_tz` companion) alongside
+  value list), `timezone` (a date with a `<name>_tz` companion) and
+  `companions` (the suffixes of every companion key the field carries — `_tz`,
+  `_lang` — so a later companion is described without a new field) alongside
   the existing keys; a global's `DescribeCollection` reports
   `timestamps: true`.
 

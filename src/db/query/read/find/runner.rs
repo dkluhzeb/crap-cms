@@ -12,15 +12,13 @@ use crate::core::Document;
 use crate::db::query::filter::{
     build_where_clause, lookup_column_field_type, resolve_filter_column, resolve_filters,
 };
-use crate::db::query::read::select::apply_select_filter;
+use crate::db::query::read::{decode_row, select::apply_select_filter};
 use crate::db::query::{
-    fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
+    fts, get_column_names, get_locale_select_columns_full,
     helpers::{append_soft_delete_filter, append_sql_condition, quote_ident},
     validate_query_fields,
 };
-use crate::db::{
-    DbConnection, DbRow, DbValue, FindQuery, LocaleContext, LocaleMode, document::row_to_document,
-};
+use crate::db::{DbConnection, DbRow, DbValue, FindQuery, LocaleContext};
 
 /// Find documents matching a query.
 ///
@@ -259,16 +257,7 @@ fn map_rows(
     let mut documents = Vec::new();
 
     for row in rows {
-        let mut doc = row_to_document(conn, row)?;
-
-        if let Some(ctx) = locale_ctx
-            && ctx.config.is_enabled()
-            && let LocaleMode::All = ctx.mode
-        {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
-        }
-
-        documents.push(doc);
+        documents.push(decode_row(conn, row, &def.fields, locale_ctx)?);
     }
 
     if using_before {

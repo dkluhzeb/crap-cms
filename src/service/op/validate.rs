@@ -276,7 +276,7 @@ mod tests {
         core::{CollectionDefinition, FieldDefinition, FieldType, Hooks},
         db::{AccessResult, DbConnection},
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
-        service::ServiceContext,
+        service::{FieldReadStrip, ServiceContext},
     };
 
     /// Write hooks whose access check returns a fixed result.
@@ -327,6 +327,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl FieldReadStrip for FixedAccessHooks {}
 
     fn posts_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

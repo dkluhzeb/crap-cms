@@ -1,7 +1,7 @@
 //! Array field join table operations.
 
 use anyhow::Result;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     slice,
@@ -13,11 +13,9 @@ use crate::core::{
 use crate::db::{
     DbConnection, DbRow, DbValue,
     query::{
-        coerce_json_value,
-        helpers::{coerce_date_value_json, join_table, tz_column},
-        join::convert_timezone_dates,
+        helpers::{column_value, companion_writes, decode_value, join_table, tz_column},
+        join::store_nested_values,
     },
-    types::real_to_json_number,
 };
 
 use super::helpers::{
@@ -25,44 +23,37 @@ use super::helpers::{
     select_junction_rows, select_junction_rows_batch,
 };
 
-/// Coerce one flattened array sub-field to its DB value (and, for a
-/// timezone-enabled Date, its `_tz` companion value). One place for the
-/// per-column conversion so the INSERT and column-preserving UPDATE agree.
-fn coerce_array_field(
-    sf: &FieldDefinition,
-    row: &HashMap<String, Value>,
-) -> (DbValue, Option<DbValue>) {
-    let value = row.get(&sf.name).cloned().unwrap_or(Value::Null);
+/// Coerce one flattened array sub-field to its DB value. One place for the
+/// per-column conversion so the INSERT and column-preserving UPDATE agree; its
+/// companion columns are written by [`companion_writes`].
+fn coerce_array_field(sf: &FieldDefinition, row: &HashMap<String, Value>) -> DbValue {
+    let mut value = row.get(&sf.name).cloned().unwrap_or(Value::Null);
 
-    if sf.has_tz_companion() {
-        let tz_key = tz_column(&sf.name);
-        let db_val = coerce_date_value_json(
-            &sf.field_type,
-            &value,
-            row.get(&tz_key).and_then(Value::as_str),
-        );
-        let tz_val = match row.get(&tz_key).and_then(Value::as_str) {
-            Some(s) if !s.is_empty() => DbValue::Text(s.to_string()),
-            _ => DbValue::Null,
-        };
-        return (db_val, Some(tz_val));
-    }
-
-    // A group, nested array or blocks value is stored whole as JSON: convert
-    // the timezone dates inside it, as the direct date columns above are.
+    // A group, nested array or blocks value is stored whole as JSON: its values
+    // take their typed form, as a direct column's value does.
     if matches!(
         field_children(sf),
         FieldChildren::Group(_) | FieldChildren::Array(_) | FieldChildren::Blocks(_)
     ) {
         let mut holder = Map::new();
         holder.insert(sf.name.clone(), value);
-        convert_timezone_dates(slice::from_ref(sf), &mut holder);
-
-        let value = holder.remove(&sf.name).unwrap_or(Value::Null);
-        return (coerce_json_value(&sf.field_type, &value), None);
+        store_nested_values(&mut holder, slice::from_ref(sf));
+        value = holder.remove(&sf.name).unwrap_or(Value::Null);
     }
 
-    (coerce_json_value(&sf.field_type, &value), None)
+    let zone = row.get(&tz_column(&sf.name)).and_then(Value::as_str);
+
+    column_value(sf, &value, zone)
+}
+
+/// The stored columns of an array's flattened sub-fields, in the order
+/// [`reconstruct_array_row`] reads them: each sub-field's column followed by its
+/// companion columns.
+fn sub_field_columns(flat_subs: &[&FieldDefinition]) -> Vec<String> {
+    flat_subs
+        .iter()
+        .flat_map(|&sf| sf.columns_with_companions(&sf.name))
+        .collect()
 }
 
 /// INSERT a brand-new array row with every column (an absent sub-field is
@@ -88,12 +79,12 @@ fn insert_array_row(
     }
 
     for &sf in flat_subs {
-        let (val, tz) = coerce_array_field(sf, row);
         cols.push(sf.name.clone());
-        params.push(val);
-        if let Some(tz_val) = tz {
-            cols.push(tz_column(&sf.name));
-            params.push(tz_val);
+        params.push(coerce_array_field(sf, row));
+
+        for (column, companion) in companion_writes(sf, &sf.name, row) {
+            cols.push(column);
+            params.push(companion);
         }
     }
 
@@ -115,7 +106,8 @@ fn insert_array_row(
 /// columns present in the incoming row. A sub-field absent from the row —
 /// removed by the write-access strip, or simply not sent — is left out of the
 /// `SET`, so its stored value is preserved (the array analog of the scalar
-/// update's set-only-present-columns rule).
+/// update's set-only-present-columns rule). Companion columns follow
+/// [`companion_writes`].
 fn update_array_row(
     conn: &dyn DbConnection,
     table_name: &str,
@@ -129,22 +121,15 @@ fn update_array_row(
     let mut idx = 2;
 
     for &sf in flat_subs {
-        if !row.contains_key(&sf.name) {
-            continue;
+        if row.contains_key(&sf.name) {
+            set_parts.push(format!("{} = {}", sf.name, conn.placeholder(idx)));
+            params.push(coerce_array_field(sf, row));
+            idx += 1;
         }
 
-        let (val, tz) = coerce_array_field(sf, row);
-        set_parts.push(format!("{} = {}", sf.name, conn.placeholder(idx)));
-        params.push(val);
-        idx += 1;
-
-        if let Some(tz_val) = tz {
-            set_parts.push(format!(
-                "{} = {}",
-                tz_column(&sf.name),
-                conn.placeholder(idx)
-            ));
-            params.push(tz_val);
+        for (column, companion) in companion_writes(sf, &sf.name, row) {
+            set_parts.push(format!("{column} = {}", conn.placeholder(idx)));
+            params.push(companion);
             idx += 1;
         }
     }
@@ -260,14 +245,7 @@ pub fn find_array_rows(
     let table_name = join_table(collection, field_name);
     let flat_subs = flatten_array_sub_fields(sub_fields);
 
-    // Build SELECT column list including _tz companions
-    let mut select_col_names: Vec<String> = Vec::new();
-    for sf in &flat_subs {
-        select_col_names.push(sf.name.clone());
-        if sf.has_tz_companion() {
-            select_col_names.push(tz_column(&sf.name));
-        }
-    }
+    let select_col_names = sub_field_columns(&flat_subs);
     let select_cols = if select_col_names.is_empty() {
         "id".to_string()
     } else {
@@ -316,13 +294,7 @@ pub fn find_array_rows_batch(
 
     // Same column list as the per-parent path, with `parent_id` spliced in
     // at index 1 for bucketing (sub-field decoding starts at index 2).
-    let mut select_col_names: Vec<String> = Vec::new();
-    for sf in &flat_subs {
-        select_col_names.push(sf.name.clone());
-        if sf.has_tz_companion() {
-            select_col_names.push(tz_column(&sf.name));
-        }
-    }
+    let select_col_names = sub_field_columns(&flat_subs);
     let select_cols = if select_col_names.is_empty() {
         "id, parent_id".to_string()
     } else {
@@ -357,7 +329,7 @@ pub fn find_array_rows_batch(
 /// Whether a sub-field column holds JSON that must be parsed on read: any
 /// composite (Group/Array/Blocks/layout wrapper/Json) or a has-many
 /// relationship/upload (stored as a JSON id array in the column).
-fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
+pub(crate) fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
     matches!(
         sf.field_type,
         FieldType::Array
@@ -374,7 +346,8 @@ fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
 /// at column index `start`. Composite sub-fields (Group/Array/Blocks/layout
 /// wrappers/Json) are stored as JSON in TEXT columns and parsed back to
 /// structured values, so nested composites at any depth come back ready for a
-/// JSON walk. Date+timezone fields read their `_tz` companion column.
+/// JSON walk. Companion columns (`_tz`, `_lang`) are read as text beside their
+/// sub-field.
 ///
 /// Shared by [`find_array_rows`] (per-parent read) and
 /// [`find_all_array_rows_with_parent`] (back-reference scan) so the
@@ -392,32 +365,27 @@ pub(crate) fn reconstruct_array_row(
         col_idx += 1;
 
         let json_val = match val {
-            DbValue::Integer(n) => json!(n),
-            // A whole-valued Number must read back as an integer (`5`, not
-            // `5.0`) — the same normalization every other read surface applies
-            // via `real_to_json_number`. Number columns are floating-point, so
-            // `5` round-trips through the DB as `5.0`.
-            DbValue::Real(f) => real_to_json_number(f),
             DbValue::Text(s) if sub_field_stores_json(sf) => {
                 // Composite sub-fields (and has-many relationship/upload, which
                 // store a JSON id array) keep JSON in a TEXT column — parse it
                 // so nested data comes back structured.
                 serde_json::from_str(&s).unwrap_or(Value::String(s))
             }
-            DbValue::Text(s) => Value::String(s),
-            DbValue::Null | DbValue::Blob(_) => Value::Null,
+            DbValue::Blob(_) => Value::Null,
+            // Any other column decodes as a main-table column does: a whole
+            // number as an integer, a scalar has-many list parsed from its text.
+            other => decode_value(sf, &other.to_json()),
         };
         map.insert(sf.name.clone(), json_val);
 
-        if sf.has_tz_companion() {
-            let tz_val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
-            col_idx += 1;
-
-            let tz_json = match tz_val {
-                DbValue::Text(s) => Value::String(s),
+        for column in sf.companion_columns(&sf.name) {
+            let companion = match db_row.get_value(col_idx) {
+                Some(DbValue::Text(s)) => Value::String(s.clone()),
                 _ => Value::Null,
             };
-            map.insert(tz_column(&sf.name), tz_json);
+            col_idx += 1;
+
+            map.insert(column, companion);
         }
     }
 
@@ -440,14 +408,7 @@ pub(crate) fn find_all_array_rows_with_parent(
     sub_fields: &[FieldDefinition],
 ) -> Result<Vec<(String, Map<String, Value>)>> {
     let flat_subs = flatten_array_sub_fields(sub_fields);
-
-    let mut select_col_names: Vec<String> = Vec::new();
-    for sf in &flat_subs {
-        select_col_names.push(sf.name.clone());
-        if sf.has_tz_companion() {
-            select_col_names.push(tz_column(&sf.name));
-        }
-    }
+    let select_col_names = sub_field_columns(&flat_subs);
 
     let select_cols = if select_col_names.is_empty() {
         "parent_id".to_string()
@@ -473,9 +434,11 @@ pub(crate) fn find_all_array_rows_with_parent(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::CrapConfig;
-    use crate::core::FieldTab;
+    use crate::core::{FieldAdmin, FieldTab, RelationshipConfig};
     use crate::db::{BoxedConnection, pool};
     use tempfile::TempDir;
 
@@ -935,6 +898,102 @@ mod tests {
         );
     }
 
+    // ── Code language companion tests ────────────────────────────────
+
+    /// Regression: an array row update that sent a code sub-field's value
+    /// without its `_lang` key wrote NULL over the row's stored language. An
+    /// absent key keeps it, as any absent key does.
+    #[test]
+    fn array_row_update_without_code_language_keeps_it() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_examples (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 snippet TEXT,
+                 snippet_lang TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');
+             INSERT INTO posts_examples (id, parent_id, _order, snippet, snippet_lang)
+                 VALUES ('r1', 'p1', 0, 'print(1)', 'python');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .build(),
+        ];
+
+        let update = vec![HashMap::from([
+            ("id".to_string(), json!("r1")),
+            ("snippet".to_string(), json!("print(2)")),
+        ])];
+        set_array_rows(&conn, "posts", "examples", "p1", &update, &sub_fields, None).unwrap();
+
+        let after = find_array_rows(&conn, "posts", "examples", "p1", &sub_fields, None).unwrap();
+        assert_eq!(after[0]["id"], "r1", "the row is updated in place");
+        assert_eq!(after[0]["snippet"], "print(2)");
+        assert_eq!(after[0]["snippet_lang"], "python");
+    }
+
+    /// Regression: a code sub-field's `_lang` companion was neither written nor
+    /// read on array rows, so the language pick of a code field inside an array
+    /// was lost.
+    #[test]
+    fn set_and_find_array_rows_with_code_language() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_examples (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 snippet TEXT,
+                 snippet_lang TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .build(),
+        ];
+
+        let rows = vec![HashMap::from([
+            ("snippet".to_string(), json!("print(1)")),
+            ("snippet_lang".to_string(), json!("python")),
+        ])];
+        set_array_rows(&conn, "posts", "examples", "p1", &rows, &sub_fields, None).unwrap();
+
+        let found = find_array_rows(&conn, "posts", "examples", "p1", &sub_fields, None).unwrap();
+        assert_eq!(found[0]["snippet_lang"], "python", "inserted row");
+
+        // A matched row changes its language in place.
+        let update = vec![HashMap::from([
+            ("id".to_string(), found[0]["id"].clone()),
+            ("snippet".to_string(), json!("console.log(1)")),
+            ("snippet_lang".to_string(), json!("javascript")),
+        ])];
+        set_array_rows(&conn, "posts", "examples", "p1", &update, &sub_fields, None).unwrap();
+
+        let after = find_array_rows(&conn, "posts", "examples", "p1", &sub_fields, None).unwrap();
+        assert_eq!(after[0]["id"], found[0]["id"]);
+        assert_eq!(after[0]["snippet_lang"], "javascript", "updated row");
+
+        let batch =
+            find_array_rows_batch(&conn, "posts", "examples", &["p1"], &sub_fields, None).unwrap();
+        assert_eq!(batch["p1"][0]["snippet_lang"], "javascript", "batched read");
+    }
+
     // ── Deep nesting round-trips (write → DB → read) ─────────────────
 
     #[test]
@@ -985,7 +1044,7 @@ mod tests {
 
         let sub_fields = vec![
             FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(crate::core::RelationshipConfig::new("tags", true))
+                .relationship(RelationshipConfig::new("tags", true))
                 .has_many(true)
                 .build(),
         ];

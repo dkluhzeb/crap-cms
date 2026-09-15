@@ -15,6 +15,7 @@ use crate::{
     },
     db::{BoxedConnection, DbConnection, DbPool, DbValue, query},
     hooks::HookRunner,
+    service::purge_document,
 };
 
 /// Validate that a collection exists and has `soft_delete` enabled.
@@ -83,7 +84,7 @@ fn run_list(
     }
 
     let conn = pool.get().context("Failed to get DB connection")?;
-    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale)?;
+    let locale_ctx = query::LocaleContext::default_for(&cfg.locale);
     let fq = deleted_filter();
 
     let mut table = Table::new(vec!["ID", "Title", "Collection", "Deleted At"]);
@@ -306,7 +307,7 @@ fn purge_documents(
     let mut purged = Purged::new();
     // The row lookup needs the locale context: a collection with localized
     // fields has no bare columns to select.
-    let locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
+    let locale_ctx = query::LocaleContext::default_for(locale);
 
     for id in ids {
         if query::ref_count::get_ref_count(tx, slug, id)?.unwrap_or(0) > 0 {
@@ -323,9 +324,7 @@ fn purge_documents(
             purged.upload_docs.push(doc.fields);
         }
 
-        query::ref_count::before_hard_delete(tx, slug, id, &def.fields, locale)?;
-        query::fts::fts_delete(tx, slug, id)?;
-        query::delete(tx, slug, id)?;
+        purge_document(tx, def, id, locale)?;
     }
 
     Ok(purged)
@@ -422,7 +421,7 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
     let mut conn = pool.write().context("Failed to get DB connection")?;
     let fq = deleted_filter();
     // A localized collection has no bare columns to select.
-    let locale_ctx = query::LocaleContext::from_locale_string(None, locale)?;
+    let locale_ctx = query::LocaleContext::default_for(locale);
     let docs = query::find(&conn, collection, &def, &fq, locale_ctx.as_ref())?;
 
     if docs.is_empty() {
@@ -537,11 +536,59 @@ mod tests {
     use crate::{
         config::DatabaseConfig,
         core::{
+            JobStatus,
             field::{FieldDefinition, FieldType, RelationshipConfig},
             upload::CollectionUpload,
         },
         db::{DbValue, migrate, pool},
     };
+
+    /// Regression: the CLI purge deleted a document without cancelling its
+    /// queued image conversions, which then ran against a missing row.
+    #[test]
+    fn purge_cancels_queued_image_conversions() {
+        let mut media = CollectionDefinition::new("media");
+        media.soft_delete = true;
+        media.upload = Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        });
+        let (_tmp, pool, _registry) = setup_db(&[media.clone()]);
+        let conn = pool.get().unwrap();
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        upload::queue_image_conversion(
+            &conn,
+            &upload::ImageConvertJobData {
+                collection: "media".to_string(),
+                document_id: "m1".to_string(),
+                source_path: "a.png".to_string(),
+                target_path: "a.webp".to_string(),
+                format: "webp".to_string(),
+                quality: 80,
+                url_column: "thumbnail_webp_url".to_string(),
+                url_value: "/uploads/a.webp".to_string(),
+            },
+            1,
+        )
+        .unwrap();
+
+        purge_documents(
+            &conn,
+            ("media", &media),
+            &["m1".to_string()],
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+
+        let pending = query::jobs::count_job_runs(
+            &conn,
+            Some(upload::SYSTEM_IMAGE_CONVERT_JOB),
+            Some(JobStatus::Pending),
+        )
+        .unwrap();
+        assert_eq!(pending, 0);
+    }
 
     // ── purge_documents ref-count semantics ──────────────────────────────
 

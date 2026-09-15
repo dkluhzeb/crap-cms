@@ -5,12 +5,12 @@ use anyhow::{Context as _, Result};
 use crate::{
     core::{Document, DocumentFields, collection::GlobalDefinition},
     db::{
-        DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
-        document::row_to_document,
+        DbConnection, DbRow, DbValue, LocaleContext,
         query::{
-            collect_column_names, get_locale_select_columns, group_locale_fields,
+            collect_column_names, get_locale_select_columns,
             helpers::{global_table, quote_ident, utc_now},
             join::hydrate_document,
+            read::decode_row,
             write::{UpdateCollector, collect_update_params},
         },
     },
@@ -55,14 +55,7 @@ pub fn get_global(
         .collect();
     let remapped = DbRow::new(result_names.clone(), values);
 
-    let mut doc = row_to_document(conn, &remapped)?;
-
-    if let Some(ctx) = locale_ctx
-        && ctx.config.is_enabled()
-        && let LocaleMode::All = ctx.mode
-    {
-        group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
-    }
+    let mut doc = decode_row(conn, &remapped, &def.fields, locale_ctx)?;
 
     // Hydrate join table data (arrays, blocks, has-many relationships)
     hydrate_document(conn, &table_name, &def.fields, &mut doc, None, locale_ctx)?;

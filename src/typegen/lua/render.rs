@@ -807,7 +807,9 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
 mod tests {
     use super::super::test_helpers::{checkbox_field, select_field, text_field};
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType, RelationshipConfig, VersionsConfig};
+    use crate::core::{
+        FieldAdmin, FieldDefinition, FieldTab, FieldType, RelationshipConfig, VersionsConfig,
+    };
 
     /// One `---@class` annotation block, from its header to the blank line after it.
     fn class_block<'a>(out: &'a str, header: &str) -> &'a str {
@@ -865,6 +867,48 @@ mod tests {
             "{doc}"
         );
         assert!(doc.contains("---@field _deleted_at? string"), "{doc}");
+    }
+
+    /// A code field with a language allow-list.
+    fn code_with_languages(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
+    /// A code field with a language allow-list carries its `<name>_lang`
+    /// companion at the top level, inside a group and inside an array row;
+    /// one without an allow-list carries none.
+    #[test]
+    fn read_document_has_the_code_language_companion() {
+        let mut col = CollectionDefinition::new("snippets");
+        col.fields = vec![
+            code_with_languages("snippet"),
+            FieldDefinition::builder("plain", FieldType::Code).build(),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![code_with_languages("example")])
+                .build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![code_with_languages("example")])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let doc = class_block(&out, "---@class crap.doc.Snippets");
+        assert!(doc.contains("---@field snippet_lang? string"), "{doc}");
+
+        let meta = class_block(&out, "---@class crap.group.SnippetsMeta");
+        assert!(meta.contains("---@field example_lang? string"), "{meta}");
+
+        let items = class_block(&out, "---@class crap.array_row.SnippetsItems");
+        assert!(items.contains("---@field example_lang? string"), "{items}");
+
+        assert!(!out.contains("plain_lang"), "{out}");
     }
 
     #[test]

@@ -6,12 +6,10 @@ use super::{
     operators::{build_filter_condition, build_op_condition},
     resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
 };
-use crate::core::{
-    BLOCK_TYPE_KEY, CollectionDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
-};
+use crate::core::{BLOCK_TYPE_KEY, CollectionDefinition, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterClause, LocaleContext,
-    query::{helpers::locale_column, is_valid_identifier},
+    query::{column_is_localized, helpers::locale_column, is_valid_identifier},
 };
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
@@ -305,74 +303,12 @@ pub(crate) fn resolve_filter_column(
 ) -> Result<String> {
     if let Some(ctx) = locale_ctx
         && ctx.config.is_enabled()
+        && column_is_localized(field_name, &def.fields) == Some(true)
     {
-        for field in &def.fields {
-            if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                return locale_column(field_name, locale);
-            }
-        }
+        return locale_column(field_name, ctx.access_locale());
     }
 
     Ok(field_name.to_string())
-}
-
-fn check_field_locale<'a>(
-    field: &FieldDefinition,
-    field_name: &str,
-    ctx: &'a LocaleContext,
-) -> Option<&'a str> {
-    match field_children(field) {
-        // Group carries its own `{name}__` flat-column prefix and localization
-        // inheritance, so it stays bespoke (transparent wrappers do not).
-        FieldChildren::Group(_) => check_group_locale(field, field_name, ctx),
-        FieldChildren::Wrapper(sub) => check_flat_sub_fields(sub, field_name, ctx),
-        FieldChildren::Tabs(tabs) => {
-            for tab in tabs {
-                if let Some(locale) = check_flat_sub_fields(&tab.fields, field_name, ctx) {
-                    return Some(locale);
-                }
-            }
-            None
-        }
-        FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
-            if field.name == field_name && field.localized {
-                Some(ctx.access_locale())
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn check_group_locale<'a>(
-    field: &FieldDefinition,
-    field_name: &str,
-    ctx: &'a LocaleContext,
-) -> Option<&'a str> {
-    let prefix = format!("{}__", field.name);
-
-    if field_name.starts_with(&prefix) {
-        let sub_name = &field_name[prefix.len()..];
-        for sub in &field.fields {
-            if sub.name == sub_name && (field.localized || sub.localized) {
-                return Some(ctx.access_locale());
-            }
-        }
-    }
-    None
-}
-
-fn check_flat_sub_fields<'a>(
-    sub_fields: &[FieldDefinition],
-    field_name: &str,
-    ctx: &'a LocaleContext,
-) -> Option<&'a str> {
-    for sub in sub_fields {
-        if sub.name == field_name && sub.localized {
-            return Some(ctx.access_locale());
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -833,6 +769,52 @@ mod tests {
         };
         let result = resolve_filter_column("meta__title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "meta__title__en");
+    }
+
+    /// Regression: the filter/sort column resolution looked one level deep, so
+    /// a localized value below a nested group or a layout wrapper inside a
+    /// group resolved to a bare column that doesn't exist.
+    #[test]
+    fn resolve_column_nested_localized_paths() {
+        let deep = FieldDefinition::builder("a", FieldType::Group)
+            .localized(true)
+            .fields(vec![
+                FieldDefinition::builder("b", FieldType::Group)
+                    .fields(vec![make_field("c", FieldType::Text, false)])
+                    .build(),
+            ])
+            .build();
+        let seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("r", FieldType::Row)
+                    .fields(vec![make_field("title", FieldType::Text, true)])
+                    .build(),
+            ])
+            .build();
+        let meta = FieldDefinition::builder("layout", FieldType::Row)
+            .fields(vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![make_field("title", FieldType::Text, false)])
+                    .build(),
+            ])
+            .build();
+        let def = make_collection(vec![deep, seo, meta]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+
+        for (name, column) in [
+            ("a__b__c", "a__b__c__de"),
+            ("seo__title", "seo__title__de"),
+            ("meta__title", "meta__title__de"),
+        ] {
+            assert_eq!(
+                resolve_filter_column(name, &def, Some(&ctx)).unwrap(),
+                column
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! `count`, `count_with_search`, `count_where_field_eq` — document counting.
 
+use std::slice;
+
 use anyhow::{Context as _, Result, bail};
 
 use crate::core::{Builder, CollectionDefinition};
@@ -168,7 +170,7 @@ pub struct FieldEqCount<'a> {
     #[builder(required)]
     field: &'a str,
     #[builder(required)]
-    value: &'a str,
+    value: DbValue,
     exclude_id: Option<&'a str>,
     soft_delete: bool,
     case_insensitive: bool,
@@ -182,14 +184,14 @@ pub struct FieldEqCount<'a> {
 /// Returns an error if the field name is invalid, or a backend error if the
 /// COUNT query fails.
 pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) -> Result<i64> {
-    let &FieldEqCount {
+    let FieldEqCount {
         table,
         field,
-        value,
+        ref value,
         exclude_id,
         soft_delete,
         case_insensitive,
-    } = params;
+    } = *params;
 
     if !is_valid_identifier(field) {
         bail!("Invalid field name '{field}': must be alphanumeric/underscore");
@@ -212,17 +214,11 @@ pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) 
         let p2 = conn.placeholder(2);
         let sql =
             format!("SELECT COUNT(*) FROM \"{table}\" WHERE {compare} AND id != {p2}{soft_filter}");
-        conn.query_one(
-            &sql,
-            &[
-                DbValue::Text(value.to_string()),
-                DbValue::Text(eid.to_string()),
-            ],
-        )
-        .with_context(|| format!("Unique check on {table}.{field}"))?
+        conn.query_one(&sql, &[value.clone(), DbValue::Text(eid.to_string())])
+            .with_context(|| format!("Unique check on {table}.{field}"))?
     } else {
         let sql = format!("SELECT COUNT(*) FROM \"{table}\" WHERE {compare}{soft_filter}");
-        conn.query_one(&sql, &[DbValue::Text(value.to_string())])
+        conn.query_one(&sql, slice::from_ref(value))
             .with_context(|| format!("Unique check on {table}.{field}"))?
     };
 
@@ -345,7 +341,7 @@ mod tests {
 
         let c = count_where_field_eq(
             &conn,
-            &FieldEqCount::builder("posts", "status", "draft").build(),
+            &FieldEqCount::builder("posts", "status", DbValue::Text("draft".into())).build(),
         )
         .unwrap();
         assert_eq!(c, 2);
@@ -353,7 +349,7 @@ mod tests {
         // Exclude one
         let c_excl = count_where_field_eq(
             &conn,
-            &FieldEqCount::builder("posts", "status", "draft")
+            &FieldEqCount::builder("posts", "status", DbValue::Text("draft".into()))
                 .exclude_id(Some(&doc2.id))
                 .build(),
         )
@@ -378,7 +374,7 @@ mod tests {
         // Exact match: different case does NOT match.
         let exact = count_where_field_eq(
             &conn,
-            &FieldEqCount::builder("posts", "title", "victim@x.com").build(),
+            &FieldEqCount::builder("posts", "title", DbValue::Text("victim@x.com".into())).build(),
         )
         .unwrap();
         assert_eq!(exact, 0, "exact comparison is case-sensitive");
@@ -386,7 +382,7 @@ mod tests {
         // Case-insensitive: the differently-cased value matches.
         let ci = count_where_field_eq(
             &conn,
-            &FieldEqCount::builder("posts", "title", "victim@x.com")
+            &FieldEqCount::builder("posts", "title", DbValue::Text("victim@x.com".into()))
                 .case_insensitive(true)
                 .build(),
         )
@@ -403,7 +399,7 @@ mod tests {
         let conn = pool.get().unwrap();
         let result = count_where_field_eq(
             &conn,
-            &FieldEqCount::builder("posts", "bad field!", "val").build(),
+            &FieldEqCount::builder("posts", "bad field!", DbValue::Text("val".into())).build(),
         );
         assert!(result.is_err(), "Invalid field name should error");
         assert!(

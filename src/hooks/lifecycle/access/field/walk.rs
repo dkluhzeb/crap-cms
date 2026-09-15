@@ -9,7 +9,7 @@ use crate::core::{
     BLOCK_TYPE_KEY, DenialSeg, DocumentFields, FieldChildren, FieldDefinition, FieldDenial,
     HookRef, any_field, field_children,
 };
-use crate::db::query::helpers::{prefixed_name, tz_column};
+use crate::db::query::helpers::prefixed_name;
 
 pub(super) fn extract_read_access(f: &FieldDefinition) -> Option<&HookRef> {
     f.access.read.as_ref()
@@ -45,10 +45,13 @@ pub(crate) fn collect_denials_flat<F: Fn(&FieldDefinition) -> bool>(
         let full_name = prefixed_name(prefix, &field.name);
 
         if is_denied(field) {
-            // A timezone date's zone is part of its value.
-            let zone = field.has_tz_companion().then(|| tz_column(&full_name));
-            out.push(FieldDenial::Flat(full_name));
-            out.extend(zone.map(FieldDenial::Flat));
+            // A companion (a date's zone, a code field's language) is part of
+            // its value.
+            out.extend(
+                field
+                    .columns_with_companions(&full_name)
+                    .map(FieldDenial::Flat),
+            );
 
             continue; // Parent denied → its sub-fields go with it.
         }
@@ -100,12 +103,9 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
                 row_path: row_path.to_vec(),
                 leaf,
             };
-            out.push(denial(field.name.clone()));
-
-            // A timezone date's zone is part of its value.
-            if field.has_tz_companion() {
-                out.push(denial(tz_column(&field.name)));
-            }
+            // A companion (a date's zone, a code field's language) is part of
+            // its value.
+            out.extend(field.columns_with_companions(&field.name).map(denial));
 
             continue;
         }
@@ -245,11 +245,10 @@ fn strip_level_with_snapshot<E, F>(
         if let Some(hook) = extract(field)
             && is_denied(hook, snapshot)
         {
-            level.remove(&field.name);
-
-            // A timezone date's zone is part of its value.
-            if field.has_tz_companion() {
-                level.remove(&tz_column(&field.name));
+            // A companion (a date's zone, a code field's language) is part of
+            // its value.
+            for column in field.columns_with_companions(&field.name) {
+                level.remove(&column);
             }
 
             continue; // Parent denied → its sub-fields go with it.
@@ -313,8 +312,124 @@ fn strip_level_with_snapshot<E, F>(
 mod tests {
     use super::super::super::test_helpers::*;
     use super::*;
-    use crate::core::{FieldAccess, FieldDefinition, FieldTab, FieldType};
+    use crate::core::{
+        BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldTab, FieldType,
+    };
     use serde_json::json;
+
+    /// A code field with a language allow-list, gated by `access`.
+    fn code_lang_field(access: FieldAccess) -> FieldDefinition {
+        FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .access(access)
+            .build()
+    }
+
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            panic!("fixture is an object: {value}");
+        };
+
+        map
+    }
+
+    /// Regression: a denied code field's `<name>_lang` companion wasn't denied
+    /// with it, so a hidden or read-denied code field still shipped its
+    /// language — at the document level, in groups, and inside array rows.
+    #[test]
+    fn denying_a_code_field_denies_its_language() {
+        let code = code_lang_field(FieldAccess::default());
+        let fields = vec![
+            code.clone(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![code.clone()])
+                .build(),
+            FieldDefinition::builder("slots", FieldType::Array)
+                .fields(vec![code])
+                .build(),
+        ];
+        let mut out = Vec::new();
+
+        collect_denials_flat(
+            &fields,
+            &|f: &FieldDefinition| f.name == "snippet",
+            "",
+            &mut out,
+        );
+
+        let paths: Vec<String> = out.iter().map(FieldDenial::display_path).collect();
+        for path in [
+            "snippet",
+            "snippet_lang",
+            "seo__snippet",
+            "seo__snippet_lang",
+            "slots.snippet",
+            "slots.snippet_lang",
+        ] {
+            assert!(paths.contains(&path.to_string()), "{path}: {paths:?}");
+        }
+    }
+
+    /// Regression: a read-denied code field was removed but its `<name>_lang`
+    /// companion stayed in the document — at the top level and inside a group.
+    #[test]
+    fn a_read_denied_code_field_takes_its_language_with_it() {
+        let gated = code_lang_field(FieldAccess {
+            read: Some("h".into()),
+            ..Default::default()
+        });
+        let fields = vec![
+            gated.clone(),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![gated])
+                .build(),
+        ];
+        let mut level = object(json!({
+            "snippet": "print(1)",
+            "snippet_lang": "python",
+            "meta": { "snippet": "x", "snippet_lang": "javascript", "kept": 1 },
+            "title": "kept",
+        }));
+
+        strip_read_access_data_aware(&fields, &mut level, &|_, _| true);
+
+        assert!(!level.contains_key("snippet"), "{level:?}");
+        assert!(!level.contains_key("snippet_lang"), "{level:?}");
+        assert!(level.contains_key("title"), "{level:?}");
+
+        let meta = level["meta"].as_object().unwrap();
+        assert!(!meta.contains_key("snippet"), "{meta:?}");
+        assert!(!meta.contains_key("snippet_lang"), "{meta:?}");
+        assert!(meta.contains_key("kept"), "{meta:?}");
+    }
+
+    /// Regression: a write-denied code field's value was dropped from the write
+    /// data but its `<name>_lang` companion was not, so the language stayed
+    /// writable through the companion key.
+    #[test]
+    fn a_write_denied_code_field_drops_its_language_from_the_write() {
+        let fields = vec![code_lang_field(FieldAccess {
+            update: Some("h".into()),
+            ..Default::default()
+        })];
+        let mut data = object(json!({
+            "snippet": "print(1)",
+            "snippet_lang": "python",
+        }));
+
+        strip_access_data_aware(
+            &fields,
+            &mut data,
+            &|f| f.access.update.as_ref(),
+            &|_, _| true,
+        );
+
+        assert!(data.is_empty(), "{data:?}");
+    }
 
     fn read_gated(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
@@ -559,7 +674,7 @@ mod tests {
     fn data_aware_strip_drops_unresolved_block_row_data() {
         let fields = vec![
             FieldDefinition::builder("body", FieldType::Blocks)
-                .blocks(vec![crate::core::BlockDefinition::new(
+                .blocks(vec![BlockDefinition::new(
                     "text",
                     vec![FieldDefinition::builder("value", FieldType::Text).build()],
                 )])

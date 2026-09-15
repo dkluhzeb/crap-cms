@@ -1,7 +1,5 @@
 //! Snapshot building and data extraction helpers.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use serde_json::{Map, Value};
 
@@ -14,9 +12,8 @@ use crate::{
     db::{
         DbConnection, DbValue,
         query::{
-            LocaleContext, LocaleMode, get_locale_select_columns_full,
-            helpers::{locale_column, parse_has_many_scalar, tz_column},
-            join::hydrate_document,
+            LocaleContext, LocaleMode, get_locale_select_columns_full, helpers::locale_column,
+            join::hydrate_document, per_locale_columns, read::decode_row,
         },
     },
 };
@@ -38,7 +35,7 @@ pub fn build_snapshot(
     // With locales on, join fields hydrate under the default locale, so a
     // localized join field's bare key holds the default locale's rows — never a
     // mix of every locale's. Each locale's own rows are recorded below.
-    let default_ctx = active_locales.map(|c| exact_locale_ctx(c, &c.default_locale));
+    let default_ctx = active_locales.map(|c| LocaleContext::exact(c, &c.default_locale));
 
     let mut hydrated = doc.clone();
     hydrate_document(
@@ -78,19 +75,6 @@ pub fn build_snapshot(
     }
 
     Ok(Value::Object(data))
-}
-
-/// A single-locale context with fallback off: a snapshot records exactly the
-/// rows each locale holds, not the default locale's rows standing in for an
-/// empty one.
-fn exact_locale_ctx(config: &LocaleConfig, locale: &str) -> LocaleContext {
-    LocaleContext {
-        mode: LocaleMode::Single(locale.to_string()),
-        config: LocaleConfig {
-            fallback: false,
-            ..config.clone()
-        },
-    }
 }
 
 /// The collection a document belongs to: its slug and fields.
@@ -150,7 +134,7 @@ pub(crate) fn locale_join_rows(
 
     for locale in &config.locales {
         let mut per_locale = doc.clone();
-        let ctx = exact_locale_ctx(config, locale);
+        let ctx = LocaleContext::exact(config, locale);
         hydrate_document(conn, slug, fields, &mut per_locale, None, Some(&ctx))?;
 
         let flat = flatten_group_fields(&per_locale.fields, fields);
@@ -184,12 +168,14 @@ fn add_locale_columns(
         mode: LocaleMode::All,
         config: config.clone(),
     };
-    let (exprs, names) = get_locale_select_columns_full(fields, false, false, false, &ctx)?;
-
-    // Only the decorated columns are interesting; `id` rides along in both.
-    if names.iter().all(|n| !n.contains("__")) {
+    // Only per-locale columns are recorded under their own keys; a group's plain
+    // column (`seo__title`) is already in the nested group.
+    let per_locale = per_locale_columns(fields, config)?;
+    if per_locale.is_empty() {
         return Ok(());
     }
+
+    let (exprs, _) = get_locale_select_columns_full(fields, false, false, false, &ctx)?;
 
     let sql = format!(
         "SELECT {} FROM \"{slug}\" WHERE id = {}",
@@ -200,45 +186,14 @@ fn add_locale_columns(
         return Ok(());
     };
 
-    let lists = has_many_scalar_types(fields);
-
-    for (i, name) in names.iter().enumerate() {
-        if !name.contains("__") {
-            continue;
+    // Decoded as every read decodes a row.
+    for (name, value) in decode_row(conn, &row, fields, None)?.fields {
+        if per_locale.contains(&name) {
+            data.insert(name, value);
         }
-
-        let value = row.get_value(i).map_or(Value::Null, DbValue::to_json);
-        data.insert(name.clone(), decode_locale_value(&lists, name, value));
     }
 
     Ok(())
-}
-
-/// The field type of every scalar has-many leaf, by column name.
-fn has_many_scalar_types(fields: &[FieldDefinition]) -> HashMap<String, FieldType> {
-    let mut types = HashMap::new();
-
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if field.is_has_many_scalar() {
-            types.insert(prefixed_name(prefix, &field.name), field.field_type.clone());
-        }
-
-        Ok(())
-    });
-
-    types
-}
-
-/// A per-locale column value as the published read returns it: a scalar
-/// has-many list parsed from its stored JSON text, anything else as stored.
-fn decode_locale_value(lists: &HashMap<String, FieldType>, column: &str, value: Value) -> Value {
-    match column
-        .rsplit_once("__")
-        .and_then(|(base, _)| lists.get(base))
-    {
-        Some(field_type) => parse_has_many_scalar(field_type, &value),
-        None => value,
-    }
 }
 
 /// Whether a snapshot JSON value is a scalar that maps to a column write.
@@ -259,8 +214,8 @@ fn is_scalar_snapshot_value(val: &Value) -> bool {
 /// columns that live on the parent row are taken — a scalar has-many list among
 /// them; localized columns (separate locale columns), join-table data
 /// (arrays/blocks/has-many relationships), and
-/// `created_at`/`updated_at` are handled elsewhere. Date `__tz` companions ride
-/// along with their owning column.
+/// `created_at`/`updated_at` are handled elsewhere. Companion columns (`_tz`,
+/// `_lang`) ride along with their owning column.
 pub(super) fn extract_snapshot_data(
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],
@@ -292,13 +247,11 @@ pub(super) fn extract_snapshot_data(
                 data.insert(key.clone(), val.clone());
             }
 
-            if field.has_tz_companion() {
-                let tz_key = tz_column(&key);
-
-                if let Some(tz_val) = flat.get(&tz_key)
-                    && is_scalar_snapshot_value(tz_val)
+            for companion in field.companion_columns(&key) {
+                if let Some(val) = flat.get(&companion)
+                    && is_scalar_snapshot_value(val)
                 {
-                    data.insert(tz_key, tz_val.clone());
+                    data.insert(companion, val.clone());
                 }
             }
 
@@ -348,9 +301,42 @@ pub(super) fn collect_join_data_from_snapshot(
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use tempfile::TempDir;
 
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, RelationshipConfig};
+    use crate::{
+        config::{CrapConfig, LocaleConfig},
+        core::{
+            Document, DocumentFields, FieldAdmin, FieldDefinition, FieldTab, RelationshipConfig,
+        },
+        db::{BoxedConnection, DbConnection, pool},
+    };
+
+    fn setup_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let db_pool = pool::create_pool(dir.path(), &CrapConfig::default()).unwrap();
+        let conn = db_pool.get().unwrap();
+        (dir, conn)
+    }
+
+    fn en_de() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    fn code_lang_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
     #[test]
     fn extract_snapshot_data_basic() {
         let fields = vec![
@@ -651,5 +637,128 @@ mod tests {
             Some(&json!("Europe/Berlin")),
             "Group _tz companion should be extracted with prefix"
         );
+    }
+
+    // ── Code language companion column tests ─────────────────────────
+
+    /// Regression: restore extraction took only `_tz` companions, so restoring
+    /// a version left a code field's language at its current value.
+    #[test]
+    fn extract_snapshot_data_includes_code_lang_companion() {
+        let fields = vec![code_lang_field("snippet")];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "snippet": "print(1)",
+            "snippet_lang": "python"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(data.get("snippet"), Some(&json!("print(1)")));
+        assert_eq!(
+            data.get("snippet_lang"),
+            Some(&json!("python")),
+            "Language companion should be extracted"
+        );
+    }
+
+    #[test]
+    fn extract_snapshot_data_group_code_lang_companion() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![code_lang_field("example")])
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "meta": { "example": "console.log(1)", "example_lang": "javascript" }
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("meta__example_lang"),
+            Some(&json!("javascript")),
+            "Group _lang companion should be extracted with prefix"
+        );
+    }
+
+    /// Regression: the snapshot build copied every column whose name holds `__`
+    /// as a per-locale column — a plain group column (`seo__title`) too. It sat
+    /// flat beside the nested group, and flattening the snapshot picked either
+    /// value at random, so a first draft save could record the published value
+    /// instead of the edit.
+    #[test]
+    fn a_snapshot_keeps_only_per_locale_columns_flat() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                title__en TEXT,
+                title__de TEXT,
+                seo__title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO items (id, title__en, seo__title) VALUES ('i1', 'Hello', 'published');",
+        )
+        .unwrap();
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let mut group = DocumentFields::new();
+        group.insert("seo".to_string(), json!({ "title": "edited" }));
+        let doc = Document::builder("i1").fields(group).build();
+
+        let snapshot = build_snapshot(&conn, "items", &fields, &doc, Some(&locale)).unwrap();
+
+        assert_eq!(snapshot.get("seo__title"), None);
+        assert_eq!(snapshot["seo"], json!({ "title": "edited" }));
+        assert_eq!(snapshot["title__en"], json!("Hello"));
+    }
+
+    /// Regression: the snapshot build recorded no per-locale `_lang` columns,
+    /// so a version lost every non-default locale's language pick.
+    #[test]
+    fn a_snapshot_records_every_locales_code_language() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE snippets (
+                id TEXT PRIMARY KEY,
+                snippet__en TEXT,
+                snippet__de TEXT,
+                snippet_lang__en TEXT,
+                snippet_lang__de TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO snippets (id, snippet__en, snippet__de, snippet_lang__en, snippet_lang__de)
+                VALUES ('s1', 'console.log(1)', 'print(1)', 'javascript', 'python');",
+        )
+        .unwrap();
+
+        let mut snippet = code_lang_field("snippet");
+        snippet.localized = true;
+        let fields = vec![snippet];
+        let doc = Document::builder("s1").build();
+
+        let snapshot = build_snapshot(&conn, "snippets", &fields, &doc, Some(&en_de())).unwrap();
+
+        assert_eq!(snapshot["snippet_lang__en"], json!("javascript"));
+        assert_eq!(snapshot["snippet_lang__de"], json!("python"));
     }
 }

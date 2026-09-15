@@ -7,7 +7,6 @@ use axum::{
 use serde_json::{Value, from_str, json};
 use tracing::warn;
 
-use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -21,10 +20,10 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PageRequest, PaginationParams, bad_request, extract_editor_locale,
-                extract_status_filter, extract_where_params, parse_where_params, paths,
-                render_page, require_collection, service_error_to_admin_response,
-                task_join_error_response, validate_sort,
+                HxNav, ListUrlContext, PageRequest, PaginationParams, bad_request,
+                editor_locale_ctx, extract_editor_locale, extract_status_filter,
+                extract_where_params, parse_where_params, paths, render_page, require_collection,
+                service_error_to_admin_response, task_join_error_response, validate_sort,
             },
         },
     },
@@ -51,7 +50,7 @@ struct FetchListArgs<'a> {
     state: &'a AdminState,
     slug: &'a str,
     find_query: &'a FindQuery,
-    locale_ctx: Option<&'a query::LocaleContext>,
+    locale_ctx: Option<&'a LocaleContext>,
     auth_user: &'a Option<Extension<AuthUser>>,
     cursor_enabled: bool,
     is_trash: bool,
@@ -315,9 +314,7 @@ fn parse_list_inputs(
     let find_query = build_find_query(&pagination, &url_filters, order_by, search.as_deref());
 
     let editor_locale = extract_editor_locale(headers, &state.config.locale);
-    let locale_ctx =
-        LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale)
-            .unwrap_or(None);
+    let locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale.as_deref());
 
     Ok(ListInputs {
         is_trash,

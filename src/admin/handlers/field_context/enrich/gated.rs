@@ -6,11 +6,18 @@
 //! filter (downgraded to the viewer's access) in SQL — the same scope a normal
 //! read uses — instead of a raw, unscoped query.
 
+use std::slice;
+
 use tracing::warn;
 
-use crate::core::{CollectionDefinition, Document};
-use crate::db::{Filter, FilterClause, FilterOp, FindQuery, query};
-use crate::service::{ReadAccessCtx, RunnerReadHooks, requested_views, resolve_view_scope};
+use crate::{
+    core::{CollectionDefinition, Document},
+    db::{Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
+    service::{
+        ReadAccessCtx, ReadStripArgs, RunnerReadHooks, helpers::strip_unreadable_docs,
+        requested_views, resolve_view_scope,
+    },
+};
 
 use super::EnrichCtx;
 
@@ -59,11 +66,38 @@ pub(in crate::admin::handlers::field_context) fn gated_find_by_id(
     }));
 
     let fq = FindQuery::builder().filters(filters).build();
-    query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
+    let mut doc = query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
         .inspect_err(|e| warn!("enrichment label read for '{slug}' failed: {e}"))
         .ok()?
         .into_iter()
-        .next()
+        .next()?;
+
+    strip_label_docs(ctx, slug, def, slice::from_mut(&mut doc));
+
+    Some(doc)
+}
+
+/// Strip what the viewer may not read from label documents, as every read
+/// does: read-denied fields — each document its own `ctx.document` — and hidden
+/// fields. The read-access strip runs as one batch, so the Lua VM is taken once
+/// for the whole list. A label whose title field is stripped falls back to the id.
+fn strip_label_docs(
+    ctx: &EnrichCtx,
+    slug: &str,
+    def: &CollectionDefinition,
+    docs: &mut [Document],
+) {
+    let hooks = RunnerReadHooks::new(&ctx.state.infra.hook_runner, ctx.conn, ctx.user, None);
+    let locale = ctx.rel_locale_ctx.map(LocaleContext::access_locale);
+
+    strip_unreadable_docs(
+        &hooks,
+        &ReadStripArgs::builder(&def.fields, slug)
+            .user(ctx.user)
+            .locale(locale)
+            .build(),
+        docs,
+    );
 }
 
 /// Gated reverse-lookup / list read for a display label set: `base_filters` AND
@@ -81,9 +115,13 @@ pub(in crate::admin::handlers::field_context) fn gated_find(
     filters.extend(base_filters);
 
     let fq = FindQuery::builder().filters(filters).build();
-    query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
+    let mut docs = query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
         .inspect_err(|e| warn!("enrichment label list read for '{slug}' failed: {e}"))
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    strip_label_docs(ctx, slug, def, &mut docs);
+
+    docs
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -93,8 +131,90 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
-    use crate::admin::handlers::field_context::enrich::test_helpers::make_test_state_with_deny;
-    use crate::core::{CollectionDefinition, FieldDefinition, FieldType, Registry};
+    use crate::{
+        admin::handlers::field_context::enrich::test_helpers::make_test_state_with_deny,
+        core::{FieldDefinition, FieldType, Registry},
+    };
+
+    /// Regression: a label read skipped the read strips, so a hidden (or
+    /// read-denied) title field still named the selected item.
+    #[test]
+    fn a_hidden_title_is_not_read_for_a_label() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT,
+                _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO posts (id, title) VALUES ('p1', 'Secret Title');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .hidden(true)
+                .build(),
+        ];
+        let reg = Registry::new();
+        let errors = HashMap::new();
+        let state = make_test_state_with_deny(false);
+        let ctx = EnrichCtx {
+            state: &state,
+            non_default_locale: false,
+            errors: &errors,
+            conn: &conn,
+            reg: &reg,
+            rel_locale_ctx: None,
+            user: None,
+        };
+
+        let doc = gated_find_by_id(&ctx, "posts", &def, "p1").expect("a readable target");
+
+        assert_eq!(doc.get_str("title"), None);
+    }
+
+    /// A label list read strips every document it returns, not only the first:
+    /// the hidden title field names none of the listed items.
+    #[test]
+    fn a_hidden_title_is_not_read_for_any_label_in_a_list() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT,
+                _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO posts (id, title) VALUES ('p1', 'Secret One');
+            INSERT INTO posts (id, title) VALUES ('p2', 'Secret Two');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .hidden(true)
+                .build(),
+        ];
+        let reg = Registry::new();
+        let errors = HashMap::new();
+        let state = make_test_state_with_deny(false);
+        let ctx = EnrichCtx {
+            state: &state,
+            non_default_locale: false,
+            errors: &errors,
+            conn: &conn,
+            reg: &reg,
+            rel_locale_ctx: None,
+            user: None,
+        };
+
+        let docs = gated_find(&ctx, "posts", &def, Vec::new());
+
+        assert_eq!(docs.len(), 2, "both readable targets are listed");
+        for doc in &docs {
+            assert_eq!(doc.get_str("title"), None, "title leaked for {}", doc.id);
+        }
+    }
 
     /// Regression: enrichment label reads are access-gated. A target the viewer
     /// cannot read must NOT be surfaced as a label — closing the field-context

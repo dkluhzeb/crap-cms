@@ -2,14 +2,15 @@
 
 use std::collections::HashSet;
 
-use crate::core::Document;
+use crate::{core::Document, db::query::helpers::column_belongs_to};
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
 /// returns all columns (backward compat). Always includes `id`, `created_at`,
 /// `updated_at`, and `_status` (the latter so cursor pagination can encode the
 /// composite `(_status, sort_col, id)` order regardless of caller-provided
-/// `select`). For group fields: selecting `"seo"` includes all `seo__*`
-/// sub-columns.
+/// `select`). A selected field keeps every column it stores
+/// ([`column_belongs_to`]): per-locale columns, a group's sub-columns, and its
+/// `_tz` / `_lang` companions.
 pub(super) fn apply_select_filter(
     select_exprs: Vec<String>,
     result_names: Vec<String>,
@@ -28,12 +29,7 @@ pub(super) fn apply_select_filter(
         let dominated_by_select = matches!(
             name.as_str(),
             "id" | "created_at" | "updated_at" | "_status"
-        ) || selected.contains(name.as_str())
-            || name.split_once("__").is_some_and(|(prefix, _)| {
-                // Group prefix: "seo" selected → include "seo__title"
-                // Locale suffix: "title" selected → include "title__de"
-                selected.contains(prefix)
-            });
+        ) || selected.iter().any(|field| column_belongs_to(&name, field));
 
         if dominated_by_select {
             out_exprs.push(expr);
@@ -49,12 +45,8 @@ pub(super) fn apply_select_filter(
 pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
     let selected: HashSet<&str> = select.iter().map(std::string::String::as_str).collect();
 
-    doc.fields.retain(|key, _| {
-        selected.contains(key.as_str())
-            || key
-                .split_once("__")
-                .is_some_and(|(prefix, _)| selected.contains(prefix))
-    });
+    doc.fields
+        .retain(|key, _| selected.iter().any(|field| column_belongs_to(key, field)));
 
     if !selected.contains("created_at") {
         doc.created_at = None;
@@ -69,6 +61,49 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Regression: a selected field kept only the columns named after it with
+    /// `__`, so a timezone date lost its `_tz` companion and a code field its
+    /// `_lang` companion.
+    #[test]
+    fn select_keeps_a_fields_companion_columns() {
+        let names: Vec<String> = [
+            "id",
+            "starts",
+            "starts_tz",
+            "starts_tz__en",
+            "snippet",
+            "snippet_lang",
+            "other",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        let select = vec!["starts".to_string(), "snippet".to_string()];
+
+        let (_, kept) = apply_select_filter(names.clone(), names, Some(&select));
+        assert_eq!(
+            kept,
+            [
+                "id",
+                "starts",
+                "starts_tz",
+                "starts_tz__en",
+                "snippet",
+                "snippet_lang"
+            ]
+        );
+
+        let mut doc = Document::new("d1".to_string());
+        for key in ["starts", "starts_tz", "snippet", "snippet_lang", "other"] {
+            doc.fields.insert(key.to_string(), json!("x"));
+        }
+        apply_select_to_document(&mut doc, &select);
+
+        let mut keys: Vec<String> = doc.fields.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["snippet", "snippet_lang", "starts", "starts_tz"]);
+    }
 
     #[test]
     fn apply_select_filter_with_group() {

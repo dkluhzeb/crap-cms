@@ -87,8 +87,9 @@ pub(in crate::typegen) struct PolyDef {
 /// One resolved field, ready for a printer to render.
 #[derive(Clone)]
 pub(in crate::typegen) struct Field<'a> {
-    /// The raw wire key: a schema field name, or a synthesized key such as a
-    /// timezone date's `<name>_tz`. Printers sanitize per language.
+    /// The raw wire key: a schema field name, or a synthesized companion key
+    /// such as a timezone date's `<name>_tz` or a code field's `<name>_lang`.
+    /// Printers sanitize per language.
     pub name: Cow<'a, str>,
     pub ty: FieldTy,
     pub optional: bool,

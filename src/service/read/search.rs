@@ -7,8 +7,8 @@ use crate::{
     core::{Document, upload},
     db::{LocaleContext, query},
     service::{
-        PaginatedResult, ReadAccessCtx, SearchDocumentsInput, ServiceContext, ServiceError,
-        helpers, requested_views, resolve_view_scope,
+        PaginatedResult, ReadAccessCtx, ReadStripArgs, SearchDocumentsInput, ServiceContext,
+        ServiceError, helpers, requested_views, resolve_view_scope,
     },
 };
 
@@ -90,27 +90,22 @@ pub fn search_documents(
 
     let cursor_has_more = helpers::finish_cursor_overfetch(&mut fq, &mut docs, overfetch, total);
 
-    if let Some(ref uc) = def.upload
-        && uc.enabled
-    {
-        for doc in &mut docs {
-            upload::assemble_sizes_object(doc, uc);
-        }
+    for doc in &mut docs {
+        upload::shape_read_document(def, doc);
     }
 
     // Field-read access is data-aware (per-doc, per-row), stripped in ONE batch
-    // so the Lua VM is acquired once for the whole list. The API-hidden set is
-    // document-independent and computed once.
+    // so the Lua VM is acquired once for the whole list.
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    let api_hidden = helpers::collect_api_hidden_field_names(&def.fields, "");
 
-    hooks.strip_read_access_docs(&def.fields, &mut docs, ctx.slug, ctx.user, access_locale);
-
-    if !api_hidden.is_empty() {
-        for doc in &mut docs {
-            doc.strip_fields(&api_hidden);
-        }
-    }
+    helpers::strip_unreadable_docs(
+        hooks,
+        &ReadStripArgs::builder(&def.fields, ctx.slug)
+            .user(ctx.user)
+            .locale(access_locale)
+            .build(),
+        &mut docs,
+    );
 
     let pagination = helpers::build_pagination(&helpers::PaginationInputs {
         docs: &docs,

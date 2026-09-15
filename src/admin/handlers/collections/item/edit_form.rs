@@ -11,30 +11,29 @@ use axum::{
 use serde_json::{Value, json};
 use tracing::warn;
 
-use crate::admin::context::field::{
-    BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
-};
-use crate::admin::handlers::shared::HxNav;
-
 use crate::{
     admin::{
         AdminState,
         context::{
             BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, DocumentRef,
             LocaleTemplateData, PageMeta, PageType,
+            field::{
+                BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField,
+                ValidationAttrs,
+            },
             page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
         },
         handlers::shared::{
-            EnrichOptions, PageRequest, apply_display_conditions, build_field_contexts,
+            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
             build_locale_template_data, collection_base, compute_denied_read_fields,
-            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            editor_locale_ctx, enrich_field_contexts, extract_doc_status, extract_editor_locale,
             fetch_version_sidebar_data, flatten_document_values, get_user_doc,
             is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
             require_collection, service_error_to_admin_response, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
-    db::{DbPool, query::LocaleContext},
+    db::{DbPool, LocaleContext},
     hooks::ConditionContext,
     service::{
         RunnerReadHooks, ServiceContext, ServiceError,
@@ -125,6 +124,7 @@ fn prepare_edit_fields(
         non_default_locale,
     );
 
+    let locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale);
     enrich_field_contexts(
         &mut fields,
         &def.fields,
@@ -135,6 +135,7 @@ fn prepare_edit_fields(
             .non_default_locale(non_default_locale)
             .doc_id(Some(id))
             .user(get_user_doc(auth_user))
+            .locale_ctx(locale_ctx.as_ref())
             .build(),
     );
 

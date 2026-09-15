@@ -192,7 +192,7 @@ covers reads as well as writes:
 <!-- GENERATED:mcp-reserved-args BEGIN -->
 | Argument | Tools | Description |
 |----------|-------|-------------|
-| `locale` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields — selects the locale on reads, targets it on writes. |
+| `locale` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `list_versions_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields — selects the locale on reads, targets it on writes. |
 | `draft` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | On writes: save as a draft version. On reads: include the draft overlay. |
 | `events` | `create_*`, `update_*`, `delete_*`, `undelete_*`, `unpublish_*`, `create_many_*`, `update_many_*`, `delete_many_*`, `global_update_*` | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
 | `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |

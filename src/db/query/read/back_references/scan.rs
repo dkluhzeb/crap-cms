@@ -5,10 +5,9 @@ use anyhow::Result;
 
 use crate::config::LocaleConfig;
 use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, field_children};
-use crate::db::query::helpers::{
-    global_table, join_table, locale_column, prefixed_name as prefixed,
-};
+use crate::db::query::helpers::{global_table, join_table, prefixed_name as prefixed};
 use crate::db::query::poly_ref;
+use crate::db::query::{column_is_localized, stored_columns};
 use crate::db::{DbConnection, DbValue};
 
 use super::helpers::query_ids;
@@ -39,6 +38,7 @@ pub fn find_back_references(
             target_collection,
             target_id,
             locale_config,
+            root_fields: &def.fields,
             owner_slug: slug,
             owner_label: def.display_name(),
             is_global: false,
@@ -54,6 +54,7 @@ pub fn find_back_references(
             target_collection,
             target_id,
             locale_config,
+            root_fields: &def.fields,
             owner_slug: slug,
             owner_label: def.display_name(),
             is_global: true,
@@ -136,7 +137,8 @@ fn scan_relationship(
             parent_table,
             &col,
             rc.is_polymorphic(),
-            field.localized && scan.locale_config.is_enabled(),
+            column_is_localized(&col, scan.root_fields).unwrap_or(false)
+                && scan.locale_config.is_enabled(),
         )?
     } else {
         let junction = join_table(parent_table, &col);
@@ -173,12 +175,7 @@ fn query_has_one(
 ) -> Result<Vec<String>> {
     if is_localized {
         // Localized has-one: check all locale columns
-        let locale_cols: Vec<String> = scan
-            .locale_config
-            .locales
-            .iter()
-            .map(|l| locale_column(col, l))
-            .collect::<Result<Vec<String>>>()?;
+        let locale_cols = stored_columns(col, true, scan.locale_config)?;
 
         if locale_cols.is_empty() {
             return Ok(Vec::new());
@@ -291,6 +288,35 @@ mod tests {
     use crate::db::query::read::back_references::test_helpers::*;
 
     // ── Has-one relationship ──────────────────────────────────────────
+
+    /// Regression: the back-reference scan read a has-one relationship inside a
+    /// localized group from a bare column that doesn't exist, so listing a
+    /// target's references failed.
+    #[test]
+    fn a_has_one_in_a_localized_group_is_found_in_any_locale() {
+        let mut media = CollectionDefinition::new("media");
+        media.fields = vec![FieldDefinition::builder("alt", FieldType::Text).build()];
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("grp", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("image", FieldType::Upload)
+                        .relationship(RelationshipConfig::new("media", false))
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &locale_en_de());
+        let conn = pool.get().unwrap();
+        insert_doc(&conn, "media", "m1");
+        insert_doc_with_field(&conn, "posts", "p1", "grp__image__de", "m1");
+
+        let refs = find_back_references(&conn, &registry, "media", "m1", &locale_en_de()).unwrap();
+
+        assert_eq!(refs.len(), 1);
+    }
 
     #[test]
     fn has_one_finds_back_reference() {

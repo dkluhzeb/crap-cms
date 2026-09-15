@@ -1,7 +1,5 @@
 //! Draft version save: merge data onto existing doc, snapshot, prune.
 
-use std::collections::HashSet;
-
 use anyhow::Result;
 use serde_json::{Map, Value};
 
@@ -14,7 +12,7 @@ use crate::{
     db::{
         DbConnection, LocaleContext, query,
         query::{
-            helpers::{locale_column, prefixed_name, tz_column},
+            helpers::{locale_column, prefixed_name},
             locale_locked_field_names,
         },
     },
@@ -70,6 +68,11 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     // overlay nor the join re-merge can bake a non-default-locale edit of a
     // shared field into the snapshot.
     flattened.retain(|k, _| !locked.contains(k));
+
+    // The snapshot stands in for the stored row: every value in the form its
+    // write stores and a read returns (a checkbox as `0`/`1`, JSON as text, a
+    // timezone date normalized), so a draft read matches the published one.
+    query::stored_document_values(&mut flattened, fields);
 
     // A localized join field's edit belongs to the saving locale only: it is
     // written under that locale's snapshot key, never over the rows the other
@@ -186,12 +189,7 @@ fn split_per_locale_keys(
         return Ok((prior.into_iter().collect(), Map::new()));
     };
 
-    let mut per_locale_keys = HashSet::new();
-    for base in per_locale_bases(fields) {
-        for locale in &ctx.config.locales {
-            per_locale_keys.insert(locale_column(&base, locale)?);
-        }
-    }
+    let per_locale_keys = query::per_locale_columns(fields, &ctx.config)?;
 
     let mut rest = DocumentFields::new();
     let mut per_locale = Map::new();
@@ -205,27 +203,6 @@ fn split_per_locale_keys(
     }
 
     Ok((rest, per_locale))
-}
-
-/// The flat keys a snapshot records per locale: localized columns — with a
-/// timezone date's companion — and localized join fields.
-fn per_locale_bases(fields: &[FieldDefinition]) -> HashSet<String> {
-    let mut bases: HashSet<String> = query::localized_join_keys(fields).into_iter().collect();
-
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
-        if (field.localized || inherited) && field.has_parent_column() {
-            let name = prefixed_name(prefix, &field.name);
-
-            if field.has_tz_companion() {
-                bases.insert(tz_column(&name));
-            }
-            bases.insert(name);
-        }
-
-        Ok(())
-    });
-
-    bases
 }
 
 /// Write the edited rows of each localized join field under the saving locale's
@@ -282,18 +259,12 @@ fn stamp_write_locale_columns(
             return Ok(());
         }
 
-        let name = prefixed_name(prefix, &field.name);
-        if let Some(value) = data.get(&name) {
-            snapshot.insert(locale_column(&name, locale)?, value.clone());
-        }
-
-        // A timezone date's zone is stamped beside it: the draft read resolves
-        // the companion from its per-locale key too.
-        let tz = tz_column(&name);
-        if field.has_tz_companion()
-            && let Some(value) = data.get(&tz)
-        {
-            snapshot.insert(locale_column(&tz, locale)?, value.clone());
+        // A companion (a date's zone, a code field's language) is stamped beside
+        // its value: the draft read resolves it from its per-locale key too.
+        for column in field.columns_with_companions(&prefixed_name(prefix, &field.name)) {
+            if let Some(value) = data.get(&column) {
+                snapshot.insert(locale_column(&column, locale)?, value.clone());
+            }
         }
 
         Ok(())
@@ -378,7 +349,11 @@ fn merge_join_data_prefixed(
 mod tests {
     use serde_json::json;
 
-    use crate::{config::LocaleConfig, core::field::RelationshipConfig, db::LocaleMode};
+    use crate::{
+        config::LocaleConfig,
+        core::field::{FieldAdmin, RelationshipConfig},
+        db::LocaleMode,
+    };
 
     use super::*;
 
@@ -514,6 +489,44 @@ mod tests {
 
         assert_eq!(snapshot["starts__de"], json!("2026-01-01T10:00:00.000Z"));
         assert_eq!(snapshot["starts_tz__de"], json!("America/New_York"));
+    }
+
+    /// Regression: a draft save stamped only a timezone companion per locale,
+    /// so a localized code field's language edit never reached the draft and the
+    /// draft read showed the stored language.
+    #[test]
+    fn a_localized_code_field_stamps_its_language_under_the_saving_locale() {
+        let fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        };
+        let mut snapshot = json!({ "snippet_lang__de": "javascript" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut edit = DocumentFields::new();
+        edit.insert("snippet".into(), json!("print(1)"));
+        edit.insert("snippet_lang".into(), json!("python"));
+
+        stamp_write_locale_columns(&mut snapshot, &fields, &edit, Some(&ctx)).unwrap();
+
+        assert_eq!(snapshot["snippet__de"], json!("print(1)"));
+        assert_eq!(snapshot["snippet_lang__de"], json!("python"));
+        assert!(!snapshot.contains_key("snippet_lang__en"));
     }
 
     #[test]

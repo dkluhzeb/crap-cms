@@ -34,7 +34,7 @@ use crate::{
         },
     },
     core::field::{FieldDefinition, FieldType},
-    db::query::helpers::tz_column,
+    db::query::helpers::{lang_column, tz_column},
 };
 
 /// Inheritance state passed down through recursion in this module.
@@ -237,13 +237,12 @@ fn apply_date(
 ) {
     field_types::sub_date(df, child, child_val, "");
 
-    if !child.timezone {
+    if !child.has_tz_companion() {
         return;
     }
 
-    let tz_key = tz_column(&child.name);
     let tz_val = data_obj
-        .and_then(|m| m.get(&tz_key))
+        .and_then(|m| m.get(&tz_column(&child.name)))
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
@@ -299,7 +298,7 @@ fn dispatch_child(
         FieldContext::Upload(uf) => field_types::sub_upload(uf, child),
         FieldContext::Textarea(tf) => enrich_sub_textarea(tf, child),
         FieldContext::Richtext(rf) => enrich_sub_richtext(rf, child, child_name, opts.errors),
-        FieldContext::Code(cf) => enrich_sub_code(cf, child),
+        FieldContext::Code(cf) => enrich_sub_code(cf, child, data_obj),
         FieldContext::Text(tf) if child.has_many => {
             field_types::sub_text_has_many_tags(tf, child_val);
         }
@@ -374,21 +373,36 @@ fn enrich_sub_textarea(tf: &mut TextareaField, child: &FieldDefinition) {
     tf.resizable = child.admin.resizable;
 }
 
-/// Apply the code-editor-specific admin knobs (`language`, `languages`) to
-/// a layout-wrapper-nested code child.
+/// Apply the code-editor-specific admin knobs (`language`, `languages`) to a
+/// layout-wrapper-nested code child.
 ///
-/// Layout-wrapper-nested Code fields use the operator-default language
-/// only — no per-row `<short>_lang` lookup. This preserves the pre-existing
-/// Value-based behavior; fixing the companion lookup is a separate concern.
-fn enrich_sub_code(cf: &mut CodeField, child: &FieldDefinition) {
+/// The language starts at the operator default and is replaced by the row's
+/// stored `<name>_lang` companion when it holds one — the same lookup the
+/// top-level and array builders do, so a layout wrapper stays transparent.
+fn enrich_sub_code(
+    cf: &mut CodeField,
+    child: &FieldDefinition,
+    data_obj: Option<&serde_json::Map<String, Value>>,
+) {
     cf.language = child
         .admin
         .language
         .as_deref()
         .unwrap_or("json")
         .to_string();
-    if !child.admin.languages.is_empty() {
-        cf.languages = Some(child.admin.languages.clone());
+
+    if !child.has_lang_companion() {
+        return;
+    }
+
+    cf.languages = Some(child.admin.languages.clone());
+
+    if let Some(lang) = data_obj
+        .and_then(|m| m.get(&lang_column(&child.name)))
+        .and_then(Value::as_str)
+        .filter(|lang| !lang.is_empty())
+    {
+        cf.language = lang.to_string();
     }
 }
 
@@ -463,6 +477,76 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::core::FieldAdmin;
+
+    /// A code field inside a layout wrapper takes its language from the row's
+    /// stored `<name>_lang` companion, the way the top-level and array builders
+    /// do — a wrapper is transparent, so it must not fall back to the operator
+    /// default and show the row in the wrong language.
+    #[test]
+    fn a_wrapped_code_child_takes_its_language_from_the_row() {
+        let snippet = FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .language("javascript")
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build();
+
+        let row = json!({ "snippet": "print(1)", "snippet_lang": "python" });
+
+        let children = build_enriched_children_from_data(
+            &[snippet],
+            Some(&row),
+            "items[0]",
+            false,
+            false,
+            0,
+            &HashMap::new(),
+        );
+
+        let FieldContext::Code(cf) = &children[0] else {
+            panic!("expected a code context")
+        };
+        assert_eq!(cf.language, "python");
+        assert_eq!(
+            cf.languages.as_deref(),
+            Some(&["javascript".to_string(), "python".to_string()][..])
+        );
+    }
+
+    /// Without a stored pick the operator default stands, and the picker's
+    /// allow-list is still emitted.
+    #[test]
+    fn a_wrapped_code_child_keeps_the_default_language_without_a_pick() {
+        let snippet = FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .language("javascript")
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build();
+
+        let row = json!({ "snippet": "print(1)", "snippet_lang": "" });
+
+        let children = build_enriched_children_from_data(
+            &[snippet],
+            Some(&row),
+            "items[0]",
+            false,
+            false,
+            0,
+            &HashMap::new(),
+        );
+
+        let FieldContext::Code(cf) = &children[0] else {
+            panic!("expected a code context")
+        };
+        assert_eq!(cf.language, "javascript");
+        assert!(cf.languages.is_some());
+    }
 
     /// Resolve a leaf field's (name, raw, value) from a parent data object.
     fn resolve_leaf(name: &str, ft: FieldType, data: &Value, parent: &str) -> (String, String) {

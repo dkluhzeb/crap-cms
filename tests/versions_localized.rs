@@ -11,10 +11,11 @@ use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    FindByIdInput, OpDeadline, RunnerReadHooks, ServiceContext, UpdateManyOptions, WriteInput,
-    find_document_by_id, restore_collection_version, update_document, update_many,
+    FindByIdInput, ListVersionsInput, OpDeadline, RunnerReadHooks, ServiceContext,
+    UpdateManyOptions, WriteInput, find_document_by_id, list_versions, restore_collection_version,
+    unpublish_document, update_document, update_many,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 struct Harness {
     _tmp: tempfile::TempDir,
@@ -169,6 +170,49 @@ fn restoring_a_version_keeps_every_locale() {
         "restoring a German-made version must not wipe the English title"
     );
     assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo v2"));
+}
+
+/// The `title` of the newest version snapshot, read under `locale`
+/// (`None` = unqualified, `Some("all")` = every locale at once).
+fn latest_version_title(h: &Harness, id: &str, locale: Option<&str>) -> Value {
+    let conn = h.pool.get().unwrap();
+    let hooks = RunnerReadHooks::new(&h.runner, &conn, None, None);
+    let read_ctx = ServiceContext::collection("pages", &h.def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .locale_config(Some(&h.locale))
+        .build();
+
+    let locale_ctx =
+        LocaleContext::from_locale_string(locale, &h.locale).expect("a configured locale");
+    let input = ListVersionsInput::builder(id)
+        .locale_ctx(locale_ctx.as_ref())
+        .build();
+
+    let mut listed = list_versions(&read_ctx, &input).expect("version history");
+    let newest = listed.docs.remove(0);
+
+    newest.snapshot.get("title").cloned().expect("a title")
+}
+
+/// A version snapshot reads as a document in the locale the caller asks for:
+/// the German values under `de`, every locale's value under `all`, and the
+/// default locale when no locale is given. Without the locale the history
+/// surface was pinned to the default locale and a snapshot's translations
+/// were unreachable.
+#[test]
+fn a_version_snapshot_reads_in_the_requested_locale() {
+    let h = setup();
+    let id = seed(&h);
+
+    write(&h, &id, "de", fields(&[("title", "Hallo v2")]), false);
+
+    assert_eq!(latest_version_title(&h, &id, None), json!("Hello"));
+    assert_eq!(latest_version_title(&h, &id, Some("de")), json!("Hallo v2"));
+    assert_eq!(
+        latest_version_title(&h, &id, Some("all")),
+        json!({ "en": "Hello", "de": "Hallo v2" })
+    );
 }
 
 /// A draft saved under one locale is read back per locale, not served as
@@ -493,4 +537,74 @@ fn a_partial_draft_update_keeps_earlier_draft_edits() {
     let draft = read_draft(&h, &id, "en");
     assert_eq!(draft.get_str("title"), Some("Hello draft"));
     assert_eq!(draft.get_str("slug"), Some("draft-slug"));
+}
+
+/// Regression: a draft save reported — to `after_change` hooks, the caller and
+/// the event — the published rows of its array fields: hydrating the stored row
+/// over the draft replaced the draft's rows.
+#[test]
+fn a_draft_save_reports_its_own_rows() {
+    let h = setup();
+    let id = seed(&h);
+    write(&h, &id, "en", slides(&["published"]), false);
+
+    let ctx = service_ctx(&h);
+    let locale_ctx = ctx_for(&h, "en");
+    let (doc, _) = update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(slides(&["drafted"]))
+            .locale_ctx(Some(&locale_ctx))
+            .draft(true)
+            .build(),
+    )
+    .expect("draft save");
+
+    assert_eq!(captions(&doc), vec!["drafted".to_string()]);
+}
+
+/// Regression: a restore reported the document as read before its rows and
+/// status were restored — without its array rows, and with the pre-restore
+/// status — and published that as the restore event. A restore takes the
+/// snapshot's own status, so restoring a published version onto an unpublished
+/// document reports it published.
+#[test]
+fn a_restore_reports_the_restored_document() {
+    let h = setup();
+    let id = seed(&h);
+    write(&h, &id, "en", slides(&["first"]), false);
+    write(&h, &id, "en", slides(&["second"]), false);
+    unpublish_document(&service_ctx(&h), &id).expect("unpublish");
+
+    // Newest first: the unpublish, the second write, then the first.
+    let conn = h.pool.get().unwrap();
+    let versions = query::list_versions(&conn, "pages", &id, false, None, None).expect("versions");
+    let version = versions.get(2).expect("the first write's version");
+    assert_eq!(version.status, "published");
+    let version = version.id.clone();
+    drop(conn);
+
+    let doc =
+        restore_collection_version(&service_ctx(&h), &id, &version, &h.locale).expect("restore");
+
+    assert_eq!(captions(&doc), vec!["first".to_string()]);
+    assert_eq!(
+        doc.get_str("_status"),
+        Some("published"),
+        "the restore reports the snapshot's status, not the pre-restore draft status"
+    );
+}
+
+/// Regression: unpublish hydrated a localized array without a locale, so it
+/// reported every locale's rows at once.
+#[test]
+fn unpublish_reports_the_default_locales_rows() {
+    let h = setup();
+    let id = seed(&h);
+    write(&h, &id, "en", slides(&["english"]), false);
+    write(&h, &id, "de", slides(&["deutsch"]), false);
+
+    let doc = unpublish_document(&service_ctx(&h), &id).expect("unpublish");
+
+    assert_eq!(captions(&doc), vec!["english".to_string()]);
 }

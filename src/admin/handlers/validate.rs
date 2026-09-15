@@ -7,11 +7,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use tracing::error;
 
 use crate::{
-    admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
+    admin::{
+        AdminState, Translations,
+        handlers::shared::{translate_validation_errors, value_to_form_string},
+    },
     core::{AuthUser, DocumentFields, ValidationError},
     service::op,
 };
@@ -52,16 +55,7 @@ pub fn validation_ok_response() -> Response {
 /// empty strings, and arrays/objects become their JSON serialization.
 pub fn values_to_string_map(data: &DocumentFields) -> HashMap<String, String> {
     data.iter()
-        .map(|(k, v)| {
-            let s = match v {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            (k.clone(), s)
-        })
+        .map(|(k, v)| (k.clone(), value_to_form_string(v)))
         .collect()
 }
 

@@ -65,6 +65,7 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
             .unwrap_or_default(),
         has_many: field.is_has_many_scalar(),
         timezone: field.has_tz_companion(),
+        companions: field.companion_suffixes().map(str::to_string).collect(),
     }
 }
 
@@ -72,8 +73,8 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
 mod tests {
     use super::*;
     use crate::core::{
-        BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
-        SelectOption,
+        BlockDefinition, FieldAdmin, FieldDefinition, FieldType, LocalizedString,
+        RelationshipConfig, SelectOption,
     };
     fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, field_type).build()
@@ -107,6 +108,32 @@ mod tests {
                 .build(),
         );
         assert!(starts.timezone);
+    }
+
+    /// A client learns every companion key a field carries — a timezone date's
+    /// zone and a code field's language — from the schema alone.
+    #[test]
+    fn field_def_to_proto_lists_companions() {
+        let starts = field_def_to_proto(
+            &FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .build(),
+        );
+        assert_eq!(starts.companions, vec!["_tz"]);
+
+        let snippet = field_def_to_proto(
+            &FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["python".to_string()])
+                        .build(),
+                )
+                .build(),
+        );
+        assert_eq!(snippet.companions, vec!["_lang"]);
+
+        let title = field_def_to_proto(&make_field("title", FieldType::Text));
+        assert!(title.companions.is_empty());
     }
 
     #[test]

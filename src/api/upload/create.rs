@@ -1,39 +1,33 @@
 //! POST /api/upload/{slug} — upload a file and create a document.
 
-use std::sync::Arc;
-
-use tracing::error;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 use tokio::task;
+use tracing::error;
 
-use std::collections::HashMap;
-
-use crate::core::SharedStorage;
 use crate::{
-    admin::AdminState,
-    core::{CollectionDefinition, Document, event::EventOperation, upload::UploadedFile},
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceError, upload::UploadCreateResult},
+    admin::{AdminState, handlers::shared::response::on_blocking_section, parse_multipart_form},
+    core::{CollectionDefinition, Document, upload::UploadedFile},
+    service::{
+        AppInfra, ServiceContext, ServiceError,
+        upload::{self, UploadCreateResult},
+    },
 };
 
 use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
-    publish_upload_event, service_error_to_response,
+    service_error_to_response,
 };
-use crate::admin::handlers::shared::response::on_blocking_section;
-use crate::admin::parse_multipart_form;
 
-/// Owned bundle for the upload-create spawn-blocking body.
+/// Owned bundle for the upload-create spawn-blocking body. Storage, locale
+/// config and transports come from `infra`.
 struct UploadCreateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
-    storage: SharedStorage,
+    infra: Arc<AppInfra>,
     slug: String,
     def: Arc<CollectionDefinition>,
     user_doc: Option<Document>,
@@ -47,9 +41,8 @@ struct UploadCreateBlockingInput {
 fn create_upload_blocking(
     input: UploadCreateBlockingInput,
 ) -> Result<UploadCreateResult, ServiceError> {
-    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .infra(&input.infra)
         .user(input.user_doc.as_ref())
         .build();
 
@@ -57,10 +50,11 @@ fn create_upload_blocking(
     // bare `Internal` before it reaches the HTTP mapper, exactly as the gRPC and
     // admin write paths do — otherwise a conflict/retryable error is reported as
     // a generic 500.
-    let db_kind = input.pool.kind();
-    service::upload::create_upload(
+    let db_kind = input.infra.pool.kind();
+
+    upload::create_upload(
         &ctx,
-        &input.storage,
+        &input.infra.storage,
         &input.file,
         input.form_data,
         input.ui_locale,
@@ -75,7 +69,7 @@ pub(super) async fn create_upload(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
-    request: axum::extract::Request,
+    request: Request,
 ) -> Response {
     // Auth (a read-pool checkout + queries) and the Lua access hook (a
     // VM-pool acquire of up to 5s) are synchronous and must not park an
@@ -139,9 +133,7 @@ pub(super) async fn create_upload(
     };
 
     let input = UploadCreateBlockingInput {
-        pool: state.infra.pool.clone(),
-        runner: state.infra.hook_runner.clone(),
-        storage: state.infra.storage.clone(),
+        infra: state.infra.clone(),
         slug: slug.clone(),
         def: def.clone(),
         user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
@@ -156,16 +148,6 @@ pub(super) async fn create_upload(
 
     match result {
         Ok(Ok(UploadCreateResult { doc, .. })) => {
-            publish_upload_event(
-                &state,
-                &def,
-                slug,
-                doc.id.clone(),
-                EventOperation::Create,
-                Some(doc.fields.clone()),
-                auth_user.as_ref(),
-            );
-
             json_ok(StatusCode::CREATED, &DocumentBody { document: &doc })
         }
         Ok(Err(e)) => service_error_to_response(&e),
@@ -174,5 +156,53 @@ pub(super) async fn create_upload(
 
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{api::upload::helpers::test_support, core::event::EventOperation};
+
+    /// An upload created through the REST API is written by the service with
+    /// the app infra: its storage, one create event and a cleared populate
+    /// cache.
+    #[test]
+    fn an_api_upload_is_created_through_the_service() {
+        let (_tmp, infra, mut rx) = test_support::infra_with_events();
+        let def = infra.registry.get_collection("media").cloned().unwrap();
+
+        let input = UploadCreateBlockingInput {
+            infra: Arc::clone(&infra),
+            slug: "media".to_string(),
+            def,
+            user_doc: None,
+            file: UploadedFile {
+                filename: "a.txt".to_string(),
+                content_type: "text/plain".to_string(),
+                data: b"hello".to_vec(),
+            },
+            form_data: HashMap::new(),
+            ui_locale: None,
+            max_file_size: 1024 * 1024,
+            image_max_attempts: 1,
+        };
+
+        let created = create_upload_blocking(input).expect("create upload");
+
+        assert!(
+            created.doc.get_str("filename").is_some(),
+            "{:?}",
+            created.doc
+        );
+        assert!(
+            !infra.cache.has(test_support::CACHED_KEY).unwrap(),
+            "the populate cache must be cleared"
+        );
+
+        let event = rx.try_recv().expect("a create event");
+        assert!(matches!(event.operation, EventOperation::Create));
+        assert_eq!(event.document_id, created.doc.id);
+        assert!(rx.try_recv().is_err(), "exactly one event");
     }
 }

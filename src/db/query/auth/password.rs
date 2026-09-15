@@ -6,8 +6,11 @@ use crate::{
     core::{CollectionDefinition, Document, HashedPassword, auth::hash_password, normalize_email},
     db::{
         DbConnection, DbValue,
-        document::row_to_document,
-        query::{LocaleContext, helpers::SOFT_DELETE_ACTIVE, read::select_columns},
+        query::{
+            LocaleContext,
+            helpers::SOFT_DELETE_ACTIVE,
+            read::{decode_row, select_columns},
+        },
     },
 };
 
@@ -58,7 +61,7 @@ pub fn find_by_email(
         return Ok(None);
     };
 
-    Ok(Some(row_to_document(conn, &row)?))
+    Ok(Some(decode_row(conn, &row, &def.fields, locale_ctx)?))
 }
 
 /// Get the password hash for a document by ID. Returns None if no hash set.

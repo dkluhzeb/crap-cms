@@ -6,24 +6,22 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
-use serde_json::Value;
 use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{FieldDefinition, Registry},
+    core::{Document, Registry, document::VersionSnapshot},
     db::{
-        AccessResult, DbConnection, FilterClause,
+        AccessResult, DbConnection, FilterClause, LocaleContext, ops,
         query::{self, BackReference, MissingRelation, filter_visible_ids},
     },
     hooks::AccessCheckInput,
     service::{
-        ReadAccessCtx, ReadHooks, ServiceContext, helpers::enforce_access_constraints,
-        resolve_visibility_filter,
+        ReadAccessCtx, ReadHooks, ReadStripArgs, ServiceContext, ServiceError, find_stored_version,
+        helpers::{enforce_access_constraints, strip_unreadable},
+        read_version_snapshot, resolve_visibility_filter,
     },
 };
-
-use super::ServiceError;
 
 /// Access-filtered back-references for a document.
 ///
@@ -265,28 +263,111 @@ fn keep_visible_group(
     }
 }
 
-/// Find relations in a version snapshot that no longer exist in the registry.
-pub fn find_missing_relations(
-    conn: &dyn DbConnection,
+/// A version as the viewer reads it, with the relations its restore would
+/// write whose targets no longer exist.
+///
+/// The check inspects what a restore writes — the stored snapshot, every locale
+/// it records — read the way the viewer reads it: one view per locale, holding
+/// that locale's own values, with the read-denied and hidden fields stripped as
+/// a version read strips them. A value the viewer cannot read is never
+/// reported. `None` when the version does not exist or is hidden from the
+/// viewer.
+///
+/// # Errors
+///
+/// Returns the version read's errors (access denied, hook errors), or a
+/// backend error if the stored snapshot cannot be read.
+pub fn version_missing_relations(
+    ctx: &ServiceContext,
     registry: &Registry,
-    snapshot: &Value,
-    fields: &[FieldDefinition],
-) -> Vec<MissingRelation> {
-    query::find_missing_relations(conn, registry, snapshot, fields)
+    version_id: &str,
+) -> Result<Option<(VersionSnapshot, Vec<MissingRelation>)>, ServiceError> {
+    // The gated read row, still carrying the STORED snapshot: the views below
+    // are what a restore would write, so they must be built before the read
+    // shaping rewrites the snapshot into the document a read returns.
+    let Some(mut version) = find_stored_version(ctx, version_id)? else {
+        return Ok(None);
+    };
+
+    let views = readable_locale_views(ctx, &version)?;
+
+    // The per-locale `views` above already cover every locale the restore
+    // would write; the returned snapshot is the default-locale read shape.
+    read_version_snapshot(ctx, ctx.read_hooks()?, &mut version, None)?;
+
+    let conn = ctx.resolve_conn()?;
+    let missing = query::find_missing_relations(conn.as_ref(), registry, &views, ctx.fields()?);
+
+    Ok(Some((version, missing)))
+}
+
+/// Each locale's view of a stored snapshot as the viewer reads it: resolved for
+/// that locale alone, then stripped of the fields a read withholds —
+/// read-denied ones judged in that locale, and hidden ones.
+fn readable_locale_views(
+    ctx: &ServiceContext,
+    stored: &VersionSnapshot,
+) -> Result<Vec<Document>, ServiceError> {
+    let hooks = ctx.read_hooks()?;
+    let fields = ctx.fields()?;
+    let parent = stored.parent.to_string();
+
+    let mut views = Vec::new();
+
+    for locale_ctx in exact_locale_contexts(ctx.locale_config) {
+        let Some(mut view) =
+            ops::snapshot_read_document(&parent, &stored.snapshot, fields, locale_ctx.as_ref())?
+        else {
+            continue;
+        };
+
+        let locale = locale_ctx.as_ref().map(LocaleContext::access_locale);
+        strip_unreadable(
+            hooks,
+            &ReadStripArgs::builder(fields, ctx.slug)
+                .user(ctx.user)
+                .locale(locale)
+                .build(),
+            &mut view,
+        );
+
+        views.push(view);
+    }
+
+    Ok(views)
+}
+
+/// One exact context per configured locale: a restore writes each locale's own
+/// value, never its fallback's. A single `None` without localization.
+fn exact_locale_contexts(config: Option<&LocaleConfig>) -> Vec<Option<LocaleContext>> {
+    let Some(config) = config.filter(|c| c.is_enabled()) else {
+        return vec![None];
+    };
+
+    config
+        .locales
+        .iter()
+        .map(|locale| Some(LocaleContext::exact(config, locale)))
+        .collect()
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use anyhow::Result;
+    use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
-    use crate::core::collection::Hooks;
-    use crate::core::{
-        CollectionDefinition, Document, FieldDefinition, FieldType, RelationshipConfig, ReqContext,
+    use crate::{
+        config::{CrapConfig, DatabaseConfig},
+        core::{
+            CollectionDefinition, DocumentFields, FieldDefinition, FieldType, HookRef,
+            RelationshipConfig, ReqContext,
+            collection::{Hooks, VersionsConfig},
+        },
+        db::{DbPool, Filter, FilterOp, migrate, pool},
+        hooks::lifecycle::{AfterReadCtx, access::strip_read_access_data_aware},
+        service::FieldReadStrip,
     };
-    use crate::db::{Filter, FilterOp, migrate, pool};
-    use crate::hooks::lifecycle::AfterReadCtx;
 
     /// Read hooks that return a canned access result per owner collection/global
     /// slug — enough to drive `find_back_references`'s access filtering without a
@@ -324,8 +405,10 @@ mod tests {
         }
     }
 
+    impl FieldReadStrip for MockHooks {}
+
     /// media (target) + posts (Upload image -> media, plus an `author` column).
-    fn setup() -> (tempfile::TempDir, crate::db::DbPool, Registry) {
+    fn setup() -> (tempfile::TempDir, DbPool, Registry) {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
         posts.fields = vec![
@@ -373,11 +456,7 @@ mod tests {
         (tmp, db_pool, registry)
     }
 
-    fn report(
-        pool: &crate::db::DbPool,
-        registry: &Registry,
-        hooks: &dyn ReadHooks,
-    ) -> BackReferenceReport {
+    fn report(pool: &DbPool, registry: &Registry, hooks: &dyn ReadHooks) -> BackReferenceReport {
         let conn = pool.get().unwrap();
         let media_def = registry.get_collection("media").unwrap();
         let ctx = ServiceContext::collection("media", media_def)
@@ -477,4 +556,238 @@ mod tests {
         assert!(r.references.is_empty());
         assert!(!r.has_inaccessible);
     }
+
+    /// Read hooks that allow every access check and strip every field whose
+    /// read rule is `deny`.
+    struct DenyMarkedFields;
+
+    impl ReadHooks for DenyMarkedFields {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    impl FieldReadStrip for DenyMarkedFields {
+        fn strip_read_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+            strip_read_access_data_aware(fields, level, &|hook, _data| hook.reference() == "deny");
+        }
+    }
+
+    /// Locales `en` (default) and `de`.
+    fn en_de() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    /// An upload field into `media`.
+    fn media_upload(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()
+    }
+
+    /// A versioned `posts` collection with `fields`, synced under `en_de`
+    /// beside `authors`, `tags` and `media`; post `p1` plus one existing
+    /// target in each (`a1`, `t1`, `m1`).
+    fn localized_posts(fields: Vec<FieldDefinition>) -> (tempfile::TempDir, DbPool, Registry) {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.versions = Some(VersionsConfig::new(false, 0));
+        posts.fields = fields;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            for slug in ["authors", "tags", "media"] {
+                reg.register_collection(CollectionDefinition::new(slug));
+            }
+            reg.register_collection(posts);
+        }
+        let registry = (*Registry::snapshot(&shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &en_de()).unwrap();
+
+        let conn = db_pool.get().unwrap();
+        for (table, id) in [
+            ("posts", "p1"),
+            ("authors", "a1"),
+            ("tags", "t1"),
+            ("media", "m1"),
+        ] {
+            conn.execute(
+                &format!("INSERT INTO \"{table}\" (id) VALUES ('{id}')"),
+                &[],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        (tmp, db_pool, registry)
+    }
+
+    /// The missing relations a viewer with `hooks` sees on a version of `p1`
+    /// stored as `snapshot`.
+    fn missing_for(
+        db_pool: &DbPool,
+        registry: &Registry,
+        hooks: &dyn ReadHooks,
+        snapshot: &Value,
+    ) -> Vec<MissingRelation> {
+        let conn = db_pool.get().unwrap();
+        let version = query::create_version(&conn, "posts", "p1", "published", snapshot).unwrap();
+        let def = registry.get_collection("posts").unwrap();
+        let locale = en_de();
+        let ctx = ServiceContext::collection("posts", def)
+            .conn(&conn)
+            .read_hooks(hooks)
+            .locale_config(Some(&locale))
+            .build();
+
+        let (_, missing) = version_missing_relations(&ctx, registry, &version.id)
+            .unwrap()
+            .expect("the version is visible");
+
+        missing
+    }
+
+    /// Each reported field's sorted missing ids and total id count.
+    fn by_field(missing: &[MissingRelation]) -> HashMap<&str, (Vec<&str>, usize)> {
+        missing
+            .iter()
+            .map(|m| {
+                let mut ids: Vec<&str> = m.missing_ids.iter().map(String::as_str).collect();
+                ids.sort_unstable();
+
+                (m.field_name.as_str(), (ids, m.total_ids))
+            })
+            .collect()
+    }
+
+    /// A stored snapshot records a localized reference once per locale
+    /// (`author__de`, `tags__de`, `slides__de`, `meta__hero__de`) and a restore
+    /// writes every locale back. The scan read only the bare key, so a target
+    /// missing in a non-default locale went unreported. Each field is reported
+    /// once, its ids combined across locales.
+    #[test]
+    fn targets_missing_in_a_non_default_locale_are_reported() {
+        let mut hero = media_upload("hero");
+        hero.localized = true;
+
+        let (_tmp, db_pool, registry) = localized_posts(vec![
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("authors", false))
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("slides", FieldType::Array)
+                .localized(true)
+                .fields(vec![media_upload("image")])
+                .build(),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![hero])
+                .build(),
+        ]);
+
+        let snapshot = json!({
+            "author": "a1", "author__en": "a1", "author__de": "a_gone",
+            "tags": ["t1"], "tags__en": ["t1", "t_gone"], "tags__de": ["t_gone"],
+            "slides": [{ "image": "m1" }],
+            "slides__en": [{ "image": "m1" }],
+            "slides__de": [{ "image": "m_gone" }],
+            "meta": { "hero": "m1" }, "meta__hero__en": "m1", "meta__hero__de": "m_gone"
+        });
+        let missing = missing_for(&db_pool, &registry, &NoStripHooks, &snapshot);
+
+        assert_eq!(
+            by_field(&missing),
+            HashMap::from([
+                ("author", (vec!["a_gone"], 2)),
+                ("tags", (vec!["t_gone"], 2)),
+                ("slides.image", (vec!["m_gone"], 2)),
+                ("meta.hero", (vec!["m_gone"], 2)),
+            ]),
+            "{missing:?}"
+        );
+    }
+
+    /// The restore-confirm page listed missing relations for every field of the
+    /// stored snapshot, so a viewer learned the names and referenced ids of
+    /// fields they may not read. A read-denied or hidden field stays
+    /// unreported in every locale.
+    #[test]
+    fn fields_the_viewer_cannot_read_are_not_reported_in_any_locale() {
+        let mut private_image = media_upload("private_image");
+        private_image.localized = true;
+        private_image.access.read = Some(HookRef::new("deny"));
+
+        let mut internal_image = media_upload("internal_image");
+        internal_image.localized = true;
+        internal_image.hidden = true;
+
+        let (_tmp, db_pool, registry) =
+            localized_posts(vec![media_upload("image"), private_image, internal_image]);
+
+        let snapshot = json!({
+            "image": "m_gone",
+            "private_image": "m1",
+            "private_image__en": "m1",
+            "private_image__de": "m_private_gone",
+            "internal_image": "m1",
+            "internal_image__en": "m1",
+            "internal_image__de": "m_internal_gone"
+        });
+        let missing = missing_for(&db_pool, &registry, &DenyMarkedFields, &snapshot);
+
+        let names: Vec<&str> = missing.iter().map(|m| m.field_name.as_str()).collect();
+        assert_eq!(names, vec!["image"], "{missing:?}");
+    }
+
+    /// Read hooks that allow every access check and strip nothing.
+    struct NoStripHooks;
+
+    impl ReadHooks for NoStripHooks {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    impl FieldReadStrip for NoStripHooks {}
 }

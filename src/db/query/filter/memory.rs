@@ -29,8 +29,8 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        DocumentFields, FieldDefinition, FieldType, canonical_operand, flatten_group_fields,
-        parse_bool, prefixed_name, walk_leaf_fields,
+        DocumentFields, FieldDefinition, FieldType, canonical_operand, checkbox_value,
+        flatten_group_fields, parse_bool, parse_number, prefixed_name, walk_leaf_fields,
     },
     db::{Filter, FilterClause, FilterOp, query::helpers::normalize_date_value},
 };
@@ -158,14 +158,14 @@ fn matches_filter(
 fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
     match ft {
         Some(FieldType::Checkbox) => match bool_from_str(expected) {
-            Some(b) => bool_repr(stored) == Some(b),
+            Some(b) => checkbox_value(stored) == Some(b),
             // Unrecognized boolean spelling: SQL falls back to a text compare.
             None => value_to_string(stored) == *expected,
         },
         Some(FieldType::Number) => {
             // Mirror SQL `coerce_filter_value`: only a *finite* parse binds as a
             // number; `inf`/`NaN` fall through to a text compare on both sides.
-            let parsed = expected.parse::<f64>().ok().filter(|f| f.is_finite());
+            let parsed = parse_number(expected).filter(|f| f.is_finite());
             match (num_repr(stored), parsed) {
                 (Some(a), Some(b)) => a == b,
                 // Non-numeric on either side: SQL falls back to a text compare.
@@ -183,20 +183,11 @@ fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
     }
 }
 
-/// Canonical boolean of a stored Checkbox value (`Bool`, `0/1` number, or a
-/// boolean string spelling).
-fn bool_repr(v: &Value) -> Option<bool> {
-    match v {
-        Value::Bool(b) => Some(*b),
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0),
-        Value::String(s) => bool_from_str(s),
-        _ => None,
-    }
-}
-
 /// Parse a constraint's boolean spelling — the shared `core::parse_bool` token
 /// set (`1/true/yes/on` → true, `0/false/no/off` → false), so the in-memory
-/// filter, the SQL filter, and the write-coerce edge agree exactly.
+/// filter, the SQL filter, and the write-coerce edge agree exactly. The *stored*
+/// value is read with the wider `core::checkbox_value` rule, which also accepts
+/// the number a column holds.
 fn bool_from_str(s: &str) -> Option<bool> {
     parse_bool(s)
 }
@@ -205,7 +196,7 @@ fn bool_from_str(s: &str) -> Option<bool> {
 fn num_repr(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse::<f64>().ok(),
+        Value::String(s) => parse_number(s),
         _ => None,
     }
 }
@@ -249,7 +240,7 @@ fn order_is(value: &Value, expected: &str, want: Ordering, allow_eq: bool) -> bo
 /// — ordered comparisons aren't a sensible access constraint on text anyway.
 fn compare_typed(value: &Value, expected: &str) -> Option<Ordering> {
     match value {
-        Value::Number(n) => n.as_f64()?.partial_cmp(&expected.parse::<f64>().ok()?),
+        Value::Number(n) => n.as_f64()?.partial_cmp(&parse_number(expected)?),
         Value::String(s) => Some(s.as_str().cmp(expected)),
         _ => None,
     }
@@ -920,6 +911,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A stored Checkbox reads through the one checkbox rule: any non-zero
+    /// number is checked, and a numeric string means what the number means.
+    /// (`NaN` cannot be a JSON number — `serde_json` refuses to build one — so
+    /// the rule's `NaN`-is-unchecked arm is only reachable through a string.)
+    #[test]
+    fn checkbox_stored_value_follows_the_one_checkbox_rule() {
+        let fields = vec![FieldDefinition::builder("active", FieldType::Checkbox).build()];
+
+        for stored in [json!(2), json!("2"), json!(0.5), json!("on")] {
+            let d = data(&[("active", stored.clone())]);
+            let eq = typed_single("active", FilterOp::Equals("true".into()));
+            assert!(
+                matches_constraints_typed(&d, from_ref(&eq), &fields),
+                "stored {stored} must read as checked"
+            );
+        }
+
+        for stored in [json!(0), json!("0"), json!(0.0), json!("NaN")] {
+            let d = data(&[("active", stored.clone())]);
+            let eq = typed_single("active", FilterOp::Equals("false".into()));
+            assert!(
+                matches_constraints_typed(&d, from_ref(&eq), &fields),
+                "stored {stored} must read as unchecked"
+            );
+        }
+    }
+
+    /// A number spelled with surrounding whitespace compares as the number it
+    /// spells, on both the equality and the ordered path — the shared
+    /// `core::parse_number` reading, so a constraint isn't silently demoted to
+    /// a text compare by a stray space.
+    #[test]
+    fn a_padded_number_constraint_compares_numerically() {
+        let fields = vec![FieldDefinition::builder("score", FieldType::Number).build()];
+        let d = data(&[("score", json!(5))]);
+
+        let eq = typed_single("score", FilterOp::Equals(" 5".into()));
+        assert!(matches_constraints_typed(&d, from_ref(&eq), &fields));
+
+        let gt = typed_single("score", FilterOp::GreaterThan(" 4 ".into()));
+        assert!(matches_constraints_typed(&d, from_ref(&gt), &fields));
+
+        let lt = typed_single("score", FilterOp::LessThan(" 4 ".into()));
+        assert!(!matches_constraints_typed(&d, from_ref(&lt), &fields));
     }
 
     /// Regression: Date constraints normalize both sides like SQL, so a stored

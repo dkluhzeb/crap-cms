@@ -294,11 +294,7 @@ fn prepare_upload_doc(
     admin_thumbnail: Option<&String>,
     include_filename: bool,
 ) -> RelationshipSelectedItem {
-    if let Some(ref uc) = related_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut doc, uc);
-    }
+    upload::shape_read_document(related_def, &mut doc);
 
     build_upload_item(&doc, title_field, admin_thumbnail, include_filename)
 }

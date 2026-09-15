@@ -1,18 +1,21 @@
-//! Check version snapshots for relationship/upload fields whose targets no longer exist.
+//! Check a version's documents for relationship/upload fields whose targets no
+//! longer exist.
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
+use tracing::debug;
+
 use crate::{
     core::{
-        BlockDefinition, FieldChildren, FieldDefinition, NestStep, Registry, RelationshipConfig,
-        field::to_title_case, field_children,
+        BlockDefinition, Document, FieldChildren, FieldDefinition, NestStep, Registry,
+        RelationshipConfig, field::to_title_case, field_children,
     },
     db::{
         DbConnection, DbValue,
         query::{
-            helpers::{placeholder_list, prefixed_name},
+            helpers::placeholder_list,
             poly_ref,
             ref_count::{walk_blocks_with, walk_nested_with},
         },
@@ -50,75 +53,185 @@ impl MissingRelation {
     }
 }
 
-/// Check a version snapshot for relationship/upload fields whose targets no longer exist.
+/// Check documents for relationship/upload fields whose targets no longer exist.
+///
+/// `views` are read-shaped documents — groups nested, localized values resolved
+/// — so a stored snapshot is checked as one view per locale it records. Each
+/// field is reported once under its dotted path (`meta.hero`, `slides.image`),
+/// its referenced ids combined across the views and each counted once.
 pub fn find_missing_relations(
     conn: &dyn DbConnection,
     registry: &Registry,
-    snapshot: &Value,
+    views: &[Document],
     fields: &[FieldDefinition],
 ) -> Vec<MissingRelation> {
-    let Some(obj) = snapshot.as_object() else {
-        return Vec::new();
-    };
-    let mut results = Vec::new();
-    collect_missing_fields(conn, registry, obj, fields, "", &mut results);
-    results
+    let mut acc = MissingAcc::new();
+    let root = ScanPrefix::root();
+
+    for view in views {
+        let obj: Map<String, Value> = view
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        collect_refs(&obj, fields, &root, &mut acc);
+    }
+
+    acc.drain(conn, registry)
 }
 
-/// Recursively walk the field tree and collect missing relations from the snapshot.
-fn collect_missing_fields(
-    conn: &dyn DbConnection,
-    registry: &Registry,
+/// Where a scan stands in the field tree: the dotted field path and the display
+/// label of the level being scanned, both empty at the document root.
+struct ScanPrefix {
+    name: String,
+    label: String,
+}
+
+impl ScanPrefix {
+    fn new(name: String, label: String) -> Self {
+        Self { name, label }
+    }
+
+    fn root() -> Self {
+        Self::new(String::new(), String::new())
+    }
+
+    /// The level inside a group field.
+    fn group(&self, field: &FieldDefinition) -> Self {
+        Self::new(
+            self.name_of(&field.name),
+            self.label_of(&field_display_label(field)),
+        )
+    }
+
+    /// The level of an array or blocks field's rows, labelled by its
+    /// title-cased name.
+    fn rows(&self, field: &FieldDefinition) -> Self {
+        Self::new(
+            self.name_of(&field.name),
+            self.label_of(&to_title_case(&field.name)),
+        )
+    }
+
+    /// `name` appended to the dotted path.
+    fn name_of(&self, name: &str) -> String {
+        if self.name.is_empty() {
+            return name.to_string();
+        }
+
+        format!("{}.{name}", self.name)
+    }
+
+    /// `label` appended to the label, joined with ` > `.
+    fn label_of(&self, label: &str) -> String {
+        if self.label.is_empty() {
+            return label.to_string();
+        }
+
+        format!("{} > {label}", self.label)
+    }
+}
+
+/// Walk the field tree over one level of a view, recording every reference.
+fn collect_refs<'a>(
     obj: &Map<String, Value>,
-    fields: &[FieldDefinition],
-    prefix: &str,
-    results: &mut Vec<MissingRelation>,
+    fields: &'a [FieldDefinition],
+    prefix: &ScanPrefix,
+    acc: &mut MissingAcc<'a>,
 ) {
     for field in fields {
         match field_children(field) {
             FieldChildren::Group(sub) => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-                // Group snapshot can be flat (seo__title) or nested (seo: { title })
-                if let Some(nested) = obj.get(&field.name).and_then(|v| v.as_object()) {
-                    collect_missing_fields(conn, registry, nested, sub, &new_prefix, results);
-                } else {
-                    collect_missing_fields(conn, registry, obj, sub, &new_prefix, results);
+                if let Some(nested) = obj.get(&field.name).and_then(Value::as_object) {
+                    collect_refs(nested, sub, &prefix.group(field), acc);
                 }
             }
-            FieldChildren::Wrapper(sub) => {
-                collect_missing_fields(conn, registry, obj, sub, prefix, results);
-            }
+            FieldChildren::Wrapper(sub) => collect_refs(obj, sub, prefix, acc),
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    collect_missing_fields(conn, registry, obj, &tab.fields, prefix, results);
+                    collect_refs(obj, &tab.fields, prefix, acc);
                 }
             }
             FieldChildren::Array(sub) => {
-                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_array(conn, registry, arr, sub, &field.name, results);
+                if let Some(rows) = obj.get(&field.name).and_then(Value::as_array) {
+                    collect_array_refs(rows, sub, &prefix.rows(field), acc);
                 }
             }
             FieldChildren::Blocks(blocks) => {
-                if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_blocks(conn, registry, arr, blocks, &field.name, results);
+                if let Some(rows) = obj.get(&field.name).and_then(Value::as_array) {
+                    collect_blocks_refs(rows, blocks, &prefix.rows(field), acc);
                 }
             }
-            // Relationship/Upload leaves carry a stored ref to resolve; every
-            // other leaf has none (so it falls through the `else continue`).
-            FieldChildren::Leaf => {
-                let Some(rc) = &field.relationship else {
-                    continue;
-                };
-
-                let key = prefixed_name(prefix, &field.name);
-                let val = obj.get(&key).or_else(|| obj.get(&field.name));
-                let ids = extract_ref_ids(val, rc.is_polymorphic());
-                let label = field_display_label(field);
-
-                push_if_missing(conn, registry, &ids, rc, field.name.clone(), label, results);
-            }
+            FieldChildren::Leaf => collect_leaf_refs(obj.get(&field.name), field, prefix, acc),
         }
     }
+}
+
+/// Record a relationship/upload leaf's references; every other leaf has none.
+fn collect_leaf_refs<'a>(
+    value: Option<&Value>,
+    field: &'a FieldDefinition,
+    prefix: &ScanPrefix,
+    acc: &mut MissingAcc<'a>,
+) {
+    let Some(rc) = &field.relationship else {
+        return;
+    };
+
+    for ref_id in extract_ref_ids(value, rc.is_polymorphic()) {
+        let name = prefix.name_of(&field.name);
+        let label = prefix.label_of(&field_display_label(field));
+
+        acc.add(name, label, rc, ref_id);
+    }
+}
+
+/// Record the references in array rows at ANY nesting depth (a relationship in
+/// a group inside the row, an inner array, etc.), via the shared
+/// [`walk_nested_with`] — the same walker ref-counting and back-references use,
+/// so the three agree on which references a row contains.
+fn collect_array_refs<'a>(
+    rows: &[Value],
+    fields: &'a [FieldDefinition],
+    prefix: &ScanPrefix,
+    acc: &mut MissingAcc<'a>,
+) {
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+
+        let mut stack = Vec::new();
+        walk_nested_with(
+            obj,
+            fields,
+            &mut stack,
+            &mut |leaf, path, coll, id, _poly| {
+                acc.add_nested(prefix, leaf, path, (coll.to_string(), id.to_string()));
+            },
+        );
+    }
+}
+
+/// Record the references in blocks rows at any nesting depth, via the shared
+/// [`walk_blocks_with`].
+fn collect_blocks_refs<'a>(
+    rows: &[Value],
+    blocks: &'a [BlockDefinition],
+    prefix: &ScanPrefix,
+    acc: &mut MissingAcc<'a>,
+) {
+    let mut stack = Vec::new();
+
+    walk_blocks_with(
+        rows,
+        blocks,
+        &mut stack,
+        &mut |leaf, path, coll, id, _poly| {
+            acc.add_nested(prefix, leaf, path, (coll.to_string(), id.to_string()));
+        },
+    );
 }
 
 /// Extract referenced IDs from a snapshot value.
@@ -221,37 +334,10 @@ fn query_existing_ids(
             .filter_map(|row| row.opt_text_at(0))
             .collect(),
         Err(e) => {
-            tracing::debug!("Missing relations check skipping {}: {}", collection, e);
+            debug!("Missing relations check skipping {}: {}", collection, e);
             HashSet::new()
         }
     }
-}
-
-/// If any IDs are missing, push a `MissingRelation` onto results.
-fn push_if_missing(
-    conn: &dyn DbConnection,
-    registry: &Registry,
-    all_ids: &[(String, String)],
-    rc: &RelationshipConfig,
-    field_name: String,
-    label: String,
-    results: &mut Vec<MissingRelation>,
-) {
-    if all_ids.is_empty() {
-        return;
-    }
-
-    let missing = check_ids_exist(conn, registry, all_ids, rc);
-    if missing.is_empty() {
-        return;
-    }
-
-    results.push(MissingRelation::new(
-        field_name,
-        label,
-        missing.into_iter().collect(),
-        all_ids.len(),
-    ));
 }
 
 /// The dotted field path: ancestor segment names plus the leaf field name.
@@ -267,16 +353,16 @@ fn path_names(path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
     parts.join(".")
 }
 
-/// The human label: container prefix, each ancestor segment's display label,
-/// then the leaf field's label — joined with ` > `.
-fn path_label(prefix: &str, path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
-    let mut parts: Vec<String> = vec![prefix.to_string()];
-    for seg in path {
-        parts.push(match seg {
+/// The human label: each ancestor segment's display label, then the leaf
+/// field's label — joined with ` > `.
+fn path_label(path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
+    let mut parts: Vec<String> = path
+        .iter()
+        .map(|seg| match seg {
             NestStep::Field(f) => field_display_label(f),
             NestStep::Block(b) => b.display_label(),
-        });
-    }
+        })
+        .collect();
     parts.push(field_display_label(leaf));
     parts.join(" > ")
 }
@@ -291,7 +377,8 @@ struct MissingEntry<'a> {
 }
 
 /// Accumulates [`MissingEntry`] per field path so the existence check aggregates
-/// across all rows (one `MissingRelation` per path), keeping insertion order.
+/// across all rows and views (one `MissingRelation` per path), keeping
+/// insertion order.
 struct MissingAcc<'a> {
     entries: Vec<MissingEntry<'a>>,
 }
@@ -303,111 +390,76 @@ impl<'a> MissingAcc<'a> {
         }
     }
 
+    /// Record one `(collection, id)` reference of a field path. A path keeps
+    /// each id once, however many rows or views hold it.
     fn add(
         &mut self,
         field_name: String,
         label: String,
         rc: &'a RelationshipConfig,
-        coll: String,
-        id: String,
+        ref_id: (String, String),
     ) {
-        if let Some(e) = self.entries.iter_mut().find(|e| e.field_name == field_name) {
-            e.ids.push((coll, id));
-        } else {
-            self.entries.push(MissingEntry {
-                field_name,
-                label,
-                rc,
-                ids: vec![(coll, id)],
-            });
-        }
-    }
-
-    fn drain(
-        self,
-        conn: &dyn DbConnection,
-        registry: &Registry,
-        results: &mut Vec<MissingRelation>,
-    ) {
-        for e in self.entries {
-            push_if_missing(conn, registry, &e.ids, e.rc, e.field_name, e.label, results);
-        }
-    }
-}
-
-/// Check array rows for missing relations at ANY nesting depth (a relationship
-/// in a group inside the row, an inner array, etc.), via the shared
-/// [`walk_nested_with`] — the same walker ref-counting and back-references use,
-/// so the three agree on which references a row contains.
-fn collect_missing_in_array(
-    conn: &dyn DbConnection,
-    registry: &Registry,
-    rows: &[Value],
-    fields: &[FieldDefinition],
-    array_name: &str,
-    results: &mut Vec<MissingRelation>,
-) {
-    let mut acc = MissingAcc::new();
-    let prefix = to_title_case(array_name);
-
-    for row in rows {
-        let Some(obj) = row.as_object() else {
-            continue;
-        };
-        let mut stack = Vec::new();
-        walk_nested_with(
-            obj,
-            fields,
-            &mut stack,
-            &mut |leaf, path, coll, id, _poly| {
-                if let Some(rc) = &leaf.relationship {
-                    acc.add(
-                        format!("{}.{}", array_name, path_names(path, leaf)),
-                        path_label(&prefix, path, leaf),
-                        rc,
-                        coll.to_string(),
-                        id.to_string(),
-                    );
-                }
-            },
-        );
-    }
-
-    acc.drain(conn, registry, results);
-}
-
-/// Check blocks rows for missing relations at any nesting depth, via the shared
-/// [`walk_blocks_with`].
-fn collect_missing_in_blocks(
-    conn: &dyn DbConnection,
-    registry: &Registry,
-    rows: &[Value],
-    blocks: &[BlockDefinition],
-    blocks_name: &str,
-    results: &mut Vec<MissingRelation>,
-) {
-    let mut acc = MissingAcc::new();
-    let prefix = to_title_case(blocks_name);
-
-    let mut stack = Vec::new();
-    walk_blocks_with(
-        rows,
-        blocks,
-        &mut stack,
-        &mut |leaf, path, coll, id, _poly| {
-            if let Some(rc) = &leaf.relationship {
-                acc.add(
-                    format!("{}.{}", blocks_name, path_names(path, leaf)),
-                    path_label(&prefix, path, leaf),
-                    rc,
-                    coll.to_string(),
-                    id.to_string(),
-                );
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.field_name == field_name) {
+            if !entry.ids.contains(&ref_id) {
+                entry.ids.push(ref_id);
             }
-        },
-    );
 
-    acc.drain(conn, registry, results);
+            return;
+        }
+
+        self.entries.push(MissingEntry {
+            field_name,
+            label,
+            rc,
+            ids: vec![ref_id],
+        });
+    }
+
+    /// Record a reference a nested walk found at `path` below `prefix`.
+    fn add_nested(
+        &mut self,
+        prefix: &ScanPrefix,
+        leaf: &'a FieldDefinition,
+        path: &[NestStep<'_>],
+        ref_id: (String, String),
+    ) {
+        let Some(rc) = &leaf.relationship else {
+            return;
+        };
+
+        let name = prefix.name_of(&path_names(path, leaf));
+        let label = prefix.label_of(&path_label(path, leaf));
+
+        self.add(name, label, rc, ref_id);
+    }
+
+    /// Check every recorded path's ids against the database.
+    fn drain(self, conn: &dyn DbConnection, registry: &Registry) -> Vec<MissingRelation> {
+        self.entries
+            .into_iter()
+            .filter_map(|entry| missing_relation(conn, registry, entry))
+            .collect()
+    }
+}
+
+/// The report for `entry` when any of its ids no longer exists.
+fn missing_relation(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    entry: MissingEntry<'_>,
+) -> Option<MissingRelation> {
+    let missing = check_ids_exist(conn, registry, &entry.ids, entry.rc);
+
+    if missing.is_empty() {
+        return None;
+    }
+
+    Some(MissingRelation::new(
+        entry.field_name,
+        entry.label,
+        missing.into_iter().collect(),
+        entry.ids.len(),
+    ))
 }
 
 #[cfg(test)]
@@ -464,6 +516,17 @@ mod tests {
         .unwrap();
     }
 
+    /// A read-shaped view holding `snapshot`'s keys.
+    fn view(snapshot: Value) -> Document {
+        let mut doc = Document::new("p1".to_string());
+
+        if let Value::Object(obj) = snapshot {
+            doc.fields = obj.into_iter().collect();
+        }
+
+        doc
+    }
+
     #[test]
     fn missing_has_one_detected() {
         let media = CollectionDefinition::new("media");
@@ -481,7 +544,7 @@ mod tests {
         insert_doc(&conn, "media", "m1");
 
         let snapshot = json!({"title": "Hello", "image": "m_deleted"});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "image");
         assert_eq!(missing[0].missing_count, 1);
@@ -505,7 +568,7 @@ mod tests {
         insert_doc(&conn, "media", "m1");
 
         let snapshot = json!({"image": "m1"});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert!(missing.is_empty());
     }
 
@@ -525,7 +588,7 @@ mod tests {
         insert_doc(&conn, "tags", "t1");
 
         let snapshot = json!({"tags": ["t1", "t2"]});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "tags");
         assert_eq!(missing[0].missing_count, 1);
@@ -554,11 +617,14 @@ mod tests {
         let conn = pool.get().unwrap();
 
         let snapshot = json!({"featured": "media/m1"});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
         assert!(missing[0].missing_ids.contains(&"media/m1".to_string()));
     }
 
+    /// A relationship inside a group is reported under its dotted path and
+    /// labelled through the group, like one inside an array or blocks row —
+    /// a bare `hero` could not be told apart from a top-level `hero`.
     #[test]
     fn missing_group_nested_relation() {
         let media = CollectionDefinition::new("media");
@@ -577,10 +643,45 @@ mod tests {
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
 
-        let snapshot = json!({"meta__hero": "m_gone"});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let snapshot = json!({"meta": {"hero": "m_gone"}});
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0].field_name, "hero");
+        assert_eq!(missing[0].field_name, "meta.hero");
+        assert_eq!(
+            missing[0].field_label.split(" > ").count(),
+            2,
+            "the label names the group, then the field: {}",
+            missing[0].field_label
+        );
+    }
+
+    /// An array inside a group carries the group in its path too.
+    #[test]
+    fn missing_array_in_group_carries_the_group_path() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("slides", FieldType::Array)
+                        .fields(vec![
+                            FieldDefinition::builder("image", FieldType::Upload)
+                                .relationship(RelationshipConfig::new("media", false))
+                                .build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        let snapshot = json!({"meta": {"slides": [{"image": "m_gone"}]}});
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].field_name, "meta.slides.image");
     }
 
     #[test]
@@ -608,9 +709,10 @@ mod tests {
                 {"image": "m_deleted"}
             ]
         });
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "slides.image");
+        assert_eq!(missing[0].field_label, "Slides > Image");
         assert_eq!(missing[0].missing_count, 1);
         assert_eq!(missing[0].total_ids, 2);
     }
@@ -641,7 +743,7 @@ mod tests {
                 {"_block_type": "hero", "bg_image": "m_gone"}
             ]
         });
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "content.hero.bg_image");
     }
@@ -680,7 +782,7 @@ mod tests {
                 { "meta": { "image": "m_deleted" } }
             ]
         });
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert_eq!(
             missing.len(),
             1,
@@ -689,6 +791,34 @@ mod tests {
         assert_eq!(missing[0].field_name, "slides.meta.image");
         assert_eq!(missing[0].missing_count, 1);
         assert_eq!(missing[0].total_ids, 2);
+    }
+
+    /// The views of one snapshot (one per locale) report a field once: its ids
+    /// combined across the views, a shared id counted once.
+    #[test]
+    fn a_field_is_reported_once_across_views() {
+        let tags = CollectionDefinition::new("tags");
+        let mut posts = CollectionDefinition::new("posts");
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+        ];
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+        insert_doc(&conn, "tags", "t1");
+
+        let views = [
+            view(json!({"tags": ["t1", "t_gone"]})),
+            view(json!({"tags": ["t_gone", "t_also_gone"]})),
+        ];
+        let missing = find_missing_relations(&conn, &registry, &views, &fields);
+
+        assert_eq!(missing.len(), 1, "one entry per field: {missing:?}");
+        assert_eq!(missing[0].missing_count, 2);
+        assert_eq!(missing[0].total_ids, 3);
     }
 
     #[test]
@@ -706,7 +836,7 @@ mod tests {
         let conn = pool.get().unwrap();
 
         let snapshot = json!({});
-        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        let missing = find_missing_relations(&conn, &registry, &[view(snapshot)], &fields);
         assert!(missing.is_empty());
     }
 }

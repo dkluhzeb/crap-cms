@@ -23,21 +23,21 @@ use crate::{
                 nested::build_enriched_sub_field_context,
             },
             inject_lang_values_from_row, inject_timezone_values_from_row, locale_locked_display,
-            safe_template_id,
+            safe_template_id, set_date_picker_values, tag_values,
         },
     },
     core::{
-        BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldTab, FieldType,
+        BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldTab, FieldType, parse_truthy,
         timezone::TIMEZONE_OPTIONS,
     },
-    db::query::helpers::{tz_column, utc_to_local},
+    db::query::helpers::tz_column,
 };
 
 // ── build_enriched_sub_field_context helpers ─────────────────────────
 
 /// Enrich a Checkbox sub-field context.
 pub(super) fn sub_checkbox(cf: &mut CheckboxField, val: &str) {
-    cf.checked = matches!(val, "1" | "true" | "on" | "yes");
+    cf.checked = parse_truthy(val);
 }
 
 /// Enrich a Select/Radio sub-field context.
@@ -76,32 +76,7 @@ pub(super) fn sub_date(df: &mut DateField, sf: &FieldDefinition, val: &str, tz_v
         .map_or("dayOnly", crate::core::PickerAppearance::as_str);
     df.picker_appearance = appearance.to_string();
 
-    // Convert UTC back to local time for display if timezone is stored
-    let display_value = if !tz_value.is_empty() && !val.is_empty() {
-        utc_to_local(val, tz_value).unwrap_or_else(|| val.to_string())
-    } else {
-        val.to_string()
-    };
-
-    match appearance {
-        "dayOnly" => {
-            df.date_only_value = Some(
-                display_value
-                    .get(..10)
-                    .unwrap_or(&display_value)
-                    .to_string(),
-            );
-        }
-        "dayAndTime" => {
-            df.datetime_local_value = Some(
-                display_value
-                    .get(..16)
-                    .unwrap_or(&display_value)
-                    .to_string(),
-            );
-        }
-        _ => {}
-    }
+    set_date_picker_values(df, val, tz_value);
 
     if sf.timezone {
         let default_tz = sf
@@ -822,7 +797,7 @@ pub(super) fn sub_tabs(
 
 /// Enrich a Text `has_many` sub-field context (tag input).
 pub(super) fn sub_text_has_many_tags(tf: &mut TextField, val: &str) {
-    let tags: Vec<String> = from_str(val).unwrap_or_default();
+    let tags = tag_values(val);
     tf.base.value = Value::String(tags.join(","));
     tf.has_many = Some(true);
     tf.tags = Some(tags);
@@ -830,7 +805,7 @@ pub(super) fn sub_text_has_many_tags(tf: &mut TextField, val: &str) {
 
 /// Enrich a Number `has_many` sub-field context (tag input).
 pub(super) fn sub_number_has_many_tags(nf: &mut NumberField, val: &str) {
-    let tags: Vec<String> = from_str(val).unwrap_or_default();
+    let tags = tag_values(val);
     nf.base.value = Value::String(tags.join(","));
     nf.has_many = Some(true);
     nf.tags = Some(tags);
@@ -848,6 +823,30 @@ mod tests {
         LocalizedString::Plain(s.to_string())
     }
 
+    /// Regression: the tag input parsed a stored list as strings only, so a
+    /// multi-value number field — stored as `[1,2]` — showed no tags, and
+    /// saving the form wiped its values.
+    #[test]
+    fn number_tags_read_a_stored_number_list() {
+        let mut nf = NumberField::default();
+        sub_number_has_many_tags(&mut nf, "[1,2.5]");
+
+        assert_eq!(nf.tags, Some(vec!["1".to_string(), "2.5".to_string()]));
+        assert_eq!(nf.base.value, json!("1,2.5"));
+    }
+
+    /// Regression: the form checked a box only for four exact spellings, while
+    /// the write stores any truthy spelling — `"TRUE"` or `" on "` — as checked,
+    /// so the form showed such a stored value unchecked.
+    #[test]
+    fn sub_checkbox_reads_every_spelling_the_write_stores_as_checked() {
+        for val in ["TRUE", " on ", "Yes"] {
+            let mut cf = CheckboxField::default();
+            sub_checkbox(&mut cf, val);
+            assert!(cf.checked, "{val:?} is stored as checked");
+        }
+    }
+
     #[test]
     fn sub_checkbox_truthy_strings_check_the_box() {
         for truthy in ["1", "true", "on", "yes"] {
@@ -855,7 +854,9 @@ mod tests {
             sub_checkbox(&mut cf, truthy);
             assert!(cf.checked, "{truthy:?} should be checked");
         }
-        for falsy in ["0", "false", "off", "", "no", "TRUE"] {
+        // Every spelling the write stores as unchecked; any case of a checked
+        // spelling (`"TRUE"`) is checked, as the write stores it.
+        for falsy in ["0", "false", "off", "", "no"] {
             let mut cf = CheckboxField::default();
             sub_checkbox(&mut cf, falsy);
             assert!(!cf.checked, "{falsy:?} should not be checked");

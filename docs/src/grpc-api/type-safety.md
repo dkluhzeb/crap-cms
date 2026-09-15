@@ -154,7 +154,8 @@ Each field in the response has:
 | `relationship_max_depth` | int? | Per-field population depth cap |
 | `relationship_collections` | string[] | Target collections of a polymorphic relationship; its values are `collection/id` |
 | `has_many` | bool | Whether a `text`, `number` or `select` field holds a list |
-| `timezone` | bool | Whether a `date` field carries its IANA timezone in `<name>_tz` |
+| `timezone` | bool | Whether a `date` field carries its IANA timezone in `<name>_tz` (equivalent to `companions` containing `_tz`; kept for clients that read it) |
+| `companions` | string[] | Suffixes of the companion keys the field carries beside its value: `_tz` (timezone date), `_lang` (code field with `admin.languages`). Each is an optional string key `<name><suffix>` |
 | `localized` | bool | Whether the field stores a value per locale |
 | `fields` | FieldInfo[] | Sub-fields for `array` and `group` types (recursive) |
 | `blocks` | BlockInfo[] | Block types of a `blocks` field |

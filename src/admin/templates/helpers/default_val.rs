@@ -1,7 +1,7 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
 
-use super::is_truthy;
+use crate::core::value_truthy;
 
 /// Default value helper: `{{default val fallback}}`.
 pub(super) struct DefaultHelper;
@@ -20,7 +20,7 @@ impl HelperDef for DefaultHelper {
         let fallback = h
             .param(1)
             .map_or(&Value::Null, handlebars::PathAndJson::value);
-        if is_truthy(val) {
+        if value_truthy(val) {
             Ok(ScopedJson::Derived(val.clone()))
         } else {
             Ok(ScopedJson::Derived(fallback.clone()))

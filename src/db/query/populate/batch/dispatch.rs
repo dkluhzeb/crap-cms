@@ -395,12 +395,8 @@ fn prepare_join_children(
         opts.locale_ctx,
     )?;
 
-    if let Some(ref uc) = target.target_def.upload
-        && uc.enabled
-    {
-        for doc in &mut prepared {
-            upload::assemble_sizes_object(doc, uc);
-        }
+    for doc in &mut prepared {
+        upload::shape_read_document(target.target_def, doc);
     }
 
     let mut nested_visited = visited.clone();

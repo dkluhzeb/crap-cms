@@ -33,7 +33,7 @@ use crate::{
         query::filter::memory::matches_constraints_typed,
     },
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
-    service::helpers::collect_api_hidden_field_names,
+    service::helpers::strip_unreadable_fields,
 };
 
 /// Map an event operation to the canonical lowercase string used by hooks,
@@ -157,18 +157,17 @@ impl EventGate<'_> {
         // Data-aware field-read strip (each `access.read` rule sees the event's
         // original document as `ctx.data` / `ctx.document`, matching the
         // per-level snapshot semantics of normal reads), evaluated
-        // connection-less on a pool VM — a rule doing CRUD fails closed.
-        self.hook_runner.strip_read_access_for_event(
-            &field_defs,
-            &mut visible,
-            &event.data,
-            slug,
-            self.user_doc,
-        );
-
-        for denial in collect_api_hidden_field_names(&field_defs, "") {
-            denial.strip_from(&mut visible);
-        }
+        // connection-less on a pool VM — a rule doing CRUD fails closed. The
+        // API-hidden strip follows it, as in every other read.
+        strip_unreadable_fields(&field_defs, &mut visible, |visible| {
+            self.hook_runner.strip_read_access_for_event(
+                &field_defs,
+                visible,
+                &event.data,
+                slug,
+                self.user_doc,
+            );
+        });
 
         // Per-subscriber `after_read` enrichment on the stripped data.
         let stripped: DocumentFields = visible

@@ -2,6 +2,7 @@
 
 mod admin;
 mod block_definition;
+mod companion;
 mod definition;
 mod field_type;
 mod localized_string;
@@ -12,6 +13,7 @@ pub use admin::{
     FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldWidth, validate_template_name,
 };
 pub use block_definition::{BLOCK_TYPE_KEY, BlockDefinition, FieldTab};
+pub(crate) use companion::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use definition::{
     FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, McpFieldConfig,
     PickerAppearance, RequiredLocales, ValidateFunction, to_title_case,

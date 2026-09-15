@@ -29,6 +29,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::value_truthy;
+
 /// A display-condition expression. Accepts either a single row or an
 /// array of rows AND'd together.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -93,23 +95,10 @@ impl ConditionRow {
             ConditionOp::NotEquals(v) => field_val != v,
             ConditionOp::In(list) => list.contains(field_val),
             ConditionOp::NotIn(list) => !list.contains(field_val),
-            ConditionOp::IsTruthy(true) => is_truthy(field_val),
-            ConditionOp::IsFalsy(true) => !is_truthy(field_val),
+            ConditionOp::IsTruthy(true) => value_truthy(field_val),
+            ConditionOp::IsFalsy(true) => !value_truthy(field_val),
             ConditionOp::IsTruthy(false) | ConditionOp::IsFalsy(false) => true,
         }
-    }
-}
-
-/// Field-presence truthiness, matching the JS evaluator's `isTruthy`.
-/// `0`, `0.0`, `""`, `null`, `[]`, `{}` are falsy; everything else is truthy.
-fn is_truthy(val: &Value) -> bool {
-    match val {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
     }
 }
 
@@ -177,6 +166,19 @@ mod tests {
         assert!(!expr.evaluate(&json!({ "featured": false })));
         assert!(!expr.evaluate(&json!({ "featured": "" })));
         assert!(!expr.evaluate(&json!({ "featured": 0 })));
+    }
+
+    /// Regression: the server evaluator called an empty object falsy while the
+    /// browser's `isTruthy` calls every object truthy, so a condition on an
+    /// untouched group field showed a field in the form and hid it on reload.
+    /// An empty array stays falsy on both sides.
+    #[test]
+    fn is_truthy_matches_the_browser_on_an_empty_object() {
+        let expr = parse(json!({ "field": "seo", "is_truthy": true }));
+
+        assert!(expr.evaluate(&json!({ "seo": {} })));
+        assert!(expr.evaluate(&json!({ "seo": { "title": "x" } })));
+        assert!(!expr.evaluate(&json!({ "seo": [] })));
     }
 
     #[test]

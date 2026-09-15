@@ -1,9 +1,6 @@
 //! Locale resolution helpers for join table hydration.
 
-use crate::{
-    core::FieldDefinition,
-    db::{LocaleContext, LocaleMode},
-};
+use crate::{core::FieldDefinition, db::LocaleContext};
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
@@ -12,18 +9,9 @@ pub(super) fn resolve_join_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
-    let ctx = locale_ctx?;
+    let ctx = join_locale_ctx(field, locale_ctx)?;
 
-    if !field.localized || !ctx.config.is_enabled() {
-        return None;
-    }
-
-    let locale = match &ctx.mode {
-        LocaleMode::Single(l) => l.as_str(),
-        _ => ctx.config.default_locale.as_str(),
-    };
-
-    Some(locale.to_string())
+    Some(ctx.rows_read_locale().locale.to_string())
 }
 
 /// When fallback is enabled and we're querying a non-default locale,
@@ -32,18 +20,18 @@ pub(super) fn resolve_join_fallback_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
-    let ctx = locale_ctx?;
+    let ctx = join_locale_ctx(field, locale_ctx)?;
 
-    if !field.localized || !ctx.config.is_enabled() || !ctx.config.fallback {
-        return None;
-    }
+    ctx.rows_read_locale().fallback.map(str::to_string)
+}
 
-    match &ctx.mode {
-        LocaleMode::Single(l) if l != &ctx.config.default_locale => {
-            Some(ctx.config.default_locale.clone())
-        }
-        _ => None,
-    }
+/// The locale context a join field is read under: present only for a localized
+/// field with localization on.
+fn join_locale_ctx<'a>(
+    field: &FieldDefinition,
+    locale_ctx: Option<&'a LocaleContext>,
+) -> Option<&'a LocaleContext> {
+    locale_ctx.filter(|ctx| field.localized && ctx.config.is_enabled())
 }
 
 #[cfg(all(test, feature = "sqlite"))]

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::core::{Builder, Document};
+use crate::db::LocaleContext;
 
 /// Bundled parameters for `enrich_field_contexts` to avoid too many arguments.
 #[derive(Builder)]
@@ -15,6 +16,9 @@ pub struct EnrichOptions<'a> {
     /// The viewer, so relationship/join/upload label reads are access-gated
     /// (a viewer must not learn the title/existence of targets they can't read).
     pub user: Option<&'a Document>,
+    /// The editor's content locale: relationship labels read their titles in
+    /// it, as the list and edit views read. The default locale without one.
+    pub locale_ctx: Option<&'a LocaleContext>,
 }
 
 #[cfg(test)]

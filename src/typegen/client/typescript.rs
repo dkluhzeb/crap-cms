@@ -243,7 +243,7 @@ mod tests {
     use super::super::drive;
     use super::*;
     use crate::core::{
-        BlockDefinition, CollectionDefinition, FieldDefinition, FieldTab, FieldType,
+        BlockDefinition, CollectionDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType,
         GlobalDefinition, LocalizedString, RelationshipConfig, SelectOption, VersionsConfig,
     };
 
@@ -317,6 +317,63 @@ mod tests {
         let data = interface_block(&out, "export interface EventsData {");
         assert!(data.contains("  starts_tz?: string;"), "{data}");
         assert!(!data.contains("_status"), "{data}");
+    }
+
+    /// A code field with a language allow-list.
+    fn code_with_languages(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
+    /// A code field with a language allow-list carries its `<name>_lang`
+    /// companion (also accepted as input), at the top level and inside a group.
+    #[test]
+    fn typescript_code_field_has_its_language_companion() {
+        let col = make_col(
+            "snippets",
+            vec![
+                code_with_languages("snippet"),
+                FieldDefinition::builder("plain", FieldType::Code).build(),
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![code_with_languages("example")])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let doc = interface_block(&out, "export interface SnippetsDocument {");
+        assert!(doc.contains("  snippet_lang?: string | null;"), "{doc}");
+
+        let data = interface_block(&out, "export interface SnippetsData {");
+        assert!(data.contains("  snippet_lang?: string;"), "{data}");
+
+        let meta = interface_block(&out, "export interface SnippetsMeta {");
+        assert!(meta.contains("  example_lang?: string | null;"), "{meta}");
+
+        assert!(!out.contains("plain_lang"), "{out}");
+    }
+
+    /// Under `locale = "all"` a localized code field's language pick is a
+    /// per-locale map, like its value.
+    #[test]
+    fn typescript_localized_code_language_companion_is_per_locale() {
+        let mut snippet = code_with_languages("snippet");
+        snippet.localized = true;
+        let col = make_col("snippets", vec![snippet]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let doc = interface_block(&out, "export interface SnippetsLocalizedDocument {");
+        assert!(
+            doc.contains("  snippet_lang?: Localized<string> | null;"),
+            "{doc}"
+        );
     }
 
     /// A `locale = "all"` read returns each localized field as a per-locale

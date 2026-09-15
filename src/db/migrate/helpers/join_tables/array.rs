@@ -9,7 +9,7 @@ use crate::db::DbConnection;
 use crate::db::migrate::helpers::add_column_if_missing;
 use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
 use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
-use crate::db::query::helpers::{join_table, quote_ident, tz_column};
+use crate::db::query::helpers::{join_table, quote_ident};
 
 /// Sync an array join table (create or alter).
 pub(super) fn sync_array_table(
@@ -72,8 +72,8 @@ fn create_array_table(
             conn.column_type_for(&sub_field.field_type)
         ));
 
-        if sub_field.has_tz_companion() {
-            columns.push(format!("{} TEXT", quote_ident(&tz_column(&sub_field.name))));
+        for companion in sub_field.companion_columns(&sub_field.name) {
+            columns.push(format!("{} TEXT", quote_ident(&companion)));
         }
     }
 
@@ -102,10 +102,9 @@ fn alter_array_table(
         );
         add_column_if_missing(conn, table_name, &sub_field.name, &col_def, &existing)?;
 
-        if sub_field.has_tz_companion() {
-            let tz_col = tz_column(&sub_field.name);
-            let tz_def = format!("{} TEXT", quote_ident(&tz_col));
-            add_column_if_missing(conn, table_name, &tz_col, &tz_def, &existing)?;
+        for companion in sub_field.companion_columns(&sub_field.name) {
+            let companion_def = format!("{} TEXT", quote_ident(&companion));
+            add_column_if_missing(conn, table_name, &companion, &companion_def, &existing)?;
         }
     }
 
@@ -115,8 +114,7 @@ fn alter_array_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FieldTab;
-    use crate::core::FieldType;
+    use crate::core::{FieldAdmin, FieldTab, FieldType};
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::join_tables::sync_join_tables;
 
@@ -448,6 +446,62 @@ mod tests {
         assert!(
             cols.contains("scheduled_at_tz"),
             "timezone companion column should be added on alter"
+        );
+    }
+
+    fn code_lang_array(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("snippet", FieldType::Code)
+                    .admin(
+                        FieldAdmin::builder()
+                            .languages(vec!["javascript".to_string(), "python".to_string()])
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build()
+    }
+
+    /// Regression: a code sub-field with a language allow-list got no `_lang`
+    /// companion column in its array table, so the pick had nowhere to live.
+    #[test]
+    fn array_code_with_languages_creates_lang_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let def = simple_collection("posts", vec![code_lang_array("examples")]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_examples").unwrap();
+        assert!(cols.contains("snippet"));
+        assert!(
+            cols.contains("snippet_lang"),
+            "language companion column should exist for a code field in an array"
+        );
+    }
+
+    #[test]
+    fn existing_array_adds_lang_column_on_alter() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_examples (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, snippet TEXT)",
+            &[],
+        )
+        .unwrap();
+
+        let def = simple_collection("posts", vec![code_lang_array("examples")]);
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_examples").unwrap();
+        assert!(
+            cols.contains("snippet_lang"),
+            "language companion column should be added on alter"
         );
     }
 

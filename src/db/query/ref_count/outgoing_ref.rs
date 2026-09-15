@@ -1,5 +1,7 @@
 //! [`OutgoingRef`] — a single edge in the doc-to-doc reference graph.
 
+use crate::db::query::poly_ref;
+
 /// An outgoing reference from one document to another.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OutgoingRef {
@@ -30,13 +32,10 @@ pub(super) fn push_ref(
         return;
     }
 
-    if let Some((col, id)) = value.split_once('/')
-        && !col.is_empty()
-        && !id.is_empty()
-    {
+    if let Some((col, id)) = poly_ref::parse(value) {
         refs.push(OutgoingRef {
-            target_collection: col.to_string(),
-            target_id: id.to_string(),
+            target_collection: col,
+            target_id: id,
         });
     }
 }

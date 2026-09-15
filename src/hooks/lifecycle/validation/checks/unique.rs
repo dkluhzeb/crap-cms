@@ -1,18 +1,22 @@
-use serde_json::Value;
-
 use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
-    db::query::{self, FieldEqCount},
+    db::{
+        DbValue,
+        query::{self, FieldEqCount},
+    },
     hooks::ValidationCtx,
 };
 
 /// Check unique constraint (only if value is non-empty and field has a parent column).
+/// `stored` is the value as its write stores it ([`column_value`]).
+///
+/// [`column_value`]: crate::db::query::helpers::column_value
 /// `col_name` is the actual DB column to query (may differ from `data_key` for localized fields).
 pub(crate) fn check_unique(
     field: &FieldDefinition,
     data_key: &str,
     col_name: &str,
-    value: Option<&Value>,
+    stored: Option<DbValue>,
     is_empty: bool,
     ctx: &ValidationCtx,
     errors: &mut Vec<FieldError>,
@@ -21,10 +25,10 @@ pub(crate) fn check_unique(
         return;
     }
 
-    let value_str = match value {
-        Some(Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
+    // Compared in the form the write stores it — a date normalized, a number
+    // as a number — so a duplicate matches however it was typed.
+    let Some(stored) = stored.filter(|v| !v.is_null()) else {
+        return;
     };
 
     // Email identity fields are compared case-insensitively so uniqueness
@@ -37,7 +41,7 @@ pub(crate) fn check_unique(
 
     match query::count_where_field_eq(
         ctx.conn,
-        &FieldEqCount::builder(ctx.table, col_name, &value_str)
+        &FieldEqCount::builder(ctx.table, col_name, stored)
             .exclude_id(ctx.exclude_id)
             .soft_delete(ctx.soft_delete)
             .case_insensitive(case_insensitive)
@@ -76,9 +80,44 @@ mod tests {
     use crate::config::LocaleConfig;
     use crate::core::DocumentFields;
     use crate::core::{FieldDefinition, FieldType};
+    use crate::db::DbValue;
     use crate::db::LocaleContext;
+    use crate::db::query::helpers::coerce_value;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: the unique check compared the value as sent, so a date typed
+    /// without a time never matched the normalized value a write stored, and
+    /// the duplicate slipped through.
+    #[test]
+    fn a_unique_date_matches_its_stored_form() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let DbValue::Text(stored) = coerce_value(&FieldType::Date, "2026-01-15") else {
+            panic!("a date encodes as text");
+        };
+        conn.execute_batch(&format!(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, day TEXT);
+             INSERT INTO test (id, day) VALUES ('existing', '{stored}');"
+        ))
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("day", FieldType::Date)
+                .unique(true)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("day".to_string(), json!("2026-01-15"));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+
+        assert!(result.is_err(), "a duplicate date must be rejected");
+    }
 
     #[test]
     fn test_validate_unique_check() {

@@ -19,7 +19,7 @@ pub mod write;
 mod columns;
 pub(crate) mod helpers;
 mod locale;
-mod poly_ref;
+pub(crate) mod poly_ref;
 mod types;
 mod validation;
 mod view_scope;
@@ -40,10 +40,11 @@ pub use validation::{
 };
 pub use view_scope::{RequestedViews, ViewScope};
 
-pub(crate) use helpers::coerce_json_value;
+pub(crate) use helpers::stored_document_values;
 pub(crate) use locale::{
-    group_locale_fields, is_locale_locked_write, is_non_default_single_locale,
-    locale_locked_field_names, locale_write_column,
+    ReadLocale, column_is_localized, group_locale_fields, is_locale_locked_write,
+    is_non_default_single_locale, locale_locked_field_names, locale_write_column,
+    per_locale_columns, regroup_by_locale, stored_columns,
 };
 
 pub(super) use columns::collect_column_names;

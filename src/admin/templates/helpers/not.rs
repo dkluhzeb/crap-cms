@@ -1,7 +1,7 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
 
-use super::is_truthy;
+use crate::core::value_truthy;
 
 /// Boolean negation helper: `{{#if (not val)}}`.
 pub(super) struct NotHelper;
@@ -17,7 +17,7 @@ impl HelperDef for NotHelper {
         let val = h
             .param(0)
             .map_or(&Value::Null, handlebars::PathAndJson::value);
-        let truthy = is_truthy(val);
+        let truthy = value_truthy(val);
         Ok(ScopedJson::Derived(Value::Bool(!truthy)))
     }
 }

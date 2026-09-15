@@ -22,7 +22,10 @@
 
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, validate::FieldError};
+use crate::{
+    core::{FieldDefinition, validate::FieldError},
+    db::query::poly_ref,
+};
 
 /// Reject polymorphic relationship values whose target collection is not
 /// in the field's `polymorphic` allowlist.
@@ -71,7 +74,7 @@ fn check_one(field: &FieldDefinition, data_key: &str, value: &Value, errors: &mu
 
     let collection = match value {
         Value::String(s) if s.is_empty() => return,
-        Value::String(s) => s.split_once('/').map(|(c, _)| c.to_string()),
+        Value::String(s) => poly_ref::parse(s).map(|(collection, _)| collection),
         Value::Object(obj) => obj
             .get("collection")
             .and_then(|v| v.as_str())

@@ -5,12 +5,12 @@ use anyhow::{Context as _, Result};
 use crate::{
     core::{CollectionDefinition, Document},
     db::{
-        DbConnection, DbValue, LocaleContext, LocaleMode,
-        document::row_to_document,
+        DbConnection, DbValue, LocaleContext,
         query::{
-            get_column_names, get_locale_select_columns_full, group_locale_fields,
+            get_column_names, get_locale_select_columns_full,
             helpers::{SOFT_DELETE_ACTIVE, placeholder_list, quote_ident},
             hydrate_document, hydrate_documents,
+            read::decode_row,
         },
     },
 };
@@ -120,15 +120,7 @@ pub fn find_by_ids(
 
     let mut documents = Vec::with_capacity(rows.len());
     for row in &rows {
-        let mut doc = row_to_document(conn, row)?;
-
-        if let Some(ctx) = locale_ctx
-            && ctx.config.is_enabled()
-            && let LocaleMode::All = ctx.mode
-        {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
-        }
-        documents.push(doc);
+        documents.push(decode_row(conn, row, &def.fields, locale_ctx)?);
     }
 
     // Batched hydrate: one `WHERE parent_id IN (…)` SELECT per
@@ -199,15 +191,7 @@ pub(crate) fn find_by_id_raw(
 
     let Some(r) = row else { return Ok(None) };
 
-    let mut doc = row_to_document(conn, &r)?;
-    if let Some(ctx) = locale_ctx
-        && ctx.config.is_enabled()
-        && let LocaleMode::All = ctx.mode
-    {
-        group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
-    }
-
-    Ok(Some(doc))
+    Ok(Some(decode_row(conn, &r, &def.fields, locale_ctx)?))
 }
 
 #[cfg(test)]

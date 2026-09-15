@@ -7,7 +7,11 @@ use anyhow::Result;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldDefinition, FieldDenial, FieldType, Registry},
-    db::query::helpers::{locale_column, prefixed_name, walk_leaf_fields},
+    db::query::{
+        column_is_localized,
+        helpers::{prefixed_name, walk_leaf_fields},
+        stored_columns,
+    },
     hooks::lifecycle::access::collect_denials_flat,
 };
 
@@ -156,39 +160,11 @@ pub fn get_fts_columns(
         // layout wrappers (Row/Collapsible/Tabs), so the localized lookup must
         // descend the same way — otherwise a localized field inside a wrapper is
         // mis-resolved to a bare column instead of `field__locale`.
-        let is_localized = field_localized(field_name, &def.fields).unwrap_or(false);
-
-        if is_localized {
-            for locale in &locale_config.locales {
-                columns.push(locale_column(field_name, locale)?);
-            }
-        } else {
-            columns.push(field_name.clone());
-        }
+        let localized = column_is_localized(field_name, &def.fields).unwrap_or(false);
+        columns.extend(stored_columns(field_name, localized, locale_config)?);
     }
 
     Ok(columns)
-}
-
-/// Find a field by its flat-column name and return whether it is localized,
-/// resolving the same way FTS collects columns (`walk_leaf_fields`): group
-/// sub-fields by their `group__field` name, with group `localized` inherited by
-/// children — so a field inside a localized group expands per-locale even if the
-/// field itself isn't marked localized. `None` if no such column exists.
-fn field_localized(name: &str, fields: &[FieldDefinition]) -> Option<bool> {
-    let mut result = None;
-    let _ = walk_leaf_fields(
-        fields,
-        "",
-        false,
-        &mut |field, prefix, inherited_localized| {
-            if result.is_none() && prefixed_name(prefix, &field.name) == name {
-                result = Some(inherited_localized || field.localized);
-            }
-            Ok(())
-        },
-    );
-    result
 }
 
 /// Build a set of column names that are JSON-format richtext fields — including

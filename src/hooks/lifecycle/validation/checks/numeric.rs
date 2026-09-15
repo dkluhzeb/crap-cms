@@ -1,7 +1,9 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use crate::db::f64_to_exact_i64;
+use crate::{
+    core::{FieldDefinition, FieldType, validate::FieldError},
+    db::{f64_to_exact_i64, query::helpers::number_element},
+};
 
 /// Why a numeric value is unacceptable for `field`, independent of min/max.
 /// Shared by the single-value ([`check_numeric_bounds`]) and per-element
@@ -53,13 +55,9 @@ pub(crate) fn check_numeric_bounds(
         return;
     }
 
-    let num_val = match value {
-        Some(Value::Number(n)) => n.as_f64(),
-        Some(Value::String(s)) => s.parse::<f64>().ok(),
-        _ => None,
-    };
-
-    let Some(v) = num_val else {
+    // The reading the write and the has-many elements share, so a value
+    // validation accepts is the number the write stores.
+    let Some(v) = value.and_then(number_element) else {
         // A present, non-empty value that isn't numeric at all: the persist
         // edge would coerce it to NULL — silent data loss, and a `required`
         // bypass (the value counted as present). Reject it instead.
@@ -126,10 +124,12 @@ pub(crate) fn check_numeric_bounds(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::DocumentFields;
-    use crate::core::{FieldDefinition, FieldType};
-    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    use crate::{
+        core::{DocumentFields, FieldDefinition, FieldType},
+        hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
+    };
 
     /// Regression: a non-numeric value on a Number field passed all
     /// validation (parse failure was a silent early-return) and the persist
@@ -400,6 +400,36 @@ mod tests {
             );
             assert!(result.is_ok(), "input {ok:?} should pass: {result:?}");
         }
+    }
+
+    /// Regression: a single number field rejected a number with surrounding
+    /// whitespace, which a has-many element and the write both read as the
+    /// number. A padded non-finite number is still rejected.
+    #[test]
+    fn a_padded_number_is_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("score", FieldType::Number).build()];
+        let validate = |input: &str| {
+            let mut data = DocumentFields::new();
+            data.insert("score".to_string(), json!(input));
+
+            validate_fields_inner(
+                &lua,
+                &fields,
+                &data,
+                &ValidationCtx::builder(&conn, "test").build(),
+            )
+        };
+
+        for padded in [" 5", "5 ", "\t5\n"] {
+            let result = validate(padded);
+            assert!(result.is_ok(), "{padded:?} should pass: {result:?}");
+        }
+
+        assert!(validate(" inf ").is_err(), "a padded non-finite number");
     }
 
     /// Sanity: ordinary finite values still pass.

@@ -165,6 +165,7 @@ mod tests {
     use crate::core::collection::Hooks;
     use crate::core::{CollectionDefinition, Document, HookRef, ReqContext};
     use crate::hooks::lifecycle::AfterReadCtx;
+    use crate::service::FieldReadStrip;
 
     /// Returns a canned access result and records whether `check_access` ran
     /// (so a test can prove the unset toggle short-circuits without a hook call)
@@ -201,6 +202,8 @@ mod tests {
             Ok(self.result.clone())
         }
     }
+
+    impl FieldReadStrip for GateHooks {}
 
     fn def_with_versions(versions: Option<HookRef>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

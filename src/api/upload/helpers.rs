@@ -12,13 +12,9 @@ use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, server::evaluate_admin_request},
-    core::{
-        AuthUser, CollectionDefinition, Document, DocumentFields, HookRef,
-        collection::LiveMode,
-        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
-    },
+    core::{AuthUser, Document, HookRef},
     db::AccessResult,
-    hooks::{AccessCheckInput, lifecycle::PublishEventInput},
+    hooks::AccessCheckInput,
     service::{
         ServiceError,
         auth::{AuthFailure, Resolution},
@@ -187,52 +183,6 @@ fn db_error_response(e: anyhow::Error, db_kind: &str) -> Response {
     service_error_to_response(&ServiceError::classify(e, db_kind))
 }
 
-/// Publish a mutation event and build the `EventUser` from auth.
-#[cfg(not(tarpaulin_include))]
-pub fn publish_upload_event(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    collection: impl Into<String>,
-    doc_id: impl Into<String>,
-    operation: EventOperation,
-    data: Option<DocumentFields>,
-    auth_user: Option<&AuthUser>,
-) {
-    let edited_by =
-        auth_user.map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
-
-    // Create/update carry the full upload doc — derive the view from `_status`;
-    // a delete carries no payload, so gate it by the collection's soft-delete
-    // mode (upload collections have no status axis, so status stays `None`).
-    let view = match &data {
-        Some(d) => EventViewMeta::from_fields(d),
-        None => EventViewMeta::for_delete(def.soft_delete, None),
-    };
-
-    let mut builder = PublishEventInput::builder(EventTarget::Collection, operation)
-        .collection(collection.into())
-        .document_id(doc_id.into())
-        .edited_by(edited_by)
-        .view(view);
-
-    // Attach the payload only in `full` live mode — same stripping discipline as
-    // the central publish path, so a `metadata`-mode collection never puts the
-    // full upload document on the transport wire. (The `view` above was derived
-    // from the full `data` first, which it must be.)
-    if let Some(d) = data
-        && def.live_mode == LiveMode::Full
-    {
-        builder = builder.data(d);
-    }
-
-    state.infra.hook_runner.publish_event(
-        &state.infra.event_transport,
-        &def.hooks,
-        def.live.as_ref(),
-        builder.build(),
-    );
-}
-
 /// Map a [`ServiceError`] to the appropriate JSON error response.
 ///
 /// Semantic errors (validation, access, hook, not-found, unique violation,
@@ -274,6 +224,54 @@ pub fn service_error_to_response(err: &ServiceError) -> Response {
     };
 
     json_error(status, &message)
+}
+
+/// Fixtures shared by the upload handlers' tests.
+#[cfg(test)]
+pub(super) mod test_support {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
+    use crate::{
+        admin::test_support::test_infra_with_events,
+        core::{
+            CollectionDefinition, EventReceiver, FieldDefinition, FieldType,
+            upload::CollectionUpload,
+        },
+        service::AppInfra,
+    };
+
+    /// A populate-cache entry every fixture starts with, for a write to clear.
+    pub const CACHED_KEY: &str = "populate:media:m1";
+
+    /// The `media` upload collection with the metadata columns a non-image
+    /// upload writes.
+    fn media() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        });
+        def.fields = vec![
+            FieldDefinition::builder("filename", FieldType::Text).build(),
+            FieldDefinition::builder("mime_type", FieldType::Text).build(),
+            FieldDefinition::builder("filesize", FieldType::Number).build(),
+            FieldDefinition::builder("url", FieldType::Text).build(),
+        ];
+
+        def
+    }
+
+    /// A full infra over the `media` collection with an in-process event bus,
+    /// a receiver subscribed to it, and [`CACHED_KEY`] in the populate cache.
+    pub fn infra_with_events() -> (TempDir, Arc<AppInfra>, EventReceiver) {
+        let (tmp, infra, rx) = test_infra_with_events(media());
+
+        infra.cache.set(CACHED_KEY, b"stale").unwrap();
+
+        (tmp, infra, rx)
+    }
 }
 
 #[cfg(test)]

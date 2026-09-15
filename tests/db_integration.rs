@@ -17,7 +17,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
-use crap_cms::db::{migrate, ops, pool, query};
+use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use serde_json::{Value, json};
 
 fn make_posts_def() -> CollectionDefinition {
@@ -628,7 +628,7 @@ fn count_where_field_eq_basic() {
     let conn = pool.get().expect("DB connection");
     let count = query::count_where_field_eq(
         &conn,
-        &query::FieldEqCount::builder("posts", "status", "published").build(),
+        &query::FieldEqCount::builder("posts", "status", DbValue::Text("published".into())).build(),
     )
     .expect("Count failed");
     assert_eq!(count, 2);
@@ -652,7 +652,7 @@ fn count_where_field_eq_with_exclude() {
 
     let count = query::count_where_field_eq(
         &conn,
-        &query::FieldEqCount::builder("posts", "status", "published")
+        &query::FieldEqCount::builder("posts", "status", DbValue::Text("published".into()))
             .exclude_id(Some(exclude_id))
             .build(),
     )

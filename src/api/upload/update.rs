@@ -1,34 +1,33 @@
 //! PATCH /api/upload/{slug}/{id} — replace file on an existing document.
 
-use std::sync::Arc;
-
-use tracing::error;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 use tokio::task;
-
-use std::collections::HashMap;
+use tracing::error;
 
 use crate::{
-    admin::AdminState,
-    config::LocaleConfig,
-    core::{
-        CollectionDefinition, Document, SharedStorage, event::EventOperation, upload::UploadedFile,
+    admin::{AdminState, handlers::shared::response::on_blocking_section, parse_multipart_form},
+    core::{CollectionDefinition, Document, upload::UploadedFile},
+    service::{
+        AppInfra, ServiceContext, ServiceError,
+        upload::{self, UpdateUploadInput, UploadUpdateResult},
     },
-    db::DbPool,
-    hooks::HookRunner,
-    service::{self, ServiceError, upload::UploadUpdateResult},
 };
 
-/// Owned bundle for the upload-update spawn-blocking body.
+use super::helpers::{
+    DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
+    service_error_to_response,
+};
+
+/// Owned bundle for the upload-update spawn-blocking body. Storage, locale
+/// config and transports come from `infra`.
 struct UploadUpdateBlockingInput {
-    pool: DbPool,
-    runner: HookRunner,
-    storage: SharedStorage,
+    infra: Arc<AppInfra>,
     slug: String,
     id: String,
     def: Arc<CollectionDefinition>,
@@ -36,7 +35,6 @@ struct UploadUpdateBlockingInput {
     file: Option<UploadedFile>,
     form_data: HashMap<String, String>,
     ui_locale: Option<String>,
-    locale_config: LocaleConfig,
     max_file_size: u64,
     image_max_attempts: u32,
 }
@@ -44,24 +42,24 @@ struct UploadUpdateBlockingInput {
 fn update_upload_blocking(
     input: UploadUpdateBlockingInput,
 ) -> Result<UploadUpdateResult, ServiceError> {
-    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
-        .pool(&input.pool)
-        .runner(&input.runner)
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .infra(&input.infra)
         .user(input.user_doc.as_ref())
         .build();
 
     // Recover the real error kind from a bare `Internal` before the HTTP mapper,
     // matching the gRPC/admin write paths (see `create_upload_blocking`).
-    let db_kind = input.pool.kind();
-    service::upload::update_upload(
+    let db_kind = input.infra.pool.kind();
+
+    upload::update_upload(
         &ctx,
-        service::upload::UpdateUploadInput {
+        UpdateUploadInput {
             id: &input.id,
-            storage: &input.storage,
+            storage: &input.infra.storage,
             file: input.file,
             form_data: input.form_data,
             ui_locale: input.ui_locale,
-            locale_config: &input.locale_config,
+            locale_config: &input.infra.locale_config,
             upload_max_file_size: input.max_file_size,
             image_max_attempts: input.image_max_attempts,
         },
@@ -69,22 +67,15 @@ fn update_upload_blocking(
     .map_err(|e| e.reclassify(db_kind))
 }
 
-use super::helpers::{
-    DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
-    publish_upload_event, service_error_to_response,
-};
-use crate::admin::handlers::shared::response::on_blocking_section;
-use crate::admin::parse_multipart_form;
-
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn update_upload(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
-    request: axum::extract::Request,
+    request: Request,
 ) -> Response {
-    // L12: run the synchronous auth + Lua access gate on the blocking
-    // pool, not the async worker. The multipart parse below stays async.
+    // Run the synchronous auth + Lua access gate on the blocking pool, not the
+    // async worker. The multipart parse below stays async.
     let (auth_user, def) = match on_blocking_section(|| {
         let auth_user = extract_bearer_user(&state, &headers)?;
 
@@ -135,9 +126,7 @@ pub(super) async fn update_upload(
     };
 
     let input = UploadUpdateBlockingInput {
-        pool: state.infra.pool.clone(),
-        runner: state.infra.hook_runner.clone(),
-        storage: state.infra.storage.clone(),
+        infra: state.infra.clone(),
         slug: slug.clone(),
         id: id.clone(),
         def: def.clone(),
@@ -145,7 +134,6 @@ pub(super) async fn update_upload(
         file,
         form_data,
         ui_locale: auth_user.as_ref().map(|au| au.ui_locale.clone()),
-        locale_config: state.config.locale.clone(),
         max_file_size: state.config.upload.max_file_size,
         image_max_attempts: state.config.jobs.system_image_max_attempts(),
     };
@@ -154,16 +142,6 @@ pub(super) async fn update_upload(
 
     match result {
         Ok(Ok(UploadUpdateResult { doc, .. })) => {
-            publish_upload_event(
-                &state,
-                &def,
-                slug,
-                id,
-                EventOperation::Update,
-                Some(doc.fields.clone()),
-                auth_user.as_ref(),
-            );
-
             json_ok(StatusCode::OK, &DocumentBody { document: &doc })
         }
         Ok(Err(e)) => service_error_to_response(&e),

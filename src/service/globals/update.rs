@@ -133,10 +133,10 @@ pub fn update_global_in_conn(
     let final_ctx =
         run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
 
+    // Both reported shapes carry their rows for the write's locale before
+    // after-change hooks see them: a draft save its snapshot, a published write
+    // the global as `get_global` reads it.
     let mut doc = persist_global_update(conn, ctx, def, &gtable, &final_ctx, &input, is_draft)?;
-
-    // Hydrate join fields BEFORE after-change hooks so they see nested data.
-    query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -158,12 +158,7 @@ pub fn update_global_in_conn(
         conn,
     )?;
 
-    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
-    doc.strip_fields(&svc_helpers::collect_api_hidden_field_names(
-        &def.fields,
-        "",
-    ));
+    svc_helpers::strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
     Ok((doc, after_ctx))
 }

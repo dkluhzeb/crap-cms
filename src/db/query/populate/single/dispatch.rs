@@ -47,11 +47,7 @@ pub(super) fn finalize_target(
         return Ok(None);
     }
 
-    if let Some(uc) = &def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut raw, uc);
-    }
+    upload::shape_read_document(def, &mut raw);
 
     // Recurse, forwarding the access checker + user so nested targets are gated
     // too, and the shared singleflight so nested raw fetches dedup across requests.

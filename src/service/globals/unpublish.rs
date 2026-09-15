@@ -112,8 +112,7 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
     doc.fields
         .insert("_status".to_string(), Value::String("draft".into()));
 
-    // Hydrate join fields BEFORE after-change hooks so they see nested data.
-    query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, None)?;
+    // `get_global` read the global with its rows for the default locale.
 
     run_after_change_hooks(
         write_hooks,
@@ -129,8 +128,7 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
         conn,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
-    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
+    helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
     Ok(doc)
 }
@@ -163,13 +161,21 @@ fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
 mod tests {
     use anyhow::Result as AnyResult;
     use rusqlite::Connection;
+    use serde_json::{Value, json};
 
     use super::unpublish_global_document;
     use crate::{
-        core::{DocumentFields, FieldDefinition, GlobalDefinition, Hooks, ValidationError},
-        db::{AccessResult, DbConnection},
+        config::{CrapConfig, LocaleConfig},
+        core::{
+            DocumentFields, FieldDefinition, FieldType, GlobalDefinition, Hooks, Registry,
+            ValidationError, VersionsConfig,
+        },
+        db::{
+            AccessResult, DbConnection, LocaleContext, LocaleMode, migrate, pool, query,
+            query::helpers::global_table,
+        },
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
-        service::{ServiceContext, ServiceError, hooks::WriteHooks},
+        service::{FieldReadStrip, ServiceContext, ServiceError, hooks::WriteHooks},
     };
 
     struct NoopWriteHooks;
@@ -220,6 +226,8 @@ mod tests {
         }
     }
 
+    impl FieldReadStrip for NoopWriteHooks {}
+
     /// Regression: unpublishing a non-versioned global must fail with a typed
     /// gate error at the service chokepoint. The admin codec used to guard
     /// this itself and silently fall through to a full update instead.
@@ -239,5 +247,78 @@ mod tests {
             matches!(&err, ServiceError::HookError(msg) if msg.contains("versioning")),
             "expected typed versioning gate error, got {err:?}"
         );
+    }
+
+    /// Store one `slides` row per locale on the `settings` global.
+    fn save_slides(conn: &dyn DbConnection, def: &GlobalDefinition, locale: &LocaleConfig) {
+        for (code, caption) in [("en", "english"), ("de", "deutsch")] {
+            let ctx = LocaleContext {
+                mode: LocaleMode::Single(code.to_string()),
+                config: locale.clone(),
+            };
+            let data: DocumentFields = [("slides".to_string(), json!([{ "caption": caption }]))]
+                .into_iter()
+                .collect();
+
+            query::save_join_table_data(
+                conn,
+                &global_table("settings"),
+                &def.fields,
+                "default",
+                &data,
+                Some(&ctx),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Unpublishing a global reports its rows, in the default locale.
+    #[test]
+    fn unpublish_reports_the_default_locales_rows() {
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+        let mut def = GlobalDefinition::new("settings");
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("caption", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let shared = Registry::shared();
+        shared.write().unwrap().register_global(def.clone());
+        migrate::sync_all(&db_pool, &Registry::snapshot(&shared), &locale).expect("sync");
+
+        let conn = db_pool.get().unwrap();
+        save_slides(&conn, &def, &locale);
+
+        let wh = NoopWriteHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .locale_config(Some(&locale))
+            .build();
+
+        let doc = unpublish_global_document(&ctx).expect("unpublish");
+
+        let captions: Vec<&str> = doc
+            .fields
+            .get("slides")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("caption").and_then(Value::as_str))
+            .collect();
+        assert_eq!(captions, vec!["english"]);
     }
 }

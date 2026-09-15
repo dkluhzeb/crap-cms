@@ -173,11 +173,7 @@ pub(super) fn batch_fetch_single_collection(
         .collect();
 
     for d in &mut survivors {
-        if let Some(ref uc) = rel_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(d, uc);
-        }
+        upload::shape_read_document(rel_def, d);
     }
 
     if ctx.effective_depth - 1 > 0 {

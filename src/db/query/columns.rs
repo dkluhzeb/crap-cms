@@ -9,7 +9,10 @@ use crate::{
     core::{CollectionDefinition, FieldDefinition},
     db::{
         LocaleContext,
-        query::helpers::{locale_column, prefixed_name, tz_column, walk_leaf_fields},
+        query::{
+            helpers::{prefixed_name, walk_leaf_fields},
+            stored_columns,
+        },
     },
 };
 
@@ -52,13 +55,9 @@ pub fn collect_column_names(fields: &[FieldDefinition], names: &mut Vec<String>)
     // inherited_localized not needed here — just walk and collect
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         if field.has_parent_column() {
-            let col = prefixed_name(prefix, &field.name);
-            names.push(col.clone());
-
-            if field.has_tz_companion() {
-                names.push(tz_column(&col));
-            }
+            names.extend(field.columns_with_companions(&prefixed_name(prefix, &field.name)));
         }
+
         Ok(())
     });
 }
@@ -103,24 +102,10 @@ fn collect_expected_locale_inner(
         let base = prefixed_name(prefix, &field.name);
         let is_localized = field.localized || inherited_loc;
 
-        if is_localized {
-            for locale in &locale_config.locales {
-                names.insert(locale_column(&base, locale)?);
-            }
-        } else {
-            names.insert(base.clone());
-        }
-
-        if field.has_tz_companion() {
-            let tz_base = tz_column(&base);
-
-            if is_localized {
-                for locale in &locale_config.locales {
-                    names.insert(locale_column(&tz_base, locale)?);
-                }
-            } else {
-                names.insert(tz_base);
-            }
+        // The field's own column and its companions, each per locale when
+        // localized.
+        for column in field.columns_with_companions(&base) {
+            names.extend(stored_columns(&column, is_localized, locale_config)?);
         }
 
         Ok(())
@@ -160,7 +145,7 @@ fn collect_valid_filter_names(fields: &[FieldDefinition], valid: &mut HashSet<St
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::{FieldTab, FieldType, VersionsConfig};
+    use crate::core::{FieldAdmin, FieldTab, FieldType, VersionsConfig};
     use crate::db::query::test_helpers::*;
 
     #[test]
@@ -754,5 +739,61 @@ mod tests {
         let expected = get_expected_column_names(&def, &no_locale()).unwrap();
         assert!(expected.contains("start"));
         assert!(expected.contains("start_tz"));
+    }
+
+    // ── Code language companion column tests ─────────────────────────
+
+    fn make_code_lang_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
+    /// Regression: a code field with an `admin.languages` allow-list has a
+    /// `<name>_lang` column, but the row surface never selected it, so the
+    /// editor's language pick never came back from a read.
+    #[test]
+    fn get_column_names_code_with_languages_adds_lang_column() {
+        let def = make_collection_def("snippets", vec![make_code_lang_field("snippet")], false);
+        let names = get_column_names(&def);
+        assert_eq!(names, vec!["id", "snippet", "snippet_lang"]);
+    }
+
+    #[test]
+    fn get_column_names_group_with_code_lang() {
+        let def = make_collection_def(
+            "snippets",
+            vec![make_group_field(
+                "meta",
+                vec![make_code_lang_field("example")],
+            )],
+            false,
+        );
+        let names = get_column_names(&def);
+        assert_eq!(names, vec!["id", "meta__example", "meta__example_lang"]);
+    }
+
+    /// Regression: the expected-column set drives orphan detection; without the
+    /// `_lang` companion the per-locale language columns read as orphans.
+    #[test]
+    fn expected_columns_code_lang_with_locale() {
+        let mut field = make_code_lang_field("snippet");
+        field.localized = true;
+        let def = make_collection_def("snippets", vec![field], false);
+        let expected = get_expected_column_names(&def, &locale_en_de()).unwrap();
+
+        assert!(
+            expected.contains("snippet_lang__en"),
+            "missing snippet_lang__en, got: {expected:?}"
+        );
+        assert!(
+            expected.contains("snippet_lang__de"),
+            "missing snippet_lang__de, got: {expected:?}"
+        );
+        assert!(!expected.contains("snippet_lang"));
     }
 }

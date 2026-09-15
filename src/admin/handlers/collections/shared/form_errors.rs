@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use axum::{Extension, response::Response};
 use serde_json::{Map, Value, json};
+use tracing::error;
 
 use crate::{
     admin::{
@@ -15,7 +16,7 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts,
+                EnrichOptions, apply_display_conditions, build_field_contexts, editor_locale_ctx,
                 enrich_field_contexts, forbidden, get_user_doc, page_with_toast, paths,
                 redirect_response, split_sidebar_fields, toast_only_error,
                 translate_validation_errors,
@@ -26,7 +27,6 @@ use crate::{
     hooks::ConditionContext,
     service::ServiceError,
 };
-use tracing::error;
 
 /// Decide the toast message for a write error that fell through the form's typed
 /// `AccessDenied` / `Validation` arms. A Lua hook abort reaches the admin path as
@@ -85,10 +85,16 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
 ) -> Response {
     let mut fields = build_field_contexts(&p.def.fields, p.form.raw(), p.error_map, true, false);
 
+    // The locale the form was submitted in, for the relationship labels.
+    let locale_ctx = editor_locale_ctx(
+        &p.state.config.locale,
+        p.form.raw().get("_locale").map(String::as_str),
+    );
     let enrich_opts = EnrichOptions::builder(p.error_map)
         .filter_hidden(true)
         .doc_id(p.doc_id)
-        .user(get_user_doc(p.auth_user));
+        .user(get_user_doc(p.auth_user))
+        .locale_ctx(locale_ctx.as_ref());
 
     enrich_field_contexts(
         &mut fields,

@@ -9,7 +9,7 @@ use crate::{
     },
     core::{
         FieldDefinition, FieldType, collection::CollectionDefinition, document::Document,
-        field::PickerAppearance,
+        field::PickerAppearance, json_truthy,
     },
     db::query::{FilterClause, FilterOp},
 };
@@ -140,13 +140,7 @@ pub(super) fn compute_cells(
                     if let Some(f) = field_def {
                         match f.field_type {
                             FieldType::Checkbox => {
-                                let checked = match &raw {
-                                    Value::Bool(b) => *b,
-                                    Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
-                                    _ => false,
-                                };
-
-                                json!({ "value": checked, "is_bool": true })
+                                json!({ "value": json_truthy(&raw), "is_bool": true })
                             }
                             FieldType::Date => {
                                 let val = raw.as_str().unwrap_or("");
@@ -615,6 +609,28 @@ mod tests {
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["is_bool"], true);
         assert_eq!(cells[0]["value"], true);
+    }
+
+    /// A read hook can hand the list any checkbox spelling; the cell must
+    /// agree with the write and the edit form on what counts as checked.
+    #[test]
+    fn compute_cells_checkbox_reads_every_checked_spelling() {
+        let def = test_collection();
+        let columns = vec![json!({"key": "active"})];
+
+        for (value, checked) in [
+            (json!("yes"), true),
+            (json!(" On "), true),
+            (json!(0.5), true),
+            (json!("off"), false),
+            (json!(0), false),
+        ] {
+            let mut doc = DocumentBuilder::new("1").build();
+            doc.fields.insert("active".into(), value.clone());
+
+            let cells = compute_cells(&doc, &columns, &def);
+            assert_eq!(cells[0]["value"], checked, "{value}");
+        }
     }
 
     #[test]

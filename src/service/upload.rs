@@ -13,17 +13,85 @@ use crate::{
     admin::FormData,
     config::LocaleConfig,
     core::{
-        Document, FieldError, ReqContext, SharedStorage, ValidationError,
+        CollectionDefinition, Document, FieldError, ReqContext, SharedStorage, ValidationError,
         upload::{
-            CleanupGuard, UploadedFile, delete_upload_files, enqueue_conversions,
+            CleanupGuard, QueuedConversion, UploadedFile, delete_upload_files, enqueue_conversions,
             inject_upload_metadata, process_upload,
         },
     },
-    db::{LocaleContext, query},
-    service::{ServiceContext, WriteInput, create_document, update_document},
+    db::{DbConnection, LocaleContext, query},
+    service::{
+        ServiceContext, WriteInput, create_document, update_document, write::cancel_image_jobs,
+    },
 };
 
 use super::ServiceError;
+
+/// What a committed upload write needs to settle the document's queued image
+/// conversions.
+struct ConversionRequeue<'a> {
+    def: &'a CollectionDefinition,
+    document_id: &'a str,
+    /// The conversions the written file queued; empty when it needs none.
+    conversions: &'a [QueuedConversion],
+    max_attempts: u32,
+    /// Whether this write replaced the document's file, so the conversions
+    /// still queued for the previous one must be cancelled.
+    replaced_file: bool,
+}
+
+/// Cancel the conversions still queued for a replaced file, then queue the
+/// written file's.
+///
+/// A conversion queued for the previous file writes its derivative URL onto the
+/// document when it runs; left in the queue across a file replacement it lands
+/// after the new file's own conversions and overwrites them with a derivative
+/// of a file the document no longer references. Best-effort, logged.
+fn replace_queued_conversions(
+    conn: &dyn DbConnection,
+    slug: &str,
+    requeue: &ConversionRequeue<'_>,
+) {
+    if requeue.replaced_file {
+        cancel_image_jobs(conn, slug, requeue.def, requeue.document_id);
+    }
+
+    if requeue.conversions.is_empty() {
+        return;
+    }
+
+    if let Err(e) = enqueue_conversions(
+        conn,
+        slug,
+        requeue.document_id,
+        requeue.conversions,
+        requeue.max_attempts,
+    ) {
+        warn!("Failed to enqueue image conversions: {e}");
+    }
+}
+
+/// [`replace_queued_conversions`] on a write connection from the context's
+/// pool. A no-op without a pool (Lua CRUD), which queues no conversions.
+fn requeue_conversions(ctx: &ServiceContext, requeue: &ConversionRequeue<'_>) {
+    // Nothing to cancel and nothing to queue — don't take a write connection.
+    if !requeue.replaced_file && requeue.conversions.is_empty() {
+        return;
+    }
+
+    let Some(pool) = ctx.pool else {
+        return;
+    };
+
+    let Ok(conn) = pool
+        .write()
+        .inspect_err(|e| warn!("Image conversions for {}: {e:#}", ctx.slug))
+    else {
+        return;
+    };
+
+    replace_queued_conversions(&conn, ctx.slug, requeue);
+}
 
 /// Result of a successful upload-create operation.
 pub struct UploadCreateResult {
@@ -106,19 +174,17 @@ pub fn create_upload(
 
     guard.commit();
 
-    if !queued_conversions.is_empty()
-        && let Some(pool) = ctx.pool
-        && let Ok(conn) = pool.write()
-        && let Err(e) = enqueue_conversions(
-            &conn,
-            ctx.slug,
-            &doc.id,
-            &queued_conversions,
-            image_max_attempts,
-        )
-    {
-        warn!("Failed to enqueue image conversions: {}", e);
-    }
+    // A create has no previous file, so nothing to cancel.
+    requeue_conversions(
+        ctx,
+        &ConversionRequeue {
+            def,
+            document_id: &doc.id,
+            conversions: &queued_conversions,
+            max_attempts: image_max_attempts,
+            replaced_file: false,
+        },
+    );
 
     Ok(UploadCreateResult { doc, req_context })
 }
@@ -170,7 +236,7 @@ pub fn update_upload(
     let upload_max_file_size = input.upload_max_file_size;
     let image_max_attempts = input.image_max_attempts;
     let def = ctx.collection_def()?;
-    let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
+    let locale_ctx = LocaleContext::default_for(locale_config);
 
     // Strip caller-supplied server-derived upload columns up front: on a no-file
     // update they must stay unchanged (absent = keep stored), and on a file
@@ -192,7 +258,9 @@ pub fn update_upload(
     // read error must propagate: silently skipping cleanup leaks the previous
     // file and all its variants (the delete path is hardened the same way — the
     // old `.ok().flatten()` here was the swallow).
-    let old_doc_fields = if replaces_published_files(file.is_some(), draft) {
+    let replaced_file = replaces_published_files(file.is_some(), draft);
+
+    let old_doc_fields = if replaced_file {
         let pool = ctx.pool.ok_or_else(|| {
             ServiceError::Internal(anyhow!("a pool is required to replace an upload file"))
         })?;
@@ -252,26 +320,147 @@ pub fn update_upload(
         delete_upload_files(&**storage, &old_fields, upload);
     }
 
-    if !queued_conversions.is_empty()
-        && let Some(pool) = ctx.pool
-        && let Ok(conn) = pool.write()
-        && let Err(e) = enqueue_conversions(
-            &conn,
-            ctx.slug,
-            &doc.id,
-            &queued_conversions,
-            image_max_attempts,
-        )
-    {
-        warn!("Failed to enqueue image conversions: {}", e);
-    }
+    requeue_conversions(
+        ctx,
+        &ConversionRequeue {
+            def,
+            document_id: &doc.id,
+            conversions: &queued_conversions,
+            max_attempts: image_max_attempts,
+            replaced_file,
+        },
+    );
 
     Ok(UploadUpdateResult { doc, req_context })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use rusqlite::Connection;
+
     use super::*;
+    use crate::{
+        core::upload::{
+            CollectionUpload, FALLBACK_MAX_ATTEMPTS, ImageConvertJobData, queue_image_conversion,
+        },
+        db::{migrate, query::jobs::list_job_runs},
+    };
+
+    /// An in-memory database holding only the jobs table.
+    fn jobs_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate::create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
+            .expect("create_jobs_table");
+
+        conn
+    }
+
+    fn media_upload_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload::new());
+
+        def
+    }
+
+    fn conversion(target: &str) -> QueuedConversion {
+        QueuedConversion {
+            source_path: "a.png".to_string(),
+            target_path: target.to_string(),
+            format: "webp".to_string(),
+            quality: 80,
+            url_column: "thumbnail_webp_url".to_string(),
+            url_value: format!("/uploads/{target}"),
+        }
+    }
+
+    /// The queued payloads of every job still in the queue.
+    fn queued_payloads(conn: &Connection) -> Vec<String> {
+        list_job_runs(conn, None, None, 100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.data)
+            .collect()
+    }
+
+    /// Regression: replacing an upload's file queued the new conversions but
+    /// left the previous file's queued. The stale run finishes later and writes
+    /// its derivative URL over the new file's — the document then points at a
+    /// derivative of a file it no longer references.
+    #[test]
+    fn replacing_a_file_cancels_the_previous_files_conversions() {
+        let conn = jobs_db();
+        let def = media_upload_def();
+
+        queue_image_conversion(
+            &conn,
+            &ImageConvertJobData {
+                collection: "media".to_string(),
+                document_id: "m1".to_string(),
+                source_path: "old.png".to_string(),
+                target_path: "old.webp".to_string(),
+                format: "webp".to_string(),
+                quality: 80,
+                url_column: "thumbnail_webp_url".to_string(),
+                url_value: "/uploads/old.webp".to_string(),
+            },
+            FALLBACK_MAX_ATTEMPTS,
+        )
+        .unwrap();
+
+        replace_queued_conversions(
+            &conn,
+            "media",
+            &ConversionRequeue {
+                def: &def,
+                document_id: "m1",
+                conversions: &[conversion("new.webp")],
+                max_attempts: FALLBACK_MAX_ATTEMPTS,
+                replaced_file: true,
+            },
+        );
+
+        let payloads = queued_payloads(&conn);
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert!(payloads[0].contains("new.webp"), "{payloads:?}");
+    }
+
+    /// A write that replaces no file (a create, or an update carrying no new
+    /// file) leaves the document's queued conversions alone.
+    #[test]
+    fn a_write_that_replaces_no_file_keeps_the_queued_conversions() {
+        let conn = jobs_db();
+        let def = media_upload_def();
+
+        queue_image_conversion(
+            &conn,
+            &ImageConvertJobData {
+                collection: "media".to_string(),
+                document_id: "m1".to_string(),
+                source_path: "a.png".to_string(),
+                target_path: "a.webp".to_string(),
+                format: "webp".to_string(),
+                quality: 80,
+                url_column: "thumbnail_webp_url".to_string(),
+                url_value: "/uploads/a.webp".to_string(),
+            },
+            FALLBACK_MAX_ATTEMPTS,
+        )
+        .unwrap();
+
+        replace_queued_conversions(
+            &conn,
+            "media",
+            &ConversionRequeue {
+                def: &def,
+                document_id: "m1",
+                conversions: &[],
+                max_attempts: FALLBACK_MAX_ATTEMPTS,
+                replaced_file: false,
+            },
+        );
+
+        assert_eq!(queued_payloads(&conn).len(), 1);
+    }
 
     /// Regression: a draft save with a new file must NOT clean up the published
     /// file. The draft write leaves the published row pointing at the current

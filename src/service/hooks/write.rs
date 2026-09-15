@@ -9,7 +9,7 @@ use crate::{
         Builder, Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
         nest_group_fields,
     },
-    db::{AccessResult, DbConnection, LocaleContext, query::helpers::TZ_SUFFIX},
+    db::{AccessResult, DbConnection, LocaleContext, query::helpers::column_belongs_to},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
@@ -21,6 +21,7 @@ use crate::{
             run_field_hooks_inner, run_hooks_inner, validate_fields_inner,
         },
     },
+    service::hooks::FieldReadStrip,
 };
 
 /// Local alias to disambiguate from the file-wide `anyhow::Result`.
@@ -74,7 +75,7 @@ fn collect_removed_paths(
 fn drop_decorated(level: &mut Map<String, Value>, prefix: &str, removed: &[String]) {
     level.retain(|key, _| {
         let path = format!("{prefix}{key}");
-        !removed.iter().any(|field| belongs_to_field(&path, field))
+        !removed.iter().any(|field| column_belongs_to(&path, field))
     });
 
     for (key, value) in level.iter_mut() {
@@ -82,20 +83,6 @@ fn drop_decorated(level: &mut Map<String, Value>, prefix: &str, removed: &[Strin
             drop_decorated(nested, &format!("{prefix}{key}__"), removed);
         }
     }
-}
-
-/// Whether `path` is a companion column of `field`: a per-locale column
-/// (`{field}__…`) or a timezone companion (`{field}_tz`, `{field}_tz__…`).
-/// Field names cannot contain `__` or end in `_tz`, so no sibling field matches.
-fn belongs_to_field(path: &str, field: &str) -> bool {
-    let Some(rest) = path.strip_prefix(field) else {
-        return false;
-    };
-
-    rest.starts_with("__")
-        || rest
-            .strip_prefix(TZ_SUFFIX)
-            .is_some_and(|tz_rest| tz_rest.is_empty() || tz_rest.starts_with("__"))
 }
 
 /// Shared body of the create/update strips: round-trip `data` through the
@@ -118,7 +105,11 @@ fn strip_in_place<H: WriteHooks + ?Sized>(
 /// Two implementations exist:
 /// - [`RunnerWriteHooks`]: acquires a Lua VM from the pool (admin, gRPC, MCP)
 /// - [`LuaWriteHooks`]: uses the current Lua VM inline (Lua CRUD hooks)
-pub trait WriteHooks {
+///
+/// The data-aware field-read strip a write applies to the document it reports
+/// lives in [`FieldReadStrip`], shared with the read surface so both strip the
+/// same way.
+pub trait WriteHooks: FieldReadStrip {
     /// Full before-write pipeline: field `BeforeValidate` → richtext attr hooks →
     /// collection `BeforeValidate` → validate → field `BeforeChange` → collection `BeforeChange`.
     ///
@@ -170,48 +161,6 @@ pub trait WriteHooks {
     /// runner, knowledge of globally-registered delete hooks).
     fn runs_delete_hooks(&self, hooks: &Hooks) -> bool {
         !hooks.before_delete.is_empty() || !hooks.after_delete.is_empty()
-    }
-
-    /// Data-aware field-**read** strip applied to a write op's returned document.
-    /// See [`crate::service::hooks::ReadHooks::strip_read_access_map`]. Default
-    /// no-op so lightweight test/override impls keep their behavior.
-    fn strip_read_access_map(
-        &self,
-        fields: &[FieldDefinition],
-        level: &mut Map<String, Value>,
-        document: &DocumentFields,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        let _ = (fields, level, document, collection, user, locale);
-    }
-
-    /// Convenience: strip read-denied fields from a returned [`Document`] in
-    /// place, capturing the full pre-strip document as `ctx.document`.
-    fn strip_read_access_doc(
-        &self,
-        fields: &[FieldDefinition],
-        doc: &mut Document,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        // Skip the per-document clone + map round-trip entirely when no field
-        // configures read access (the common case) — matches the read path.
-        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
-            return;
-        }
-
-        let document = doc.fields.clone();
-        let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
-            .into_inner()
-            .into_iter()
-            .collect();
-
-        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
-
-        doc.fields = level.into_iter().collect();
     }
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
@@ -321,7 +270,7 @@ pub trait WriteHooks {
     /// Each rule judges `stored` — the live row — as `ctx.document`, exactly as
     /// an update does: the snapshot is the value under judgment, so it cannot
     /// also be the evidence. Mirrors
-    /// [`ReadHooks::strip_read_access_value`](crate::service::hooks::ReadHooks::strip_read_access_value).
+    /// [`FieldReadStrip::strip_read_access_doc`].
     fn strip_write_access_value(
         &self,
         fields: &[FieldDefinition],
@@ -505,30 +454,6 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         }
     }
 
-    fn strip_read_access_map(
-        &self,
-        fields: &[FieldDefinition],
-        level: &mut Map<String, Value>,
-        document: &DocumentFields,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        if self.override_access {
-            return;
-        }
-        let Some(conn) = self.conn else {
-            return;
-        };
-        let input = ReadStripInput {
-            document,
-            collection,
-            user,
-            locale,
-        };
-        self.runner.strip_read_access(fields, level, &input, conn);
-    }
-
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
@@ -561,6 +486,32 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         ctx: &ValidationCtx,
     ) -> ValidateResult {
         self.runner.validate_fields(fields, data, ctx)
+    }
+}
+
+impl FieldReadStrip for RunnerWriteHooks<'_> {
+    fn strip_read_access_map(
+        &self,
+        fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        document: &DocumentFields,
+        collection: &str,
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        if self.override_access {
+            return;
+        }
+        let Some(conn) = self.conn else {
+            return;
+        };
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
+        self.runner.strip_read_access(fields, level, &input, conn);
     }
 }
 
@@ -704,27 +655,6 @@ impl WriteHooks for LuaWriteHooks<'_> {
         check_collection_access(self.lua, input)
     }
 
-    fn strip_read_access_map(
-        &self,
-        fields: &[FieldDefinition],
-        level: &mut Map<String, Value>,
-        document: &DocumentFields,
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-    ) {
-        if self.override_access {
-            return;
-        }
-        let input = ReadStripInput {
-            document,
-            collection,
-            user,
-            locale,
-        };
-        strip_read_access_with_lua(self.lua, fields, level, &input);
-    }
-
     fn strip_write_access_map(
         &self,
         fields: &[FieldDefinition],
@@ -747,11 +677,50 @@ impl WriteHooks for LuaWriteHooks<'_> {
     }
 }
 
+impl FieldReadStrip for LuaWriteHooks<'_> {
+    fn strip_read_access_map(
+        &self,
+        fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        document: &DocumentFields,
+        collection: &str,
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        if self.override_access {
+            return;
+        }
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
+        strip_read_access_with_lua(self.lua, fields, level, &input);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Regression: a stripped field's companion columns were dropped for
+    /// per-locale and timezone keys only, so a denied code field kept its
+    /// `_lang` companion in the write.
+    #[test]
+    fn a_stripped_code_field_drops_its_language_companion() {
+        let before = json!({ "snippet": "x", "snippet_lang": "rust", "title": "t" });
+        let mut after = json!({ "snippet_lang": "rust", "title": "t" });
+
+        drop_locale_columns_of_stripped(
+            before.as_object().unwrap(),
+            after.as_object_mut().unwrap(),
+        );
+
+        assert_eq!(after, json!({ "title": "t" }));
+    }
 
     fn object(value: Value) -> Map<String, Value> {
         match value {

@@ -159,6 +159,7 @@ field definitions.
 | `id` | id (string) | yes | gRPC, MCP, Lua | Document ID to list versions for |
 | `limit` | integer |  | gRPC, MCP, Lua | Max versions to return |
 | `offset` | integer |  | gRPC, MCP, Lua | Number of versions to skip |
+| `locale` | locale (string) |  | MCP | Locale code (e.g. 'en', 'de') or 'all' for all locales |
 
 ### `restore_version`
 

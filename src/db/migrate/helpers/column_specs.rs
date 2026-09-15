@@ -5,10 +5,10 @@ use tracing::info;
 
 use crate::{
     config::LocaleConfig,
-    core::{FieldDefinition, FieldType},
+    core::FieldDefinition,
     db::{
         DbConnection,
-        query::helpers::{lang_column, prefixed_name, tz_column, walk_leaf_fields},
+        query::helpers::{prefixed_name, walk_leaf_fields},
     },
 };
 
@@ -23,7 +23,7 @@ pub(in crate::db::migrate) struct ColumnSpec<'a> {
     pub field: &'a FieldDefinition,
     /// Whether this column is localized (needs per-locale columns)
     pub is_localized: bool,
-    /// Companion column (e.g., timezone). Always TEXT, no constraints.
+    /// Companion column (`_tz` / `_lang`). Always TEXT, no constraints.
     pub companion_text: bool,
 }
 
@@ -74,21 +74,9 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
                 companion_text: false,
             });
 
-            if field.has_tz_companion() {
+            for companion in field.companion_columns(&col_name) {
                 specs.push(ColumnSpec {
-                    col_name: tz_column(&col_name),
-                    field,
-                    is_localized,
-                    companion_text: true,
-                });
-            }
-
-            // Code fields with a non-empty `admin.languages` allow-list get a
-            // companion `<name>_lang` column that stores the editor's per-
-            // document language pick. Mirrors the date/timezone pattern above.
-            if field.field_type == FieldType::Code && !field.admin.languages.is_empty() {
-                specs.push(ColumnSpec {
-                    col_name: lang_column(&col_name),
+                    col_name: companion,
                     field,
                     is_localized,
                     companion_text: true,
@@ -137,7 +125,7 @@ pub(in crate::db::migrate) fn ensure_locale_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
 
     #[test]
@@ -266,7 +254,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
                 .admin(
-                    crate::core::FieldAdmin::builder()
+                    FieldAdmin::builder()
                         .languages(vec!["javascript".to_string(), "python".to_string()])
                         .build(),
                 )
@@ -284,11 +272,7 @@ mod tests {
     fn code_without_languages_produces_one_spec() {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
-                .admin(
-                    crate::core::FieldAdmin::builder()
-                        .language("javascript")
-                        .build(),
-                )
+                .admin(FieldAdmin::builder().language("javascript").build())
                 .build(),
         ];
         let specs = collect_column_specs(&fields, &no_locale());
@@ -303,7 +287,7 @@ mod tests {
                 .fields(vec![
                     FieldDefinition::builder("example", FieldType::Code)
                         .admin(
-                            crate::core::FieldAdmin::builder()
+                            FieldAdmin::builder()
                                 .languages(vec!["javascript".to_string()])
                                 .build(),
                         )

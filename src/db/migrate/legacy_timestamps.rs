@@ -1,3 +1,5 @@
+//! **One-time conversion — removable after 0.1.0** (see [`super::one_time`]).
+//!
 //! One-time rewrite of legacy space-separated timestamps to ISO 8601 on disk.
 //!
 //! Early `SQLite` schemas defaulted timestamp columns to `datetime('now')`, which

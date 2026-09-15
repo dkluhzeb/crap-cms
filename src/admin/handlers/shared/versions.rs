@@ -10,11 +10,10 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, htmx_redirect},
     },
-    core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
-    db::DbConnection,
+    core::{Document, Registry, document::VersionSnapshot},
+    db::query::MissingRelation,
     service::{
-        ListVersionsInput, ServiceContext, ServiceError, document_info::find_missing_relations,
-        find_version_by_id, list_versions,
+        ListVersionsInput, ServiceContext, ServiceError, list_versions, version_missing_relations,
     },
 };
 
@@ -49,27 +48,23 @@ pub fn fetch_version_sidebar_data(ctx: &ServiceContext, parent_id: &str) -> (Vec
     }
 }
 
-/// Look up a version snapshot and find any missing relation targets.
-/// Shared by collection and global restore confirm handlers.
+/// Look up a version and the relations its restore would write whose targets
+/// no longer exist, as far as the viewer may read them. Shared by collection
+/// and global restore confirm handlers; `ctx` carries the locale config so
+/// every locale the snapshot records is checked.
 pub fn load_version_with_missing_relations(
     ctx: &ServiceContext,
-    conn: &dyn DbConnection,
     registry: &Registry,
     version_id: &str,
-    fields: &[FieldDefinition],
-) -> Result<(VersionSnapshot, Vec<crate::db::query::MissingRelation>), &'static str> {
-    let version = match find_version_by_id(ctx, version_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => return Err("Version not found"),
+) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+    match version_missing_relations(ctx, registry, version_id) {
+        Ok(Some(found)) => Ok(found),
+        Ok(None) => Err("Version not found"),
         Err(e) => {
-            error!("Find version error: {}", e);
-            return Err("Database error");
+            error!("Find version error: {e}");
+            Err("Database error")
         }
-    };
-
-    let missing = find_missing_relations(conn, registry, &version.snapshot, fields);
-
-    Ok((version, missing))
+    }
 }
 
 /// Map a spawn-blocking restore outcome to the admin HTTP response.

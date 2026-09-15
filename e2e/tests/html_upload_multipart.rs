@@ -154,24 +154,30 @@ async fn multipart_upload_creates_document_with_metadata_and_thumbnail() {
         "filesize must be positive: {body}"
     );
 
-    // The synchronously generated size variant.
-    let thumb_name = fields
-        .get("thumbnail_url")
+    // The synchronously generated size variant, in the shape a read returns:
+    // the per-size columns folded into `sizes`, not flat `thumbnail_*` keys.
+    let thumb = fields
+        .get("sizes")
+        .and_then(|sizes| sizes.get("thumbnail"))
+        .unwrap_or_else(|| panic!("sizes.thumbnail must be set: {body}"));
+    assert!(
+        fields.get("thumbnail_url").is_none(),
+        "per-size columns are folded into `sizes`: {body}"
+    );
+    let thumb_name = thumb
+        .get("url")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("thumbnail_url must be set: {body}"))
+        .unwrap_or_else(|| panic!("sizes.thumbnail.url must be set: {body}"))
         .rsplit('/')
         .next()
         .unwrap()
         .to_string();
     assert_eq!(
-        fields.get("thumbnail_width").and_then(Value::as_i64),
+        thumb.get("width").and_then(Value::as_i64),
         Some(8),
         "thumbnail resized to configured width: {body}"
     );
-    assert_eq!(
-        fields.get("thumbnail_height").and_then(Value::as_i64),
-        Some(8)
-    );
+    assert_eq!(thumb.get("height").and_then(Value::as_i64), Some(8));
 
     // Both stored files must be retrievable through the serve route.
     for name in [filename, thumb_name] {

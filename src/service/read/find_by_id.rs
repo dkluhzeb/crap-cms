@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::post_process::post_process_single;
+use super::post_process::{PostProcessCall, post_process_single};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -166,25 +166,81 @@ pub fn find_document_by_id(
         return Ok(None);
     };
 
-    post_process_single(ctx, conn, &mut doc, input, "find_by_id", req_context);
+    let call = PostProcessCall::builder(input, "find_by_id", req_context).build();
+    post_process_single(ctx, conn, &mut doc, call);
 
     Ok(Some(doc))
 }
 
+/// Run the read pipeline on a document the caller already holds — `before_read`,
+/// upload sizes, field read strips, `after_read` — without the collection-level
+/// read gate. For a user's own document at login and on Me: a rule restricting
+/// who may list users must not keep a signed-in user from their own record.
+///
+/// # Errors
+///
+/// Returns an error when the context has no read hooks, definition or
+/// connection, or a `before_read` hook fails. The document's fields are then
+/// cleared (its id is kept): the caller holds a row the read strips never ran
+/// on, and must not be able to ship it.
+pub fn read_own_document(
+    ctx: &ServiceContext,
+    doc: &mut Document,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    let result = run_own_document_read(ctx, doc, locale_ctx);
+
+    if result.is_err() {
+        doc.fields.clear();
+    }
+
+    result
+}
+
+/// The read pipeline of [`read_own_document`], which clears the document when
+/// this fails.
+fn run_own_document_read(
+    ctx: &ServiceContext,
+    doc: &mut Document,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    let hooks = ctx.read_hooks()?;
+    let def = ctx.collection_def()?;
+    let conn = ctx.resolve_conn()?;
+
+    let req_context = hooks.before_read(
+        &def.hooks,
+        ctx.slug,
+        "find_by_id",
+        locale_ctx.map(LocaleContext::access_locale),
+    )?;
+
+    let id = doc.id.to_string();
+    let input = FindByIdInput::builder(&id).locale_ctx(locale_ctx).build();
+    let call = PostProcessCall::builder(&input, "find_by_id", req_context).build();
+    post_process_single(ctx, conn.as_ref(), doc, call);
+
+    Ok(())
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
     use rusqlite::Connection;
+    use serde_json::{Map, Value};
 
     use super::*;
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, Hooks, ReqContext,
-            collection::VersionsConfig,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, HookRef,
+            Hooks, ReqContext, collection::VersionsConfig,
         },
         db::{AccessResult, Filter, FilterClause, FilterOp},
-        hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
-        service::{ServiceContext, hooks::ReadHooks},
+        hooks::{
+            AccessCheckInput,
+            lifecycle::{AfterReadCtx, access::strip_read_access_data_aware},
+        },
+        service::{FieldReadStrip, ServiceContext, hooks::ReadHooks},
     };
 
     /// Read hooks that allow access only when the configured access ref is the
@@ -218,6 +274,157 @@ mod tests {
         }
     }
 
+    impl FieldReadStrip for OnlyReadFnAllowed {}
+
+    /// Read hooks whose `after_read` marks the document, whose field strip
+    /// removes every field with a `deny` read rule, and which deny every
+    /// collection access check — so a read that consults the gate can't pass.
+    struct MarkingDenyingReadHooks;
+
+    impl ReadHooks for MarkingDenyingReadHooks {
+        fn before_read(
+            &self,
+            _hooks: &Hooks,
+            _slug: &str,
+            _op: &str,
+            _locale: Option<&str>,
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
+            let mut doc = doc;
+            doc.fields
+                .insert("after_read".to_string(), Value::String("ran".to_string()));
+            doc
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Denied)
+        }
+    }
+
+    impl FieldReadStrip for MarkingDenyingReadHooks {
+        fn strip_read_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+            strip_read_access_data_aware(fields, level, &|hook, _data| hook.reference() == "deny");
+        }
+    }
+
+    /// Read hooks whose `before_read` aborts the read.
+    struct AbortingReadHooks;
+
+    impl ReadHooks for AbortingReadHooks {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Err(anyhow!("before_read aborted"))
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    impl FieldReadStrip for AbortingReadHooks {}
+
+    /// A user collection with a readable `email`, a `hidden` `secret` and a
+    /// `salary` whose read rule denies.
+    fn own_document_def() -> CollectionDefinition {
+        let mut salary = FieldDefinition::builder("salary", FieldType::Text).build();
+        salary.access.read = Some(HookRef::new("deny"));
+
+        let mut def = CollectionDefinition::new("users");
+        def.access.read = Some(HookRef::new("read_fn"));
+        def.fields = vec![
+            FieldDefinition::builder("email", FieldType::Text).build(),
+            FieldDefinition::builder("secret", FieldType::Text)
+                .hidden(true)
+                .build(),
+            salary,
+        ];
+
+        def
+    }
+
+    /// The user's own row as the credential lookup loads it: every column set.
+    fn own_document() -> Document {
+        let mut doc = Document::new("u1".to_string());
+
+        for (key, value) in [("email", "a@b.c"), ("secret", "s3cr3t"), ("salary", "100")] {
+            doc.fields
+                .insert(key.to_string(), Value::String(value.to_string()));
+        }
+
+        doc
+    }
+
+    /// Login and Me returned the user's document without its read hooks. Their
+    /// read runs the hooks and the field strips — and no read gate, which a
+    /// rule restricting who may list users would otherwise close on the user's
+    /// own record.
+    #[test]
+    fn an_own_document_runs_the_read_hooks_without_the_read_gate() {
+        let def = own_document_def();
+        let conn = Connection::open_in_memory().unwrap();
+        let hooks = MarkingDenyingReadHooks;
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .build();
+        let mut doc = own_document();
+
+        read_own_document(&ctx, &mut doc, None).unwrap();
+
+        assert_eq!(doc.get_str("after_read"), Some("ran"));
+        assert_eq!(doc.get_str("email"), Some("a@b.c"));
+        assert!(
+            !doc.fields.contains_key("secret"),
+            "a hidden field must be stripped: {:?}",
+            doc.fields
+        );
+        assert!(
+            !doc.fields.contains_key("salary"),
+            "a read-denied field must be stripped: {:?}",
+            doc.fields
+        );
+    }
+
+    /// A `before_read` abort returned before the field strips ran, leaving the
+    /// caller holding the unstripped document — Login and Me logged the error
+    /// and shipped it, hidden and read-denied fields included. An aborted read
+    /// must leave nothing readable behind.
+    #[test]
+    fn an_aborted_own_document_read_leaves_no_fields() {
+        let def = own_document_def();
+        let conn = Connection::open_in_memory().unwrap();
+        let hooks = AbortingReadHooks;
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .build();
+        let mut doc = own_document();
+
+        let result = read_own_document(&ctx, &mut doc, None);
+
+        assert!(result.is_err(), "a before_read abort must fail the read");
+        assert_eq!(doc.id.to_string(), "u1");
+        assert!(
+            doc.fields.is_empty(),
+            "an aborted read left fields on the document: {:?}",
+            doc.fields
+        );
+    }
+
     /// Always-allow read hooks so the test exercises the draft-visibility
     /// filter rather than access control.
     struct NoopReadHooks;
@@ -241,6 +448,8 @@ mod tests {
             Ok(AccessResult::Allowed)
         }
     }
+
+    impl FieldReadStrip for NoopReadHooks {}
 
     fn drafts_collection_with_rows() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();
@@ -382,6 +591,8 @@ mod tests {
             }
         }
     }
+
+    impl FieldReadStrip for OwnDraftsConstrained {}
 
     /// THE constrained-draft leak (regression): when `access.draft` returns a row
     /// FILTER (e.g. "preview your OWN drafts"), the draft snapshot returned by

@@ -132,11 +132,7 @@ pub(super) fn populate_join_docs(
             opts.locale_ctx,
         )?;
 
-        if let Some(ref uc) = target_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut matched_doc, uc);
-        }
+        upload::shape_read_document(target_def, &mut matched_doc);
 
         populate_relationships_cached(
             &PopulateContext {

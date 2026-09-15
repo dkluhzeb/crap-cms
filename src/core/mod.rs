@@ -88,12 +88,15 @@ pub use field::{
     FieldWidth, JoinConfig, LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig,
     RequiredLocales, SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
+pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
 pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};
-pub use parse::{parse_bool, parse_truthy};
+pub use parse::{
+    checkbox_value, json_truthy, parse_bool, parse_number, parse_truthy, value_truthy,
+};
 pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;

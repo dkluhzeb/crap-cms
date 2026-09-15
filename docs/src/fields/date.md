@@ -133,6 +133,7 @@ This pre-selects the timezone in the admin dropdown for any date field with `tim
 
 ### Compatibility
 
+- **Writes**: The zone is written together with its date — the stored UTC value is computed from it, so the two are one unit. An update that sends the date without `<name>_tz` clears the zone (the date is then taken as UTC); to change only the zone, send the date with it. A `null` or empty `<name>_tz` clears it explicitly.
 - **Localized fields**: Each locale gets its own `_tz` column (e.g., `start_date_tz__en`)
 - **Groups / Rows / Tabs / Collapsible / Arrays**: Companion columns follow the parent field's naming rules
 - **Versioning**: Timezone data is included in version snapshots and restored correctly

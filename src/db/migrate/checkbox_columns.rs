@@ -1,3 +1,5 @@
+//! **One-time conversion — removable after 0.1.0** (see [`super::one_time`]).
+//!
 //! One-time Postgres migration: checkbox columns BIGINT → SMALLINT.
 //!
 //! Checkbox fields store a 0/1 flag; on Postgres they were created as BIGINT

@@ -1,7 +1,7 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
 
-use super::is_truthy;
+use crate::core::value_truthy;
 
 /// Logical OR helper: `{{#if (or a b)}}`.
 pub(super) struct OrHelper;
@@ -21,7 +21,7 @@ impl HelperDef for OrHelper {
             .param(1)
             .map_or(&Value::Null, handlebars::PathAndJson::value);
         Ok(ScopedJson::Derived(Value::Bool(
-            is_truthy(a) || is_truthy(b),
+            value_truthy(a) || value_truthy(b),
         )))
     }
 }

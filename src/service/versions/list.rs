@@ -7,7 +7,10 @@ use crate::{
     service::{
         Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
         helpers::enforce_access_constraints,
-        versions::gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
+        versions::{
+            find::read_version_snapshot,
+            gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
+        },
     },
 };
 
@@ -96,22 +99,11 @@ pub fn list_versions(
     let mut versions =
         query::list_versions(conn, &table, input.parent_id, published_only, limit, offset)?;
 
-    // Strip read-denied + API-hidden fields from every snapshot — parity with
-    // `find_version_by_id`; otherwise denied fields leak through the list.
-    // Field-read access is data-aware (per-snapshot), so evaluate it per row; the
-    // API-hidden set is document-independent and computed once. Unlike the
-    // collection list read, this isn't VM-batched: a single document's version
-    // history is bounded (by `max_versions`) and the `Vec<Version>` layout has no
-    // contiguous `&mut [Value]` of snapshots to hand a batch.
-    let fields = ctx.fields()?;
-    let api_hidden = crate::service::helpers::collect_api_hidden_field_names(fields, "");
-
+    // Every snapshot reads as a document — parity with `find_version_by_id`;
+    // otherwise denied, hidden or per-locale values leak through the list.
+    // The caller's locale picks which values each snapshot returns.
     for version in &mut versions {
-        hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.slug, ctx.user, None);
-
-        if !api_hidden.is_empty() {
-            super::find::strip_snapshot_fields(&mut version.snapshot, &api_hidden);
-        }
+        read_version_snapshot(ctx, hooks, version, input.locale_ctx)?;
     }
 
     let meta_limit = limit.unwrap_or(total);
@@ -138,7 +130,7 @@ mod tests {
 
     use anyhow::Result;
     use rusqlite::Connection;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::{
         config::LocaleConfig,
@@ -146,10 +138,10 @@ mod tests {
             CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
             ReqContext, ValidationError, VersionsConfig,
         },
-        db::{AccessResult, DbConnection},
+        db::{AccessResult, DbConnection, LocaleContext},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
         service::{
-            ServiceContext,
+            FieldReadStrip, ServiceContext,
             hooks::{ReadHooks, WriteHooks},
             versions::restore_collection_version_core,
         },
@@ -177,6 +169,8 @@ mod tests {
             Ok(AccessResult::Allowed)
         }
     }
+
+    impl FieldReadStrip for NoopReadHooks {}
 
     /// Read hooks that allow access only when the access ref is the `read`
     /// function — so a version read (which resolves to the edit-level
@@ -207,6 +201,8 @@ mod tests {
             })
         }
     }
+
+    impl FieldReadStrip for OnlyReadFnAllowed {}
 
     /// Noop implementation of `WriteHooks` for unit tests — always allows access.
     struct NoopWriteHooks;
@@ -256,6 +252,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl FieldReadStrip for NoopWriteHooks {}
 
     fn setup_versioned_collection() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();
@@ -354,6 +352,121 @@ mod tests {
         assert_eq!(result.total, 2);
         assert_eq!(result.docs.len(), 2);
         assert_eq!(result.docs[0].version, 2, "should be newest first");
+    }
+
+    /// A versioned collection with a localized `title` and a hidden localized
+    /// `secret`, holding one snapshot that records both locales' values.
+    fn localized_versioned_collection() -> (Connection, CollectionDefinition, LocaleConfig) {
+        let (conn, mut def) = setup_versioned_collection();
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("secret", FieldType::Text)
+                .localized(true)
+                .hidden(true)
+                .build(),
+        ];
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('v1', 'p1', 1, 'published', 1, \
+             '{\"title\": \"Hello\", \"title__en\": \"Hello\", \"title__de\": \"Hallo\", \
+               \"secret\": \"s\", \"secret__en\": \"s\", \"secret__de\": \"g\"}');",
+        )
+        .unwrap();
+
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+
+        (conn, def, locale)
+    }
+
+    /// The snapshot of the only listed version, as the caller's locale returns it.
+    fn listed_snapshot(
+        conn: &Connection,
+        def: &CollectionDefinition,
+        locale: &LocaleConfig,
+        requested: Option<&str>,
+    ) -> Value {
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", def)
+            .conn(conn)
+            .read_hooks(&rh)
+            .locale_config(Some(locale))
+            .build();
+
+        let locale_ctx =
+            LocaleContext::from_locale_string(requested, locale).expect("a configured locale");
+        let input = ListVersionsInput::builder("p1")
+            .locale_ctx(locale_ctx.as_ref())
+            .build();
+
+        let mut result = list_versions(&ctx, &input).unwrap();
+
+        result.docs.remove(0).snapshot
+    }
+
+    /// Regression: version snapshots were stripped in their stored shape, where
+    /// a localized field sits under per-locale keys (`secret__en`). The strip
+    /// removed `secret` only, so a hidden localized field left the server in
+    /// every snapshot. Snapshots now come back shaped as a draft read — resolved
+    /// for the default locale — and stripped like any read document.
+    #[test]
+    fn version_snapshots_read_as_documents_without_hidden_locale_keys() {
+        let (conn, def, locale) = localized_versioned_collection();
+
+        let snapshot = listed_snapshot(&conn, &def, &locale, None);
+        let snapshot = snapshot.as_object().unwrap();
+
+        assert_eq!(snapshot.get("title"), Some(&json!("Hello")));
+        assert!(
+            snapshot
+                .keys()
+                .all(|k| !k.starts_with("secret") && !k.contains("__")),
+            "hidden or per-locale keys reached the caller: {snapshot:?}"
+        );
+    }
+
+    /// A version read takes the caller's locale: reading the history in `de`
+    /// returns the German values, not the default locale's. Without it, a
+    /// snapshot's translations were unreachable once snapshots started reading
+    /// as documents.
+    #[test]
+    fn a_requested_locale_returns_that_locales_snapshot_values() {
+        let (conn, def, locale) = localized_versioned_collection();
+
+        let snapshot = listed_snapshot(&conn, &def, &locale, Some("de"));
+        let snapshot = snapshot.as_object().unwrap();
+
+        assert_eq!(snapshot.get("title"), Some(&json!("Hallo")));
+        assert!(
+            snapshot
+                .keys()
+                .all(|k| !k.starts_with("secret") && !k.contains("__")),
+            "hidden or per-locale keys reached the caller: {snapshot:?}"
+        );
+    }
+
+    /// `locale = "all"` shapes a snapshot the way an all-locales document read
+    /// does: every locale's value under its own key.
+    #[test]
+    fn an_all_locales_read_returns_the_per_locale_map() {
+        let (conn, def, locale) = localized_versioned_collection();
+
+        let snapshot = listed_snapshot(&conn, &def, &locale, Some("all"));
+        let snapshot = snapshot.as_object().unwrap();
+
+        assert_eq!(
+            snapshot.get("title"),
+            Some(&json!({ "en": "Hello", "de": "Hallo" }))
+        );
+        assert!(
+            !snapshot.contains_key("secret"),
+            "a hidden field must stay hidden in every locale: {snapshot:?}"
+        );
     }
 
     #[test]
@@ -482,6 +595,8 @@ mod tests {
         }
     }
 
+    impl FieldReadStrip for DraftConstrainedToMe {}
+
     /// Regression: a `Constrained` draft rule must be enforced against the
     /// parent document on BOTH version surfaces. Treating `Constrained` as full
     /// draft access (the old `matches!(.., Denied)` check) leaked another
@@ -551,7 +666,7 @@ mod tests {
         );
         assert_eq!(listed.docs[0].status, "published");
         assert!(
-            crate::service::versions::find::find_version_by_id(&ctx1, "p1v2")
+            crate::service::versions::find::find_version_by_id(&ctx1, "p1v2", None)
                 .unwrap()
                 .is_none(),
             "fetching another owner's draft version by id must be hidden"
@@ -565,7 +680,7 @@ mod tests {
         let mine = list_versions(&ctx2, &ListVersionsInput::builder("p2").build()).unwrap();
         assert_eq!(mine.total, 2, "own draft version is still visible");
         assert!(
-            crate::service::versions::find::find_version_by_id(&ctx2, "p2v2")
+            crate::service::versions::find::find_version_by_id(&ctx2, "p2v2", None)
                 .unwrap()
                 .is_some(),
             "fetching own draft version by id still works"

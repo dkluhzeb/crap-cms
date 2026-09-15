@@ -36,6 +36,19 @@ pub fn extract_editor_locale(headers: &HeaderMap, config: &LocaleConfig) -> Opti
     }
 }
 
+/// The editor's content locale as a read context: `locale` when it is a
+/// configured locale (or `"all"`), else the default locale — `None` only when
+/// localization is off. An unknown locale (a stale cookie, a tampered `_locale`
+/// form field) reads in the default locale rather than with no context, which on
+/// a localized collection selects columns that don't exist.
+pub fn editor_locale_ctx(config: &LocaleConfig, locale: Option<&str>) -> Option<LocaleContext> {
+    LocaleContext::from_locale_string(locale, config)
+        .inspect_err(|e| warn!("Invalid editor locale, reading in the default locale: {e}"))
+        .ok()
+        .flatten()
+        .or_else(|| LocaleContext::default_for(config))
+}
+
 /// Parse an explicitly requested locale (form `_locale` field / validate
 /// payload), rejecting unknown locales. Swallowing the parse error would
 /// drop the locale context entirely, and a `None` context on a localized
@@ -58,16 +71,8 @@ pub fn build_locale_template_data(
 ) -> (Option<LocaleContext>, Option<LocaleTemplateData>) {
     let config = &state.config.locale;
 
-    let locale_ctx = if config.is_enabled() {
-        let current = requested_locale.unwrap_or(&config.default_locale);
-        LocaleContext::from_locale_string(Some(current), config)
-            .inspect_err(|e| {
-                warn!("Invalid editor locale '{current}' — falling back to no locale context: {e}");
-            })
-            .unwrap_or(None)
-    } else {
-        None
-    };
+    let current = requested_locale.unwrap_or(&config.default_locale);
+    let locale_ctx = editor_locale_ctx(config, Some(current));
 
     let template_data = LocaleTemplateData::for_locale(config, requested_locale);
 
@@ -126,8 +131,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::FieldType;
-    use crate::db::query::LocaleMode;
+    use crate::{core::FieldType, db::LocaleMode};
 
     fn locale_config_enabled() -> LocaleConfig {
         LocaleConfig {
@@ -135,6 +139,46 @@ mod tests {
             locales: vec!["en".to_string(), "de".to_string(), "fr".to_string()],
             fallback: false,
         }
+    }
+
+    // ── editor locale context ──────────────────────────────────────────────
+
+    #[test]
+    fn editor_locale_ctx_without_a_locale_reads_the_default() {
+        let ctx = editor_locale_ctx(&locale_config_enabled(), None).expect("a context");
+
+        assert!(matches!(ctx.mode, LocaleMode::Default));
+        assert_eq!(ctx.access_locale(), "en");
+    }
+
+    /// Regression: an unconfigured locale dropped the context entirely, so a
+    /// read of a localized collection selected bare, nonexistent columns.
+    #[test]
+    fn editor_locale_ctx_with_an_unconfigured_locale_reads_the_default() {
+        let config = locale_config_enabled();
+
+        for locale in ["zz", ""] {
+            let ctx = editor_locale_ctx(&config, Some(locale)).expect("a context");
+
+            assert!(matches!(ctx.mode, LocaleMode::Default), "locale {locale:?}");
+            assert_eq!(ctx.access_locale(), "en");
+        }
+    }
+
+    #[test]
+    fn editor_locale_ctx_with_a_configured_locale_is_single() {
+        let ctx = editor_locale_ctx(&locale_config_enabled(), Some("de")).expect("a context");
+
+        assert!(matches!(&ctx.mode, LocaleMode::Single(l) if l == "de"));
+        assert_eq!(ctx.access_locale(), "de");
+    }
+
+    #[test]
+    fn editor_locale_ctx_is_none_when_localization_is_off() {
+        let config = LocaleConfig::default();
+
+        assert!(editor_locale_ctx(&config, None).is_none());
+        assert!(editor_locale_ctx(&config, Some("de")).is_none());
     }
 
     #[test]

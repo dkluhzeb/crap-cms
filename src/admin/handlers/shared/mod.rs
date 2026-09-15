@@ -39,13 +39,13 @@ pub(crate) use access::{
 // document
 pub(crate) use document::{
     auto_label_from_name, compute_row_label, flatten_document_values, lookup_ref_count,
-    translate_validation_errors,
+    translate_validation_errors, value_to_form_string,
 };
 
 // locale
 pub(crate) use locale::{
-    build_locale_template_data, extract_editor_locale, is_non_default_locale, parse_request_locale,
-    strip_locale_locked_for_publish,
+    build_locale_template_data, editor_locale_ctx, extract_editor_locale, is_non_default_locale,
+    parse_request_locale, strip_locale_locked_for_publish,
 };
 
 // pagination

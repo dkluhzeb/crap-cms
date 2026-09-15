@@ -1,6 +1,7 @@
 //! Individual validation check functions.
 //! Each function performs a single validation concern and pushes errors into the provided vec.
 
+mod checkbox;
 mod custom;
 mod date;
 mod email;
@@ -15,6 +16,7 @@ mod row_bounds;
 mod shared;
 mod unique;
 
+pub(crate) use self::checkbox::check_checkbox_value;
 pub(crate) use self::custom::{CustomValidateCtx, check_custom_validate};
 pub(crate) use self::date::{check_date_field, check_local_time_exists};
 pub(crate) use self::email::check_email_format;

@@ -10,7 +10,6 @@ use crate::{
         CollectionDefinition, FieldChildren, FieldDefinition, FieldType, Registry,
         collection::GlobalDefinition, field_children, flatten_array_sub_fields,
     },
-    db::query::helpers::tz_column,
     typegen::{
         Language,
         helpers::{
@@ -385,7 +384,8 @@ fn resolve_shaped<'a>(
 }
 
 /// Resolve one field into `out`, recursing through a transparent layout
-/// wrapper. A timezone date is followed by its `<name>_tz` companion.
+/// wrapper. A field is followed by its companion keys (a timezone date's
+/// `<name>_tz`, a code field's `<name>_lang`), each an optional string.
 fn push_resolved<'a>(
     out: &mut Vec<Field<'a>>,
     field: &'a FieldDefinition,
@@ -410,9 +410,9 @@ fn push_resolved<'a>(
         optional: is_optional(field) || is_single_ref(field),
     });
 
-    if field.has_tz_companion() {
+    for column in field.companion_columns(&field.name) {
         out.push(Field {
-            name: Cow::Owned(tz_column(&field.name)),
+            name: Cow::Owned(column),
             ty: localized_if(FieldTy::Str, localized),
             optional: true,
         });

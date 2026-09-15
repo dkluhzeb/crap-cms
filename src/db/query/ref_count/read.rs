@@ -6,9 +6,10 @@ use tracing::debug;
 
 use crate::config::LocaleConfig;
 use crate::core::{BlockDefinition, FieldChildren, FieldDefinition, field_children};
-use crate::db::query::helpers::{join_table, locale_column, prefixed_name};
+use crate::db::query::helpers::{join_table, prefixed_name};
 use crate::db::query::join::{find_array_rows, find_block_rows};
 use crate::db::query::poly_ref;
+use crate::db::query::{column_is_localized, stored_columns};
 use crate::db::{DbConnection, DbValue};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
@@ -24,7 +25,14 @@ pub(super) fn read_outgoing_refs(
 ) -> Result<Vec<OutgoingRef>> {
     let mut refs = Vec::new();
 
-    collect_refs(conn, table, id, fields, locale_config, "", &mut refs)?;
+    let read = RefRead {
+        conn,
+        table,
+        id,
+        root: fields,
+        locale_config,
+    };
+    collect_refs(&read, fields, "", &mut refs)?;
 
     // A document referencing itself protects nothing: deleting it removes the
     // reference too. Counting it would block its own hard delete with a
@@ -37,13 +45,19 @@ pub(super) fn read_outgoing_refs(
     Ok(refs)
 }
 
+/// The document whose references are read, and the schema its columns follow.
+struct RefRead<'a> {
+    conn: &'a dyn DbConnection,
+    table: &'a str,
+    id: &'a str,
+    root: &'a [FieldDefinition],
+    locale_config: &'a LocaleConfig,
+}
+
 /// Recursively walk the field tree and collect outgoing refs.
 fn collect_refs(
-    conn: &dyn DbConnection,
-    table: &str,
-    id: &str,
+    read: &RefRead<'_>,
     fields: &[FieldDefinition],
-    locale_config: &LocaleConfig,
     prefix: &str,
     refs: &mut Vec<OutgoingRef>,
 ) -> Result<()> {
@@ -54,84 +68,90 @@ fn collect_refs(
         // junction tables here vs the in-memory data map there).
         match field_children(field) {
             FieldChildren::Group(sub_fields) => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-                collect_refs(
-                    conn,
-                    table,
-                    id,
-                    sub_fields,
-                    locale_config,
-                    &new_prefix,
-                    refs,
-                )?;
+                collect_refs(read, sub_fields, &prefixed_name(prefix, &field.name), refs)?;
             }
             FieldChildren::Wrapper(sub_fields) => {
-                collect_refs(conn, table, id, sub_fields, locale_config, prefix, refs)?;
+                collect_refs(read, sub_fields, prefix, refs)?;
             }
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    collect_refs(conn, table, id, &tab.fields, locale_config, prefix, refs)?;
+                    collect_refs(read, &tab.fields, prefix, refs)?;
                 }
             }
 
             FieldChildren::Array(sub_fields) => {
                 let field_name = prefixed_name(prefix, &field.name);
-                collect_array_refs(conn, table, &field_name, id, sub_fields, refs);
+                collect_array_refs(
+                    read.conn,
+                    read.table,
+                    &field_name,
+                    read.id,
+                    sub_fields,
+                    refs,
+                );
             }
 
             FieldChildren::Blocks(block_defs) => {
                 let field_name = prefixed_name(prefix, &field.name);
-                collect_blocks_refs(conn, table, &field_name, id, block_defs, refs);
-            }
-
-            // A leaf structurally — Relationship/Upload leaves carry a stored
-            // reference (a parent column for has-one, a junction table for
-            // has-many); every other leaf stores none.
-            FieldChildren::Leaf => {
-                let Some(rc) = &field.relationship else {
-                    continue;
-                };
-                let col = prefixed_name(prefix, &field.name);
-
-                if !field.has_parent_column() {
-                    let junction = join_table(table, &col);
-
-                    collect_has_many_refs(
-                        conn,
-                        &junction,
-                        id,
-                        &rc.collection,
-                        rc.is_polymorphic(),
-                        refs,
-                    );
-
-                    continue;
-                }
-
-                let columns = if field.localized && locale_config.is_enabled() {
-                    locale_config
-                        .locales
-                        .iter()
-                        .map(|l| locale_column(&col, l))
-                        .collect::<Result<_>>()?
-                } else {
-                    vec![col]
-                };
-
-                collect_has_one_refs(
-                    conn,
-                    table,
-                    id,
-                    &columns,
-                    &rc.collection,
-                    rc.is_polymorphic(),
+                collect_blocks_refs(
+                    read.conn,
+                    read.table,
+                    &field_name,
+                    read.id,
+                    block_defs,
                     refs,
-                )?;
+                );
             }
+
+            FieldChildren::Leaf => collect_leaf_refs(read, field, prefix, refs)?,
         }
     }
 
     Ok(())
+}
+
+/// Collect the stored reference of a leaf. Relationship/Upload leaves carry
+/// one — a junction table for has-many, the parent columns for has-one (one per
+/// locale when the column is localized, by its own flag or a parent group's);
+/// every other leaf stores none.
+fn collect_leaf_refs(
+    read: &RefRead<'_>,
+    field: &FieldDefinition,
+    prefix: &str,
+    refs: &mut Vec<OutgoingRef>,
+) -> Result<()> {
+    let Some(rc) = &field.relationship else {
+        return Ok(());
+    };
+    let col = prefixed_name(prefix, &field.name);
+
+    if !field.has_parent_column() {
+        let junction = join_table(read.table, &col);
+
+        collect_has_many_refs(
+            read.conn,
+            &junction,
+            read.id,
+            &rc.collection,
+            rc.is_polymorphic(),
+            refs,
+        );
+
+        return Ok(());
+    }
+
+    let localized = column_is_localized(&col, read.root).unwrap_or(false);
+    let columns = stored_columns(&col, localized, read.locale_config)?;
+
+    collect_has_one_refs(
+        read.conn,
+        read.table,
+        read.id,
+        &columns,
+        &rc.collection,
+        rc.is_polymorphic(),
+        refs,
+    )
 }
 
 /// Read has-one reference(s) from a parent table column.
@@ -287,6 +307,38 @@ mod tests {
     use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::ref_count::test_helpers::*;
+
+    /// Regression: a has-one relationship inside a localized group was read from
+    /// a bare column that doesn't exist — the group's localization was ignored —
+    /// so reading the document's references failed on update, restore and hard
+    /// delete.
+    #[test]
+    fn a_has_one_in_a_localized_group_reads_every_locale_column() {
+        let mut tags = CollectionDefinition::new("tags");
+        tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+        let fields = vec![
+            FieldDefinition::builder("grp", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("rel", FieldType::Relationship)
+                        .relationship(RelationshipConfig::new("tags", false))
+                        .build(),
+                ])
+                .build(),
+        ];
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[tags, posts], &locale_en_de());
+        let conn = pool.get().unwrap();
+        insert_doc(&conn, "tags", "t1");
+        insert_doc_with_field(&conn, "posts", "p1", "grp__rel__de", "t1");
+
+        let refs = read_outgoing_refs(&conn, "posts", "p1", &fields, &locale_en_de()).unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].target_id, "t1");
+    }
 
     #[test]
     fn no_relationship_fields_yields_no_refs() {

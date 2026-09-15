@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{Document, FieldChildren, FieldDefinition, field_children},
-    db::query::helpers::{prefixed_name, tz_column},
+    db::query::helpers::prefixed_name,
 };
 
 /// Recursively extract prefixed columns from `doc.fields` into a nested Group object.
@@ -46,12 +46,16 @@ pub(super) fn reconstruct_group_fields(
                     group_obj.insert(sub.name.clone(), val);
                 }
 
-                // A timezone date's `<name>_tz` companion sits beside it in the
-                // group, where writes and the generated types expect it.
-                if sub.has_tz_companion()
-                    && let Some(tz) = doc.fields.remove(&tz_column(&col_name))
-                {
-                    group_obj.insert(tz_column(&sub.name), tz);
+                // A companion (`<name>_tz`, `<name>_lang`) sits beside its field
+                // in the group, where writes and the generated types expect it.
+                let companions = sub
+                    .companion_columns(&col_name)
+                    .zip(sub.companion_columns(&sub.name));
+
+                for (column, name) in companions {
+                    if let Some(companion) = doc.fields.remove(&column) {
+                        group_obj.insert(name, companion);
+                    }
                 }
             }
         }
@@ -61,7 +65,7 @@ pub(super) fn reconstruct_group_fields(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldTab, FieldType};
     use crate::db::query::join::hydrate::hydrate_document;
     use rusqlite::Connection;
     use serde_json::json;
@@ -146,6 +150,43 @@ mod tests {
 
         assert_eq!(doc.fields["meta"]["starts_tz"], json!("Europe/Berlin"));
         assert!(!doc.fields.contains_key("meta__starts_tz"));
+    }
+
+    /// Regression: a code field inside a group came back nested while its
+    /// `<name>_lang` companion stayed a flat `group__name_lang` key.
+    #[test]
+    fn hydrate_group_nests_a_code_language_companion() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE snippets (id TEXT PRIMARY KEY, meta__example TEXT, meta__example_lang TEXT);
+             INSERT INTO snippets VALUES ('s1', 'print(1)', 'python');",
+        )
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("example", FieldType::Code)
+                        .admin(
+                            FieldAdmin::builder()
+                                .languages(vec!["javascript".to_string(), "python".to_string()])
+                                .build(),
+                        )
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let mut doc = Document::new("s1".to_string());
+        doc.fields
+            .insert("meta__example".to_string(), json!("print(1)"));
+        doc.fields
+            .insert("meta__example_lang".to_string(), json!("python"));
+
+        hydrate_document(&conn, "snippets", &fields, &mut doc, None, None).unwrap();
+
+        assert_eq!(doc.fields["meta"]["example_lang"], json!("python"));
+        assert!(!doc.fields.contains_key("meta__example_lang"));
     }
 
     #[test]

@@ -60,7 +60,7 @@ Field-access functions receive the **document data**, not just the user — the 
 | `ctx.user` | The requesting user (or `nil` when anonymous). |
 | `ctx.collection` | The collection (or global) slug the field belongs to — lets a field-access function shared across collections branch on which one it is running for. |
 | `ctx.operation` | `"read"`, `"create"`, or `"update"`. |
-| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; some auxiliary surfaces (version snapshots, live events, restore, self-reads) leave it `nil`. Treat it as an optional hint — don't make a security decision depend on it being present. |
+| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; version snapshots, restore, unpublish, undelete and the user document returned by Login and Me use the default locale; live events leave it `nil`. Treat it as an optional hint — don't make a security decision depend on it being present. |
 
 This makes rules like these possible:
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{
     cli::crap_theme,
     commands::MakeAction,
-    core::{FieldType, Registry},
+    core::{FieldChildren, FieldDefinition, Registry, field_children},
     scaffold::{self, ConditionFieldInfo, HookType, MakeHookOptions},
 };
 
@@ -315,33 +315,38 @@ pub(super) fn load_field_infos_from_registry(
     let reg = registry?;
     let def = reg.get_collection(collection)?;
 
-    Some(
-        def.fields
-            .iter()
-            .filter(|f| {
-                !matches!(
-                    f.field_type,
-                    FieldType::Array
-                        | FieldType::Blocks
-                        | FieldType::Group
-                        | FieldType::Row
-                        | FieldType::Collapsible
-                        | FieldType::Tabs
-                )
-            })
-            .map(|f| ConditionFieldInfo {
-                name: f.name.clone(),
-                field_type: f.field_type.as_str().to_string(),
-                select_options: f.options.iter().map(|o| o.value.clone()).collect(),
-            })
-            .collect(),
-    )
+    let mut infos = Vec::new();
+    collect_condition_fields(&def.fields, &mut infos);
+
+    Some(infos)
+}
+
+/// Collect the fields a condition can test: every leaf at the document's top
+/// level, looking through layout wrappers; groups, arrays and blocks hold
+/// nested data and are skipped.
+fn collect_condition_fields(fields: &[FieldDefinition], infos: &mut Vec<ConditionFieldInfo>) {
+    for field in fields {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => collect_condition_fields(sub, infos),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    collect_condition_fields(&tab.fields, infos);
+                }
+            }
+            FieldChildren::Leaf => infos.push(ConditionFieldInfo {
+                name: field.name.clone(),
+                field_type: field.field_type.as_str().to_string(),
+                select_options: field.options.iter().map(|o| o.value.clone()).collect(),
+            }),
+            FieldChildren::Group(_) | FieldChildren::Array(_) | FieldChildren::Blocks(_) => {}
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::core::{
-        CollectionDefinition,
+        CollectionDefinition, FieldTab, FieldType,
         field::{FieldDefinition, LocalizedString, SelectOption},
     };
 
@@ -368,6 +373,31 @@ mod tests {
         let mut reg = Registry::new();
         reg.register_collection(def);
         Arc::new(reg)
+    }
+
+    /// Regression: fields inside a row, collapsible or tabs were never offered
+    /// as conditions, though a layout wrapper keeps them at the document's top
+    /// level.
+    #[test]
+    fn offers_fields_inside_layout_wrappers() {
+        let row = FieldDefinition::builder("r", FieldType::Row)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new("Main", vec![row])])
+                .build(),
+        ];
+        let mut reg = Registry::new();
+        reg.register_collection(posts);
+
+        let infos = load_field_infos_from_registry(Some(&Arc::new(reg)), "posts").unwrap();
+        let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
+
+        assert_eq!(names, ["title"]);
     }
 
     #[test]

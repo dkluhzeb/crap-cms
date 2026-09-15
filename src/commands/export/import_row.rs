@@ -16,7 +16,9 @@ use crate::{
         DbConnection, DbValue,
         query::{
             self,
-            helpers::{locale_column, prefixed_name, tz_column},
+            helpers::{
+                coerce_json_value, column_value, companion_value, locale_column, prefixed_name,
+            },
         },
     },
 };
@@ -74,27 +76,27 @@ impl ImportRow<'_> {
     /// state exactly (nulls included); an ABSENT field is never routed here
     /// (callers gate on `obj.get`), so it stays unchanged under
     /// `ON CONFLICT … DO UPDATE` rather than being reset.
-    fn push(&mut self, col: String, val: &Value, field_type: &FieldType) {
+    fn push(&mut self, col: String, value: DbValue) {
         self.parent_cols.push(col);
-        self.parent_vals
-            .push(json_to_db_value(val, field_type).unwrap_or(DbValue::Null));
+        self.parent_vals.push(value);
     }
 
-    /// Push one field's column, or one column per locale when `localized`.
+    /// Push one field's column, or one column per locale when `localized`,
+    /// each value encoded by `encode`.
     fn push_field(
         &mut self,
         col: &str,
         val: &Value,
-        field_type: &FieldType,
         localized: bool,
+        encode: impl Fn(&Value) -> DbValue,
     ) -> Result<()> {
         if !localized {
-            self.push(col.to_string(), val, field_type);
+            self.push(col.to_string(), encode(val));
             return Ok(());
         }
 
         for (loc, v) in self.by_locale(col, val)? {
-            self.push(locale_column(col, loc)?, v, field_type);
+            self.push(locale_column(col, loc)?, encode(v));
         }
 
         Ok(())
@@ -124,23 +126,6 @@ impl ImportRow<'_> {
         }
 
         Ok(by_locale)
-    }
-}
-
-/// Convert a JSON value to a typed `DbValue` based on the field type.
-fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
-    match val {
-        Value::Null => None,
-        Value::String(s) => Some(DbValue::Text(s.clone())),
-        Value::Number(n) => match field_type {
-            FieldType::Number => n.as_f64().map(DbValue::Real),
-            _ => n
-                .as_i64()
-                .map(DbValue::Integer)
-                .or_else(|| n.as_f64().map(DbValue::Real)),
-        },
-        Value::Bool(b) => Some(DbValue::Integer(i64::from(*b))),
-        other => Some(DbValue::Text(other.to_string())),
     }
 }
 
@@ -203,14 +188,21 @@ fn collect_column(
     // holds a bare value.
     let scoped = field.is_locale_scoped(scope.localized) && row.locale.is_enabled();
 
+    // Encoded as a write encodes: exported values are already in their stored
+    // form, so no zone is applied again — a hand-edited one is canonicalized.
     if let Some(val) = obj.get(&field.name) {
-        row.push_field(&col, val, &field.field_type, scoped)?;
+        row.push_field(&col, val, scoped, |v| column_value(field, v, None))?;
     }
 
-    if field.has_tz_companion()
-        && let Some(tz) = obj.get(&tz_column(&field.name))
+    // Every companion the field stores (a date's zone, a code field's language)
+    // is imported beside it, under the same prefix.
+    for (key, companion_col) in field
+        .companion_columns(&field.name)
+        .zip(field.companion_columns(&col))
     {
-        row.push_field(&tz_column(&col), tz, &FieldType::Text, scoped)?;
+        if let Some(val) = obj.get(&key) {
+            row.push_field(&companion_col, val, scoped, |v| companion_value(Some(v)))?;
+        }
     }
 
     Ok(())
@@ -278,7 +270,7 @@ fn collect_system_columns(
 
     for col in text_columns {
         if let Some(val) = doc_obj.get(col).filter(|v| v.is_string()) {
-            row.push(col.to_string(), val, &FieldType::Text);
+            row.push(col.to_string(), coerce_json_value(&FieldType::Text, val));
         }
     }
 
@@ -286,7 +278,10 @@ fn collect_system_columns(
     if def.soft_delete
         && let Some(val) = doc_obj.get("_deleted_at")
     {
-        row.push("_deleted_at".to_string(), val, &FieldType::Text);
+        row.push(
+            "_deleted_at".to_string(),
+            coerce_json_value(&FieldType::Text, val),
+        );
     }
 }
 
@@ -349,52 +344,102 @@ pub(super) fn canonical_document(
 mod tests {
     use serde_json::json;
 
+    use crate::{core::FieldAdmin, db::query::helpers::coerce_value};
+
     use super::*;
 
+    /// Regression: import encoded values on its own, so a hand-edited export
+    /// was stored differently from a normal write: `"42"` in a number field
+    /// stayed text, a date kept the form it was typed in, and `""` stayed an
+    /// empty string.
     #[test]
-    fn json_to_db_value_null() {
-        assert!(json_to_db_value(&Value::Null, &FieldType::Text).is_none());
+    fn import_encodes_values_as_a_write_does() {
+        let locale = LocaleConfig::default();
+        let fields = vec![
+            FieldDefinition::builder("n", FieldType::Number).build(),
+            FieldDefinition::builder("d", FieldType::Date).build(),
+            FieldDefinition::builder("t", FieldType::Text).build(),
+        ];
+        let obj = json!({ "n": "42", "d": "2026-01-01", "t": "" });
+        let mut row = ImportRow {
+            locale: &locale,
+            parent_cols: Vec::new(),
+            parent_vals: Vec::new(),
+            join_data: DocumentFields::new(),
+            localized_joins: BTreeMap::new(),
+        };
+
+        collect_fields(
+            &fields,
+            obj.as_object().unwrap(),
+            Scope::new("", false),
+            &mut row,
+        )
+        .unwrap();
+
+        let value = |col: &str| {
+            let i = row.parent_cols.iter().position(|c| c == col).unwrap();
+            &row.parent_vals[i]
+        };
+        let DbValue::Text(date) = coerce_value(&FieldType::Date, "2026-01-01") else {
+            panic!("a date encodes as text");
+        };
+
+        assert!(matches!(value("n"), DbValue::Real(n) if (n - 42.0).abs() < 1e-9));
+        assert!(matches!(value("d"), DbValue::Text(d) if *d == date));
+        assert!(matches!(value("t"), DbValue::Null));
     }
 
+    /// Regression: import carried a timezone date's zone but not a code field's
+    /// language pick, so an export/import round trip dropped every `_lang`.
+    /// Every companion a field stores is imported.
     #[test]
-    fn json_to_db_value_string() {
-        let val = json_to_db_value(&json!("hello"), &FieldType::Text);
-        assert!(matches!(val, Some(DbValue::Text(s)) if s == "hello"));
-    }
+    fn import_carries_every_companion() {
+        let locale = LocaleConfig::default();
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .build(),
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["python".to_string()])
+                        .build(),
+                )
+                .build(),
+        ];
+        let obj = json!({
+            "starts": "2026-01-01T10:00:00.000Z",
+            "starts_tz": "Europe/Berlin",
+            "snippet": "print(1)",
+            "snippet_lang": "python"
+        });
+        let mut row = ImportRow {
+            locale: &locale,
+            parent_cols: Vec::new(),
+            parent_vals: Vec::new(),
+            join_data: DocumentFields::new(),
+            localized_joins: BTreeMap::new(),
+        };
 
-    #[test]
-    fn json_to_db_value_integer() {
-        let val = json_to_db_value(&json!(42), &FieldType::Text);
-        assert!(matches!(val, Some(DbValue::Integer(42))));
-    }
+        collect_fields(
+            &fields,
+            obj.as_object().unwrap(),
+            Scope::new("", false),
+            &mut row,
+        )
+        .unwrap();
 
-    #[test]
-    fn json_to_db_value_number_field_gives_real() {
-        let val = json_to_db_value(&json!(42), &FieldType::Number);
-        assert!(matches!(val, Some(DbValue::Real(v)) if (v - 42.0).abs() < f64::EPSILON));
-    }
+        let value = |col: &str| {
+            let i = row.parent_cols.iter().position(|c| c == col);
+            i.map(|i| &row.parent_vals[i])
+        };
 
-    #[test]
-    fn json_to_db_value_float() {
-        let val = json_to_db_value(&json!(2.5), &FieldType::Text);
-        assert!(matches!(val, Some(DbValue::Real(v)) if (v - 2.5).abs() < f64::EPSILON));
-    }
-
-    #[test]
-    fn json_to_db_value_bool_true() {
-        let val = json_to_db_value(&json!(true), &FieldType::Checkbox);
-        assert!(matches!(val, Some(DbValue::Integer(1))));
-    }
-
-    #[test]
-    fn json_to_db_value_bool_false() {
-        let val = json_to_db_value(&json!(false), &FieldType::Checkbox);
-        assert!(matches!(val, Some(DbValue::Integer(0))));
-    }
-
-    #[test]
-    fn json_to_db_value_object_becomes_text() {
-        let val = json_to_db_value(&json!({"key": "val"}), &FieldType::Json);
-        assert!(matches!(val, Some(DbValue::Text(_))));
+        assert!(matches!(value("starts_tz"), Some(DbValue::Text(z)) if z == "Europe/Berlin"));
+        assert!(
+            matches!(value("snippet_lang"), Some(DbValue::Text(l)) if l == "python"),
+            "{:?}",
+            row.parent_cols
+        );
     }
 }

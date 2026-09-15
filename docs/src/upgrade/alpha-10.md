@@ -128,6 +128,14 @@ of the API.
 - **Backups and exports carry more.** `crap-cms backup` includes the generated
   auth secret — keep backups private — and exports include trashed documents;
   add `--include-credentials` to move users between installations (item 34).
+- **MCP `list_versions` snapshots read as documents.** No per-locale keys, one
+  value per localized field, hidden fields removed (item 35).
+- **Values inside blocks and nested rows are typed** — booleans, numbers and
+  arrays instead of the strings the admin form sent; converted once at startup
+  (item 36).
+- **Checkbox values are validated.** A checkbox accepts a boolean, a
+  recognized spelling or a number; anything else (`"maybe"`, a list, an
+  object) is now a validation error instead of silently unchecked (item 37).
 - **Typed clients: regenerate `typegen client`.** Every field of a generated
   read document is optional now, read documents gained `_status`,
   `_deleted_at` and `<name>_tz`, and localized collections get a
@@ -1006,6 +1014,52 @@ older version stores its values in canonical form.
 - Scripts that imported collection by collection to recover from a partial
   failure can import the whole file again after fixing the cause.
 
+### 35. MCP clients: version snapshots read as documents
+
+`list_versions` returned each version's `snapshot` as stored: a localized field
+appeared under per-locale keys such as `title__en` and `title__pt_BR`, and a
+hidden localized field was not removed. A snapshot now has the shape of a read
+of the document in the default locale — groups nested, each localized field as
+one value — with hidden and read-denied fields removed.
+
+**Action:**
+
+- If a client reads a version's content, read `title` instead of
+  `title__<locale>`.
+- A snapshot comes back in the default locale unless the tool call passes
+  `locale`: a locale code returns that locale's values, and `"all"` returns
+  every locale as `{"en": …, "de": …}` per field, as `find_by_id` does.
+- Restoring a version is unchanged: it still writes back every locale.
+
+### 36. API clients: values inside blocks and nested rows are typed
+
+Values inside a blocks row, and inside any group, array or blocks nested in a
+row, used to be stored as the writing surface sent them: rows saved in the admin
+form held strings (`"on"`, `"3"`, a list as JSON text), rows written over gRPC or
+Lua held typed values. They are now stored in one typed form — a checkbox as
+`true`/`false`, a number as a number, a multi-value field as an array, a blank
+value as `null` (timezone dates are covered by item 32) — and existing rows are
+converted once at the first startup.
+
+**Action:**
+
+- If a client or hook reads nested checkbox, number or multi-value values as
+  strings, read them as booleans, numbers and arrays.
+- Large databases: the first startup walks every blocks and array join table
+  once.
+
+### 37. API clients: checkbox values are validated
+
+A checkbox used to accept any value and store everything it didn't recognize
+as unchecked, so `"maybe"`, `[]` or `{}` passed silently. A checkbox value now
+has to be a boolean, a recognized spelling (`1`/`0`, `true`/`false`,
+`yes`/`no`, `on`/`off`, any case, surrounding whitespace ignored) or a number
+(any value other than `0` is checked; `"2"` and `2` agree). Anything else is a
+validation error on every surface, at the top level and inside groups, arrays
+and blocks. `null` and an absent key are unchanged (`required` decides those).
+
+**Action:** if a client sent something else to a checkbox, send a boolean.
+
 ## Admin UI behavior
 
 ### Navigation now partial-swaps `#main`
@@ -1706,6 +1760,42 @@ if you use versions on a localized collection.
 
 ## Behavior changes (likely no action)
 
+- **Login and Me run the auth collection's read hooks.** `before_read` and
+  `after_read` now run on the user document Login and Me return, as on a
+  find: a masking `after_read` changes the returned user, and a `before_read`
+  that errors makes Login and Me fail instead of returning the user.
+  **Action:** check that read hooks on an auth collection work for a request
+  that is signing in — the user is the document being read.
+- **Upload write responses and events carry `sizes`.** The document an upload
+  create or update returns (REST `POST/PUT /api/upload/...`, gRPC, MCP, Lua)
+  and the event it publishes now have the shape a read returns: the per-size
+  values sit in `sizes.<name>.url/width/height`, and the flat `<name>_url`,
+  `<name>_width`, `<name>_height` keys are gone from them. **Action:** a client
+  that read `thumbnail_url` from the upload response reads
+  `sizes.thumbnail.url` instead, as it already must from a read.
+- **A finished image conversion is reported as an update.** When a queued
+  conversion writes its format URLs, the document's `updated_at` changes and
+  subscribers receive an `update` event carrying `sizes` like any other write;
+  no hooks run and no version is created. Subscribers that treat every update
+  as an editor's change should expect these.
+- **Trashing an upload keeps its queued image conversions.** A conversion
+  queued before a soft delete still runs, so a restored upload has its format
+  variants. Only a permanent delete (or the trash purge) cancels them.
+- **Reads return a code field's language choice.** A code field with
+  `admin.languages` now stores the editor's pick and reads return it as
+  `<name>_lang` (a per-locale map when read with `locale = "all"`, a key of the
+  group object inside a group). Array rows get the column at the first startup.
+  If a client rejects unknown keys, allow it, or regenerate typed clients — the
+  generated types include it, and gRPC `FieldInfo.companions` lists a field's
+  companion keys (`_tz`, `_lang`).
+- **Admin relationship pickers and labels read in the editor's locale.** Search
+  results and labels of a localized target collection show the locale being
+  edited, not the default locale.
+- **Numbers ignore surrounding whitespace; any non-zero number checks a
+  checkbox.** `" 5"` is accepted and stored as `5` in single and multi-value
+  number fields (a single field used to reject it). A checkbox written as a
+  number is checked for any value other than `0` — `2` and `1.0` used to store
+  unchecked in a top-level checkbox.
 - **`crap-cms user delete` goes through the service layer.** On a soft-delete
   auth collection the user is moved to the trash (empty it with
   `crap-cms trash purge`, which refuses a user other documents still

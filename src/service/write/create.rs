@@ -12,7 +12,7 @@ use crate::{
 use super::ServiceError;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
-    EmptyPassword, collect_api_hidden_field_names, validate_password_policy,
+    EmptyPassword, hydrate_reported, strip_reported, validate_password_policy,
 };
 use crate::service::hooks::WriteHooks;
 
@@ -165,14 +165,7 @@ pub fn create_document_in_conn(
 
     // Hydrate join fields (arrays, blocks, has-many) BEFORE after-change hooks so
     // they can react to nested array/blocks/has-many data, not just scalar columns.
-    query::hydrate_document(
-        conn,
-        ctx.slug,
-        &def.fields,
-        &mut doc,
-        None,
-        input.locale_ctx,
-    )?;
+    hydrate_reported(ctx, &mut doc, input.locale_ctx)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -196,9 +189,7 @@ pub fn create_document_in_conn(
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc (hydration can add join data for denied fields).
-    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
-    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
+    strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
     Ok((doc, after_ctx))
 }

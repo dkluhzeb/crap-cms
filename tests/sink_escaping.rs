@@ -55,7 +55,7 @@ const SINK_INVENTORY: &[(&str, &str, &str)] = &[
     ),
     (
         "SQL identifiers (reserved words, quoting)",
-        "src/db/query/helpers.rs",
+        "src/db/query/helpers/sql.rs",
         "fn quote_ident",
     ),
     (

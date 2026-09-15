@@ -108,7 +108,7 @@ fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(St
 }
 
 /// Convert a `serde_json` Value to a string suitable for form rendering.
-fn value_to_form_string(v: &Value) -> String {
+pub(crate) fn value_to_form_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),

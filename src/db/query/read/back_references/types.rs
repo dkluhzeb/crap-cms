@@ -3,6 +3,7 @@
 use serde::Serialize;
 
 use crate::config::LocaleConfig;
+use crate::core::FieldDefinition;
 use crate::db::DbConnection;
 
 /// A group of documents in one collection/global that reference a target via one field.
@@ -46,6 +47,8 @@ pub(super) struct BackRefScan<'a> {
     pub(super) target_collection: &'a str,
     pub(super) target_id: &'a str,
     pub(super) locale_config: &'a LocaleConfig,
+    /// The owner's fields, against which a column's localization is decided.
+    pub(super) root_fields: &'a [FieldDefinition],
     pub(super) owner_slug: &'a str,
     pub(super) owner_label: &'a str,
     pub(super) is_global: bool,

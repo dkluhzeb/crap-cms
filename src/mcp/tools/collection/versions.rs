@@ -6,7 +6,7 @@ use serde_json::{Value, to_string_pretty, to_value};
 use tracing::info;
 
 use crate::{
-    db::query::PaginationResult,
+    db::{LocaleContext, query::PaginationResult},
     mcp::tools::ToolExecCtx,
     service::op::{
         self, ListVersions, ListVersionsArgs, Principal, RestoreVersion, RestoreVersionArgs,
@@ -38,9 +38,16 @@ pub(in crate::mcp::tools) fn exec_list_versions(
     let limit = args.get("limit").and_then(serde_json::Value::as_i64);
     let offset = args.get("offset").and_then(serde_json::Value::as_i64);
 
+    // Snapshots read as documents, so they take a locale like any read —
+    // decoded through the shared resolver, which rejects an unconfigured
+    // locale exactly as `find_by_id` does.
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
     let op_args = ListVersionsArgs::builder(id)
         .limit(limit)
         .offset(offset)
+        .locale_ctx(locale_ctx)
         .build();
 
     // MCP operates with full access — override access checks.

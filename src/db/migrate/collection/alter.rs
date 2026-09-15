@@ -69,12 +69,7 @@ fn add_field_column(
     let mut col_def = expected_type.to_string();
 
     if !spec.companion_text {
-        append_default_value_for(
-            &mut col_def,
-            spec.field.default_value.as_ref(),
-            &spec.field.field_type,
-            ctx.conn.kind(),
-        );
+        append_default_value_for(&mut col_def, spec.field);
     }
 
     let full_def = format!("{} {col_def}", quote_ident(col_name));
@@ -400,6 +395,43 @@ mod tests {
     use crate::db::DbValue;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
+    use crate::db::query::helpers::column_value;
+    use serde_json::json;
+
+    /// Regression: a has-many default added by ALTER became the column DEFAULT
+    /// through the single-value coercion, so a number list stored nothing where
+    /// a write of the same default stores the list.
+    #[test]
+    fn alter_adds_a_has_many_default_as_its_write_stores_it() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("scores", FieldType::Number)
+                    .has_many(true)
+                    .default_value(json!([1, 2]))
+                    .build(),
+            ],
+        );
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        conn.execute("INSERT INTO posts (id) VALUES ('a')", &[])
+            .unwrap();
+        let row = conn
+            .query_one("SELECT scores FROM posts WHERE id = 'a'", &[])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
+            column_value(&def2.fields[1], &json!([1, 2]), None)
+        );
+    }
 
     #[test]
     fn alter_adds_new_column() {

@@ -243,6 +243,7 @@ mod tests {
     use crate::core::collection::{Access, VersionsConfig};
     use crate::db::{Filter, FilterClause, FilterOp};
     use crate::hooks::lifecycle::AfterReadCtx;
+    use crate::service::FieldReadStrip;
 
     /// Records which access refs were checked and replays canned results keyed
     /// by the ref string. Only `check_access` is exercised by `resolve_view_scope`.
@@ -286,6 +287,8 @@ mod tests {
                 .unwrap_or(AccessResult::Denied))
         }
     }
+
+    impl FieldReadStrip for MockHooks {}
 
     fn drafts_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

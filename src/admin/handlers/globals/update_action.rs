@@ -20,7 +20,7 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts,
+                EnrichOptions, apply_display_conditions, build_field_contexts, editor_locale_ctx,
                 enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
                 parse_request_locale, paths, redirect_response, split_sidebar_fields,
                 strip_locale_locked_for_publish, toast_only_error, translate_validation_errors,
@@ -105,6 +105,11 @@ async fn render_validation_error(
     let mut fields = build_field_contexts(&def.fields, form.raw(), &error_map, false, false);
 
     let doc_fields = form.to_doc_fields();
+    // The locale the form was submitted in, for the relationship labels.
+    let locale_ctx = editor_locale_ctx(
+        &state.config.locale,
+        form.raw().get("_locale").map(String::as_str),
+    );
 
     enrich_field_contexts(
         &mut fields,
@@ -113,6 +118,7 @@ async fn render_validation_error(
         state,
         &EnrichOptions::builder(&error_map)
             .user(get_user_doc(auth_user))
+            .locale_ctx(locale_ctx.as_ref())
             .build(),
     );
 

@@ -14,7 +14,7 @@ use crate::service::ServiceError;
 
 pub(crate) use create::check_create_access;
 pub use create::create_document_in_conn;
-pub(crate) use delete::delete_document_in_conn;
+pub(crate) use delete::{cancel_image_jobs, delete_document_in_conn, purge_document};
 pub(crate) use update::update_document_in_conn;
 pub(crate) use update::{
     check_update_access, reject_locale_locked_fields, stored_fields_for_update_rules,

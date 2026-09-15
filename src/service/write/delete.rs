@@ -17,6 +17,53 @@ use super::ServiceError;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
+/// Permanently delete a document's row with every cleanup a hard delete needs:
+/// its outgoing reference counts, the row, its full-text entry and its queued
+/// image conversions. The one path the service hard delete, the CLI trash purge
+/// and the scheduled retention purge share. Returns whether a row was deleted.
+///
+/// # Errors
+///
+/// Returns a backend error if the reference-count update, the DELETE or the
+/// full-text removal fails.
+pub(crate) fn purge_document(
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<bool> {
+    let slug = &def.slug;
+
+    query::ref_count::before_hard_delete(conn, slug, id, &def.fields, locale_config)?;
+
+    if !query::delete(conn, slug, id)? {
+        return Ok(false);
+    }
+
+    if conn.supports_fts() {
+        query::fts::fts_delete(conn, slug, id)?;
+    }
+
+    cancel_image_jobs(conn, slug, def, id);
+
+    Ok(true)
+}
+
+/// Cancel an upload document's queued image conversions, so none runs against
+/// a row that is gone — or against a file it has since replaced. Best-effort,
+/// logged. Shared by the hard delete and the upload file-replace write.
+pub(crate) fn cancel_image_jobs(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+) {
+    if def.is_upload_collection() {
+        let _ = delete_image_jobs_for_document(conn, slug, id)
+            .inspect_err(|e| warn!("Failed to cancel image jobs for {slug}/{id}: {e}"));
+    }
+}
+
 /// Result of a delete operation.
 pub(crate) struct DeleteResult {
     /// Request-scoped context returned by after-delete hooks.
@@ -55,7 +102,7 @@ fn prepare_delete_hook_data(
 
     let doc_fields = if def.is_upload_collection() || wants_hook_data || def.has_drafts() {
         let lc = locale_config.cloned().unwrap_or_default();
-        let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
+        let locale_ctx = LocaleContext::default_for(&lc);
 
         // Propagate a genuine DB error rather than swallowing it — a
         // transient failure here must not silently degrade delete hooks to
@@ -169,13 +216,6 @@ pub(crate) fn delete_document_in_conn(
     let final_ctx =
         write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, conn)?;
 
-    // Decrement ref counts before hard delete
-    if !def.soft_delete {
-        let locale_cfg = locale_config.cloned().unwrap_or_default();
-
-        query::ref_count::before_hard_delete(conn, ctx.slug, id, &def.fields, &locale_cfg)?;
-    }
-
     // Execute delete
     if def.soft_delete {
         let deleted = query::soft_delete(conn, ctx.slug, id)?;
@@ -186,29 +226,23 @@ pub(crate) fn delete_document_in_conn(
                 ctx.slug
             )));
         }
-    } else {
-        let deleted = query::delete(conn, ctx.slug, id)?;
 
-        if !deleted {
+        // A soft-deleted row keeps its FTS entry so the trash view stays
+        // searchable (the normal view is filtered by `_deleted_at` before the FTS
+        // membership clause), and its queued image conversions: a restore brings
+        // the upload back, and nothing re-queues them. A conversion that runs
+        // while the row is trashed writes its URL onto the trashed row and
+        // publishes nothing (the report reads live rows only); only a hard
+        // delete cancels them.
+    } else {
+        let locale_cfg = locale_config.cloned().unwrap_or_default();
+
+        if !purge_document(conn, def, id, &locale_cfg)? {
             return Err(ServiceError::NotFound(format!(
                 "Document '{id}' not found in '{}'",
                 ctx.slug
             )));
         }
-    }
-
-    // Cleanup. A soft-deleted row keeps its FTS entry so the trash view stays
-    // searchable (the normal view is filtered by `_deleted_at` before the FTS
-    // membership clause); only a hard delete drops it.
-    if !def.soft_delete && conn.supports_fts() {
-        query::fts::fts_delete(conn, ctx.slug, id)?;
-    }
-    if def.is_upload_collection() {
-        // Best-effort cleanup of any queued `_system_image_convert`
-        // jobs targeting this doc — see `core/upload/queue.rs`. Non-fatal, but
-        // logged for observability (matching the scheduler-side call site).
-        let _ = delete_image_jobs_for_document(conn, ctx.slug, id)
-            .inspect_err(|e| warn!("Failed to cancel image jobs for {}/{}: {e}", ctx.slug, id));
     }
 
     // After-delete hooks
@@ -242,13 +276,20 @@ mod tests {
     use serde_json::json;
 
     use crate::{
+        config::CrapConfig,
         core::{
-            CollectionDefinition, FieldDefinition, FieldType, Hooks, SharedInvalidationTransport,
-            ValidationError, collection::Auth, event::InProcessInvalidationBus,
+            CollectionDefinition, FieldDefinition, FieldType, Hooks, JobStatus, Registry,
+            SharedInvalidationTransport, ValidationError,
+            collection::Auth,
+            event::InProcessInvalidationBus,
+            upload::{
+                CollectionUpload, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
+                queue_image_conversion,
+            },
         },
-        db::DbConnection,
+        db::{DbConnection, migrate, pool},
         hooks::ValidationCtx,
-        service::{ServiceContext, hooks::WriteHooks},
+        service::{FieldReadStrip, ServiceContext, hooks::WriteHooks},
     };
 
     use super::*;
@@ -301,6 +342,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl FieldReadStrip for AllowAllWriteHooks {}
 
     fn setup_auth_collection() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();
@@ -499,6 +542,8 @@ mod tests {
         }
     }
 
+    impl FieldReadStrip for RecordingWriteHooks {}
+
     /// Regression: `before_delete` and `after_delete` must receive the deleted
     /// document's field data (plus `id`), not just `{ id }`. For a hard delete
     /// the row is gone by `after_delete`, so the snapshot is the only way the
@@ -551,5 +596,58 @@ mod tests {
             Some(&json!("Hello")),
             "after_delete must see the field data (the row is already gone)"
         );
+    }
+
+    /// Regression: a soft delete cancelled the upload's queued image
+    /// conversions and a restore never re-queued them, so an upload trashed
+    /// before its conversions ran came back without its variant URLs.
+    #[test]
+    fn a_soft_delete_keeps_queued_image_conversions() {
+        let mut media = CollectionDefinition::new("media");
+        media.soft_delete = true;
+        media.upload = Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let shared = Registry::shared();
+        shared.write().unwrap().register_collection(media.clone());
+        migrate::sync_all(&db_pool, &Registry::snapshot(&shared), &config.locale).expect("sync");
+
+        let conn = db_pool.get().unwrap();
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        let job = ImageConvertJobData {
+            collection: "media".to_string(),
+            document_id: "m1".to_string(),
+            source_path: "a.png".to_string(),
+            target_path: "a.webp".to_string(),
+            format: "webp".to_string(),
+            quality: 80,
+            url_column: "thumbnail_webp_url".to_string(),
+            url_value: "/uploads/a.webp".to_string(),
+        };
+        queue_image_conversion(&conn, &job, 1).unwrap();
+
+        let hooks = AllowAllWriteHooks;
+        let ctx = ServiceContext::collection("media", &media)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .override_access(true)
+            .build();
+
+        delete_document_in_conn(&ctx, "m1", None).expect("soft delete");
+
+        let pending = query::jobs::count_job_runs(
+            &conn,
+            Some(SYSTEM_IMAGE_CONVERT_JOB),
+            Some(JobStatus::Pending),
+        )
+        .unwrap();
+        assert_eq!(pending, 1, "a trashed upload keeps its queued conversion");
     }
 }

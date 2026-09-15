@@ -8,7 +8,7 @@
 //!   Owns the tokio `select!` over poll / cron / heartbeat / image-queue
 //!   tickers, claims pending jobs, spawns timeout-bounded tasks, and
 //!   drives periodic retention purges.
-//! - `runner.rs` -- pure execution helpers: `execute_job` (the Lua
+//! - `runner/` -- pure execution helpers: `execute_job` (the Lua
 //!   handler / system-email dispatch), `check_cron_schedules`,
 //!   `recover_stale_jobs`, `purge_soft_deleted`. No event loop,
 //!   no tokio -- callable from tests directly.

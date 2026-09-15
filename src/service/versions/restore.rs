@@ -13,7 +13,7 @@ use crate::{
     },
     db::{
         AccessResult, LocaleContext, query,
-        query::helpers::{global_table, prefixed_name, tz_column},
+        query::helpers::{global_table, prefixed_name},
     },
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
@@ -53,7 +53,7 @@ fn snapshot_to_validation_data(snapshot: &Value) -> DocumentFields {
 /// - group-prefixed sub-field names (e.g. `seo__title`),
 /// - layout-wrapper children (tabs/rows/collapsibles are transparent),
 /// - Blocks/Array/Relationship top-level names (join data),
-/// - optional `_tz` companions for date-with-timezone fields,
+/// - companion columns (a timezone date's `_tz`, a code field's `_lang`),
 /// - system columns (`created_at`, `updated_at`).
 fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSet<String>) {
     for f in fields {
@@ -74,16 +74,11 @@ fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSe
             }
             // Array/Blocks (join-backed) and scalar leaves all register their
             // own key: the snapshot extractor accepts both the prefixed and the
-            // bare name, plus `_tz` companions for a timezone Date.
+            // bare name, plus its companions (`_tz`, `_lang`).
             FieldChildren::Array(_) | FieldChildren::Blocks(_) | FieldChildren::Leaf => {
                 let key = prefixed_name(prefix, &f.name);
-                out.insert(key.clone());
-                out.insert(f.name.clone());
-
-                if f.has_tz_companion() {
-                    out.insert(tz_column(&key));
-                    out.insert(tz_column(&f.name));
-                }
+                out.extend(f.columns_with_companions(&key));
+                out.extend(f.columns_with_companions(&f.name));
             }
         }
     }
@@ -283,9 +278,7 @@ pub(crate) fn restore_collection_version_core(
 
     // The default-locale context, reused below for the trashed-target guard and
     // the completeness-aware validation.
-    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
-        .ok()
-        .flatten();
+    let restore_locale_ctx = LocaleContext::default_for(locale_config);
 
     // A restore must target a LIVE document. Restoring onto a soft-deleted
     // (trashed) row would silently rewrite its fields and record new version
@@ -378,8 +371,8 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
-    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
+    helpers::hydrate_reported(ctx, &mut doc, restore_locale_ctx.as_ref())?;
+    helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
     Ok(doc)
 }
@@ -473,9 +466,7 @@ pub(crate) fn restore_global_version_core(
     // above. Drop write-denied fields from the snapshot before validation and
     // persistence so a restore can't overwrite a write-locked field's value.
     // Rules judge the live global, not the snapshot being restored.
-    let restore_locale_ctx = LocaleContext::from_locale_string(None, locale_config)
-        .ok()
-        .flatten();
+    let restore_locale_ctx = LocaleContext::default_for(locale_config);
     let stored =
         stored_global_fields_for_update_rules(conn, ctx.slug, def, restore_locale_ctx.as_ref())?;
     write_hooks.strip_write_access_value(
@@ -515,8 +506,7 @@ pub(crate) fn restore_global_version_core(
         locale_config,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
-    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
+    helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
     Ok(doc)
 }
@@ -533,9 +523,41 @@ mod tests {
     };
     use crate::{
         config::LocaleConfig,
-        core::{CollectionDefinition, FieldDefinition, FieldType},
+        core::{CollectionDefinition, FieldAdmin, FieldDefinition, FieldType},
         service::{ServiceContext, ServiceError},
     };
+
+    /// Regression: the drift check knew only a timezone date's `_tz` companion,
+    /// so restoring a snapshot that holds a code field's language warned that
+    /// `snippet_lang` (and each `snippet_lang__xx`) no longer exists. The warning
+    /// itself isn't capturable without extra deps, so this pins the known-key
+    /// set the check consults — its bare, group-prefixed and per-locale forms.
+    #[test]
+    fn collect_known_keys_includes_code_language_companion() {
+        let code = FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build();
+        let fields = vec![
+            code.clone(),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![code])
+                .build(),
+        ];
+
+        let mut known = HashSet::new();
+        collect_known_keys(&fields, "", &mut known);
+
+        assert!(known.contains("snippet_lang"), "{known:?}");
+        assert!(known.contains("meta__snippet_lang"), "{known:?}");
+
+        let per_locale = "snippet_lang__de";
+        let base = &per_locale[..per_locale.rfind("__").unwrap()];
+        assert!(known.contains(base), "per-locale key resolves: {known:?}");
+    }
 
     /// Regression: a restore validated and wrote a snapshot's email and text
     /// values as typed, so a snapshot taken before values were stored

@@ -3,14 +3,29 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, from_str};
 
 use crate::{
     admin::context::field::{DateField, FieldContext, NonRepeatingChildren},
-    core::{FieldDefinition, FieldType, HookRef},
+    core::{FieldDefinition, HookRef},
     db::query::helpers::{lang_column, tz_column, utc_to_local},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
+
+/// The tags a multi-value field shows: the elements of its stored list — text
+/// or numbers, as a read returns them — as strings. Nulls and a malformed list
+/// show no tags.
+pub fn tag_values(value: &str) -> Vec<String> {
+    from_str::<Vec<Value>>(value)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|element| match element {
+            Value::Null => None,
+            Value::String(s) => Some(s),
+            other => Some(other.to_string()),
+        })
+        .collect()
+}
 
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
 pub const MAX_FIELD_DEPTH: usize = 5;
@@ -130,16 +145,60 @@ pub fn localize_date_display(df: &mut DateField, stored: &str, tz: &str) {
         return;
     }
 
+    // Only a stored UTC instant converts; anything else (a local value
+    // re-rendered from a submitted form) stays as typed.
     let Some(local) = utc_to_local(stored, tz) else {
         return;
     };
 
-    match df.picker_appearance.as_str() {
-        "dayOnly" => df.date_only_value = Some(local.get(..10).unwrap_or(&local).to_string()),
-        "dayAndTime" => {
-            df.datetime_local_value = Some(local.get(..16).unwrap_or(&local).to_string());
-        }
-        _ => {}
+    let values = cut_to_appearance(&local, &df.picker_appearance);
+    apply_picker_values(df, values);
+}
+
+/// The values a date picker shows for a stored date: the date in its zone when
+/// one is stored, cut to what the picker shows — the date for `dayOnly`, the date
+/// and time for `dayAndTime`. The one display conversion every date context uses.
+pub fn date_picker_values(
+    stored: &str,
+    tz: &str,
+    appearance: &str,
+) -> (Option<String>, Option<String>) {
+    let display = if tz.is_empty() || stored.is_empty() {
+        stored.to_string()
+    } else {
+        utc_to_local(stored, tz).unwrap_or_else(|| stored.to_string())
+    };
+
+    cut_to_appearance(&display, appearance)
+}
+
+/// A display date cut to what a picker of `appearance` shows: the date for
+/// `dayOnly`, the date and time for `dayAndTime`, neither otherwise.
+fn cut_to_appearance(display: &str, appearance: &str) -> (Option<String>, Option<String>) {
+    match appearance {
+        "dayOnly" => (Some(display.get(..10).unwrap_or(display).to_string()), None),
+        "dayAndTime" => (None, Some(display.get(..16).unwrap_or(display).to_string())),
+        _ => (None, None),
+    }
+}
+
+/// Set the picker values of `df` for a stored date, leaving a value the
+/// picker's appearance doesn't show as it is.
+pub fn set_date_picker_values(df: &mut DateField, stored: &str, tz: &str) {
+    let values = date_picker_values(stored, tz, &df.picker_appearance);
+    apply_picker_values(df, values);
+}
+
+/// Write picker values into `df`, leaving a value the appearance doesn't show
+/// (`None`) as it is.
+fn apply_picker_values(df: &mut DateField, values: (Option<String>, Option<String>)) {
+    let (date_only, datetime_local) = values;
+
+    if date_only.is_some() {
+        df.date_only_value = date_only;
+    }
+    if datetime_local.is_some() {
+        df.datetime_local_value = datetime_local;
     }
 }
 
@@ -162,7 +221,7 @@ pub fn inject_lang_values_from_row(
     };
 
     for (fc, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
-        if fd.field_type != FieldType::Code || fd.admin.languages.is_empty() {
+        if !fd.has_lang_companion() {
             continue;
         }
 
@@ -695,5 +754,52 @@ mod tests {
             panic!("expected date")
         };
         assert_eq!(d.datetime_local_value.as_deref(), Some("2026-01-15T23:00"));
+    }
+
+    fn picker(appearance: &str, date_only: Option<&str>, datetime: Option<&str>) -> DateField {
+        DateField {
+            picker_appearance: appearance.to_string(),
+            date_only_value: date_only.map(str::to_string),
+            datetime_local_value: datetime.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// A value that is not a stored UTC instant — a local date re-rendered from
+    /// a submitted form — is left as typed, in both picker appearances.
+    #[test]
+    fn localize_date_display_leaves_an_unparseable_value_as_typed() {
+        let mut day = picker("dayOnly", Some("2026-01-15"), None);
+        localize_date_display(&mut day, "2026-01-15", "Asia/Tokyo");
+        assert_eq!(day.date_only_value.as_deref(), Some("2026-01-15"));
+        assert_eq!(day.datetime_local_value, None);
+
+        let mut day_time = picker("dayAndTime", None, Some("2026-01-15T14:00"));
+        localize_date_display(&mut day_time, "2026-01-15T14:00", "Asia/Tokyo");
+        assert_eq!(
+            day_time.datetime_local_value.as_deref(),
+            Some("2026-01-15T14:00")
+        );
+        assert_eq!(day_time.date_only_value, None);
+    }
+
+    /// A stored UTC instant shows in its zone, cut to the picker's appearance;
+    /// an empty value or zone leaves the field untouched.
+    #[test]
+    fn localize_date_display_converts_a_stored_instant() {
+        let mut day = picker("dayOnly", Some("2026-01-15"), None);
+        localize_date_display(&mut day, "2026-01-15T20:00:00.000Z", "Asia/Tokyo");
+        assert_eq!(day.date_only_value.as_deref(), Some("2026-01-16"));
+
+        let mut no_zone = picker("dayOnly", Some("2026-01-15"), None);
+        localize_date_display(&mut no_zone, "2026-01-15T20:00:00.000Z", "");
+        assert_eq!(no_zone.date_only_value.as_deref(), Some("2026-01-15"));
+
+        let mut empty = picker("dayAndTime", None, Some("2026-01-15T14:00"));
+        localize_date_display(&mut empty, "", "Asia/Tokyo");
+        assert_eq!(
+            empty.datetime_local_value.as_deref(),
+            Some("2026-01-15T14:00")
+        );
     }
 }

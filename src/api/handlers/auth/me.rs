@@ -64,7 +64,12 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Document, String), Status> {
         .map_err(|_| Status::internal("Internal error"))?
         .ok_or_else(|| Status::not_found("User not found"))?;
 
-    prepare_user_document(&input.infra, def, &collection, &mut doc, &conn);
+    // The same mapping an ordinary read of this collection gets, so a
+    // `before_read` abort reports its message as INVALID_ARGUMENT here too
+    // instead of an opaque INTERNAL the client retries on.
+    prepare_user_document(&input.infra, def, &collection, &mut doc, &conn)
+        .inspect_err(|e| error!("Me user read error for {collection}: {e}"))
+        .map_err(|e| Status::from(e.reclassify(input.infra.pool.kind())))?;
 
     Ok((doc, collection))
 }

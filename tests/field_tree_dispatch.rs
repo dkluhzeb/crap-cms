@@ -31,10 +31,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "src/core/walk.rs",
         "field_children — THE FieldType → sub-tree classifier",
     ),
-    (
-        "src/hooks/lifecycle/execution/field_hooks.rs",
-        "FieldHookWalker — the canonical in-row hook walker",
-    ),
     // Leaf value-dispatch INSIDE a `field_children` match (Relationship / Upload
     // / Join each carry a distinct leaf action — not tree descent).
     (

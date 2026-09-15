@@ -2,12 +2,13 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::core::{
-    BLOCK_TYPE_KEY, CollectionDefinition, FieldChildren, FieldDefinition, FieldType,
-    GlobalDefinition, JobStatus, LocalizedString, field_children,
+use crate::{
+    core::{
+        BLOCK_TYPE_KEY, CollectionDefinition, Companion, FieldChildren, FieldDefinition, FieldType,
+        GlobalDefinition, JobStatus, LocalizedString, field_children,
+    },
+    service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces},
 };
-use crate::db::query::helpers::tz_column;
-use crate::service::op::wire::{self, OpWire, WireField, WireKind, WireSurfaces};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -227,16 +228,23 @@ fn array_row_schema(fields: &[FieldDefinition], row_id: bool) -> Value {
     row
 }
 
-/// Insert a field's property, and the `{name}_tz` companion of a timezone date.
+/// Insert a field's property, and every companion key it carries beside its
+/// value — a timezone date's `{name}_tz`, a code field's `{name}_lang`.
 fn insert_field_props(props: &mut Map<String, Value>, field: &FieldDefinition, relational: bool) {
     props.insert(field.name.clone(), field_schema(field, relational));
 
-    if field.has_tz_companion() {
+    for companion in field.companion_descriptors() {
         props.insert(
-            tz_column(&field.name),
-            json!({ "type": "string", "description": "IANA timezone of the date" }),
+            format!("{}{}", field.name, companion.suffix),
+            companion_schema(&companion),
         );
     }
+}
+
+/// The schema of a companion key: a string, described by what the companion
+/// itself says it holds — never by recognizing its suffix here.
+fn companion_schema(companion: &Companion) -> Value {
+    json!({ "type": "string", "description": companion.description })
 }
 
 /// Insert a field into the schema properties, tracking required fields.
@@ -253,40 +261,37 @@ fn insert_prop(
     }
 }
 
+/// Insert the properties of one document level: layout wrappers are transparent
+/// at any depth, a join stores no value, and every other field — scalar, group,
+/// array, blocks, relationship — is one property whose own sub-schema
+/// `field_schema` builds.
+fn insert_level(
+    props: &mut Map<String, Value>,
+    required: &mut Vec<Value>,
+    fields: &[FieldDefinition],
+    relational: bool,
+) {
+    for field in fields {
+        match field_children(field) {
+            FieldChildren::Wrapper(sub) => insert_level(props, required, sub, relational),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    insert_level(props, required, &tab.fields, relational);
+                }
+            }
+            _ if field.field_type == FieldType::Join => {}
+            _ => insert_prop(props, required, field, relational),
+        }
+    }
+}
+
 /// Convert a list of `FieldDefinition`s to a JSON Schema `object` with
 /// `properties` and `required`; `relational` as in [`field_schema`].
 fn fields_to_object_schema(fields: &[FieldDefinition], relational: bool) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
 
-    for field in fields {
-        match field_children(field) {
-            FieldChildren::Wrapper(sub) => {
-                for sf in sub {
-                    insert_prop(&mut props, &mut required, sf, relational);
-                }
-            }
-            FieldChildren::Tabs(tabs) => {
-                for tab in tabs {
-                    for sf in &tab.fields {
-                        insert_prop(&mut props, &mut required, sf, relational);
-                    }
-                }
-            }
-            // Join stores no value → no property. Every other field (scalar,
-            // Group, Array, Blocks, Relationship…) is one property whose own
-            // sub-schema `field_schema` builds — not flattened here.
-            FieldChildren::Group(_)
-            | FieldChildren::Array(_)
-            | FieldChildren::Blocks(_)
-            | FieldChildren::Leaf => {
-                if field.field_type == FieldType::Join {
-                    continue;
-                }
-                insert_prop(&mut props, &mut required, field, relational);
-            }
-        }
-    }
+    insert_level(&mut props, &mut required, fields, relational);
 
     let mut schema = json!({
         "type": "object",
@@ -587,6 +592,29 @@ mod tests {
         FieldDefinition::builder(name, FieldType::Text)
             .required(true)
             .build()
+    }
+
+    /// Regression: the object schema flattened layout wrappers one level only,
+    /// so a field in a row inside tabs was missing — the row showed up as an
+    /// empty property instead — and a join inside a row got a string property.
+    #[test]
+    fn nested_layout_wrappers_are_transparent() {
+        let row = FieldDefinition::builder("r", FieldType::Row)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+                FieldDefinition::builder("related", FieldType::Join).build(),
+            ])
+            .build();
+        let tabs = FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![FieldTab::new("Main", vec![row])])
+            .build();
+
+        let schema = fields_to_object_schema(&[tabs], true);
+        let props = schema["properties"].as_object().unwrap();
+
+        assert!(props.contains_key("title"), "{props:?}");
+        assert!(!props.contains_key("r"), "{props:?}");
+        assert!(!props.contains_key("related"), "{props:?}");
     }
 
     #[test]
@@ -1097,6 +1125,45 @@ mod tests {
         let s = fields_to_object_schema(&fields, true);
 
         assert_eq!(s["properties"]["starts_tz"]["type"], "string", "{s}");
+        assert_eq!(
+            s["properties"]["starts_tz"]["description"], "IANA timezone of the date",
+            "{s}"
+        );
+    }
+
+    /// A code field with a language picker carries the pick in the
+    /// `{name}_lang` companion, top level and inside a group.
+    #[test]
+    fn code_field_with_languages_has_its_language_companion() {
+        let code = |name: &str| {
+            FieldDefinition::builder(name, FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["python".to_string()])
+                        .build(),
+                )
+                .build()
+        };
+        let fields = vec![
+            code("snippet"),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![code("example")])
+                .build(),
+            FieldDefinition::builder("plain", FieldType::Code).build(),
+        ];
+        let s = fields_to_object_schema(&fields, true);
+
+        assert_eq!(s["properties"]["snippet_lang"]["type"], "string", "{s}");
+        assert_eq!(
+            s["properties"]["snippet_lang"]["description"],
+            "Language the code is written in (one of the field's languages)",
+            "{s}"
+        );
+        assert_eq!(
+            s["properties"]["meta"]["properties"]["example_lang"]["type"], "string",
+            "{s}"
+        );
+        assert!(s["properties"].get("plain_lang").is_none(), "{s}");
     }
 
     // ── Tabs layout flattening ─────────────────────────────────────────────

@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::{
+    core::{FieldDefinition, FieldType, validate::FieldError},
+    db::query::helpers::number_element,
+};
 
 use super::numeric::{NumberViolation, number_violation};
 use super::shared::{decode_element_list, element_display};
@@ -127,11 +130,7 @@ fn check_number_value_bounds(
     element: &Value,
     errors: &mut Vec<FieldError>,
 ) {
-    let num = match element {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse::<f64>().ok(),
-        _ => None,
-    };
+    let num = number_element(element);
     let v = element_display(element);
     let v = v.as_str();
 
@@ -242,7 +241,30 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
+
+    use super::check_has_many_elements;
     use serde_json::json;
+
+    /// Regression: validation parsed a number element untrimmed while the write
+    /// trims it, so `" 5"` was rejected though the write would store `5`.
+    #[test]
+    fn a_padded_number_element_is_valid() {
+        let field = FieldDefinition::builder("scores", FieldType::Number)
+            .has_many(true)
+            .build();
+        let mut errors = Vec::new();
+
+        check_has_many_elements(
+            &field,
+            "scores",
+            Some(&json!([" 5"])),
+            false,
+            false,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty(), "{errors:?}");
+    }
 
     /// Regression: a malformed (scalar / bare-string) value on a has-many
     /// Text/Number field was silently coerced to an empty list — dropping the

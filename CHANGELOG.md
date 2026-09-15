@@ -8,6 +8,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Values inside blocks and nested rows are stored typed.** In a blocks row, and
+  in any group, array or blocks nested inside a row, a checkbox is `true`/`false`, a
+  number a number, a scalar has-many list a typed array, a date normalized (a
+  timezone date as UTC) and a blank value `null` — whichever surface wrote it.
+  They used to be stored as sent, so rows saved in the admin form read `"on"` and
+  `"3"`. Existing rows are converted once at startup. The admin form still reads
+  a checkbox left unchecked in a row as `false`; a value an API write doesn't
+  send stays as stored.
+
+- **Checkbox values are validated.** A value that is not a boolean, a recognized
+  spelling (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`, any case, trimmed)
+  or a number is a validation error on every surface and at every nesting
+  level; it used to be stored as unchecked. A numeric string counts as its
+  number, so `"2"` and `2` are both checked.
+
+- **Numbers ignore surrounding whitespace, and any non-zero number checks a
+  checkbox.** `" 5"` is accepted and stored as `5` in single and multi-value
+  number fields; a single field used to reject it. A checkbox written as a
+  number is checked for any value other than `0`, in a column and inside rows
+  alike — `2` and `1.0` used to store unchecked in a top-level checkbox.
+
+- **Version snapshots read as documents.** A version's `snapshot` in MCP
+  `list_versions` is shaped like a read of the document in the default locale:
+  groups nested, localized fields resolved, and no per-locale keys such as
+  `title__en` or `title__pt_BR`. Hidden and read-denied fields are removed as in
+  any read.
+
 - **Generated client read types no longer promise fields a read can omit.**
   `typegen client` made a document's `required` fields non-optional, but a
   draft read returns them empty, and field read access and `select` leave keys
@@ -863,6 +890,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **The admin restore-confirm page listed missing relations of fields the
+  viewer can't read.** Its missing-target check ran on the stored version
+  snapshot, so a field denied by `access.read` or marked `hidden` still showed
+  its label and how many of its referenced documents are gone. The check now
+  runs on what the viewer may read, in every locale.
+- **Hidden localized fields leaked through version history.** A version
+  snapshot stores a localized field under per-locale keys (`secret__en`), and
+  the strip removed only `secret`, so MCP `list_versions` returned hidden
+  localized values.
 
 - **The upload API and file serving bypassed the admin's auth rules.** The REST
   upload API and the `/uploads` route loaded a token's user on their own: a
@@ -2076,6 +2113,129 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Reading a draft with `locale = "all"` returned only the default locale's
   value**; it now returns every locale's, as the published read does. An empty
   group in a draft is kept as `{}`.
+- **A localized multi-value field read with `locale = "all"` came back empty**
+  for every locale, on every surface.
+- **A draft read returned values as they were sent**, not as they are stored: a
+  checkbox as `true` instead of `1`, a JSON field as an object instead of its
+  text, a timezone date without its UTC normalization. Drafts now read as the
+  published document does.
+- **A multi-value field inside an array row read back as its stored text**
+  (`"[\"a\",\"b\"]"`) instead of a list.
+- **A draft save reported the published rows of its array, blocks and
+  has-many fields** to `after_change` hooks, the response and the event, instead
+  of the draft's.
+- **A version restore reported the document before it was restored** — without
+  its array, blocks and has-many rows, and with its earlier status, which the
+  restore event was also routed by.
+- **Unpublish reported every locale's rows of a localized array** at once, and
+  the global unpublish did the same.
+- **Filters and sorts on a localized value in a nested group** — a group inside
+  a localized group, or a localized field in a row or tab inside a group —
+  failed with a missing column.
+- **A relationship or upload inside a localized group broke reference
+  counting**: updating, restoring or permanently deleting the document failed,
+  and the target didn't list it as a reference.
+- **A first draft save could record the published value of a group field** in a
+  project with locales: the snapshot held the group's stored column beside the
+  edited value, and either one could win.
+- **MCP tool schemas left out fields in nested layout wrappers** — a row inside
+  tabs, for example — and gave a join field inside a row a property.
+- **`select` dropped a field's companion values**: a timezone date's `_tz`
+  and a code field's `_lang`. A denied code field also kept its `_lang` in a
+  write.
+- **The admin form lost a multi-value number field's values**: it showed no
+  tags for a stored number list, and saving the form cleared the list.
+- **`crap-cms make hook` didn't offer fields inside a row, collapsible or tabs**
+  as conditions.
+- **The startup check for field names that collide with locale columns missed
+  hyphenated locales** (`title__de_DE` for `de-DE`).
+- **The unique check compared values as sent, not as stored**, so a duplicate
+  date typed without a time, or a number, slipped through (and a number field's
+  unique check could fail on PostgreSQL).
+- **`crap-cms import` stored hand-edited values differently from a normal
+  write**: a number sent as text stayed text, dates weren't normalized, and an
+  empty string stayed an empty string instead of empty.
+- **A date field's `default_value` was stored as written** in rows created
+  without the field, not normalized like a written date.
+- **A multi-value number field rejected an element with surrounding spaces**
+  (`" 5"`) that the write would store as `5`.
+- **A polymorphic relationship accepted a reference without an id or a
+  collection** (`posts/`) and then silently dropped it on write; it is now a
+  validation error.
+- **Admin relationship labels showed a hidden or read-denied title field** of
+  the selected item; they now fall back to its id, as a read would.
+- **A finished image conversion didn't report the new URL**: it left
+  `updated_at` unchanged, didn't invalidate the populate cache and published no
+  update event, so readers and subscribers kept the old document. Its update
+  event carries `sizes` and the document's rows, like any other write's.
+- **Restoring a trashed upload lost its image conversions.** Moving an upload to
+  the trash cancelled its queued conversions and restoring it didn't queue them
+  again, so its format variants were never written. Only a permanent delete
+  cancels them now.
+- **Create and update responses and events of an upload collection lacked the
+  `sizes` object** a read returns. They now take the read's shape: the per-size
+  values are folded into `sizes` (`sizes.thumbnail.url`, `.width`, `.height`)
+  and the flat `<size>_url`, `<size>_width` and `<size>_height` keys are no
+  longer in the response or the event, as they never were in a read.
+- **Queueing a bulk operation failed for users of an auth collection with a
+  localized field.**
+- **`crap-cms trash empty` left queued image conversions** of the purged
+  documents behind; they ran against rows that no longer existed. The command
+  and the scheduled trash purge now share the server's permanent-delete path.
+- **The upload REST API skipped cache invalidation and hook-queued events**, and
+  built its own create, update and delete events: a hard delete's event wasn't
+  routed by the document's status. Uploads now report through the same path as
+  every other write.
+- **Admin relationship pickers and the labels of selected relationships always
+  read the default locale**; they read the editor's locale, as the list and
+  edit views do.
+- **Login and Me returned the user document without its read hooks**:
+  `before_read`/`after_read` didn't run, unlike a Find on the users collection,
+  so hook-computed or hook-masked values differed. They run now, and a
+  `before_read` that errors fails Login and Me as it fails a Find.
+- **The admin form and list showed a checked value unchecked** when it was
+  spelled other than the exact values they each accepted (`"TRUE"`, `" on "`, or
+  `"yes"` and `0.5` set by a read hook in the list), which the write stores as
+  checked.
+- **The admin restore-confirm page missed targets gone in another locale.** It
+  checked only a version's default-locale values, so restoring a version whose
+  localized relationship pointed at a deleted document in another locale gave no
+  warning. Every locale the version records is checked, a document referenced in
+  several locales counts once, and a relationship inside a group is named by its
+  path ("Meta > Hero"), like one inside an array or block.
+- **A code field's language choice was never saved.** A code field with
+  `admin.languages` has a `<name>_lang` column, but no write stored it and no
+  read returned it, so the editor always reopened with the default language —
+  and `crap-cms db cleanup --confirm` treated the column as an orphan and would
+  drop it. The choice is now saved and read like any value: per locale for a
+  localized field, inside groups and array rows, recorded in versions, written
+  back on restore, and carried by export and import. An update that doesn't
+  send `<name>_lang` keeps the stored choice. Generated Lua and client types and the MCP tool schemas include
+  the key, and the gRPC schema lists it in the new `FieldInfo.companions`
+  (`["_lang"]`; `["_tz"]` for a timezone date).
+- **Login, Me and Verify MFA reported a failing `before_read` hook as an
+  internal error**, while a Find on the same collection reports the hook's
+  error as invalid input with its message; they report it the same way now.
+- **Replacing an upload's file left its earlier image conversions queued**, so
+  an older conversion could finish after the newer one and overwrite its URL.
+  Replacing the file cancels the queued conversions first.
+- **An image conversion that was already running when its upload was purged
+  left the converted file in storage** with nothing referring to it; the
+  conversion now removes the file when its document is gone.
+- **A server-side condition treated an empty object as false while the admin
+  form treated it as true**, so a field conditioned on an untouched group could
+  be hidden in one place and shown in the other. Both follow one rule now: an
+  object is truthy, an empty list, `""`, `0`, `false` and `null` are not.
+- **Filters compared a number spelled with surrounding whitespace as text.**
+  `" 5"` now compares as the number `5`, as the write stores it.
+- **Unchecking the only checkbox of a group inside an array or blocks row
+  didn't save** in the admin form: the group submitted no keys, so the stored
+  value was kept.
+- **A multi-value field's `default_value` wasn't the column default a write
+  stores.** A multi-value number field got no column default at all, and a
+  multi-value text field's default kept the list as written (`[1,"b"]` instead
+  of `["1","b"]`), so rows added without the field held a different value than
+  rows written with it.
 
 - **Editing a timezone date in a draft kept the old timezone.** A draft save
   recorded the date for its locale but not the timezone, so the draft read
@@ -4390,6 +4550,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`locale` on the MCP `list_versions` tool.** A version snapshot is returned
+  in the requested locale, or as a per-locale map with `locale: "all"`, as
+  `find_by_id` does; without it a snapshot comes back in the default locale.
+  gRPC and Lua return version summaries rather than snapshot content, so the
+  option is MCP-only.
 - **`FieldInfo` describes polymorphic targets, value lists and timezone
   dates.** gRPC `DescribeCollection` field info gained
   `relationship_collections` (every target of a polymorphic relationship),
@@ -5209,6 +5374,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON.)
 
 ### Internal
+
+- Companion columns (a timezone date's `_tz`, a code field's `_lang`) are one
+  list on the field definition that schema, column lists, locale handling,
+  writes, array rows, snapshots, restore, field access and generated types all
+  iterate, so a companion can't be handled by some paths and missed by others.
+- The read and write-report paths share one "read-access strip, then hidden
+  strip" helper and one single-locale constructor (`LocaleContext::exact`);
+  `db::query::helpers`, `db::query::locale`, `db::query::versions::restore`,
+  `db::query::write::create` and `scheduler::runner` are split into submodules.
+- The one-time startup conversion of values inside JSON-stored rows reads each
+  join table in pages instead of loading it into memory, and removes the meta
+  rows of the conversion it replaced.
+- Populated relationships share one cache entry for reads that select the same
+  locale with the same fallback: a default-locale read, an explicit read of the
+  default locale, and a read of a locale that isn't configured.
+- Every read of an upload document takes its shape (the `sizes` object) from
+  one function, and every read strip runs through one helper (read access,
+  then hidden fields) on one trait both hook sets implement; live events and
+  the in-memory filter use the same value rules as the write.
+- **One-time startup conversions are listed in one place** — the checkbox column
+  retype, the legacy timestamp rewrite, canonical text and typed nested values
+  — each marked removable after 0.1.0, with a test keeping the list and the
+  markers in step.
+
+- **One path between document values and columns.** Encoding a value for its
+  column, decoding a row (each column, then the `locale = "all"` grouping) and
+  choosing the locale a localized value is read or written in each have one
+  implementation, shared by create, update, version restore, draft saves, list,
+  single and global reads, credential lookups, join hydration, filters, hooks
+  and the draft read. A round-trip test matrix covers every value shape —
+  localized or shared, top-level or in a group — across locale modes: a fresh
+  draft reads as the published document, and a restore reproduces every
+  locale.
 
 - **`crap.storage.register` docs no longer show a `url` handler.** The inline
   module example and two stale tests referenced a `url` handler the strict-key

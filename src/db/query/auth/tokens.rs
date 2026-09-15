@@ -4,7 +4,10 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     core::{CollectionDefinition, Document, auth::hash_security_value},
-    db::{DbConnection, DbValue, document::row_to_document, query::get_column_names},
+    db::{
+        DbConnection, DbValue,
+        query::{get_column_names, read::decode_row},
+    },
 };
 
 // ── Shared token helpers ─────────────────────────────────────────────────
@@ -60,7 +63,7 @@ fn find_by_token(
         return Ok(None);
     };
 
-    let doc = row_to_document(conn, &row)?;
+    let doc = decode_row(conn, &row, &def.fields, None)?;
     let exp = row
         .get_i64(exp_col)
         .with_context(|| format!("Failed to read {exp_col}"))?;

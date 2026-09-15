@@ -9,7 +9,10 @@
 
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, validate::FieldError};
+use crate::{
+    core::{FieldDefinition, validate::FieldError},
+    db::query::poly_ref,
+};
 
 /// Reject a relationship/upload value that is not an id or a list of ids.
 ///
@@ -64,7 +67,7 @@ pub(crate) fn check_relationship_shape(
 fn element_problem(value: &Value, polymorphic: bool) -> Option<&'static str> {
     match value {
         Value::String(s) if s.is_empty() => None,
-        Value::String(s) if polymorphic && !s.contains('/') => {
+        Value::String(s) if polymorphic && poly_ref::parse(s).is_none() => {
             Some("must reference its target as 'collection/id' (polymorphic relationship)")
         }
         Value::String(_) => None,
@@ -80,7 +83,35 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::field::{FieldType, RelationshipConfig};
+    use crate::core::{
+        Slug,
+        field::{FieldType, RelationshipConfig},
+    };
+
+    /// Regression: a polymorphic reference was checked only for a `/`, so
+    /// `posts/` passed validation, and the write — which needs both a
+    /// collection and an id — silently dropped it.
+    #[test]
+    fn a_polymorphic_reference_needs_a_collection_and_an_id() {
+        let field = FieldDefinition::builder("featured", FieldType::Relationship)
+            .relationship(RelationshipConfig {
+                collection: Slug::new("media"),
+                has_many: false,
+                max_depth: None,
+                polymorphic: vec![Slug::new("media"), Slug::new("posts")],
+            })
+            .build();
+
+        for value in [json!("posts/"), json!("/p1")] {
+            let mut errors = Vec::new();
+            check_relationship_shape(&field, "featured", Some(&value), &mut errors);
+            assert_eq!(errors.len(), 1, "{value} must be rejected");
+        }
+
+        let mut errors = Vec::new();
+        check_relationship_shape(&field, "featured", Some(&json!("posts/p1")), &mut errors);
+        assert!(errors.is_empty());
+    }
 
     fn has_one() -> FieldDefinition {
         FieldDefinition::builder("author", FieldType::Relationship)

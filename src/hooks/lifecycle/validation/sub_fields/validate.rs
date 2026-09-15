@@ -416,6 +416,10 @@ fn validate_leaf_sub_field(
     // 5. Numeric bounds (min / max)
     checks::check_numeric_bounds(sf, qualified, value, is_empty, errors);
 
+    // 5b. Checkbox spelling — a value no reader turns into checked/unchecked
+    //     would coerce silently to `false` at the persist edge.
+    checks::check_checkbox_value(sf, qualified, value, is_empty, errors);
+
     // 6. Email format validation
     checks::check_email_format(sf, qualified, value, is_empty, errors);
 

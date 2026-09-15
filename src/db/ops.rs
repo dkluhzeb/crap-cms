@@ -4,18 +4,16 @@ use anyhow::{Context as _, Result};
 use serde_json::{Map, Value};
 
 use crate::{
-    config::LocaleConfig,
     core::{
         CollectionDefinition, Document, DocumentFields, collection::GlobalDefinition,
         document::DocumentBuilder, field::FieldDefinition, flatten_group_fields, nest_group_fields,
         prefixed_name, walk_leaf_fields,
     },
     db::{
-        DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, LocaleMode,
-        query,
+        DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
         query::{
-            filter::memory::matches_constraints_typed,
-            helpers::{locale_column, tz_column},
+            ReadLocale, filter::memory::matches_constraints_typed, helpers::locale_column,
+            regroup_by_locale,
         },
     },
 };
@@ -116,12 +114,12 @@ pub struct FindByIdFullParams<'a> {
 ///
 /// An all-locales read maps each localized column field to `{ locale: value }`,
 /// as the published read does.
-pub(crate) fn resolve_snapshot_locale(
+fn resolve_snapshot_locale(
     doc: &mut Document,
     fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
-    let read = SnapshotRead::new(locale_ctx.filter(|c| c.config.is_enabled()));
+    let active = locale_ctx.filter(|c| c.config.is_enabled());
 
     // Snapshots keep groups nested while per-locale keys sit flat at the root:
     // resolve on the flat shape and nest again, so a group's localized sub-field
@@ -129,8 +127,14 @@ pub(crate) fn resolve_snapshot_locale(
     let mut flat = flatten_group_fields(&doc.fields, fields);
 
     walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
-        if field.localized || inherited {
-            resolve_field(&mut flat, &read, field, &prefixed_name(prefix, &field.name))?;
+        if !(field.localized || inherited) {
+            return Ok(());
+        }
+
+        // A companion (`_tz`, `_lang`) is resolved like any localized column, as
+        // the published select resolves it.
+        for column in field.columns_with_companions(&prefixed_name(prefix, &field.name)) {
+            resolve_field(&mut flat, active, field, &column)?;
         }
 
         Ok(())
@@ -143,111 +147,51 @@ pub(crate) fn resolve_snapshot_locale(
     Ok(())
 }
 
-/// The locales a snapshot value is read in: the reading locale, then the
-/// fallback.
-#[derive(Clone, Copy)]
-struct ReadLocales<'l> {
-    reading: Option<&'l str>,
-    fallback: Option<&'l str>,
-}
-
-impl<'l> ReadLocales<'l> {
-    fn new(reading: Option<&'l str>, fallback: Option<&'l str>) -> Self {
-        Self { reading, fallback }
-    }
-}
-
-/// How a draft read resolves a snapshot's per-locale keys: into the value of the
-/// reading locale — else the fallback — or, for an all-locales read, into a
-/// `{ locale: value }` map as the published read returns.
-struct SnapshotRead<'l> {
-    config: Option<&'l LocaleConfig>,
-    locales: ReadLocales<'l>,
-    all: bool,
-}
-
-impl<'l> SnapshotRead<'l> {
-    fn new(active: Option<&'l LocaleContext>) -> Self {
-        let fallback = active
-            .filter(|ctx| ctx.config.fallback)
-            .map(|ctx| ctx.config.default_locale.as_str());
-
-        Self {
-            config: active.map(|ctx| &ctx.config),
-            locales: ReadLocales::new(active.map(LocaleContext::access_locale), fallback),
-            all: active.is_some_and(|ctx| matches!(ctx.mode, LocaleMode::All)),
-        }
-    }
-}
-
-/// Resolve one localized field of `flat` — and a timezone date's companion.
+/// Resolve the per-locale keys of `name` — a localized value of `field` — with
+/// the locale decision the published read uses: the reading locale's value,
+/// else its fallback, or every locale's for an all-locales read of a column.
+/// Without an active locale context the keys are only dropped.
 fn resolve_field(
     flat: &mut DocumentFields,
-    read: &SnapshotRead<'_>,
+    ctx: Option<&LocaleContext>,
     field: &FieldDefinition,
     name: &str,
 ) -> Result<()> {
-    let rows = !field.has_parent_column();
-
-    // An all-locales read maps a column field's locales; join rows are read in
-    // the default locale there, as the published read hydrates them.
-    if let (true, false, Some(config)) = (read.all, rows, read.config) {
-        regroup_locales(flat, name, config)?;
-
-        if field.has_tz_companion() {
-            regroup_locales(flat, &tz_column(name), config)?;
-        }
-
+    let Some(ctx) = ctx else {
+        drop_decorated(flat, name);
         return Ok(());
+    };
+
+    // Join rows are read in one locale, even by an all-locales read.
+    if !field.has_parent_column() {
+        return resolve_locale_value(flat, name, ctx.rows_read_locale(), true);
     }
 
-    let source = resolve_locale_value(flat, name, read.locales, rows)?;
+    let Some(read) = ctx.read_locale() else {
+        regroup_by_locale(flat, name, &ctx.config)?;
+        drop_decorated(flat, name);
+        return Ok(());
+    };
 
-    // A timezone date's companion takes the zone of the locale the date came from.
-    if field.has_tz_companion() {
-        let locales = source.map_or(read.locales, |s| ReadLocales::new(Some(s), None));
-        resolve_locale_value(flat, &tz_column(name), locales, false)?;
-    }
-
-    Ok(())
+    resolve_locale_value(flat, name, read, false)
 }
 
-/// Replace the per-locale keys of `name` with a `{ locale: value }` map — the
-/// shape an all-locales read returns. A snapshot without them keeps its value.
-fn regroup_locales(flat: &mut DocumentFields, name: &str, config: &LocaleConfig) -> Result<()> {
-    let mut by_locale = Map::new();
-
-    for locale in &config.locales {
-        if let Some(value) = flat.remove(&locale_column(name, locale)?) {
-            by_locale.insert(locale.clone(), value);
-        }
-    }
-
-    drop_decorated(flat, name);
-
-    if !by_locale.is_empty() {
-        flat.insert(name.to_string(), Value::Object(by_locale));
-    }
-
-    Ok(())
-}
-
-/// Set `name` to its value in `locales` from the decorated snapshot key, and
-/// drop every decorated key of `name`. `rows` marks a join field (array, blocks,
-/// has-many), whose locale without rows counts as empty, as the published read
-/// treats it. Returns the locale the value came from.
-fn resolve_locale_value<'l>(
+/// Set `name` to its value in `read`'s locale — else its fallback — from the
+/// decorated snapshot key, and drop every decorated key of `name`. `rows` marks
+/// a join field (array, blocks, has-many), whose locale without rows counts as
+/// empty, as the published read treats it.
+fn resolve_locale_value(
     data: &mut DocumentFields,
     name: &str,
-    locales: ReadLocales<'l>,
+    read: ReadLocale<'_>,
     rows: bool,
-) -> Result<Option<&'l str>> {
-    let source = take_first_value(data, name, locales, rows)?;
+) -> Result<()> {
+    let found = take_first_value(data, name, read, rows)?;
 
     // A snapshot that records the field per locale but has no value for the
     // reading (or fallback) locale holds nothing there — not the value of the
     // locale the draft was saved under, which the bare key carries.
-    if source.is_none() && locales.reading.is_some() && has_decorated(data, name) {
+    if !found && has_decorated(data, name) {
         let empty = if rows {
             Value::Array(Vec::new())
         } else {
@@ -258,27 +202,27 @@ fn resolve_locale_value<'l>(
 
     drop_decorated(data, name);
 
-    Ok(source)
+    Ok(())
 }
 
-/// Set `name` to its first non-empty per-locale value among `locales`, returning
-/// the locale it came from.
-fn take_first_value<'l>(
+/// Set `name` to its first non-empty per-locale value — the reading locale's,
+/// then the fallback's — returning whether one was found.
+fn take_first_value(
     data: &mut DocumentFields,
     name: &str,
-    locales: ReadLocales<'l>,
+    read: ReadLocale<'_>,
     rows: bool,
-) -> Result<Option<&'l str>> {
-    for candidate in [locales.reading, locales.fallback].into_iter().flatten() {
+) -> Result<bool> {
+    for candidate in [Some(read.locale), read.fallback].into_iter().flatten() {
         let value = data.get(&locale_column(name, candidate)?);
 
         if let Some(value) = value.filter(|v| !is_empty_value(v, rows)).cloned() {
             data.insert(name.to_string(), value);
-            return Ok(Some(candidate));
+            return Ok(true);
         }
     }
 
-    Ok(None)
+    Ok(false)
 }
 
 /// Whether a snapshot value holds nothing: null, or a join field without rows.
@@ -370,13 +314,12 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         && p.def.has_drafts()
         && let Some(version) = query::find_latest_version(p.conn, p.slug, p.id)?
         && version.status == "draft"
-        && let Some(mut doc) = document_from_snapshot(p.id, &version.snapshot)
-    {
         // A snapshot carries every locale's decorated column plus the value
-        // resolved at save time. Resolve for the READING locale, so a draft
+        // resolved at save time. It is read for the READING locale, so a draft
         // saved under `en` doesn't surface as the `de` value (and vice versa).
-        resolve_snapshot_locale(&mut doc, &p.def.fields, p.locale_ctx)?;
-
+        && let Some(mut doc) =
+            snapshot_read_document(p.id, &version.snapshot, &p.def.fields, p.locale_ctx)?
+    {
         // SECURITY: the snapshot bypasses the SQL `WHERE` path, so the view's
         // row constraint (e.g. a `draft = { author = me }` rule) must be enforced
         // here against the snapshot fields. Without this, a caller with a
@@ -423,8 +366,32 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
     Ok(doc)
 }
 
+/// A version snapshot as a read returns the document: its fields resolved for
+/// the reading locale (every locale's `{ locale: value }` map for an
+/// all-locales read), per-locale keys dropped, groups nested. `None` for a
+/// snapshot that isn't a JSON object. The one path from a stored snapshot to a
+/// document — draft reads, draft-save responses and version history use it.
+///
+/// # Errors
+///
+/// Returns an error if a configured locale code has no column form.
+pub(crate) fn snapshot_read_document(
+    id: &str,
+    snapshot: &Value,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
+    let Some(mut doc) = document_from_snapshot(id, snapshot) else {
+        return Ok(None);
+    };
+
+    resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
+
+    Ok(Some(doc))
+}
+
 /// Reconstruct a Document from a version snapshot JSON object.
-pub(crate) fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
+fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
     let obj = snapshot.as_object()?;
     let mut fields: DocumentFields = obj.clone().into_iter().collect();
 
@@ -449,12 +416,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::FieldType;
+    use crate::{
+        config::LocaleConfig,
+        core::{FieldAdmin, FieldType},
+        db::LocaleMode,
+    };
 
     /// A draft read resolves a hyphenated locale from its column-form key
-    /// (`title__pt_BR`), a timezone date's companion follows the locale its
-    /// date came from, and no decorated key — the companion's included —
-    /// reaches the caller.
+    /// (`title__pt_BR`), a timezone date's companion resolves for the reading
+    /// locale like any localized column, and no decorated key — the
+    /// companion's included — reaches the caller.
     #[test]
     fn snapshot_resolves_a_hyphenated_locale_and_its_timezone() {
         let fields = vec![
@@ -503,6 +474,84 @@ mod tests {
         ] {
             assert!(!doc.fields.contains_key(key), "{key} must be dropped");
         }
+    }
+
+    /// A timezone date's companion resolves on its own, as the published read's
+    /// per-column fallback resolves it: a zone set only in the reading locale is
+    /// read beside the date the fallback locale supplies.
+    #[test]
+    fn snapshot_resolves_a_timezone_companion_on_its_own() {
+        let fields = vec![
+            FieldDefinition::builder("starts", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".into(), "de".into()],
+                fallback: true,
+            },
+        };
+        let snapshot = json!({
+            "starts": "2026-01-01T10:00:00.000Z",
+            "starts__en": "2026-01-01T10:00:00.000Z",
+            "starts__de": null,
+            "starts_tz": "Europe/London",
+            "starts_tz__en": "Europe/London",
+            "starts_tz__de": "Europe/Berlin",
+        });
+        let mut doc = document_from_snapshot("d1", &snapshot).unwrap();
+
+        resolve_snapshot_locale(&mut doc, &fields, Some(&ctx)).unwrap();
+
+        assert_eq!(
+            doc.fields.get_str("starts"),
+            Some("2026-01-01T10:00:00.000Z")
+        );
+        assert_eq!(doc.fields.get_str("starts_tz"), Some("Europe/Berlin"));
+    }
+
+    /// Regression: a draft read resolved only a timezone companion per locale, so
+    /// a localized code field's `_lang` came back as flat `snippet_lang__xx`
+    /// keys instead of the reading locale's language pick.
+    #[test]
+    fn snapshot_resolves_a_code_language_companion() {
+        let fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".into(), "de".into()],
+                fallback: true,
+            },
+        };
+        let snapshot = json!({
+            "snippet": "console.log(1)",
+            "snippet__en": "console.log(1)",
+            "snippet__de": "print(1)",
+            "snippet_lang": "javascript",
+            "snippet_lang__en": "javascript",
+            "snippet_lang__de": "python",
+        });
+        let mut doc = document_from_snapshot("d1", &snapshot).unwrap();
+
+        resolve_snapshot_locale(&mut doc, &fields, Some(&ctx)).unwrap();
+
+        assert_eq!(doc.fields.get_str("snippet_lang"), Some("python"));
+        assert!(!doc.fields.contains_key("snippet_lang__de"));
+        assert!(!doc.fields.contains_key("snippet_lang__en"));
     }
 
     /// Regression: a draft read with `locale = "all"` resolved to the default

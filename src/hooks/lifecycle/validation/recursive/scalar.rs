@@ -7,7 +7,7 @@ use crate::{
     core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, validate::FieldError},
     db::{
         LocaleContext,
-        query::helpers::{prefixed_name, tz_column},
+        query::helpers::{column_value, prefixed_name, tz_column},
         query::locale_write_column,
     },
     hooks::lifecycle::validation::{
@@ -135,12 +135,15 @@ impl ValidationWalker<'_> {
         if let Some(col_name) =
             self.resolve_unique_check_column(field, &data_key, inherited_localized, errors)
         {
+            let zone = self.data.get(&tz_column(&data_key)).and_then(Value::as_str);
+            let stored = value.map(|v| column_value(field, v, zone));
             checks::check_unique(
-                field, &data_key, &col_name, value, is_empty, self.ctx, errors,
+                field, &data_key, &col_name, stored, is_empty, self.ctx, errors,
             );
         }
         checks::check_length_bounds(field, &data_key, value, is_empty, errors);
         checks::check_numeric_bounds(field, &data_key, value, is_empty, errors);
+        checks::check_checkbox_value(field, &data_key, value, is_empty, errors);
         checks::check_email_format(field, &data_key, value, is_empty, errors);
         checks::check_option_valid(field, &data_key, value, is_empty, errors);
         checks::check_has_many_elements(

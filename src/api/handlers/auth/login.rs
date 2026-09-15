@@ -88,8 +88,13 @@ impl ContentService {
                 .inspect_err(|e| error!("Login response pool error: {e}"))
                 .map_err(|e| pool_error_status(e, infra.pool.kind()))?;
 
+            // The same mapping an ordinary read of this collection gets, so a
+            // `before_read` abort reports its message as INVALID_ARGUMENT here
+            // too instead of an opaque INTERNAL the client retries on.
             let mut user = user;
-            prepare_user_document(&infra, &def, &collection, &mut user, &conn);
+            prepare_user_document(&infra, &def, &collection, &mut user, &conn)
+                .inspect_err(|e| error!("Login response user read error for {collection}: {e}"))
+                .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?;
 
             Ok(user)
         })

@@ -20,12 +20,9 @@ use mlua::{Lua, Table, Value};
 use crate::{
     core::{
         AUTO_COLUMNS, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
-        McpFieldConfig, RequiredLocales,
+        LANG_SUFFIX, McpFieldConfig, RequiredLocales, TZ_SUFFIX,
     },
-    db::query::{
-        self,
-        helpers::{LANG_SUFFIX, TZ_SUFFIX},
-    },
+    db::query,
 };
 
 use super::super::admin::parse_field_admin;

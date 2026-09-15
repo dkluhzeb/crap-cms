@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     backfill_ref_counts, canonical_text, checkbox_columns, collection, global, identifier_check,
-    legacy_timestamps, nested_timezone_dates,
+    legacy_timestamps, nested_values,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -69,10 +69,13 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
         global::sync_global_table(&tx, slug, def, locale_config)?;
     }
 
+    // The one-time conversions run in this order on purpose: nested values
+    // are typed before text is canonicalized, since both rewrite the same
+    // JSON-stored rows and the canonical form applies to the typed value.
     backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
     checkbox_columns::migrate_if_needed(&tx, registry)?;
     legacy_timestamps::normalize_if_needed(&tx, registry)?;
-    nested_timezone_dates::convert_if_needed(&tx, registry)?;
+    nested_values::convert_if_needed(&tx, registry)?;
     canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
 
     tx.commit()

@@ -1,3 +1,5 @@
+//! **One-time conversion — removable after 0.1.0** (see [`super::one_time`]).
+//!
 //! Rewrite of stored email and text values to their canonical form.
 //!
 //! Email values are stored trimmed, lowercased and NFC-composed, Text and

@@ -3,18 +3,25 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::HeaderMap,
 };
 use serde_json::{Value, json};
 use tracing::warn;
 
-use crate::admin::handlers::shared::response::on_blocking_section;
 use crate::{
     admin::{
         AdminState,
-        handlers::{collections::shared::thumbnail_url, shared::get_user_doc},
+        handlers::{
+            collections::shared::thumbnail_url,
+            shared::{
+                editor_locale_ctx, extract_editor_locale, get_user_doc,
+                response::on_blocking_section,
+            },
+        },
     },
+    config::LocaleConfig,
     core::{Document, auth::AuthUser},
-    db::{FindQuery, query::LocaleContext},
+    db::{FindQuery, LocaleContext},
     service,
 };
 
@@ -25,6 +32,12 @@ pub struct SearchQuery {
     pub q: Option<String>,
     /// The maximum number of results to return.
     pub limit: Option<usize>,
+}
+
+/// The locale search labels are read in: the editor's locale cookie, as the
+/// list and edit views read — the default locale without a valid one.
+fn search_locale_ctx(headers: &HeaderMap, config: &LocaleConfig) -> Option<LocaleContext> {
+    editor_locale_ctx(config, extract_editor_locale(headers, config).as_deref())
 }
 
 /// Extract the display label for a document (upload filename or title field).
@@ -75,8 +88,11 @@ pub async fn search_collection(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     Query(params): Query<SearchQuery>,
+    headers: HeaderMap,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Json<Value> {
+    let locale_ctx = search_locale_ctx(&headers, &state.config.locale);
+
     let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
         return Json(json!([]));
     };
@@ -106,8 +122,6 @@ pub async fn search_collection(
             }
         };
 
-        let locale_ctx =
-            LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
         let user_doc = get_user_doc(auth_user.as_ref());
 
         let read_hooks =
@@ -174,15 +188,60 @@ pub async fn search_collection(
 mod tests {
     use std::collections::HashMap;
 
-    use serde_json::Value;
+    use axum::http::header;
+    use serde_json::from_value;
 
     use crate::core::document::DocumentBuilder;
 
     use super::*;
 
-    fn doc(fields: serde_json::Value) -> Document {
-        let map: HashMap<String, Value> = serde_json::from_value(fields).unwrap();
+    fn doc(fields: Value) -> Document {
+        let map: HashMap<String, Value> = from_value(fields).unwrap();
         DocumentBuilder::new("id-1").fields(map).build()
+    }
+
+    fn locale_config() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        }
+    }
+
+    fn cookie_headers(cookie: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, cookie.parse().unwrap());
+        headers
+    }
+
+    /// Search labels are read in the locale of the editor's locale cookie.
+    #[test]
+    fn search_reads_labels_in_the_editor_locale() {
+        let headers = cookie_headers("crap_session=abc; crap_editor_locale=de");
+
+        let ctx = search_locale_ctx(&headers, &locale_config()).expect("a context");
+
+        assert_eq!(ctx.access_locale(), "de");
+    }
+
+    /// Without a cookie, or with one naming an unconfigured locale, labels are
+    /// read in the default locale.
+    #[test]
+    fn search_reads_labels_in_the_default_locale_without_a_valid_cookie() {
+        let config = locale_config();
+
+        for headers in [HeaderMap::new(), cookie_headers("crap_editor_locale=zz")] {
+            let ctx = search_locale_ctx(&headers, &config).expect("a context");
+
+            assert_eq!(ctx.access_locale(), "en");
+        }
+    }
+
+    #[test]
+    fn search_reads_without_a_locale_when_localization_is_off() {
+        let headers = cookie_headers("crap_editor_locale=de");
+
+        assert!(search_locale_ctx(&headers, &LocaleConfig::default()).is_none());
     }
 
     #[test]

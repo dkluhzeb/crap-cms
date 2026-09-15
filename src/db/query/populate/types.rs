@@ -4,9 +4,9 @@ use anyhow::Result;
 
 use crate::core::cache::CacheBackend;
 use crate::core::{CollectionDefinition, Document, HookRef, Registry};
-use crate::db::query::AccessResult;
 use crate::db::query::populate::{CachedDoc, Singleflight};
-use crate::db::{DbConnection, LocaleContext, LocaleMode};
+use crate::db::query::{AccessResult, ReadLocale};
+use crate::db::{DbConnection, LocaleContext};
 
 /// Minimal access-check abstraction used by join-field population.
 ///
@@ -50,18 +50,39 @@ pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str
     }
 }
 
-/// Derive the locale portion of the cache key from an optional `LocaleContext`.
+/// Marks an all-locales read. `*` is not a legal locale code (the locale config
+/// allows only ASCII alphanumerics, `-` and `_`), so no locale's key can spell
+/// this one — a marker built from legal characters would collide with a locale
+/// named after it.
+const ALL_LOCALES_KEY: &str = "*";
+
+/// Separates the read locale from the locale it falls back to. Rejected in a
+/// locale code for the same reason as [`ALL_LOCALES_KEY`], so `en>de` can only
+/// ever mean "read `en`, fall back to `de`".
+const FALLBACK_SEPARATOR: char = '>';
+
+/// Derive the locale portion of the cache key from an optional `LocaleContext`,
+/// so reads that select the same data share one key — and only those.
 ///
-/// Returns:
-/// - `None` when no locale context is active (unlocalized request).
-/// - `Some("_default_")` for `LocaleMode::Default`.
-/// - `Some("_all_")` for `LocaleMode::All`.
-/// - `Some(locale_string)` for `LocaleMode::Single(locale_string)`.
+/// Keyed off the read locale ([`LocaleContext::read_locale`]), which is the
+/// whole of what a cached document's content depends on: the locale its values
+/// come from and the locale standing in while that one holds nothing. A default
+/// read, a read of the default locale and a read of a locale that isn't
+/// configured all read the default locale, and share its key; the same locale
+/// read with and without fallback do not.
+///
+/// Returns `None` when no locale context is active (unlocalized request).
 pub(crate) fn locale_cache_key(locale_ctx: Option<&LocaleContext>) -> Option<String> {
-    locale_ctx.map(|lc| match &lc.mode {
-        LocaleMode::Single(s) => s.clone(),
-        LocaleMode::Default => "_default_".to_string(),
-        LocaleMode::All => "_all_".to_string(),
+    locale_ctx.map(|lc| match lc.read_locale() {
+        None => ALL_LOCALES_KEY.to_string(),
+        Some(ReadLocale {
+            locale,
+            fallback: None,
+        }) => locale.to_string(),
+        Some(ReadLocale {
+            locale,
+            fallback: Some(fallback),
+        }) => format!("{locale}{FALLBACK_SEPARATOR}{fallback}"),
     })
 }
 
@@ -196,6 +217,22 @@ impl<'a> PopulateOpts<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{config::LocaleConfig, db::LocaleMode};
+
+    fn en_de() -> LocaleConfig {
+        LocaleConfig {
+            locales: vec!["en".to_string(), "de".to_string()],
+            default_locale: "en".to_string(),
+            fallback: true,
+        }
+    }
+
+    fn single(locale: &str, config: LocaleConfig) -> LocaleContext {
+        LocaleContext {
+            mode: LocaleMode::Single(locale.to_string()),
+            config,
+        }
+    }
 
     #[test]
     fn populate_cache_key_no_locale() {
@@ -217,43 +254,97 @@ mod tests {
 
     #[test]
     fn locale_cache_key_single_locale() {
-        let config = crate::config::LocaleConfig {
-            locales: vec!["en".to_string(), "de".to_string()],
-            default_locale: "en".to_string(),
-            fallback: true,
+        let no_fallback = LocaleConfig {
+            fallback: false,
+            ..en_de()
         };
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".to_string()),
-            config,
-        };
-        assert_eq!(locale_cache_key(Some(&ctx)), Some("de".to_string()));
+        assert_eq!(
+            locale_cache_key(Some(&single("de", no_fallback))),
+            Some("de".to_string())
+        );
     }
 
+    /// Regression: a locale that isn't configured reads as the default locale,
+    /// yet keyed its own cache entry — the same read cached twice.
     #[test]
-    fn locale_cache_key_default_mode() {
-        let config = crate::config::LocaleConfig {
-            locales: vec!["en".to_string(), "de".to_string()],
-            default_locale: "en".to_string(),
-            fallback: true,
+    fn locale_cache_key_an_unconfigured_locale_shares_the_default_key() {
+        assert_eq!(
+            locale_cache_key(Some(&single("fr", en_de()))),
+            locale_cache_key(Some(&single("en", en_de())))
+        );
+    }
+
+    /// Regression: the key ignored `fallback`, so the same locale read with the
+    /// default locale standing in for its empty values and without it shared one
+    /// entry — whichever read filled the cache decided what the other saw.
+    #[test]
+    fn locale_cache_key_separates_a_read_with_fallback_from_one_without() {
+        let with_fallback = locale_cache_key(Some(&single("de", en_de())));
+        let without = locale_cache_key(Some(&single(
+            "de",
+            LocaleConfig {
+                fallback: false,
+                ..en_de()
+            },
+        )));
+
+        assert_eq!(with_fallback, Some("de>en".to_string()));
+        assert_eq!(without, Some("de".to_string()));
+    }
+
+    /// A read of the default locale takes no fallback (it *is* the fallback),
+    /// so it keys exactly like the default read.
+    #[test]
+    fn locale_cache_key_default_locale_shares_the_default_read_key() {
+        let default_read = LocaleContext {
+            mode: LocaleMode::Default,
+            config: en_de(),
         };
+
+        assert_eq!(
+            locale_cache_key(Some(&single("en", en_de()))),
+            locale_cache_key(Some(&default_read))
+        );
+    }
+
+    /// Regression: the all-locales marker was `_all_`, a legal locale code — a
+    /// locale named `_all_` shared the all-locales entry and read the nested
+    /// per-locale shape as its own scalar value.
+    #[test]
+    fn locale_cache_key_all_mode_cannot_collide_with_a_locale() {
+        let config = LocaleConfig {
+            locales: vec!["en".to_string(), "_all_".to_string()],
+            default_locale: "en".to_string(),
+            fallback: false,
+        };
+        let all = LocaleContext {
+            mode: LocaleMode::All,
+            config: config.clone(),
+        };
+
+        assert_ne!(
+            locale_cache_key(Some(&all)),
+            locale_cache_key(Some(&single("_all_", config)))
+        );
+    }
+
+    /// A default read selects the default locale's data, so it shares that
+    /// locale's key.
+    #[test]
+    fn locale_cache_key_default_mode_shares_the_default_locale_key() {
         let ctx = LocaleContext {
             mode: LocaleMode::Default,
-            config,
+            config: en_de(),
         };
-        assert_eq!(locale_cache_key(Some(&ctx)), Some("_default_".to_string()));
+        assert_eq!(locale_cache_key(Some(&ctx)), Some("en".to_string()));
     }
 
     #[test]
     fn locale_cache_key_all_mode() {
-        let config = crate::config::LocaleConfig {
-            locales: vec!["en".to_string(), "de".to_string()],
-            default_locale: "en".to_string(),
-            fallback: true,
-        };
         let ctx = LocaleContext {
             mode: LocaleMode::All,
-            config,
+            config: en_de(),
         };
-        assert_eq!(locale_cache_key(Some(&ctx)), Some("_all_".to_string()));
+        assert_eq!(locale_cache_key(Some(&ctx)), Some("*".to_string()));
     }
 }

@@ -439,13 +439,6 @@ impl FieldDefinition {
             self.localized
         }
     }
-
-    /// Whether the field stores a timezone companion (`{name}_tz`) beside its
-    /// value — a Date with `timezone` enabled.
-    #[must_use]
-    pub fn has_tz_companion(&self) -> bool {
-        self.field_type == FieldType::Date && self.timezone
-    }
 }
 
 /// Convert a `snake_case` identifier to Title Case.

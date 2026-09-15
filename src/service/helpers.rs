@@ -1,20 +1,152 @@
 //! Shared helper functions for the service layer.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     config::PasswordPolicy,
     core::{
         Document, FieldDefinition, FieldDenial, ReqContext,
         collection::Hooks,
+        upload,
         validate::{FieldError, ValidationError},
     },
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
     hooks::{HookContext, HookEvent, lifecycle::access::collect_denials_flat},
-    service::{AfterChangeInput, ServiceContext, ServiceError, hooks::WriteHooks},
+    service::{
+        AfterChangeInput, FieldReadStrip, ReadStripArgs, ServiceContext, ServiceError,
+        hooks::WriteHooks,
+    },
 };
+
+/// Hydrate the join fields of the stored row a write reports — for the write's
+/// locale, or the default locale without one — before `after_change` hooks, the
+/// caller and the event see it.
+///
+/// Needed only for a document read without its rows: the flat re-read a write
+/// query returns (`query::create`, `query::update`, `query::restore_version`)
+/// or a `find_by_id_raw`. A document from `find_by_id` or `get_global` already
+/// carries its rows, and a draft save reports its snapshot, which does too —
+/// hydrating those again reads the join tables twice.
+///
+/// # Errors
+///
+/// Returns an error when no connection or definition is attached, or a join
+/// table read fails.
+pub(crate) fn hydrate_reported(
+    ctx: &ServiceContext,
+    doc: &mut Document,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let default = ctx.default_locale_ctx();
+    let locale_ctx = locale_ctx.or(default.as_ref());
+
+    query::hydrate_document(
+        conn.as_ref(),
+        &ctx.version_table(),
+        ctx.fields()?,
+        doc,
+        None,
+        locale_ctx,
+    )?;
+
+    Ok(())
+}
+
+/// Shape a reported document as a read returns it: an upload document's
+/// per-size values folded into `sizes`. Strips nothing — a write strips for its
+/// caller afterwards ([`strip_reported`]), and a system report leaves stripping
+/// to per-subscriber event delivery.
+pub(crate) fn shape_reported(ctx: &ServiceContext, doc: &mut Document) {
+    let Ok(def) = ctx.collection_def() else {
+        return;
+    };
+
+    upload::shape_read_document(def, doc);
+}
+
+/// Shape the document a write reports as a read returns it ([`shape_reported`]),
+/// then strip what the caller may not read: read-denied fields, judged in the
+/// write's locale (the default locale without one), and hidden fields.
+///
+/// # Errors
+///
+/// Returns an error when the context has no definition.
+pub(crate) fn strip_reported(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    doc: &mut Document,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(), ServiceError> {
+    let fields = ctx.fields()?;
+    let default = ctx.default_locale_ctx();
+    let locale = locale_ctx
+        .or(default.as_ref())
+        .map(LocaleContext::access_locale);
+
+    shape_reported(ctx, doc);
+
+    strip_unreadable(
+        write_hooks,
+        &ReadStripArgs::builder(fields, ctx.slug)
+            .user(ctx.user)
+            .locale(locale)
+            .build(),
+        doc,
+    );
+
+    Ok(())
+}
+
+/// Strip what a reader may not read from a document: first the read-denied
+/// fields — `strip`'s data-aware field-read strip, which judges the document
+/// before anything else is removed — then the hidden fields.
+pub(crate) fn strip_unreadable(
+    strip: &dyn FieldReadStrip,
+    args: &ReadStripArgs<'_>,
+    doc: &mut Document,
+) {
+    strip.strip_read_access_doc(args.fields, doc, args.collection, args.user, args.locale);
+
+    doc.strip_fields(&collect_api_hidden_field_names(args.fields, ""));
+}
+
+/// [`strip_unreadable`] for a batch of documents: the read-denied fields of the
+/// whole batch are stripped at once, so the hooks evaluate it in one pass; the
+/// hidden fields are collected once.
+pub(crate) fn strip_unreadable_docs(
+    strip: &dyn FieldReadStrip,
+    args: &ReadStripArgs<'_>,
+    docs: &mut [Document],
+) {
+    strip.strip_read_access_docs(args.fields, docs, args.collection, args.user, args.locale);
+
+    let hidden = collect_api_hidden_field_names(args.fields, "");
+    if hidden.is_empty() {
+        return;
+    }
+
+    for doc in docs.iter_mut() {
+        doc.strip_fields(&hidden);
+    }
+}
+
+/// [`strip_unreadable`] for the map/fields shape a live event carries: the
+/// caller's `strip_read_access` runs first — judging the payload before
+/// anything is removed — then the hidden fields go.
+pub(crate) fn strip_unreadable_fields(
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    strip_read_access: impl FnOnce(&mut Map<String, Value>),
+) {
+    strip_read_access(level);
+
+    for denial in collect_api_hidden_field_names(fields, "") {
+        denial.strip_from(level);
+    }
+}
 
 /// Validate a supplied auth-collection `password` against the effective policy,
 /// surfaced as a structured `password` field error.
@@ -283,8 +415,155 @@ pub(crate) fn finish_cursor_overfetch(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use serde_json::json;
+
     use super::*;
-    use crate::core::{FieldAdmin, FieldType};
+    use crate::{
+        core::{
+            CollectionDefinition, DocumentFields, FieldAdmin, FieldType,
+            upload::{CollectionUpload, ImageSize},
+        },
+        hooks::{AccessCheckInput, ValidationCtx},
+    };
+
+    /// Write hooks that run nothing.
+    struct NoWriteHooks;
+
+    impl WriteHooks for NoWriteHooks {
+        fn run_before_write(
+            &self,
+            _: &Hooks,
+            _: &[FieldDefinition],
+            ctx: HookContext,
+            _: &ValidationCtx,
+        ) -> anyhow::Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _: &Hooks,
+            _: &[FieldDefinition],
+            _: HookEvent,
+            ctx: HookContext,
+            _: &dyn DbConnection,
+        ) -> anyhow::Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _: &Hooks,
+            _: HookEvent,
+            ctx: HookContext,
+            _: &dyn DbConnection,
+        ) -> anyhow::Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> anyhow::Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _: &[FieldDefinition],
+            _: &DocumentFields,
+            _: &ValidationCtx,
+        ) -> Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for NoWriteHooks {}
+
+    /// A read strip that drops `title` and records whether the hidden `secret`
+    /// was still present when it ran, plus how many batch calls it saw.
+    #[derive(Default)]
+    struct DropTitle {
+        saw_secret: Cell<bool>,
+        batches: Cell<usize>,
+    }
+
+    impl FieldReadStrip for DropTitle {
+        fn strip_read_access_doc(
+            &self,
+            _: &[FieldDefinition],
+            doc: &mut Document,
+            _: &str,
+            _: Option<&Document>,
+            _: Option<&str>,
+        ) {
+            self.saw_secret.set(doc.fields.contains_key("secret"));
+            doc.fields.remove("title");
+        }
+
+        fn strip_read_access_docs(
+            &self,
+            _: &[FieldDefinition],
+            docs: &mut [Document],
+            _: &str,
+            _: Option<&Document>,
+            _: Option<&str>,
+        ) {
+            self.batches.set(self.batches.get() + 1);
+            self.saw_secret
+                .set(docs.iter().all(|d| d.fields.contains_key("secret")));
+        }
+    }
+
+    fn strip_args(fields: &[FieldDefinition]) -> ReadStripArgs<'_> {
+        ReadStripArgs::builder(fields, "posts").build()
+    }
+
+    /// Regression: a write reported an upload document without its `sizes`
+    /// object — the per-size values a read folds into it came back flat.
+    #[test]
+    fn a_reported_upload_document_carries_its_sizes() {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload {
+            enabled: true,
+            image_sizes: vec![ImageSize::builder("thumbnail").width(10).height(10).build()],
+            ..Default::default()
+        });
+        let ctx = ServiceContext::collection("media", &def).build();
+        let mut doc = Document::new("m1".to_string());
+        doc.fields
+            .insert("thumbnail_url".to_string(), json!("/uploads/t.png"));
+        doc.fields.insert("thumbnail_width".to_string(), json!(10));
+        doc.fields.insert("thumbnail_height".to_string(), json!(10));
+
+        strip_reported(&ctx, &NoWriteHooks, &mut doc, None).unwrap();
+
+        assert!(doc.fields.contains_key("sizes"), "{:?}", doc.fields);
+        assert!(!doc.fields.contains_key("thumbnail_url"));
+    }
+
+    /// The reported shape folds an upload's sizes and strips nothing: a system
+    /// report leaves stripping to per-subscriber event delivery.
+    #[test]
+    fn the_reported_shape_folds_sizes_without_stripping() {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload {
+            enabled: true,
+            image_sizes: vec![ImageSize::builder("thumbnail").width(10).height(10).build()],
+            ..Default::default()
+        });
+        def.fields = vec![text_field("secret", true, false)];
+        let ctx = ServiceContext::collection("media", &def).build();
+        let mut doc = Document::new("m1".to_string());
+        doc.fields
+            .insert("thumbnail_url".to_string(), json!("/uploads/t.png"));
+        doc.fields.insert("secret".to_string(), json!("kept"));
+
+        shape_reported(&ctx, &mut doc);
+
+        assert!(doc.fields.contains_key("sizes"), "{:?}", doc.fields);
+        assert!(!doc.fields.contains_key("thumbnail_url"));
+        assert_eq!(doc.fields.get("secret"), Some(&json!("kept")));
+    }
 
     // ── validate_password_policy ──────────────────────────────────────
 
@@ -454,5 +733,77 @@ mod tests {
         let names = collect_api_hidden_field_names(&[group], "");
 
         assert_eq!(names, vec![FieldDenial::Flat("seo__internal_score".into())]);
+    }
+
+    /// A document with a visible `title` and a hidden `secret`.
+    fn doc_with_secret(id: &str) -> Document {
+        let mut doc = Document::new(id.to_string());
+        doc.fields.insert("title".into(), json!("Hello"));
+        doc.fields.insert("secret".into(), json!("s"));
+        doc
+    }
+
+    /// The read-access strip judges the document with its hidden fields still
+    /// present; the hidden fields are stripped after it.
+    #[test]
+    fn strip_unreadable_strips_read_denied_before_hidden_fields() {
+        let fields = vec![
+            text_field("title", false, false),
+            text_field("secret", true, false),
+        ];
+        let mut doc = doc_with_secret("d1");
+        let strip = DropTitle::default();
+
+        strip_unreadable(&strip, &strip_args(&fields), &mut doc);
+
+        assert!(
+            strip.saw_secret.get(),
+            "the read-access strip sees hidden fields"
+        );
+        assert!(doc.fields.is_empty(), "{:?}", doc.fields);
+    }
+
+    /// The map form runs the given read strip first, then removes the hidden
+    /// fields — the shape a live event's payload is stripped in.
+    #[test]
+    fn strip_unreadable_fields_strips_hidden_after_the_read_strip() {
+        let fields = vec![
+            text_field("title", false, false),
+            text_field("secret", true, false),
+        ];
+        let mut level: Map<String, Value> = Map::new();
+        level.insert("title".into(), json!("Hello"));
+        level.insert("secret".into(), json!("s"));
+        level.insert("token".into(), json!("t"));
+        let mut saw_secret = false;
+
+        strip_unreadable_fields(&fields, &mut level, |level| {
+            saw_secret = level.contains_key("secret");
+            level.remove("token");
+        });
+
+        assert!(saw_secret, "the read-access strip sees hidden fields");
+        assert_eq!(Value::Object(level), json!({ "title": "Hello" }));
+    }
+
+    /// The batch strip runs the read-access strip once over every document, then
+    /// strips the hidden fields from each.
+    #[test]
+    fn strip_unreadable_docs_strips_the_whole_batch() {
+        let fields = vec![
+            text_field("title", false, false),
+            text_field("secret", true, false),
+        ];
+        let mut docs = vec![doc_with_secret("d1"), doc_with_secret("d2")];
+        let strip = DropTitle::default();
+
+        strip_unreadable_docs(&strip, &strip_args(&fields), &mut docs);
+
+        assert!(strip.saw_secret.get(), "the batch sees hidden fields");
+        assert_eq!(strip.batches.get(), 1);
+        for doc in &docs {
+            assert!(!doc.fields.contains_key("secret"), "{:?}", doc.fields);
+            assert_eq!(doc.fields.get("title"), Some(&json!("Hello")));
+        }
     }
 }

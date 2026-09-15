@@ -18,8 +18,8 @@ use tracing::debug;
 
 use crate::{
     core::{
-        BLOCK_TYPE_KEY, DocumentFields, FieldDefinition, FieldType, HookRef, any_field,
-        field::FieldHooks,
+        BLOCK_TYPE_KEY, DocumentFields, FieldChildren, FieldDefinition, HookRef, any_field,
+        field::FieldHooks, field_children,
     },
     hooks::{
         lifecycle::{
@@ -83,8 +83,8 @@ impl FieldHookWalker<'_> {
     /// field fires its own hook.
     fn walk(&self, data: &mut DocumentFields, fields: &[FieldDefinition]) -> Result<()> {
         for field in fields {
-            match field.field_type {
-                FieldType::Group => {
+            match field_children(field) {
+                FieldChildren::Group(_) => {
                     // A hook on the group field itself fires on the whole nested
                     // object (parity with Array/Blocks); sub-field hooks then
                     // fire within the possibly hook-updated object.
@@ -92,29 +92,29 @@ impl FieldHookWalker<'_> {
                     self.walk_group(data, field)?;
                 }
 
-                FieldType::Row | FieldType::Collapsible => {
-                    self.walk(data, &field.fields)?;
+                FieldChildren::Wrapper(sub) => {
+                    self.walk(data, sub)?;
                 }
 
-                FieldType::Tabs => {
-                    for tab in &field.tabs {
+                FieldChildren::Tabs(tabs) => {
+                    for tab in tabs {
                         self.walk(data, &tab.fields)?;
                     }
                 }
 
-                FieldType::Array => {
+                FieldChildren::Array(_) => {
                     // A hook on the array field itself fires on the whole value.
                     self.run_single(data, field)?;
                     // Hooks on the array's sub-fields fire per row.
                     self.walk_array_rows(data, field)?;
                 }
 
-                FieldType::Blocks => {
+                FieldChildren::Blocks(_) => {
                     self.run_single(data, field)?;
                     self.walk_blocks_rows(data, field)?;
                 }
 
-                _ => {
+                FieldChildren::Leaf => {
                     self.run_single(data, field)?;
                 }
             }

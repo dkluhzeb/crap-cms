@@ -4,6 +4,7 @@ use anyhow::anyhow;
 
 use crate::{
     core::{Document, document::VersionSnapshot},
+    db::LocaleContext,
     service::{
         ListVersionsInput, PaginatedResult, ServiceContext, ServiceError, list_versions,
         restore_collection_version,
@@ -22,6 +23,8 @@ pub struct ListVersionsArgs {
     pub parent_id: String,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// The locale each snapshot is returned in; absent = the default locale.
+    pub locale_ctx: Option<LocaleContext>,
 }
 
 /// List a document's version history (gated by `access.versions ?? update`;
@@ -38,6 +41,7 @@ impl Operation for ListVersions {
         let input = ListVersionsInput::builder(&args.parent_id)
             .limit(args.limit)
             .offset(args.offset)
+            .locale_ctx(args.locale_ctx.as_ref())
             .build();
 
         list_versions(ctx, &input)

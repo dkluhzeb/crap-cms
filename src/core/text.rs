@@ -59,10 +59,11 @@ pub fn has_canonical_form(field_type: &FieldType) -> bool {
 /// by element.
 pub fn canonicalize_text_values<R>(data: &mut R, fields: &[FieldDefinition])
 where
-    R: JsonRoot + ?Sized,
+    R: JsonRoot,
 {
-    walk_nested_mut(data, fields, &mut Vec::new(), &mut |field, value, _| {
-        value
+    walk_nested_mut(data, fields, &mut Vec::new(), &mut |field, level, _| {
+        level
+            .root_get(&field.name)
             .and_then(|v| canonical_value(&field.field_type, v))
             .map_or(VisitAction::Keep, VisitAction::Replace)
     });

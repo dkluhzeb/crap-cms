@@ -13,10 +13,9 @@ use crate::{
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
-            coerce_json_value,
             helpers::{
-                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, quote_ident,
-                tz_column, utc_now, validate_no_null_byte_json, walk_leaf_fields,
+                column_value, companion_writes, prefixed_name, quote_ident, tz_column, utc_now,
+                validate_no_null_byte_json, walk_leaf_fields,
             },
             is_locale_locked_write, locale_write_column,
             read::find_by_id_raw,
@@ -205,6 +204,11 @@ fn collect_leaf_update(
     let data_key = prefixed_name(prefix, &field.name);
     let col_name = locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 
+    for (companion, companion_value) in companion_writes(field, &data_key, data) {
+        let column = locale_write_column(&companion, field, locale_ctx, inherited_localized)?;
+        collector.push(conn, &column, companion_value);
+    }
+
     let Some(value) = data.get(&data_key) else {
         if field.field_type == FieldType::Checkbox && !collector.skip_absent_checkboxes {
             collector.push(conn, &col_name, DbValue::Integer(0));
@@ -212,40 +216,10 @@ fn collect_leaf_update(
         return Ok(());
     };
 
-    let is_date_tz = field.has_tz_companion();
-    let tz_key = if is_date_tz {
-        Some(tz_column(&data_key))
-    } else {
-        None
-    };
-
     validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
-    let db_val = if field.is_has_many_scalar() {
-        coerce_has_many_scalar(&field.field_type, value)
-    } else if let Some(tk) = tz_key.as_ref() {
-        coerce_date_value_json(
-            &field.field_type,
-            value,
-            data.get(tk).and_then(Value::as_str),
-        )
-    } else {
-        coerce_json_value(&field.field_type, value)
-    };
-
-    collector.push(conn, &col_name, db_val);
-
-    if let Some(tk) = tz_key {
-        let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
-        let tz_val = data.get(&tk).and_then(Value::as_str).unwrap_or("");
-        let db_val = if tz_val.is_empty() {
-            DbValue::Null
-        } else {
-            DbValue::Text(tz_val.to_string())
-        };
-
-        collector.push(conn, &tz_col, db_val);
-    }
+    let zone = data.get(&tz_column(&data_key)).and_then(Value::as_str);
+    collector.push(conn, &col_name, column_value(field, value, zone));
 
     Ok(())
 }
@@ -292,10 +266,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::config::CrapConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::db::query::write::create;
+    use crate::db::query::{LocaleMode, write::create};
     use crate::db::{BoxedConnection, pool};
 
     fn setup_db(ddl: &str) -> (TempDir, BoxedConnection) {
@@ -751,6 +725,245 @@ mod tests {
 
         // Falls back to normal (treat as UTC)
         assert_eq!(doc.get_str("start_date"), Some("2024-06-15T10:00:00.000Z"));
+    }
+
+    // ── Code language companion tests ────────────────────────────────
+
+    fn code_lang_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .languages(vec!["javascript".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build()
+    }
+
+    /// Regression: an update never wrote the code field's `_lang` companion,
+    /// so changing the editor's language was silently dropped.
+    #[test]
+    fn update_code_language_companion() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE snippets (
+                id TEXT PRIMARY KEY,
+                snippet TEXT,
+                snippet_lang TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO snippets (id, snippet, snippet_lang) VALUES ('s1', 'x', 'javascript');",
+        );
+
+        let mut def = CollectionDefinition::new("snippets");
+        def.fields = vec![code_lang_field("snippet")];
+
+        let mut data = DocumentFields::new();
+        data.insert("snippet".to_string(), json!("print(1)"));
+        data.insert("snippet_lang".to_string(), json!("python"));
+
+        let doc = update(&conn, "snippets", &def, "s1", &data, None).unwrap();
+
+        let row = conn
+            .query_one("SELECT snippet_lang FROM snippets WHERE id = 's1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet_lang").unwrap(), "python");
+        assert_eq!(doc.get_str("snippet_lang"), Some("python"));
+    }
+
+    /// Regression: a localized code field's language pick edited under a
+    /// non-default locale lands in that locale's `_lang` column only.
+    #[test]
+    fn update_localized_code_language_under_non_default_locale() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE snippets (
+                id TEXT PRIMARY KEY,
+                snippet__en TEXT,
+                snippet__de TEXT,
+                snippet_lang__en TEXT,
+                snippet_lang__de TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO snippets (id, snippet__en, snippet_lang__en)
+                VALUES ('s1', 'fn main() {}', 'javascript');",
+        );
+
+        let mut def = CollectionDefinition::new("snippets");
+        let mut field = code_lang_field("snippet");
+        field.localized = true;
+        def.fields = vec![field];
+
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: true,
+            },
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("snippet".to_string(), json!("print(1)"));
+        data.insert("snippet_lang".to_string(), json!("python"));
+
+        let doc = update(&conn, "snippets", &def, "s1", &data, Some(&de)).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT snippet_lang__en, snippet_lang__de FROM snippets WHERE id = 's1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet_lang__de").unwrap(), "python");
+        assert_eq!(row.get_string("snippet_lang__en").unwrap(), "javascript");
+        assert_eq!(doc.get_str("snippet_lang"), Some("python"));
+    }
+
+    fn snippets_with_language_ddl() -> &'static str {
+        "CREATE TABLE snippets (
+            id TEXT PRIMARY KEY,
+            snippet TEXT,
+            snippet_lang TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        INSERT INTO snippets (id, snippet, snippet_lang) VALUES ('s1', 'x', 'javascript');"
+    }
+
+    /// Regression: an update that sent a code field's value without its `_lang`
+    /// key wrote NULL over the stored language pick. An absent key keeps it, as
+    /// any absent key does.
+    #[test]
+    fn update_without_code_language_keeps_the_stored_language() {
+        let (_dir, conn) = setup_db(snippets_with_language_ddl());
+
+        let mut def = CollectionDefinition::new("snippets");
+        def.fields = vec![code_lang_field("snippet")];
+
+        let mut data = DocumentFields::new();
+        data.insert("snippet".to_string(), json!("console.log(1)"));
+
+        update(&conn, "snippets", &def, "s1", &data, None).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT snippet, snippet_lang FROM snippets WHERE id = 's1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet").unwrap(), "console.log(1)");
+        assert_eq!(row.get_string("snippet_lang").unwrap(), "javascript");
+    }
+
+    /// Regression: a language key sent without the code value was ignored. An
+    /// explicit key writes the companion on its own — a null clears it.
+    #[test]
+    fn update_explicit_null_code_language_clears_it() {
+        let (_dir, conn) = setup_db(snippets_with_language_ddl());
+
+        let mut def = CollectionDefinition::new("snippets");
+        def.fields = vec![code_lang_field("snippet")];
+
+        let mut data = DocumentFields::new();
+        data.insert("snippet_lang".to_string(), Value::Null);
+
+        update(&conn, "snippets", &def, "s1", &data, None).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT snippet, snippet_lang IS NULL AS cleared FROM snippets WHERE id = 's1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet").unwrap(), "x");
+        assert_eq!(row.get_i64("cleared").unwrap(), 1);
+    }
+
+    /// A date's zone is bound to its value: a date written without a zone is
+    /// read as UTC, so the stored zone is cleared with it.
+    #[test]
+    fn update_date_without_zone_clears_the_stored_zone() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO events (id, start_date, start_date_tz)
+                VALUES ('e1', '2024-01-01T12:00:00.000Z', 'Europe/Berlin');",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!("2024-06-15T10:00"));
+
+        update(&conn, "events", &def, "e1", &data, None).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT start_date_tz IS NULL AS cleared FROM events WHERE id = 'e1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_i64("cleared").unwrap(), 1);
+    }
+
+    /// A shared code field edited under a non-default locale is locked as a
+    /// whole: neither its value nor its `_lang` companion overwrites the
+    /// canonical default-locale columns.
+    #[test]
+    fn update_shared_code_language_is_locked_under_non_default_locale() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE snippets (
+                id TEXT PRIMARY KEY,
+                snippet TEXT,
+                snippet_lang TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO snippets (id, snippet, snippet_lang) VALUES ('s1', 'x', 'javascript');",
+        );
+
+        let mut def = CollectionDefinition::new("snippets");
+        def.fields = vec![code_lang_field("snippet")];
+
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: true,
+            },
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("snippet".to_string(), json!("print(1)"));
+        data.insert("snippet_lang".to_string(), json!("python"));
+
+        update(&conn, "snippets", &def, "s1", &data, Some(&de)).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT snippet, snippet_lang FROM snippets WHERE id = 's1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet").unwrap(), "x");
+        assert_eq!(row.get_string("snippet_lang").unwrap(), "javascript");
     }
 
     // Regression test for: update on a non-existent id used to bubble

@@ -74,14 +74,16 @@ pub fn draft_document(args: &DraftDocumentArgs<'_>) -> Result<Document> {
         locale_ctx,
     } = args;
 
-    let mut doc = ops::document_from_snapshot(id, snapshot).unwrap_or_else(|| existing.clone());
+    // A snapshot holds every locale's decorated column. It is read for the
+    // locale the write was made under, so the response has the same shape as
+    // any other write's — and doesn't hand back translations the caller never
+    // asked for.
+    let mut doc = ops::snapshot_read_document(id, snapshot, fields, locale_ctx)?
+        .unwrap_or_else(|| existing.clone());
 
-    // A snapshot holds every locale's decorated column. Resolve the one the
-    // write was made under and drop the rest, so the response has the same
-    // shape as any other write's — and doesn't hand back translations the
-    // caller never asked for.
-    ops::resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
-
+    // `draft`, not the row's status: a live event decides who may see a change
+    // from `_status`, and a draft save's content must reach only those who may
+    // see drafts — even on a published document.
     doc.fields
         .insert("_status".to_string(), Value::String("draft".to_string()));
 

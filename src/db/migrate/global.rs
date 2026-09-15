@@ -6,18 +6,17 @@ use tracing::info;
 
 use crate::{
     config::LocaleConfig,
-    core::collection::GlobalDefinition,
+    core::{FieldDefinition, collection::GlobalDefinition},
     db::{
         DbConnection,
+        migrate::{
+            collection::append_default_value_for,
+            helpers::{
+                ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
+                reconcile_scalar_list_column, sync_join_tables, sync_versions_table, table_exists,
+            },
+        },
         query::helpers::{global_table, locale_column, quote_ident},
-    },
-};
-
-use crate::db::migrate::{
-    collection::append_default_value_for,
-    helpers::{
-        ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-        reconcile_scalar_list_column, sync_join_tables, sync_versions_table, table_exists,
     },
 };
 
@@ -50,18 +49,12 @@ fn build_col_def(
     col_name: &str,
     col_type: &str,
     companion_text: bool,
-    field: &crate::core::FieldDefinition,
-    db_kind: &str,
+    field: &FieldDefinition,
 ) -> String {
     let mut col = format!("{} {col_type}", quote_ident(col_name));
 
     if !companion_text {
-        append_default_value_for(
-            &mut col,
-            field.default_value.as_ref(),
-            &field.field_type,
-            db_kind,
-        );
+        append_default_value_for(&mut col, field);
     }
 
     col
@@ -90,7 +83,6 @@ fn create_global_table(
                     col_type,
                     spec.companion_text,
                     spec.field,
-                    conn.kind(),
                 ));
             }
         } else {
@@ -99,7 +91,6 @@ fn create_global_table(
                 col_type,
                 spec.companion_text,
                 spec.field,
-                conn.kind(),
             ));
         }
     }
@@ -232,7 +223,6 @@ fn add_field_column_if_missing(
         spec.ddl_type(conn),
         spec.companion_text,
         spec.field,
-        conn.kind(),
     );
     add_column_if_missing(conn, table_name, col_name, &col_def, existing)
 }
@@ -261,6 +251,42 @@ mod tests {
     use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
+    use crate::db::{DbValue, query::helpers::column_value};
+    use serde_json::json;
+
+    /// Regression: a global's has-many default became the column DEFAULT
+    /// through the single-value coercion, so a number list stored nothing where
+    /// a write of the same default stores the list.
+    #[test]
+    fn global_has_many_default_is_stored_as_its_write_stores_it() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global(
+            "settings",
+            vec![
+                FieldDefinition::builder("scores", FieldType::Number)
+                    .has_many(true)
+                    .default_value(json!([1, 2]))
+                    .build(),
+            ],
+        );
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        conn.execute_batch("INSERT INTO _global_settings (id) VALUES ('with_default')")
+            .unwrap();
+        let row = conn
+            .query_one(
+                "SELECT scores FROM _global_settings WHERE id = 'with_default'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
+            column_value(&def.fields[0], &json!([1, 2]), None)
+        );
+    }
 
     fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
         let mut def = GlobalDefinition::new(slug);

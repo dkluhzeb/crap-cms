@@ -13,16 +13,20 @@
 
 use std::borrow::Cow;
 
-use crate::{
-    core::{
-        CollectionDefinition, Document, DocumentFields,
-        job::{JobRun, SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
-    },
-    db::{DbPool, query},
-    service::{ServiceError, collections::delete_scope},
-};
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string};
+
+use crate::{
+    config::LocaleConfig,
+    core::{
+        CollectionDefinition, Document, DocumentFields, Registry,
+        job::{JobRun, SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
+    },
+    db::{AccessResult, DbConnection, DbPool, LocaleContext, query},
+    hooks::AccessCheckInput,
+    service::{AppInfra, ServiceError, collections::delete_scope},
+};
 
 /// Which bulk operation a `_system_bulk` run executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +195,34 @@ fn gate_definition<'a>(
     Cow::Borrowed(def)
 }
 
+/// Load the user a run was queued by, for the queue-time gate — in the default
+/// locale.
+///
+/// A DB error resolving the principal must PROPAGATE: swallowing it into
+/// `None` would run the queue-time access gate with an anonymous principal on
+/// a transient failure. (Execution re-gates fail-closed either way; this keeps
+/// the early answer honest too.)
+fn resolve_queuing_user(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+    queued_by: &QueuedBy,
+) -> Result<Option<Document>, ServiceError> {
+    let QueuedBy::User { id, collection, .. } = queued_by else {
+        return Ok(None);
+    };
+    let Some(user_def) = registry.get_collection(collection) else {
+        return Ok(None);
+    };
+
+    // In the default locale, as every internal read of a possibly-localized
+    // row is: a localized auth collection has no bare columns to select.
+    let locale_ctx = LocaleContext::default_for(locale_config);
+
+    query::find_by_id(conn, collection, user_def, id, locale_ctx.as_ref())
+        .map_err(|e| ServiceError::Internal(e.context("resolving queuing user")))
+}
+
 /// The collection-level access gate, run at QUEUE time so a caller who may
 /// not perform the operation is refused synchronously instead of being
 /// handed a `job_id` for work that can only fail. Execution still runs the
@@ -201,28 +233,15 @@ fn gate_definition<'a>(
 ///
 /// [`ServiceError::AccessDenied`] when the collection gate denies.
 pub fn check_queue_access(
-    runner: &crate::hooks::HookRunner,
-    conn: &dyn crate::db::DbConnection,
-    registry: &crate::core::Registry,
-    def: &crate::core::CollectionDefinition,
+    infra: &AppInfra,
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
     data: &BulkJobData,
 ) -> Result<(), ServiceError> {
     // Resolve the queuing user HERE rather than in the codec: surfaces call
     // service functions, never the query layer directly (the surface-parity
     // test enforces exactly this).
-    let user = match &data.queued_by {
-        QueuedBy::User { id, collection, .. } => match registry.get_collection(collection) {
-            // A DB error resolving the principal must PROPAGATE:
-            // swallowing it into `None` would run the queue-time access
-            // gate with an anonymous principal on a
-            // transient failure. (Execution re-gates fail-closed either
-            // way; this keeps the early answer honest too.)
-            Some(user_def) => query::find_by_id(conn, collection, user_def, id, None)
-                .map_err(|e| ServiceError::Internal(e.context("resolving queuing user")))?,
-            None => None,
-        },
-        QueuedBy::System => None,
-    };
+    let user = resolve_queuing_user(conn, &infra.registry, &infra.locale_config, &data.queued_by)?;
 
     let gate_def = gate_definition(def, data);
     let (operation, access_fn) = match data.op {
@@ -236,9 +255,10 @@ pub fn check_queue_access(
         }
     };
 
-    let result = runner
+    let result = infra
+        .hook_runner
         .check_access(
-            &crate::hooks::AccessCheckInput::builder(operation, &data.collection)
+            &AccessCheckInput::builder(operation, &data.collection)
                 .access(access_fn)
                 .user(user.as_ref())
                 .build(),
@@ -249,8 +269,8 @@ pub fn check_queue_access(
     match result {
         // A row-filter result is not a denial: the per-document gate at
         // execution applies it. Only an outright denial is refused here.
-        crate::db::AccessResult::Allowed | crate::db::AccessResult::Constrained(_) => Ok(()),
-        crate::db::AccessResult::Denied => Err(ServiceError::AccessDenied(format!(
+        AccessResult::Allowed | AccessResult::Constrained(_) => Ok(()),
+        AccessResult::Denied => Err(ServiceError::AccessDenied(format!(
             "{operation} access denied for collection '{}'",
             data.collection
         ))),
@@ -274,8 +294,8 @@ pub fn queue_bulk(pool: &DbPool, data: &BulkJobData) -> Result<JobRun, ServiceEr
     // rather than relying on a config default an operator can change.
     let max_attempts = 1;
 
-    let json = serde_json::to_string(data)
-        .map_err(|e| ServiceError::Internal(anyhow::anyhow!("bulk job serialize: {e}")))?;
+    let json =
+        to_string(data).map_err(|e| ServiceError::Internal(anyhow!("bulk job serialize: {e}")))?;
 
     // The write pool: this INSERT competes with the batch writes themselves.
     let conn = pool.write().map_err(ServiceError::Internal)?;
@@ -297,6 +317,55 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::{
+        config::{CrapConfig, DatabaseConfig},
+        core::{FieldDefinition, FieldType, collection::Auth},
+        db::{migrate, pool},
+    };
+
+    /// Regression: the queue-time gate loaded the queuing user without a
+    /// locale, and a read of an auth collection with a localized field selects
+    /// columns that don't exist — so queueing failed for its users.
+    #[test]
+    fn the_queuing_user_is_read_in_the_default_locale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+        let mut users = CollectionDefinition::new("users");
+        users.auth = Some(Auth::new(true));
+        users.fields = vec![
+            FieldDefinition::builder("bio", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        let shared = Registry::shared();
+        shared.write().unwrap().register_collection(users);
+        let registry = Registry::snapshot(&shared);
+        migrate::sync_all(&db_pool, &registry, &locale).unwrap();
+        let conn = db_pool.get().unwrap();
+        conn.execute("INSERT INTO users (id) VALUES ('u1')", &[])
+            .unwrap();
+
+        let queued_by = QueuedBy::User {
+            id: "u1".to_string(),
+            collection: "users".to_string(),
+            session_version: 0,
+        };
+        let user = resolve_queuing_user(&conn, &registry, &locale, &queued_by).unwrap();
+
+        assert_eq!(user.map(|u| u.id.to_string()), Some("u1".to_string()));
+    }
 
     fn delete_job(force_hard_delete: bool) -> BulkJobData {
         BulkJobData {
@@ -359,10 +428,10 @@ mod tests {
             force_hard_delete: false,
         };
 
-        let s = serde_json::to_string(&data).unwrap();
+        let s = to_string(&data).unwrap();
         assert!(s.contains("\"where\""), "wire spelling: {s}");
 
-        let back: BulkJobData = serde_json::from_str(&s).unwrap();
+        let back: BulkJobData = from_str(&s).unwrap();
         assert_eq!(back.op, BulkOpKind::UpdateMany);
         assert!(matches!(back.queued_by, QueuedBy::User { .. }));
         assert!(back.where_clause.is_some());

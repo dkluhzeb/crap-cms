@@ -18,7 +18,7 @@ use crate::{
 use super::ServiceError;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
-    EmptyPassword, collect_api_hidden_field_names, enforce_access_constraints,
+    EmptyPassword, enforce_access_constraints, hydrate_reported, strip_reported,
     validate_password_policy,
 };
 use crate::service::hooks::WriteHooks;
@@ -236,7 +236,11 @@ pub(crate) fn update_document_in_conn(
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
 
-    let doc = if is_draft && def.has_versions() {
+    // A draft save reports its snapshot, read for the write's locale with its own
+    // rows. A published write reports the stored row, its join fields (arrays,
+    // blocks, has-many) hydrated BEFORE after-change hooks so they can react to
+    // nested data, not just scalar columns.
+    let mut doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
     } else {
         let opts = PersistOptions::builder()
@@ -245,21 +249,10 @@ pub(crate) fn update_document_in_conn(
             .locale_config(input.locale_ctx.map(|c| &c.config))
             .build();
 
-        persist_update(ctx, id, &final_ctx.to_value_map(), &opts)?
+        let mut doc = persist_update(ctx, id, &final_ctx.to_value_map(), &opts)?;
+        hydrate_reported(ctx, &mut doc, input.locale_ctx)?;
+        doc
     };
-
-    // Hydrate join fields (arrays, blocks, has-many) BEFORE after-change hooks so
-    // they can react to nested array/blocks/has-many data, not just scalar columns.
-    let mut doc = doc;
-
-    query::hydrate_document(
-        conn,
-        ctx.slug,
-        &def.fields,
-        &mut doc,
-        None,
-        input.locale_ctx,
-    )?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -290,9 +283,7 @@ pub(crate) fn update_document_in_conn(
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.
-    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
-    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
+    strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
     Ok((doc, after_ctx))
 }

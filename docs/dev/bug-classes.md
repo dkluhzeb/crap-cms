@@ -37,8 +37,8 @@ chokepoint each fix lands in. Patching copies is what kept the Round 15
 focused reviews finding new instances of the same cluster.
 
 Fix discipline is unchanged: regression test first, then fix, then
-CHANGELOG. New: the CHANGELOG entry (or commit message) names the class
-ID it belongs to when one applies.
+CHANGELOG. The commit message names the class ID it belongs to when one
+applies; CHANGELOG entries stay self-contained and never cite class IDs.
 
 **Convergence metric:** the count of UNGUARDED/PARTIAL rows (drive
 down), and the rate of genuinely-new rows per audit round (should trend
@@ -132,6 +132,7 @@ most).
 | P9 | Backend/platform-specific assumption breaks the sibling target (SQLite-isms on PG, Unix-isms on Windows) | `DbConnection` trait (`ddl_type`, `quote_ident`, `now_expr`, `greatest_expr`, `supports_fts()`); CI runs `sqlite+postgres` and `postgres-only` build+clippy+suite jobs; live-server PG smoke and Windows remain manual | PARTIAL |
 | P10 | Create, alter, and table-rebuild paths provision differently (rebuild dropped FK/PK constraints) | `collect_system_columns` chokepoint; rebuild must preserve constraints — no pin | PARTIAL |
 | P11 | Process-local state assumed cluster-global | redis backends + cron dedup + `SKIP LOCKED`; `deployment/multi-server.md` is the operator checklist, now pinned by `multi_server_doc_covers_every_node_local_subsystem` (8 subsystems incl. the newly documented per-node MCP session labels); new node-local state = add mechanism + doc row + pin entry | GUARDED |
+| P12 | Copies of the value ↔ column path (snapshot build, draft save, draft read, version restore, per-read row decode, per-reader locale choice) disagree with the published path | chokepoints: `column_value` / `stored_document_values` (encode, array rows included), `decode_row` / `decode_value` (decode, array rows included), `LocaleContext::access_locale` / `read_locale` (locale choice); round-trip pin `tests/locale_value_matrix.rs` — a fresh draft reads as the published document in every locale mode, a restore reproduces every locale, lists read typed at the top level, in groups and in array rows | GUARDED |
 
 ## M — Mechanism coverage
 
@@ -1003,6 +1004,110 @@ memories; the load-bearing ones:
     each mode's caveats read before it is recommended.
   Convergence after the third focused review: still not quiet; the streak
   stays 0.
+  - **Chokepoint pass after the third focused review.** The three focused
+    reviews kept finding one cluster: copies of the value ↔ column path
+    disagreeing with the published read. Instead of another review, the
+    copies were merged (new class P12): one encoding (`column_value`, used by
+    create, update, restore and array rows; `stored_document_values` puts a
+    draft save's edit in stored form), one decoding (`decode_row`, used by every
+    row read, the credential lookups and the snapshot build; its `decode_value`
+    also decodes array row columns), and one locale choice (`access_locale` /
+    `read_locale`, used by the select, the write column, join hydration,
+    filters and their subqueries, hook locale and the draft read). The
+    round-trip matrix written first was red on four instances: a
+    `locale = "all"` read of a localized multi-value field returned `[]`
+    (pre-existing, the grouping ran before the list decode); a draft save
+    stored values as sent, so drafts read checkboxes, JSON and timezone dates
+    differently from the published read (pre-existing); a multi-value sub-field
+    of an array row read back as its stored JSON text (pre-existing — array
+    rows decoded their columns by hand); a locale that isn't configured was
+    read differently by the select and by join rows, filters and the draft read
+    (latent — requests validate the locale).
+  - **Copies sweep after the chokepoint pass** (4 search agents, every claim
+    verified in code before fixing; each fix landed in a chokepoint, test
+    first). Fixed: version history returned stored snapshots, leaking hidden
+    localized fields in MCP `list_versions` (snapshots now read as documents
+    through `snapshot_read_document` + the read strips); draft-save, restore and
+    unpublish reported the wrong document (`hydrate_reported`/`strip_reported`,
+    restore re-reads after its writes, and the draft `_status = draft` stamp
+    kept on purpose — events route by it); filters, sorts, FTS, ref counts and
+    back-references each decided a column's localization on their own
+    (`column_is_localized`/`stored_columns`); a snapshot copied plain group
+    columns flat (`per_locale_columns`); `select` dropped `_tz`/`_lang`
+    companions and the write strip `_lang` (`column_belongs_to`); the MCP schema
+    and `make hook` walked wrappers one level; the unique check, import, column
+    defaults and number-list validation encoded values their own way
+    (`column_value`, `number_element`); polymorphic references and admin number
+    tags were parsed by copies (`poly_ref::parse`, `tag_values`); the admin
+    checkbox form and list cell accepted fewer spellings than the write stores
+    as checked (`parse_truthy`, `json_truthy`), and date-picker values, form strings and default locale
+    contexts were rebuilt per site (`date_picker_values`,
+    `value_to_form_string`, `LocaleContext::default_for`); label reads
+    skipped the read strips and read the default locale; image conversion,
+    upload REST writes and the CLI purge bypassed the write reporting
+    (`report_conversion`, `.infra()`, `purge_document`); the bulk queue read a
+    localized auth collection without a locale; Login/Me skipped read hooks
+    (`read_own_document`); values inside JSON-stored rows were stored as sent
+    (`nested_value` on the shared `walk_nested_mut`, which now hands its visitor
+    the containing object). UNCOMMITTED.
+  - **Decisions in the sweep.** Version snapshots read as documents (default
+    locale). Nested values are typed; "missing checkbox is unchecked" applies at
+    admin form ingress only, since block rows merge with the stored row and a
+    write-denied value must survive. Picker and labels read the editor locale.
+    Image conversion is a reported system write (event, cache, `updated_at`; no
+    hooks or version). Login/Me run the read pipeline without the collection
+    read gate. One-time conversions are listed in `migrate::one_time`, removable
+    after 0.1.0. Lesson for the program: search for copies by kind (value
+    conversion, locale decision, naming/walks, read/write pipeline) — the copies
+    a review finds one at a time cluster by kind, and a shared primitive that
+    lacks one capability (the walker's sibling access) breeds copies until it
+    gains it. UNCOMMITTED. Process rule added to the triage section:
+    check for a chokepoint before any concrete fix.
+  - **Review of the uncommitted pass** (4 read-only reviewers by area, every
+    finding verified in code). 1 HIGH, ~10 MED, ~12 LOW, ~15 NIT; no new class.
+    HIGH (introduced by the pass, never released): Login/Me returned the user
+    unstripped when `before_read` failed — the new read pipeline made the
+    strip fallible and the caller only logged. Decision: fail the request, and
+    `read_own_document` clears the fields on error so no caller can leak.
+    MED: the scheduled trash purge still hand-rolled the hard delete (P row —
+    routed through `purge_document`); the conversion event had its own shape
+    (one "reported shape" step); a code
+    field's `_lang` companion was created but never stored or read
+    (pre-existing — one companion list); column DEFAULTs encoded by type, not
+    field; the admin restore-confirm read raw snapshots outside the service.
+    Decisions: numbers trim surrounding whitespace everywhere; any non-zero
+    number checks a checkbox everywhere (column and rows shared one rule
+    only for strings). Lesson: a chokepoint that makes a formerly infallible
+    step fallible must fail closed at the chokepoint itself, not rely on each
+    caller's error handling. Refuted by its regression test: "undelete reports
+    without rows" (`query::find_by_id` already hydrates). Fixed test-first by
+    area. UNCOMMITTED.
+  - **Architecture review of the two passes** (3 read-only lenses: layering,
+    chokepoint completeness, decisions). Layering held except one structural
+    inversion (`core::field::companion` importing the suffix constants from
+    `db` — moved core-ward, `db` re-exports). Completeness: the pass itself
+    left copies of the kind it removes — import carried `_tz` but not `_lang`
+    (data loss on export/import, fixed test-first), the draft-snapshot store and
+    the admin wrapper-nested code enrichment were `_tz`-only, upload `sizes`
+    were folded at 9 sites (now `core::upload::shape_read_document`), the
+    read/write hook traits carried the same strip bodies (now one
+    `FieldReadStrip` trait), live events hand-rolled the strip pair, two
+    `is_truthy` copies had already diverged (server condition vs admin form on
+    `{}`), the in-memory filter had its own number/bool readings. Decisions:
+    Login/Me hook failure now maps like a Find (was INTERNAL vs
+    INVALID_ARGUMENT — same cause, two frozen codes); checkbox input is
+    validated on every surface (user decision: strict, `"2"` == `2`);
+    version reads take a `locale` (the read-shape snapshot had made non-default
+    locales unreachable); populate cache key carries the fallback; replacing an
+    upload's file cancels its queued conversions; a conversion finishing after
+    a purge removes its orphan file; a nested group of only unchecked boxes now
+    saves. Guard added: `tests/chokepoint_copies.rs` — a source scan per
+    chokepoint (locale contexts, hidden strip, number parsing, hard delete,
+    admin locale, companion spellings, sizes shaping) with reviewed allowlists,
+    since none of the new chokepoints had an anti-copy guard. Lesson: a
+    chokepoint pass needs its own completeness review — the new primitive's
+    call sites are exactly where the next copies are written — and a scan
+    guard the day the chokepoint lands, not later. UNCOMMITTED.
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

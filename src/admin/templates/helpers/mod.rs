@@ -18,7 +18,7 @@ use std::{cmp::Ordering, sync::Arc};
 use handlebars::Handlebars;
 use serde_json::Value;
 
-use crate::{admin::Translations, hooks::HookRunner};
+use crate::{admin::Translations, core::parse_number, hooks::HookRunner};
 
 use self::admin_i18n::AdminI18nHelper;
 use self::and::AndHelper;
@@ -78,23 +78,13 @@ pub(super) fn register_helpers(
     }
 }
 
-/// Check if a JSON value is "truthy" (not null, not false, not empty string, not 0).
-pub(super) fn is_truthy(val: &Value) -> bool {
-    match val {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(_) => true,
-    }
-}
-
-/// Try to extract a float from a JSON value.
+/// Try to extract a float from a JSON value — a number as itself, a string
+/// through [`parse_number`], so a value typed with surrounding whitespace
+/// compares as the number it spells.
 pub(super) fn as_f64(val: &Value) -> Option<f64> {
     match val {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse::<f64>().ok(),
+        Value::String(s) => parse_number(s),
         _ => None,
     }
 }
@@ -124,29 +114,6 @@ mod tests {
 
     use super::*;
 
-    // --- is_truthy tests ---
-
-    #[test]
-    fn is_truthy_edge_cases() {
-        assert!(!is_truthy(&Value::Null));
-        assert!(!is_truthy(&json!(false)));
-        assert!(is_truthy(&json!(true)));
-        assert!(!is_truthy(&json!(0)));
-        assert!(is_truthy(&json!(1)));
-        assert!(is_truthy(&json!(-1)));
-        assert!(!is_truthy(&json!("")));
-        assert!(is_truthy(&json!("hello")));
-        assert!(!is_truthy(&json!([])));
-        assert!(is_truthy(&json!([1])));
-        assert!(is_truthy(&json!({})));
-    }
-
-    #[test]
-    fn is_truthy_float_zero() {
-        assert!(!is_truthy(&json!(0.0)));
-        assert!(is_truthy(&json!(0.1)));
-    }
-
     // --- as_f64 tests ---
 
     #[test]
@@ -154,6 +121,9 @@ mod tests {
         assert_eq!(as_f64(&json!(42)), Some(42.0));
         assert_eq!(as_f64(&json!(3.15)), Some(3.15));
         assert_eq!(as_f64(&json!("2.5")), Some(2.5));
+        // Surrounding whitespace is ignored, as everywhere a number is read
+        // from text.
+        assert_eq!(as_f64(&json!(" 2.5 ")), Some(2.5));
         assert_eq!(as_f64(&json!("not_a_number")), None);
         assert_eq!(as_f64(&json!(null)), None);
         assert_eq!(as_f64(&json!(true)), None);

@@ -10,14 +10,17 @@ use super::system_columns::{
     AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
     VERIFY_EMAIL_COLUMNS,
 };
-use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType, collection::MfaMode},
+    core::{
+        CollectionDefinition, FieldDefinition, FieldType,
+        collection::{Auth, MfaMode},
+    },
     db::{
-        DbConnection,
+        DbConnection, DbValue,
         migrate::helpers::collect_column_specs,
-        query::helpers::{locale_column, quote_ident},
+        query::helpers::{column_value, locale_column, quote_ident},
+        types::real_to_json_number,
     },
 };
 
@@ -26,9 +29,7 @@ struct ColumnConstraints<'a> {
     required: bool,
     unique: bool,
     soft_delete: bool,
-    default_value: Option<&'a Value>,
-    field_type: &'a FieldType,
-    db_kind: &'a str,
+    field: &'a FieldDefinition,
 }
 
 /// Build a column definition string with type, constraints, and default.
@@ -46,12 +47,7 @@ fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstrai
         col.push_str(" UNIQUE");
     }
 
-    append_default_value_for(
-        &mut col,
-        constraints.default_value,
-        constraints.field_type,
-        constraints.db_kind,
-    );
+    append_default_value_for(&mut col, constraints.field);
 
     col
 }
@@ -103,9 +99,7 @@ fn collect_field_columns(
                         required: is_required,
                         unique: spec.field.unique,
                         soft_delete: def.soft_delete,
-                        default_value: spec.field.default_value.as_ref(),
-                        field_type: &spec.field.field_type,
-                        db_kind: conn.kind(),
+                        field: spec.field,
                     };
                     columns.push(build_column_def(&col_name, col_type, &c));
                 }
@@ -117,9 +111,7 @@ fn collect_field_columns(
                 required: spec.field.required && !def.has_drafts(),
                 unique: spec.field.unique,
                 soft_delete: def.soft_delete,
-                default_value: spec.field.default_value.as_ref(),
-                field_type: &spec.field.field_type,
-                db_kind: conn.kind(),
+                field: spec.field,
             };
             columns.push(build_column_def(&spec.col_name, col_type, &c));
         }
@@ -170,40 +162,33 @@ fn collect_system_columns(
     }
 }
 
-/// Append a DEFAULT value clause to a column definition string.
-#[cfg(test)]
-pub(crate) fn append_default_value(
-    col: &mut String,
-    default_value: Option<&Value>,
-    field_type: &FieldType,
-) {
-    append_default_value_for(col, default_value, field_type, "sqlite");
-}
-
-/// Append a DEFAULT clause. Uses `0`/`1` for booleans (INTEGER on all backends).
-pub(crate) fn append_default_value_for(
-    col: &mut String,
-    default_value: Option<&Value>,
-    field_type: &FieldType,
-    _db_kind: &str,
-) {
-    if let Some(default) = default_value {
-        warn_default_type_mismatch(default, field_type);
-
-        match default {
-            Value::String(s) => {
-                let _ = write!(col, " DEFAULT '{}'", s.replace('\'', "''"));
-            }
-            Value::Number(n) => {
-                let _ = write!(col, " DEFAULT {n}");
-            }
-            Value::Bool(b) => {
-                let _ = write!(col, " DEFAULT {}", i32::from(*b));
-            }
-            _ => {}
+/// Append the DEFAULT clause of `field`'s column: its default value, or `0` for
+/// a checkbox without one. Checkbox values are `0`/`1` (INTEGER on all
+/// backends).
+pub(crate) fn append_default_value_for(col: &mut String, field: &FieldDefinition) {
+    let Some(default) = field.default_value.as_ref() else {
+        if field.field_type == FieldType::Checkbox {
+            col.push_str(" DEFAULT 0");
         }
-    } else if *field_type == FieldType::Checkbox {
-        col.push_str(" DEFAULT 0");
+        return;
+    };
+
+    warn_default_type_mismatch(default, &field.field_type);
+
+    // The literal is the value a write of the default stores — a date
+    // normalized, text canonical, a has-many list as its canonical JSON — so a
+    // row created without the field holds the same form as one written with it.
+    match column_value(field, default, None) {
+        DbValue::Text(s) => {
+            let _ = write!(col, " DEFAULT '{}'", s.replace('\'', "''"));
+        }
+        DbValue::Integer(i) => {
+            let _ = write!(col, " DEFAULT {i}");
+        }
+        DbValue::Real(r) => {
+            let _ = write!(col, " DEFAULT {}", real_to_json_number(r));
+        }
+        DbValue::Null | DbValue::Blob(_) => {}
     }
 }
 
@@ -236,11 +221,29 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::collection::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType};
-    use crate::db::migrate::collection::sync_collection_table;
-    use crate::db::migrate::collection::test_helpers::*;
-    use crate::db::migrate::helpers::{get_table_column_types, get_table_columns};
+    use crate::{
+        core::{FieldTab, collection::*},
+        db::{
+            migrate::{
+                collection::{sync_collection_table, test_helpers::*},
+                helpers::{get_table_column_types, get_table_columns},
+            },
+            query::helpers::coerce_value,
+        },
+    };
+
+    /// The DEFAULT clause `field_type` with `default` appends to `col`.
+    fn with_default(col: &str, field_type: FieldType, default: Option<Value>) -> String {
+        let mut builder = FieldDefinition::builder("f", field_type);
+        if let Some(default) = default {
+            builder = builder.default_value(default);
+        }
+
+        let mut col = col.to_string();
+        append_default_value_for(&mut col, &builder.build());
+
+        col
+    }
 
     /// Create a collection table and return its column names.
     fn create_and_columns(
@@ -254,6 +257,61 @@ mod tests {
         create_collection_table(&conn, slug, def, locale).unwrap();
 
         get_table_columns(&conn, slug).unwrap()
+    }
+
+    /// Regression: a date default became the column DEFAULT as written, while a
+    /// write stores dates normalized — a row created without the field held a
+    /// different form than one written with the same value.
+    #[test]
+    fn a_date_default_is_stored_normalized() {
+        let col = with_default(
+            "\"starts\" TEXT",
+            FieldType::Date,
+            Some(json!("2026-01-01")),
+        );
+
+        let DbValue::Text(stored) = coerce_value(&FieldType::Date, "2026-01-01") else {
+            panic!("a date encodes as text");
+        };
+        assert_eq!(col, format!("\"starts\" TEXT DEFAULT '{stored}'"));
+    }
+
+    /// Regression: a has-many default became the column DEFAULT through the
+    /// single-value coercion — a number list stored nothing, a text list its
+    /// JSON as sent — where a write of the same default stores the canonical
+    /// list.
+    #[test]
+    fn a_has_many_default_is_stored_as_its_write_stores_it() {
+        for (field_type, default) in [
+            (FieldType::Number, json!([1, 2])),
+            (FieldType::Text, json!([1, "b"])),
+        ] {
+            let def = simple_collection(
+                "posts",
+                vec![
+                    FieldDefinition::builder("items", field_type)
+                        .has_many(true)
+                        .default_value(default.clone())
+                        .build(),
+                ],
+            );
+            let (_dir, pool) = in_memory_pool();
+            let conn = pool.get().unwrap();
+            create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+            conn.execute("INSERT INTO posts (id) VALUES ('a')", &[])
+                .unwrap();
+            let row = conn
+                .query_one("SELECT items FROM posts WHERE id = 'a'", &[])
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(
+                row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
+                column_value(&def.fields[0], &default, None),
+                "{default}"
+            );
+        }
     }
 
     #[test]
@@ -714,37 +772,56 @@ mod tests {
 
     #[test]
     fn append_default_string() {
-        let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, Some(&json!("hello")), &FieldType::Text);
-        assert!(col.contains("DEFAULT 'hello'"));
+        let col = with_default("name TEXT", FieldType::Text, Some(json!("hello")));
+        assert_eq!(col, "name TEXT DEFAULT 'hello'");
     }
 
     #[test]
     fn append_default_number() {
-        let mut col = "count REAL".to_string();
-        append_default_value(&mut col, Some(&json!(42)), &FieldType::Number);
-        assert!(col.contains("DEFAULT 42"));
+        let col = with_default("count REAL", FieldType::Number, Some(json!(42)));
+        assert_eq!(col, "count REAL DEFAULT 42");
     }
 
     #[test]
     fn append_default_bool() {
-        let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, Some(&json!(true)), &FieldType::Checkbox);
-        assert!(col.contains("DEFAULT 1"));
+        let col = with_default("active INTEGER", FieldType::Checkbox, Some(json!(true)));
+        assert_eq!(col, "active INTEGER DEFAULT 1");
+    }
+
+    /// A number default on a checkbox is checked unless it is zero, as a write
+    /// of it stores.
+    #[test]
+    fn append_default_checkbox_number() {
+        for (default, literal) in [(json!(2), 1), (json!(0.5), 1), (json!(0), 0)] {
+            let col = with_default("active INTEGER", FieldType::Checkbox, Some(default));
+            assert_eq!(col, format!("active INTEGER DEFAULT {literal}"));
+        }
     }
 
     #[test]
     fn append_default_checkbox_none() {
-        let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, None, &FieldType::Checkbox);
-        assert!(col.contains("DEFAULT 0"));
+        let col = with_default("active INTEGER", FieldType::Checkbox, None);
+        assert_eq!(col, "active INTEGER DEFAULT 0");
     }
 
     #[test]
     fn append_default_none_non_checkbox() {
-        let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, None, &FieldType::Text);
-        assert!(!col.contains("DEFAULT"));
+        let col = with_default("name TEXT", FieldType::Text, None);
+        assert_eq!(col, "name TEXT");
+    }
+
+    /// A has-many default is the canonical JSON list a write stores.
+    #[test]
+    fn append_default_has_many_list() {
+        let field = FieldDefinition::builder("scores", FieldType::Number)
+            .has_many(true)
+            .default_value(json!(["1", 2.0]))
+            .build();
+        let mut col = "scores TEXT".to_string();
+
+        append_default_value_for(&mut col, &field);
+
+        assert_eq!(col, "scores TEXT DEFAULT '[1,2]'");
     }
 
     #[test]

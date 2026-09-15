@@ -9,7 +9,6 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::admin::handlers::shared::HxNav;
 use crate::{
     admin::{
         AdminState,
@@ -18,11 +17,12 @@ use crate::{
             field::FieldContext, page::globals::GlobalEditPage,
         },
         handlers::shared::{
-            EnrichOptions, PageRequest, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
-            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
-            require_global, service_error_to_admin_response, split_sidebar_fields,
+            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+            build_locale_template_data, compute_denied_read_fields, editor_locale_ctx,
+            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, get_user_doc,
+            is_non_default_locale, paths, render_page, require_global,
+            service_error_to_admin_response, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, DocumentFields, FieldDenial, collection::GlobalDefinition},
@@ -58,6 +58,7 @@ fn prepare_edit_fields(
         non_default_locale,
     );
 
+    let enrich_locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale);
     enrich_field_contexts(
         &mut fields,
         &def.fields,
@@ -66,6 +67,7 @@ fn prepare_edit_fields(
         &EnrichOptions::builder(&HashMap::new())
             .non_default_locale(non_default_locale)
             .user(get_user_doc(auth_user))
+            .locale_ctx(enrich_locale_ctx.as_ref())
             .build(),
     );
 

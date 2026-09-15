@@ -1,18 +1,20 @@
 //! Find a specific version by ID.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
-    core::{FieldDenial, document::VersionSnapshot},
-    db::{AccessResult, query},
+    core::{Document, document::VersionSnapshot},
+    db::{AccessResult, LocaleContext, ops, query},
     hooks::AccessCheckInput,
     service::{
-        Def, ServiceContext, ServiceError, helpers,
+        Def, ReadStripArgs, ServiceContext, ServiceError, helpers,
+        hooks::ReadHooks,
         versions::gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
     },
 };
 
-/// Look up a single version snapshot by its ID.
+/// Look up a single version snapshot by its ID, returned in `locale_ctx`'s
+/// locale (absent = the default locale).
 ///
 /// Checks read access and strips read-denied fields from the snapshot.
 /// Derives the version table from `ctx.slug` + `ctx.def`.
@@ -22,6 +24,34 @@ use crate::{
 /// Returns `AccessDenied` or `HookError`, or a backend error if the
 /// SELECT fails.
 pub fn find_version_by_id(
+    ctx: &ServiceContext,
+    version_id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<VersionSnapshot>, ServiceError> {
+    let Some(mut version) = find_stored_version(ctx, version_id)? else {
+        return Ok(None);
+    };
+
+    read_version_snapshot(ctx, ctx.read_hooks()?, &mut version, locale_ctx)?;
+
+    Ok(Some(version))
+}
+
+/// The **stored** version row behind [`find_version_by_id`], with every access
+/// gate that read applies already enforced — but without the read shaping
+/// [`read_version_snapshot`] performs, which rewrites the snapshot into the
+/// document a read returns.
+///
+/// For the caller that needs the stored snapshot itself (what a restore would
+/// write), so it reads the row once instead of selecting it again behind the
+/// gated read. Shape it with [`read_version_snapshot`] before handing it to a
+/// caller as a version read.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` or `HookError`, or a backend error if the SELECT
+/// fails.
+pub(crate) fn find_stored_version(
     ctx: &ServiceContext,
     version_id: &str,
 ) -> Result<Option<VersionSnapshot>, ServiceError> {
@@ -50,7 +80,7 @@ pub fn find_version_by_id(
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
-    let Some(mut version) = query::find_version_by_id(conn, &table, version_id)? else {
+    let Some(version) = query::find_version_by_id(conn, &table, version_id)? else {
         return Ok(None);
     };
 
@@ -90,39 +120,72 @@ pub fn find_version_by_id(
         helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
     }
 
-    // Strip read-denied fields from the snapshot JSON. Field-read access is
-    // data-aware (the snapshot is its own `ctx.document`); the API-hidden set is
-    // document-independent and applied via the shared snapshot stripper.
-    let fields = ctx.fields()?;
-    hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.slug, ctx.user, None);
-
-    let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
-    if !api_hidden.is_empty() {
-        strip_snapshot_fields(&mut version.snapshot, &api_hidden);
-    }
-
     Ok(Some(version))
 }
 
-/// Apply a static [`FieldDenial`] list to a snapshot `Value::Object` (flat,
-/// group `__`, and fields nested inside array/blocks rows). Used for the
-/// document-independent API-hidden set; the data-aware `access.read` strip is
-/// applied separately via `strip_read_access_value`. Shared with `list_versions`.
-pub(super) fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]) {
-    let Some(map) = snapshot.as_object_mut() else {
-        return;
+/// Replace a version's snapshot with the document a read returns for it:
+/// shaped by [`ops::snapshot_read_document`] for `locale_ctx` — so its
+/// per-locale keys never reach the caller — and stripped like any read
+/// document (read-denied fields, the snapshot being its own `ctx.document`,
+/// and hidden fields). Shared with `list_versions`.
+///
+/// The caller's locale decides which values come back: a single locale
+/// resolves to that locale's values, an all-locales context to the per-locale
+/// map shape. No locale reads the default locale, like an unqualified read of
+/// the document.
+pub(crate) fn read_version_snapshot(
+    ctx: &ServiceContext,
+    hooks: &dyn ReadHooks,
+    version: &mut VersionSnapshot,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<(), ServiceError> {
+    let fields = ctx.fields()?;
+    let default_ctx = ctx.locale_config.and_then(LocaleContext::default_for);
+    let locale_ctx = locale_ctx.or(default_ctx.as_ref());
+    let parent = version.parent.to_string();
+
+    let Some(mut doc) =
+        ops::snapshot_read_document(&parent, &version.snapshot, fields, locale_ctx)?
+    else {
+        return Ok(());
     };
 
-    for denial in denied {
-        denial.strip_from(map);
+    let locale = locale_ctx.map(LocaleContext::access_locale);
+    helpers::strip_unreadable(
+        hooks,
+        &ReadStripArgs::builder(fields, ctx.slug)
+            .user(ctx.user)
+            .locale(locale)
+            .build(),
+        &mut doc,
+    );
+
+    version.snapshot = snapshot_value(doc);
+
+    Ok(())
+}
+
+/// A read document back in snapshot form: its fields, with the timestamps the
+/// snapshot carried.
+fn snapshot_value(doc: Document) -> Value {
+    let mut map: Map<String, Value> = doc.fields.into_iter().collect();
+
+    for (key, ts) in [
+        ("created_at", doc.created_at),
+        ("updated_at", doc.updated_at),
+    ] {
+        if let Some(ts) = ts {
+            map.insert(key.to_string(), Value::String(ts));
+        }
     }
+
+    Value::Object(map)
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result as AnyResult;
     use rusqlite::Connection;
-    use serde_json::json;
 
     use super::*;
     use crate::{
@@ -132,7 +195,7 @@ mod tests {
         },
         db::{Filter, FilterClause, FilterOp},
         hooks::lifecycle::AfterReadCtx,
-        service::hooks::ReadHooks,
+        service::{FieldReadStrip, hooks::ReadHooks},
     };
 
     /// `read` → Allowed (public read); `update` → Constrained to `author = "me"`
@@ -167,6 +230,8 @@ mod tests {
             }
         }
     }
+
+    impl FieldReadStrip for OwnDocsConstrainedUpdate {}
 
     fn versioned_collection() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();
@@ -220,63 +285,19 @@ mod tests {
             .build();
 
         // Another owner's snapshot: denied (parent not editable by the caller).
-        let other = find_version_by_id(&ctx, "v1");
+        let other = find_version_by_id(&ctx, "v1", None);
         assert!(
             matches!(other, Err(ServiceError::AccessDenied(_))),
             "fetching another owner's version by id must be denied, got {other:?}"
         );
 
         // The caller's own snapshot: visible.
-        let own = find_version_by_id(&ctx, "v2")
+        let own = find_version_by_id(&ctx, "v2", None)
             .unwrap()
             .expect("own version snapshot must be reachable");
         assert_eq!(
             own.snapshot.get("title").and_then(|v| v.as_str()),
             Some("My Old Title")
         );
-    }
-
-    #[test]
-    fn strips_top_level_denied_fields() {
-        let mut snap = json!({ "title": "Hi", "secret": "x", "body": "text" });
-        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("secret".into())]);
-        assert_eq!(snap, json!({ "title": "Hi", "body": "text" }));
-    }
-
-    #[test]
-    fn strips_nested_group_subfield_via_double_underscore_path() {
-        // `meta__token` removes `token` inside the nested `meta` object,
-        // leaving the group's other subfields intact.
-        let mut snap = json!({
-            "meta": { "token": "secret", "author": "ada" },
-            "title": "Hi"
-        });
-        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("meta__token".into())]);
-        assert_eq!(snap, json!({ "meta": { "author": "ada" }, "title": "Hi" }));
-    }
-
-    #[test]
-    fn strips_deeply_nested_subfield() {
-        let mut snap = json!({ "a": { "b": { "c": 1, "d": 2 } } });
-        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("a__b__c".into())]);
-        assert_eq!(snap, json!({ "a": { "b": { "d": 2 } } }));
-    }
-
-    #[test]
-    fn missing_paths_and_non_objects_are_no_ops() {
-        let mut snap = json!({ "title": "Hi" });
-        strip_snapshot_fields(
-            &mut snap,
-            &[
-                FieldDenial::Flat("nope".into()),
-                FieldDenial::Flat("a__b".into()),
-            ],
-        );
-        assert_eq!(snap, json!({ "title": "Hi" }));
-
-        // A non-object snapshot is left untouched.
-        let mut arr = json!([1, 2, 3]);
-        strip_snapshot_fields(&mut arr, &[FieldDenial::Flat("x".into())]);
-        assert_eq!(arr, json!([1, 2, 3]));
     }
 }

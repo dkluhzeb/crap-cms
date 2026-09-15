@@ -190,9 +190,7 @@ fn upload_doc_visible(input: &UploadVisibilityInput) -> anyhow::Result<bool> {
     // context — without one it references the bare logical column (`caption`),
     // the query errors, and every file 404s. The default locale is sufficient:
     // the gate only resolves the owning row, not a specific translation.
-    let locale_ctx = LocaleContext::from_locale_string(None, &input.locale_config)
-        .ok()
-        .flatten();
+    let locale_ctx = LocaleContext::default_for(&input.locale_config);
 
     // `include_drafts` lets a draft upload serve to a viewer with draft access;
     // the service downgrades to what each viewer may actually see.
