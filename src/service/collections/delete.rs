@@ -62,31 +62,37 @@ fn delete_document_pool(
         },
     )?;
 
-    // Clean up upload files after successful commit (skip for soft-delete to allow restore)
-    if !def.soft_delete
-        && let Some(fields) = result.upload_doc_fields
-    {
-        // Files after commit: in conn mode this runs
-        // INSIDE the caller's transaction — deleting bytes now and then
-        // rolling back would restore the DB row pointing at nothing. With
-        // an enclosing scope, queue for its post-commit flush; without
-        // one (legacy direct conn callers), keep the immediate behavior.
-        // Resolve the server-derived file keys now, while this collection's
-        // upload config is in scope: the cross-collection cleanup queue stores
-        // keys, and the direct-delete fallback deletes them immediately.
-        let keys = def
-            .upload
-            .as_ref()
-            .map(|u| upload::upload_file_keys(&fields, u))
-            .unwrap_or_default();
-        if let Some(queue) = &ctx.file_cleanup {
-            queue.borrow_mut().extend(keys);
-        } else if let Some(s) = storage {
-            upload::delete_storage_keys(s, &keys);
-        }
-    }
+    clean_up_files(ctx, storage, result.upload_keys);
 
     Ok(result.context)
+}
+
+/// Hand the deleted document's files over for cleanup after the commit.
+///
+/// In conn mode this runs INSIDE the caller's transaction — deleting the bytes
+/// now and then rolling back would leave the restored row pointing at nothing —
+/// so with an enclosing scope the keys are queued for its post-commit flush;
+/// without one (direct conn callers) they are deleted immediately.
+///
+/// `keys` covers the published row's files AND every version snapshot's, and is
+/// empty for a soft delete, so an undelete still finds them. The write resolves
+/// them while the row and its snapshots still exist — the cross-collection
+/// queue stores keys, not documents, so this side no longer needs the
+/// collection's upload config.
+fn clean_up_files(ctx: &ServiceContext, storage: Option<&dyn StorageBackend>, keys: Vec<String>) {
+    if keys.is_empty() {
+        return;
+    }
+
+    if let Some(queue) = &ctx.file_cleanup {
+        queue.borrow_mut().extend(keys);
+
+        return;
+    }
+
+    if let Some(s) = storage {
+        upload::delete_storage_keys(s, &keys);
+    }
 }
 
 /// Conn-based delete: uses existing connection (Lua CRUD path).
@@ -108,28 +114,7 @@ fn delete_document_conn(
     // requests, so their open streams must be closed too. See the pool path.
     invalidate_user_streams_if_auth(ctx, id);
 
-    if !def.soft_delete
-        && let Some(fields) = result.upload_doc_fields
-    {
-        // Files after commit: in conn mode this runs
-        // INSIDE the caller's transaction — deleting bytes now and then
-        // rolling back would restore the DB row pointing at nothing. With
-        // an enclosing scope, queue for its post-commit flush; without
-        // one (legacy direct conn callers), keep the immediate behavior.
-        // Resolve the server-derived file keys now, while this collection's
-        // upload config is in scope: the cross-collection cleanup queue stores
-        // keys, and the direct-delete fallback deletes them immediately.
-        let keys = def
-            .upload
-            .as_ref()
-            .map(|u| upload::upload_file_keys(&fields, u))
-            .unwrap_or_default();
-        if let Some(queue) = &ctx.file_cleanup {
-            queue.borrow_mut().extend(keys);
-        } else if let Some(s) = storage {
-            upload::delete_storage_keys(s, &keys);
-        }
-    }
+    clean_up_files(ctx, storage, result.upload_keys);
 
     Ok(result.context)
 }

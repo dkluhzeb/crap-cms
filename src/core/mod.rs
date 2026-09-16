@@ -52,6 +52,7 @@ pub mod group_repr;
 pub mod hex;
 pub mod hook_ref;
 pub mod job;
+pub mod lifecycle;
 pub mod lua_lease;
 pub mod parse;
 pub mod rate_limit;
@@ -93,6 +94,7 @@ pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
 pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
+pub use lifecycle::{Readiness, SERVER_DRAIN_SECS, drain_with_deadline};
 pub use lua_lease::{LocalLease, LuaVmLease};
 pub use parse::{
     checkbox_value, json_truthy, parse_bool, parse_number, parse_truthy, value_truthy,
@@ -108,7 +110,7 @@ pub use text::{
 pub use validate::{FieldError, ValidationError};
 pub(crate) use walk::{
     FieldChildren, SchemaStep, field_children, find_field, prefixed_name, walk_all_fields,
-    walk_leaf_fields,
+    walk_leaf_fields, walk_leaf_fields_where,
 };
 pub use walk::{
     NestStep, VisitAction, any_field, flatten_array_sub_fields, walk_nested, walk_nested_mut,

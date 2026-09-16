@@ -523,7 +523,7 @@ fn restore_version_updates_main_table() {
 /// Regression: restoring a version must clear locale columns that didn't exist
 /// when the snapshot was taken, so stale translations don't persist.
 #[test]
-fn restore_version_clears_locale_columns() {
+fn restore_version_keeps_a_locale_the_snapshot_never_carried() {
     // Build a versioned def with a localized title field
     let mut def = make_versioned_def();
     for field in &mut def.fields {
@@ -601,8 +601,8 @@ fn restore_version_clears_locale_columns() {
         .unwrap();
     assert_eq!(en_after.get_str("title"), Some("English Title"));
 
-    // German should be cleared (NULL → fallback to English if fallback enabled, or NULL)
-    // Read the raw column to verify it's NULL
+    // A locale the snapshot never carried is left untouched: the German text
+    // written after the version was taken survives the restore.
     let de_raw: Option<String> = conn
         .query_one(
             "SELECT title__de FROM articles WHERE id = ?1",
@@ -614,8 +614,8 @@ fn restore_version_clears_locale_columns() {
         .ok()
         .flatten();
     assert!(
-        de_raw.is_none(),
-        "German locale column should be NULL after restoring pre-translation version"
+        de_raw.is_some(),
+        "a locale the snapshot never carried is left untouched by the restore"
     );
 
     let _ = tmp; // keep tempdir alive

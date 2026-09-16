@@ -1,11 +1,23 @@
 //! Local filesystem storage backend.
 
-use std::{fs, io, path::PathBuf};
+use std::{
+    ffi::OsStr,
+    fs::{self, File},
+    io::{self, Write as _},
+    path::{Path, PathBuf},
+    process,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::{Context as _, Result, bail};
 
 use super::backend::validate_key;
 use super::{StorageBackend, StorageNotFound};
+
+/// Extension of the sibling file [`write_atomically`] stages bytes in. The
+/// name is dot-prefixed and suffixed so a leftover from a killed process is
+/// recognisable on sight; it is never a storage key, so no read can reach it.
+const TEMP_SUFFIX: &str = ".crap-tmp";
 
 /// Local filesystem storage backend.
 ///
@@ -49,6 +61,70 @@ impl LocalStorage {
     }
 }
 
+/// A staging path next to `path`, unique within this process and carrying the
+/// pid so two processes writing the same key cannot share one.
+fn temp_sibling(path: &Path, parent: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("object"))
+        .to_string_lossy();
+
+    parent.join(format!(".{name}.{}.{seq}{TEMP_SUFFIX}", process::id()))
+}
+
+/// Put the bytes in `temp`, flush them to disk, and move `temp` onto `path`.
+/// Separated from the cleanup in [`write_atomically`] so every failure leaves
+/// through one place.
+fn fill_and_rename(temp: &Path, path: &Path, data: &[u8]) -> Result<()> {
+    let mut file = File::create(temp)
+        .with_context(|| format!("Failed to create staging file: {}", temp.display()))?;
+
+    file.write_all(data)
+        .with_context(|| format!("Failed to write file: {}", path.display()))?;
+
+    // Flush before the rename. The rename publishes the directory entry
+    // atomically, but unflushed bytes can still be in flight — a power loss
+    // between the two would publish a key holding zeros.
+    file.sync_all()
+        .with_context(|| format!("Failed to flush file: {}", path.display()))?;
+
+    drop(file);
+
+    fs::rename(temp, path).with_context(|| format!("Failed to write file: {}", path.display()))
+}
+
+/// Write `data` to `path` so a reader only ever sees a complete object.
+///
+/// A plain write truncates the target first, so a kill mid-write leaves a
+/// short file under the final key that later serves as a corrupt download.
+/// Staging in a sibling and renaming over the key means the key holds either
+/// the previous object or the whole new one. Overwriting an existing key stays
+/// allowed — the same contract the S3 backend's `put` offers.
+fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        bail!("Storage path has no parent directory: {}", path.display());
+    };
+
+    let temp = temp_sibling(path, parent);
+
+    if let Err(e) = fill_and_rename(&temp, path, data) {
+        // Never leave a half-written sibling behind.
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
+
+    // Persist the directory entry itself so the rename survives a crash.
+    // Best-effort: not every platform allows opening a directory for sync.
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(())
+}
+
 impl StorageBackend for LocalStorage {
     fn put(&self, key: &str, data: &[u8], _content_type: &str) -> Result<()> {
         let path = self.key_to_path(key)?;
@@ -58,10 +134,7 @@ impl StorageBackend for LocalStorage {
                 .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
         }
 
-        fs::write(&path, data)
-            .with_context(|| format!("Failed to write file: {}", path.display()))?;
-
-        Ok(())
+        write_atomically(&path, data)
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
@@ -108,6 +181,9 @@ impl StorageBackend for LocalStorage {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+
     use super::*;
 
     #[test]
@@ -131,6 +207,66 @@ mod tests {
 
         // Delete non-existent is OK
         storage.delete("media/test.txt").unwrap();
+    }
+
+    /// Staging files left in `dir` — a successful or cleanly failed `put`
+    /// must leave none.
+    fn temp_files_in(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.to_string_lossy().ends_with(TEMP_SUFFIX))
+            .collect()
+    }
+
+    /// Regression: `put` was a plain write, which truncates the target before
+    /// writing — a kill mid-write left a short file under the final key that
+    /// later served as a corrupt download. The bytes now land in a sibling
+    /// and are renamed over the key, so the key holds either the previous
+    /// object or the complete new one, and no staging file survives.
+    #[test]
+    fn put_publishes_the_whole_object_and_keeps_no_staging_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = LocalStorage::new(tmp.path());
+
+        storage.put("media/t.txt", b"first", "text/plain").unwrap();
+        storage
+            .put("media/t.txt", b"second and longer", "text/plain")
+            .unwrap();
+
+        assert_eq!(storage.get("media/t.txt").unwrap(), b"second and longer");
+        assert!(
+            temp_files_in(&tmp.path().join("media")).is_empty(),
+            "no staging file may survive a successful put"
+        );
+    }
+
+    /// A put that cannot be written leaves nothing behind: no final key (so a
+    /// later read is a clean miss rather than a truncated file) and no
+    /// staging sibling.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_put_leaves_neither_the_key_nor_a_staging_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = LocalStorage::new(tmp.path());
+
+        let dir = tmp.path().join("media");
+        fs::create_dir_all(&dir).unwrap();
+        // Mode 0o555: listable but not writable, so the staging file cannot
+        // be created.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = storage.put("media/t.txt", b"payload", "text/plain");
+
+        let leftovers = temp_files_in(&dir);
+        let key_exists = dir.join("t.txt").exists();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(result.is_err(), "an unwritable directory must fail the put");
+        assert!(!key_exists, "the key must not appear when the put failed");
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

@@ -36,12 +36,13 @@ use anyhow::Result;
 use crate::{
     config::{CrapConfig, LocaleConfig, PasswordPolicy},
     core::{
-        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
-        SharedTokenProvider,
+        Readiness, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        SharedStorage, SharedTokenProvider,
         auth::JwtTokenProvider,
         cache::{create_cache_with_lease, warn_if_custom_cache_multi_vm},
         email::EmailRenderer,
         event::InProcessInvalidationBus,
+        upload::FALLBACK_MAX_ATTEMPTS,
     },
     db::{DbPool, SharedPopulateSingleflight, Singleflight},
     hooks::HookRunner,
@@ -120,7 +121,14 @@ impl AppInfra {
                 .email(email)
                 .locale_config(p.config.locale.clone())
                 .password_policy(p.config.auth.password_policy.clone())
+                .image_max_attempts(p.config.jobs.system_image_max_attempts())
                 .populate_singleflight(Arc::new(Singleflight::new()))
+                // Ready on construction: a standalone bundle belongs to a
+                // process whose startup work is finished by the time it is
+                // assembled. The one that does defer work — the `work`
+                // worker's scheduler — marks the same flag again after its
+                // stale-job recovery, which is idempotent.
+                .readiness(Readiness::ready())
                 .build(),
         ))
     }
@@ -143,6 +151,8 @@ pub struct AppInfraBuilder {
     locale_config: Option<LocaleConfig>,
     password_policy: Option<PasswordPolicy>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
+    readiness: Option<Readiness>,
+    image_max_attempts: Option<u32>,
 }
 
 impl AppInfraBuilder {
@@ -219,10 +229,27 @@ impl AppInfraBuilder {
         self
     }
 
+    /// Shared readiness flag, marked once startup recovery has finished and
+    /// read by the readiness probe. Defaults to a fresh (not-yet-ready) flag
+    /// for bundles whose process has no startup recovery to wait on.
+    #[must_use]
+    pub fn readiness(mut self, readiness: Readiness) -> Self {
+        self.readiness = Some(readiness);
+        self
+    }
+
+    /// `max_attempts` for the image-conversion jobs a write queues. Defaults to
+    /// [`FALLBACK_MAX_ATTEMPTS`] for a bundle assembled without config.
+    #[must_use]
+    pub fn image_max_attempts(mut self, attempts: u32) -> Self {
+        self.image_max_attempts = Some(attempts);
+        self
+    }
+
     /// # Panics
     ///
-    /// Panics if any required field (everything except `event_transport`) was
-    /// not set on the builder.
+    /// Panics if any required field (everything except `event_transport`,
+    /// `readiness` and `image_max_attempts`) was not set on the builder.
     #[must_use]
     pub fn build(self) -> AppInfra {
         AppInfra {
@@ -242,6 +269,8 @@ impl AppInfraBuilder {
             populate_singleflight: self
                 .populate_singleflight
                 .expect("populate_singleflight is required"),
+            readiness: self.readiness.unwrap_or_default(),
+            image_max_attempts: self.image_max_attempts.unwrap_or(FALLBACK_MAX_ATTEMPTS),
         }
     }
 }
@@ -275,4 +304,15 @@ pub struct AppInfra {
     /// Process-wide singleflight for deduplicating concurrent populate
     /// cache-miss fetches across requests.
     pub populate_singleflight: SharedPopulateSingleflight,
+    /// Set once startup recovery has finished. The readiness probe answers
+    /// 503 until then, so an orchestrator doesn't route traffic to — or
+    /// advance a rolling deploy past — a node that is still reclaiming the
+    /// job rows a previous process left `running`.
+    pub readiness: Readiness,
+    /// `max_attempts` the image-conversion jobs a write queues are inserted
+    /// with (from `[jobs] system_image_max_attempts`). Threaded onto every
+    /// write context so a write that queues a conversion without a file of its
+    /// own — publishing a draft's file — uses the configured retry budget
+    /// instead of the fallback.
+    pub image_max_attempts: u32,
 }

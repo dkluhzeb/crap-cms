@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, anyhow};
 use redis::{Client, Commands, Connection};
 
-use crate::core::cache::{CacheBackend, cache_clear_pattern, cache_key};
+use crate::core::cache::{CacheBackend, cache_clear_pattern, cache_key, redis_entry_ttl_secs};
 
 /// Redis-backed cache with key prefixing and connection reuse.
 ///
@@ -23,18 +23,20 @@ pub struct RedisCache {
     client: Client,
     conn: Mutex<Connection>,
     prefix: String,
+    /// Resolved per-key expiry, always `> 0` — see [`redis_entry_ttl_secs`].
     ttl_secs: u64,
 }
 
 impl RedisCache {
     /// Create a new Redis cache backend.
     ///
-    /// `ttl_secs` controls per-key expiry: `0` = no expiry (keys live until
-    /// explicit `clear()`), `> 0` = each key expires after this many seconds.
+    /// `max_age_secs` is `[cache] max_age_secs` as configured; the effective
+    /// per-key expiry is resolved through [`redis_entry_ttl_secs`], so every
+    /// key this backend writes expires on its own even at the default `0`.
     ///
     /// Validates the connection at creation time — returns an error if Redis
     /// is unreachable.
-    pub fn new(url: &str, prefix: &str, ttl_secs: u64) -> Result<Self> {
+    pub fn new(url: &str, prefix: &str, max_age_secs: u64) -> Result<Self> {
         let client = Client::open(url).context("Failed to create Redis client")?;
 
         let mut conn = client
@@ -49,7 +51,7 @@ impl RedisCache {
             client,
             conn: Mutex::new(conn),
             prefix: prefix.to_string(),
-            ttl_secs,
+            ttl_secs: redis_entry_ttl_secs(max_age_secs),
         })
     }
 
@@ -96,22 +98,21 @@ impl CacheBackend for RedisCache {
         })
     }
 
+    /// Always `SETEX`, never a bare `SET`: an entry with no expiry in a store
+    /// that outlives the process would survive every restart and grow the
+    /// store without bound, and the periodic full clear deliberately skips
+    /// this backend because its entries expire on their own.
     fn set(&self, key: &str, value: &[u8]) -> Result<()> {
         let pkey = self.prefixed_key(key);
         let ttl = self.ttl_secs;
 
         self.with_conn(|conn| {
-            if ttl > 0 {
-                redis::cmd("SETEX")
-                    .arg(&pkey)
-                    .arg(ttl)
-                    .arg(value)
-                    .query::<()>(conn)
-                    .context("Redis SETEX failed")?;
-            } else {
-                conn.set::<_, _, ()>(&pkey, value)
-                    .context("Redis SET failed")?;
-            }
+            redis::cmd("SETEX")
+                .arg(&pkey)
+                .arg(ttl)
+                .arg(value)
+                .query::<()>(conn)
+                .context("Redis SETEX failed")?;
 
             Ok(())
         })

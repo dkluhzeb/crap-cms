@@ -2,35 +2,38 @@
 //!
 //! Top-level enrichment helpers that require DB access live in `enrich_types.rs`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use serde_json::{Value, from_str};
+use serde_json::Value;
 
 use crate::{
     admin::{
         context::field::{
             ArrayField, ArrayRow, BaseFieldData, BlockDefinition as BlockDefinitionContext,
             BlockRow, BlocksField, CheckboxField, ChoiceField, ConditionData, DateField,
-            FieldContext, GroupField, NumberField, RelationshipField, RowField, SelectOption,
-            TabPanel, TabsField, TextField, TimezoneOption, UploadField, ValidationAttrs,
+            FieldContext, GroupField, NumberField, RelationshipField, RowField, TabPanel,
+            TabsField, TextField, TimezoneOption, UploadField, ValidationAttrs,
         },
-        handlers::field_context::{
-            MAX_FIELD_DEPTH,
-            builder::build_single_field_context,
-            count_errors_in_field_contexts,
-            enrich::{
-                SubFieldOpts, children::build_enriched_children_from_data,
-                nested::build_enriched_sub_field_context,
+        handlers::{
+            field_context::{
+                MAX_FIELD_DEPTH,
+                builder::{build_select_options, build_single_field_context},
+                count_errors_in_field_contexts,
+                enrich::{
+                    SubFieldOpts, children::build_enriched_children_from_data,
+                    nested::build_enriched_sub_field_context,
+                },
+                inject_lang_values_from_row, inject_timezone_values_from_row,
+                locale_locked_display, safe_template_id, set_date_picker_values, tag_values,
+                tags_input_value,
             },
-            inject_lang_values_from_row, inject_timezone_values_from_row, locale_locked_display,
-            safe_template_id, set_date_picker_values, tag_values,
+            shared::admin_form_fields,
         },
     },
     core::{
         BLOCK_TYPE_KEY, BlockDefinition, FieldDefinition, FieldTab, FieldType, parse_truthy,
         timezone::TIMEZONE_OPTIONS,
     },
-    db::query::helpers::tz_column,
 };
 
 // ── build_enriched_sub_field_context helpers ─────────────────────────
@@ -41,30 +44,17 @@ pub(super) fn sub_checkbox(cf: &mut CheckboxField, val: &str) {
 }
 
 /// Enrich a Select/Radio sub-field context.
+///
+/// Options come from [`build_select_options`], the same builder the top-level
+/// pass uses, so a nested picker marks the stored values — declared or not —
+/// exactly like a top-level one.
 pub(super) fn sub_select_radio(cf: &mut ChoiceField, sf: &FieldDefinition, val: &str) {
-    if sf.has_many {
-        let selected_values: HashSet<String> = from_str(val).unwrap_or_default();
+    let (options, has_many) = build_select_options(sf, val);
 
-        cf.options = sf
-            .options
-            .iter()
-            .map(|opt| SelectOption {
-                label: opt.label.resolve_default().to_string(),
-                value: opt.value.clone(),
-                selected: selected_values.contains(&opt.value),
-            })
-            .collect();
+    cf.options = options;
+
+    if has_many {
         cf.has_many = Some(true);
-    } else {
-        cf.options = sf
-            .options
-            .iter()
-            .map(|opt| SelectOption {
-                label: opt.label.resolve_default().to_string(),
-                value: opt.value.clone(),
-                selected: opt.value == val,
-            })
-            .collect();
     }
 }
 
@@ -176,9 +166,7 @@ fn build_nested_array_row(
 ) -> ArrayRow {
     let nested_row_obj = nested_row.as_object();
 
-    let mut sub_fields: Vec<FieldContext> = sf
-        .fields
-        .iter()
+    let mut sub_fields: Vec<FieldContext> = admin_form_fields(&sf.fields)
         .map(|nested_sf| {
             let nested_value = extract_nested_value(nested_sf, nested_row, nested_row_obj);
             build_enriched_sub_field_context(
@@ -216,8 +204,7 @@ fn build_nested_template_sub_fields(
 ) -> Vec<FieldContext> {
     let template_prefix = format!("{indexed_name}[__INDEX__]");
 
-    sf.fields
-        .iter()
+    admin_form_fields(&sf.fields)
         .map(|nested_sf| {
             build_single_field_context(
                 nested_sf,
@@ -313,8 +300,7 @@ fn build_nested_blocks_row(
 
     let mut sub_fields: Vec<FieldContext> = block_def
         .map(|bd| {
-            bd.fields
-                .iter()
+            admin_form_fields(&bd.fields)
                 .map(|nested_sf| {
                     let nested_value = extract_nested_value(nested_sf, nested_row, nested_row_obj);
                     build_enriched_sub_field_context(
@@ -358,9 +344,7 @@ fn build_block_def_template(
 ) -> BlockDefinitionContext {
     let template_prefix = format!("{indexed_name}[__INDEX__]");
 
-    let block_fields: Vec<FieldContext> = bd
-        .fields
-        .iter()
+    let block_fields: Vec<FieldContext> = admin_form_fields(&bd.fields)
         .map(|nested_sf| {
             build_single_field_context(
                 nested_sf,
@@ -630,17 +614,22 @@ fn build_group_child_leaf(
     let mut values = HashMap::new();
     values.insert(nested_name.to_string(), nested_val.to_string());
 
-    // Date sub-fields with stored timezone need their _tz companion
-    // for `single_date`.
-    if nested_sf.has_tz_companion() {
-        let tz_key = tz_column(&nested_sf.name);
-        if let Some(tz_val) = group_obj
-            .and_then(|v| v.as_object())
-            .and_then(|m| m.get(&tz_key))
-            .and_then(|v| v.as_str())
-            && !tz_val.is_empty()
+    // A leaf's companions (a date's zone, a code field's language pick) live
+    // beside it in the row object. Seed every one the field declares, keyed by
+    // the leaf's own name, so the leaf builder reads the stored companion
+    // instead of falling back to the field-level default — which the template
+    // then re-submits, overwriting the editor's pick on the next save.
+    let row = group_obj.and_then(Value::as_object);
+    let stored_columns = nested_sf.companion_columns(&nested_sf.name);
+    let context_columns = nested_sf.companion_columns(nested_name);
+
+    for (stored, context) in stored_columns.zip(context_columns) {
+        if let Some(companion) = row
+            .and_then(|m| m.get(&stored))
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
         {
-            values.insert(tz_column(nested_name), tz_val.to_string());
+            values.insert(context, companion.to_string());
         }
     }
 
@@ -684,9 +673,7 @@ pub(super) fn sub_group(
         _ => None,
     };
 
-    let nested_sub_fields: Vec<FieldContext> = sf
-        .fields
-        .iter()
+    let nested_sub_fields: Vec<FieldContext> = admin_form_fields(&sf.fields)
         .map(|nested_sf| {
             let nested_value = group_obj
                 .and_then(|v| v.as_object())
@@ -798,7 +785,7 @@ pub(super) fn sub_tabs(
 /// Enrich a Text `has_many` sub-field context (tag input).
 pub(super) fn sub_text_has_many_tags(tf: &mut TextField, val: &str) {
     let tags = tag_values(val);
-    tf.base.value = Value::String(tags.join(","));
+    tf.base.value = tags_input_value(&tags);
     tf.has_many = Some(true);
     tf.tags = Some(tags);
 }
@@ -806,7 +793,7 @@ pub(super) fn sub_text_has_many_tags(tf: &mut TextField, val: &str) {
 /// Enrich a Number `has_many` sub-field context (tag input).
 pub(super) fn sub_number_has_many_tags(nf: &mut NumberField, val: &str) {
     let tags = tag_values(val);
-    nf.base.value = Value::String(tags.join(","));
+    nf.base.value = tags_input_value(&tags);
     nf.has_many = Some(true);
     nf.tags = Some(tags);
 }
@@ -815,7 +802,7 @@ pub(super) fn sub_number_has_many_tags(nf: &mut NumberField, val: &str) {
 mod tests {
     use serde_json::json;
 
-    use crate::core::field::{LocalizedString, SelectOption as CoreSelectOption};
+    use crate::core::field::{FieldAdmin, LocalizedString, SelectOption as CoreSelectOption};
 
     use super::*;
 
@@ -832,7 +819,84 @@ mod tests {
         sub_number_has_many_tags(&mut nf, "[1,2.5]");
 
         assert_eq!(nf.tags, Some(vec!["1".to_string(), "2.5".to_string()]));
-        assert_eq!(nf.base.value, json!("1,2.5"));
+        assert_eq!(nf.base.value, json!(r#"["1","2.5"]"#));
+    }
+
+    /// Regression: a `has_many` text element containing a comma survived the
+    /// API write but came back split in two on the first admin save, because
+    /// the widget's hidden input carried the list comma-joined. It carries JSON.
+    #[test]
+    fn text_tags_keep_an_element_that_contains_a_comma() {
+        let mut tf = TextField::default();
+        sub_text_has_many_tags(&mut tf, r#"["Hello, world","x"]"#);
+
+        assert_eq!(
+            tf.tags,
+            Some(vec!["Hello, world".to_string(), "x".to_string()])
+        );
+        assert_eq!(tf.base.value, json!(r#"["Hello, world","x"]"#));
+    }
+
+    /// Regression: a Code field inside a Group inside an array/blocks row lost
+    /// its language. Only the `_tz` companion was seeded, so the builder read a
+    /// missing `_lang` column, fell back to `admin.language`, and the template
+    /// re-submitted that — overwriting the editor's pick on the next save.
+    #[test]
+    fn a_group_child_leaf_is_seeded_with_every_companion() {
+        let code = FieldDefinition::builder("snippet", FieldType::Code)
+            .admin(
+                FieldAdmin::builder()
+                    .language("json")
+                    .languages(vec!["json".to_string(), "python".to_string()])
+                    .build(),
+            )
+            .build();
+
+        let row = json!({ "snippet": "print(1)", "snippet_lang": "python" });
+        let errors = HashMap::new();
+        let opts = SubFieldOpts::builder(&errors).build();
+
+        let fc = build_group_child_leaf(
+            &code,
+            "rows[0][meta][snippet]",
+            "print(1)",
+            Some(&row),
+            &opts,
+        );
+
+        let FieldContext::Code(cf) = fc else {
+            panic!("expected a code field")
+        };
+        assert_eq!(
+            cf.language, "python",
+            "the row's stored language pick wins over the field default"
+        );
+    }
+
+    /// The same seeding carries a date's zone, which used to be the only
+    /// companion it knew about.
+    #[test]
+    fn a_group_child_date_is_seeded_with_its_zone() {
+        let date = FieldDefinition::builder("starts", FieldType::Date)
+            .timezone(true)
+            .build();
+
+        let row = json!({ "starts": "2026-01-15T20:00:00.000Z", "starts_tz": "Asia/Tokyo" });
+        let errors = HashMap::new();
+        let opts = SubFieldOpts::builder(&errors).build();
+
+        let fc = build_group_child_leaf(
+            &date,
+            "rows[0][meta][starts]",
+            "2026-01-15T20:00:00.000Z",
+            Some(&row),
+            &opts,
+        );
+
+        let FieldContext::Date(df) = fc else {
+            panic!("expected a date field")
+        };
+        assert_eq!(df.timezone_value.as_deref(), Some("Asia/Tokyo"));
     }
 
     /// Regression: the form checked a box only for four exact spellings, while
@@ -864,12 +928,12 @@ mod tests {
     }
 
     #[test]
-    fn sub_text_has_many_parses_json_array_into_tags_and_csv_value() {
+    fn sub_text_has_many_parses_json_array_into_tags_and_json_value() {
         let mut tf = TextField::default();
         sub_text_has_many_tags(&mut tf, r#"["a","b","c"]"#);
 
         assert_eq!(tf.tags, Some(vec!["a".into(), "b".into(), "c".into()]));
-        assert_eq!(tf.base.value, json!("a,b,c"));
+        assert_eq!(tf.base.value, json!(r#"["a","b","c"]"#));
         assert_eq!(tf.has_many, Some(true));
     }
 
@@ -878,7 +942,7 @@ mod tests {
         let mut tf = TextField::default();
         sub_text_has_many_tags(&mut tf, "not json");
         assert_eq!(tf.tags, Some(vec![]));
-        assert_eq!(tf.base.value, json!(""));
+        assert_eq!(tf.base.value, json!("[]"));
     }
 
     #[test]
@@ -886,7 +950,7 @@ mod tests {
         let mut nf = NumberField::default();
         sub_number_has_many_tags(&mut nf, r#"["1","2"]"#);
         assert_eq!(nf.tags, Some(vec!["1".into(), "2".into()]));
-        assert_eq!(nf.base.value, json!("1,2"));
+        assert_eq!(nf.base.value, json!(r#"["1","2"]"#));
         assert_eq!(nf.has_many, Some(true));
     }
 
@@ -970,11 +1034,7 @@ mod tests {
     #[test]
     fn sub_upload_picker_none_disables_the_picker() {
         let sf = FieldDefinition::builder("file", FieldType::Upload)
-            .admin(
-                crate::core::field::FieldAdmin::builder()
-                    .picker("none")
-                    .build(),
-            )
+            .admin(FieldAdmin::builder().picker("none").build())
             .build();
         let mut uf = UploadField::default();
         sub_upload(&mut uf, &sf);

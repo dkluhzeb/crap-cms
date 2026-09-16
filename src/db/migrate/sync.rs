@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     backfill_ref_counts, canonical_text, checkbox_columns, collection, global, identifier_check,
-    legacy_timestamps, nested_values,
+    legacy_timestamps, locale_change, meta, nested_values,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -69,6 +69,8 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
         global::sync_global_table(&tx, slug, def, locale_config)?;
     }
 
+    delete_retired_meta_keys(&tx)?;
+
     // The one-time conversions run in this order on purpose: nested values
     // are typed before text is canonicalized, since both rewrite the same
     // JSON-stored rows and the canonical form applies to the typed value.
@@ -77,6 +79,7 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     legacy_timestamps::normalize_if_needed(&tx, registry)?;
     nested_values::convert_if_needed(&tx, registry)?;
     canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
+    locale_change::warn_on_default_locale_change(&tx, registry, locale_config)?;
 
     tx.commit()
         .context("Failed to commit migration transaction")?;
@@ -87,6 +90,27 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
 /// Advisory-lock key serializing schema sync across nodes: the ASCII bytes of
 /// `"crapsync"`, distinct from the job-claim key.
 const SCHEMA_SYNC_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapsync");
+
+/// The `_crap_meta` gates of migrations that no longer exist, removed so a
+/// database carries no key naming a pass nothing reads any more.
+///
+/// `ref_count_backfilled` was the whole-database flag the per-slug
+/// `ref_count_backfilled:{slug}` gates replaced — a collection added after it
+/// was stamped had its reference counts skipped, which is why it went per-slug.
+/// A conversion whose gate is per-slug removes its own replaced keys, which
+/// need the registry to name; this is where the ones that don't go.
+const RETIRED_META_KEYS: &[&str] = &["ref_count_backfilled"];
+
+/// Remove the gates listed in [`RETIRED_META_KEYS`]. Deleting an absent key
+/// changes nothing, so this is a no-op on every database that never held them.
+fn delete_retired_meta_keys(conn: &dyn DbConnection) -> Result<()> {
+    for key in RETIRED_META_KEYS {
+        meta::delete(conn, key)
+            .with_context(|| format!("Failed to remove the retired meta key {key}"))?;
+    }
+
+    Ok(())
+}
 
 /// Create all system tables (_`crap_meta`, _`crap_migrations`, _`crap_jobs`, etc.).
 fn create_system_tables(conn: &dyn DbConnection) -> Result<()> {
@@ -389,5 +413,41 @@ mod tests {
         // The new indexes exist (idempotent re-run is a no-op).
         create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
             .expect("second create_jobs_table call must be idempotent");
+    }
+
+    /// Regression: the whole-database `ref_count_backfilled` flag was replaced
+    /// by per-slug gates but never removed, so every database upgraded from a
+    /// release that wrote it kept a key naming a pass nothing reads. Sync
+    /// removes every retired gate, and leaves the live ones alone.
+    #[test]
+    fn sync_removes_retired_meta_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let registry = Registry::new();
+        let locale_config = LocaleConfig::default();
+
+        sync_all(&p, &registry, &locale_config).expect("first sync");
+
+        let conn = p.get().unwrap();
+        for key in RETIRED_META_KEYS {
+            meta::upsert(&conn, key, "1").unwrap();
+        }
+        meta::upsert(&conn, "ref_count_backfilled:posts", "2").unwrap();
+        drop(conn);
+
+        sync_all(&p, &registry, &locale_config).expect("second sync");
+
+        let conn = p.get().unwrap();
+        for key in RETIRED_META_KEYS {
+            assert_eq!(meta::get(&conn, key).unwrap(), None, "{key}");
+        }
+        assert_eq!(
+            meta::get(&conn, "ref_count_backfilled:posts")
+                .unwrap()
+                .as_deref(),
+            Some("2"),
+            "a per-slug gate must survive"
+        );
     }
 }

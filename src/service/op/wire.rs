@@ -489,7 +489,7 @@ pub static GLOBAL_OPS: &[OpWire] = &[
     OpWire {
         op: "get_global",
         fields: &[
-            f("locale", WireKind::Locale, LOCALE_WRITE_DOC),
+            f("locale", WireKind::Locale, LOCALE_READ_DOC),
             f(
                 "draft",
                 WireKind::Bool,

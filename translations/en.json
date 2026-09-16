@@ -130,6 +130,7 @@
   "view": "View",
   "upload_new": "Upload new",
   "no_related_items": "No related items",
+  "option_no_longer_offered": "(no longer offered)",
   "select_placeholder": "-- Select --",
   "type_and_press_enter": "Type and press Enter",
   "focal_point_hint": "Click image to set focal point",
@@ -161,6 +162,8 @@
   "restore_has_missing_relations": "This version references content that no longer exists:",
   "restore_missing_warning": "Restoring will write stale references back into the document.",
   "missing_of_total": "of {{total}} reference(s) missing",
+  "restore_has_missing_files": "This version references files that are no longer stored:",
+  "restore_missing_files_warning": "Restoring will write links to missing files back into the document.",
   "confirm_restore_version": "Restore version v{{version}}?",
 
   "badge_auth": "auth",

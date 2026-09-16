@@ -11,9 +11,9 @@ use crate::{
         handlers::shared::{forbidden, htmx_redirect},
     },
     core::{Document, Registry, document::VersionSnapshot},
-    db::query::MissingRelation,
     service::{
-        ListVersionsInput, ServiceContext, ServiceError, list_versions, version_missing_relations,
+        ListVersionsInput, ServiceContext, ServiceError, VersionGaps, list_versions,
+        version_restore_gaps,
     },
 };
 
@@ -48,16 +48,17 @@ pub fn fetch_version_sidebar_data(ctx: &ServiceContext, parent_id: &str) -> (Vec
     }
 }
 
-/// Look up a version and the relations its restore would write whose targets
-/// no longer exist, as far as the viewer may read them. Shared by collection
-/// and global restore confirm handlers; `ctx` carries the locale config so
-/// every locale the snapshot records is checked.
-pub fn load_version_with_missing_relations(
+/// Look up a version and what its restore would no longer find — relation
+/// targets that are gone, and files whose bytes storage no longer holds — as
+/// far as the viewer may read them. Shared by collection and global restore
+/// confirm handlers; `ctx` carries the locale config so every locale the
+/// snapshot records is checked, and the storage backend so the files can be.
+pub fn load_version_with_restore_gaps(
     ctx: &ServiceContext,
     registry: &Registry,
     version_id: &str,
-) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
-    match version_missing_relations(ctx, registry, version_id) {
+) -> Result<(VersionSnapshot, VersionGaps), &'static str> {
+    match version_restore_gaps(ctx, registry, version_id) {
         Ok(Some(found)) => Ok(found),
         Ok(None) => Err("Version not found"),
         Err(e) => {

@@ -4,7 +4,6 @@ use anyhow::Context as _;
 
 use crate::{
     config::LocaleConfig,
-    core::upload::upload_file_keys,
     db::{FilterClause, FindQuery, query},
     service::{
         ServiceContext, ServiceError, delete_document_in_conn, invalidate_user_streams_if_auth,
@@ -145,11 +144,7 @@ fn delete_many_pool(
                             soft_count += 1;
                         } else {
                             hard_count += 1;
-                            if let Some(fields) = result.upload_doc_fields
-                                && let Some(u) = def.upload.as_ref()
-                            {
-                                upload_keys_to_clean.extend(upload_file_keys(&fields, u));
-                            }
+                            upload_keys_to_clean.extend(result.upload_keys);
                         }
                         deleted_ids.push(id.clone());
                         pre_statuses.push(result.pre_status);
@@ -249,11 +244,7 @@ fn delete_many_conn(
                     soft_count += 1;
                 } else {
                     hard_count += 1;
-                    if let Some(fields) = result.upload_doc_fields
-                        && let Some(u) = def.upload.as_ref()
-                    {
-                        upload_keys_to_clean.extend(upload_file_keys(&fields, u));
-                    }
+                    upload_keys_to_clean.extend(result.upload_keys);
                 }
 
                 // Gated by `ctx.emit_events`; in conn mode the enqueued event

@@ -4,12 +4,9 @@
 //! and one or more dedicated workers run `work`.
 
 use std::sync::Arc;
-use std::{path::Path, process};
 #[cfg(unix)]
-use std::{
-    thread::sleep,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
+use std::{path::Path, process};
 
 #[cfg(unix)]
 use anyhow::bail;
@@ -20,7 +17,10 @@ use tracing::info;
 use tracing::{debug, warn};
 
 #[cfg(unix)]
-use crate::commands::helpers::{is_process_running, read_pid, send_signal};
+use crate::commands::helpers::{
+    STOP_DEADLINE_SOURCE, force_kill, is_process_running, read_pid, send_signal, stop_deadline,
+    wait_for_exit,
+};
 use crate::{
     cli,
     commands::helpers::{
@@ -41,14 +41,11 @@ use crate::{
 /// Worker PID filename (separate from server's crap.pid).
 const PID_FILENAME: &str = "crap-worker.pid";
 
-/// Stop a running detached worker.
-///
-/// # Errors
-///
-/// Returns an error if no PID file is found, the process can't be signalled,
-/// or the worker fails to exit after `SIGTERM` and `SIGKILL`.
+/// The PID of the running detached worker, or an error naming why there is
+/// none to stop. A PID file left behind by a worker that is gone is removed on
+/// the way out.
 #[cfg(unix)]
-pub fn stop(config_dir: &Path) -> Result<()> {
+fn running_pid(config_dir: &Path) -> Result<u32> {
     let pid = read_pid(config_dir, PID_FILENAME).context(
         "No worker PID file found — is there a detached worker running?\n\
          Start one with: crap-cms work --detach",
@@ -60,33 +57,50 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         bail!("Worker process {pid} is not running (stale PID file removed)");
     }
 
-    send_signal(pid, libc::SIGTERM)?;
+    Ok(pid)
+}
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-
-    while Instant::now() < deadline {
-        if !is_process_running(pid) {
-            helpers::remove_pid_file(config_dir, PID_FILENAME);
-
-            cli::success(&format!("Stopped worker (PID {pid})"));
-
-            return Ok(());
-        }
-
-        sleep(Duration::from_millis(100));
-    }
-
+/// The worker outlasted its stop deadline: force-kill it and clean up.
+#[cfg(unix)]
+fn force_stop(config_dir: &Path, pid: u32, grace: Duration) {
     cli::warning(&format!(
-        "Worker {pid} did not stop within 10s, sending SIGKILL"
+        "Worker {pid} did not stop within {}s, sending SIGKILL",
+        grace.as_secs()
     ));
 
-    let _ = send_signal(pid, libc::SIGKILL);
-
-    sleep(Duration::from_millis(500));
-
+    force_kill(pid);
     helpers::remove_pid_file(config_dir, PID_FILENAME);
 
     cli::success(&format!("Force-stopped worker (PID {pid})"));
+}
+
+/// Stop a running detached worker.
+///
+/// # Errors
+///
+/// Returns an error if no PID file is found or the process can't be signalled.
+#[cfg(unix)]
+pub fn stop(config_dir: &Path) -> Result<()> {
+    let pid = running_pid(config_dir)?;
+
+    send_signal(pid, libc::SIGTERM)?;
+
+    let grace = stop_deadline(config_dir);
+
+    info!(
+        "Waiting up to {}s for worker {pid} to finish its in-flight jobs ({STOP_DEADLINE_SOURCE})",
+        grace.as_secs()
+    );
+
+    if !wait_for_exit(pid, grace) {
+        force_stop(config_dir, pid, grace);
+
+        return Ok(());
+    }
+
+    helpers::remove_pid_file(config_dir, PID_FILENAME);
+
+    cli::success(&format!("Stopped worker (PID {pid})"));
 
     Ok(())
 }

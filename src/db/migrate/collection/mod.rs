@@ -17,14 +17,20 @@ pub(super) use create::create_collection_table;
 pub(crate) mod test_helpers {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::CollectionDefinition;
-    use crate::core::{FieldDefinition, FieldType};
-    use crate::db::{DbPool, pool};
+    use crate::core::{FieldDefinition, FieldType, Registry};
+    use crate::db::{DbPool, migrate::sync_all, pool};
     use tempfile::TempDir;
 
+    /// A pool whose system tables exist, created through the production sync
+    /// with an empty registry — the migration paths under test read and write
+    /// `_crap_meta`, so a pool without it is not the database they run against.
     pub(crate) fn in_memory_pool() -> (TempDir, DbPool) {
         let dir = TempDir::new().expect("temp dir");
         let config = CrapConfig::default();
         let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
+
+        sync_all(&p, &Registry::new(), &LocaleConfig::default()).expect("system tables");
+
         (dir, p)
     }
 

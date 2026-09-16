@@ -15,6 +15,7 @@ use crate::{
                 ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
                 reconcile_scalar_list_column, sync_join_tables, sync_versions_table, table_exists,
             },
+            locale_change::{LocaleShape, column_plans},
         },
         query::helpers::{global_table, locale_column, quote_ident},
     },
@@ -165,35 +166,35 @@ fn add_field_columns(
     existing: &HashSet<String>,
     column_types: &HashMap<String, String>,
 ) -> Result<()> {
-    for spec in &collect_column_specs(&def.fields, locale_config) {
-        if spec.is_localized {
-            for locale in &locale_config.locales {
-                let col_name = locale_column(&spec.col_name, locale)?;
-                add_field_column_if_missing(
-                    conn,
-                    table_name,
-                    &col_name,
-                    spec,
-                    existing,
-                    column_types,
-                )?;
-            }
-        } else {
-            add_field_column_if_missing(
+    let specs = collect_column_specs(&def.fields, locale_config);
+    let shape = LocaleShape::load(conn, table_name, &specs)?;
+
+    for spec in &specs {
+        // A field whose `localized` flag changed reads its values from another
+        // column from then on; the plan carries them across so the content
+        // stays reachable, and the shape catches a flag flipped back after the
+        // column it moves into was already created.
+        for plan in column_plans(&spec.col_name, spec.is_localized, locale_config)? {
+            let created = add_field_column_if_missing(
                 conn,
                 table_name,
-                &spec.col_name,
+                &plan.name,
                 spec,
                 existing,
                 column_types,
             )?;
+
+            if shape.must_carry(&spec.col_name, created) {
+                plan.carry_values(conn, table_name, existing)?;
+            }
         }
     }
 
-    Ok(())
+    shape.record(conn, table_name)
 }
 
-/// Build a field column definition and add it if it doesn't already exist.
+/// Build a field column definition and add it if it doesn't already exist,
+/// reporting whether this call created it.
 ///
 /// Routes the type through the shared `ColumnSpec::ddl_type` so a scalar
 /// `has_many` field (a JSON array stored in TEXT) isn't given a numeric column
@@ -206,7 +207,7 @@ fn add_field_column_if_missing(
     spec: &ColumnSpec,
     existing: &HashSet<String>,
     column_types: &HashMap<String, String>,
-) -> Result<()> {
+) -> Result<bool> {
     if existing.contains(col_name) {
         // Mirror the collection alter path: an existing scalar has-many column
         // mistyped as numeric on an older Postgres database is reconciled to
@@ -215,7 +216,7 @@ fn add_field_column_if_missing(
             reconcile_scalar_list_column(conn, table_name, col_name, column_types)?;
         }
 
-        return Ok(());
+        return Ok(false);
     }
 
     let col_def = build_col_def(
@@ -224,7 +225,9 @@ fn add_field_column_if_missing(
         spec.companion_text,
         spec.field,
     );
-    add_column_if_missing(conn, table_name, col_name, &col_def, existing)
+    add_column_if_missing(conn, table_name, col_name, &col_def, existing)?;
+
+    Ok(true)
 }
 
 /// Add a system column if condition is true and column doesn't exist.
@@ -285,6 +288,75 @@ mod tests {
         assert_eq!(
             row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
             column_value(&def.fields[0], &json!([1, 2]), None)
+        );
+    }
+
+    /// A global's fields switch localization the same way a collection's do:
+    /// the content follows the default locale's column instead of being
+    /// stranded in the bare one.
+    #[test]
+    fn a_global_keeps_its_values_when_a_field_becomes_localized() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let shared = simple_global("settings", vec![text_field("tagline")]);
+        sync_global_table(&conn, "settings", &shared, &locale_en_de()).unwrap();
+        conn.execute(
+            "UPDATE _global_settings SET tagline = 'Hi' WHERE id = 'default'",
+            &[],
+        )
+        .unwrap();
+
+        let localized = simple_global("settings", vec![localized_field("tagline")]);
+        sync_global_table(&conn, "settings", &localized, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT tagline__en FROM _global_settings WHERE id = 'default'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("tagline__en").unwrap(), "Hi");
+    }
+
+    /// Regression: the carry keyed on column creation, so flipping a global's
+    /// field back found the bare column already there and carried nothing — the
+    /// reads returned the value it held before the first flip and every edit
+    /// made in between was lost to the reader.
+    #[test]
+    fn a_global_field_flipped_back_keeps_the_edits_made_in_between() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let shared = simple_global("settings", vec![text_field("tagline")]);
+        let localized = simple_global("settings", vec![localized_field("tagline")]);
+
+        sync_global_table(&conn, "settings", &shared, &locale_en_de()).unwrap();
+        conn.execute(
+            "UPDATE _global_settings SET tagline = 'Hi' WHERE id = 'default'",
+            &[],
+        )
+        .unwrap();
+
+        sync_global_table(&conn, "settings", &localized, &locale_en_de()).unwrap();
+        conn.execute(
+            "UPDATE _global_settings SET tagline__en = 'Edited' WHERE id = 'default'",
+            &[],
+        )
+        .unwrap();
+
+        sync_global_table(&conn, "settings", &shared, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT tagline FROM _global_settings WHERE id = 'default'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("tagline").unwrap(),
+            "Edited",
+            "the reads must follow the content, not the pre-flip copy"
         );
     }
 
@@ -838,6 +910,10 @@ mod tests {
             eprintln!("skipping: TEST_DATABASE_URL not set");
             return;
         };
+
+        // The alter path reads and writes `_crap_meta`; the shared PG test
+        // database gets its system tables the way production does.
+        crate::db::migrate::sync_all(&pool, &crate::core::Registry::new(), &no_locale()).unwrap();
 
         let conn = pool.get().expect("get PG connection");
         let slug = crate::db::pg_test::unique_slug("gcfg");

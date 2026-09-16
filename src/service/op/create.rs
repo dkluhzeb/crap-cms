@@ -8,7 +8,7 @@ use crate::{
 
 use crate::core::Builder;
 
-use super::Operation;
+use super::{Operation, locale::write_locale_ctx};
 
 /// Owned arguments for [`Create`]. `password` arrives already separated from
 /// the data map by the codec's reserved-field handling; the service write
@@ -54,6 +54,8 @@ impl Operation for Create {
             events: _,
             trusted_upload_metadata,
         } = args;
+
+        let locale_ctx = write_locale_ctx(locale_ctx)?;
 
         create_document(
             ctx,

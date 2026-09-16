@@ -3,6 +3,7 @@
 mod backup;
 mod cleanup;
 mod console;
+mod helpers;
 mod manifest;
 mod migrate;
 mod restore;

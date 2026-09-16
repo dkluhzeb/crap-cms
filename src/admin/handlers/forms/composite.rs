@@ -3,9 +3,12 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::{
-    BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
-    flatten_array_sub_fields,
+use crate::{
+    admin::handlers::shared::renders_in_admin_form,
+    core::{
+        BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+        flatten_array_sub_fields,
+    },
 };
 
 use super::select_has_many::canonical_json_array;
@@ -141,10 +144,16 @@ fn parse_row(entries: Vec<(String, String)>, flat_defs: &[&FieldDefinition]) -> 
     Value::Object(obj)
 }
 
-/// Whether `field`'s subtree holds a checkbox, so a group that submitted
-/// nothing still has to be materialized. Stops at an array/blocks boundary: a
-/// row the form never submitted is no row at all, not a row of unchecked boxes.
+/// Whether `field`'s subtree holds a checkbox the row's form rendered, so a
+/// group that submitted nothing still has to be materialized. Stops at an
+/// array/blocks boundary: a row the form never submitted is no row at all, not
+/// a row of unchecked boxes. A hidden field is not rendered, so it never forces
+/// a group into existence.
 fn holds_checkbox(field: &FieldDefinition) -> bool {
+    if !renders_in_admin_form(field) {
+        return false;
+    }
+
     if field.field_type == FieldType::Checkbox {
         return true;
     }
@@ -167,8 +176,16 @@ fn holds_checkbox(field: &FieldDefinition) -> bool {
 /// all: a group whose fields are all unchecked checkboxes sends nothing, and
 /// without the group object the row carries no edit for it and the stored
 /// `true` survives the uncheck.
+///
+/// A field the row's form never rendered is skipped — [`renders_in_admin_form`]
+/// is the same answer the top-level normalizer uses, so a hidden checkbox keeps
+/// its stored value at every nesting level.
 fn fill_missing_checkboxes(obj: &mut Map<String, Value>, defs: &[&FieldDefinition]) {
     for def in defs {
+        if !renders_in_admin_form(def) {
+            continue;
+        }
+
         if def.field_type == FieldType::Checkbox {
             obj.entry(def.name.clone())
                 .or_insert_with(|| Value::String("0".to_string()));
@@ -250,7 +267,7 @@ pub(crate) fn parse_blocks_form_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldTab, FieldType};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }
@@ -290,6 +307,42 @@ mod tests {
         let result = parse_composite_form_data(&form, "items", &sub_defs);
 
         assert_eq!(result[0]["done"], "0");
+    }
+
+    /// Regression: a checkbox inside a row that the form never rendered must
+    /// stay absent, so the write keeps its stored value — the same rule the
+    /// top-level normalizer follows. A hidden group holding only hidden boxes
+    /// is not materialized at all.
+    #[test]
+    fn a_missing_checkbox_the_row_never_rendered_stays_absent() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "First".to_string());
+
+        let hidden_box = FieldDefinition::builder("internal", FieldType::Checkbox)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        let hidden_group = FieldDefinition::builder("system", FieldType::Group)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .fields(vec![make_field("flag", FieldType::Checkbox)])
+            .build();
+        let sub_defs = vec![
+            make_field("title", FieldType::Text),
+            make_field("done", FieldType::Checkbox),
+            hidden_box,
+            hidden_group,
+        ];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+
+        assert_eq!(result[0]["done"], "0", "a rendered box is still unchecked");
+        assert!(
+            result[0].get("internal").is_none(),
+            "a hidden box in a row keeps its stored value"
+        );
+        assert!(
+            result[0].get("system").is_none(),
+            "a hidden group is not materialized"
+        );
     }
 
     /// Regression: a group inside a row whose only fields are unchecked

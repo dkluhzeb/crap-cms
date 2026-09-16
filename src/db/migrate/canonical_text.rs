@@ -11,11 +11,10 @@
 //! would break uniqueness, so startup stops and names them instead of choosing
 //! one.
 
-use std::{collections::BTreeMap, fmt::Write as _, slice};
+use std::{collections::BTreeMap, slice};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Map, Value, from_str};
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::{
@@ -26,8 +25,14 @@ use crate::{
         field_children, flatten_array_sub_fields, has_canonical_form,
     },
     db::{
-        DbConnection, DbValue,
-        migrate::{collection::compound_index_columns, helpers::table_exists, meta},
+        DbConnection, DbRow, DbValue,
+        migrate::{
+            collection::compound_index_columns,
+            helpers::{
+                Scan, block_paths, field_paths, for_each_row, update_by_id, versioned_fingerprint,
+            },
+            meta,
+        },
         query::helpers::{
             global_table, join_table, locale_column, prefixed_name, walk_leaf_fields,
         },
@@ -39,8 +44,16 @@ use crate::{
 /// retyped later runs it again.
 const MIGRATION_VERSION: &str = "1";
 
-fn meta_key(slug: &str) -> String {
-    format!("canonical_text:{slug}")
+/// The gate of one target, keyed by its table so a collection and a global of
+/// the same slug can't share one — sharing it would leave the two rewriting
+/// each other's gate on every boot.
+fn meta_key(table: &str) -> String {
+    format!("canonical_text:{table}")
+}
+
+/// The leaves a pass rewrites: the ones whose values have a canonical form.
+fn keeps_canonical(field: &FieldDefinition) -> bool {
+    has_canonical_form(&field.field_type)
 }
 
 /// How a stored column holds email or text values.
@@ -76,8 +89,8 @@ impl Stored {
     fn signature(&self) -> String {
         match self {
             Self::Value(field_type) => field_type.as_str().to_string(),
-            Self::Json(field) => canonical_paths(slice::from_ref(field.as_ref())),
-            Self::Blocks(defs) => blocks_paths(defs),
+            Self::Json(field) => field_paths(slice::from_ref(field.as_ref()), &keeps_canonical),
+            Self::Blocks(defs) => block_paths(defs, &keeps_canonical),
         }
     }
 }
@@ -171,12 +184,22 @@ fn canonicalize_one(
     target: &Target<'_>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
+    let table = target.table();
+
+    // The gate was once keyed by slug. A collection's slug IS its table, so
+    // only a global left a row behind — one that names no pass any more and
+    // would sit in the database forever. Deleting an absent key changes
+    // nothing, so this runs whether or not the pass does.
+    if table != target.slug() {
+        meta::delete(conn, &meta_key(target.slug()))?;
+    }
+
     let columns = text_columns(target, locale_config)?;
     if columns.is_empty() {
         return Ok(());
     }
 
-    let key = meta_key(target.slug());
+    let key = meta_key(&table);
     let gate = gate_value(&columns);
     if meta::get(conn, &key)?.as_deref() == Some(gate.as_str()) {
         return Ok(());
@@ -201,21 +224,16 @@ fn canonicalize_one(
 
 /// `{version}:{fingerprint}` of the columns a pass covers.
 fn gate_value(columns: &[Column]) -> String {
-    let mut hasher = Sha256::new();
+    let parts: Vec<String> = columns
+        .iter()
+        .map(|c| {
+            let unique = if c.unique { "!" } else { "" };
 
-    for c in columns {
-        let unique = if c.unique { "!" } else { "" };
-        hasher.update(
-            format!("{}.{}{unique}={}\n", c.table, c.name, c.stored.signature()).as_bytes(),
-        );
-    }
+            format!("{}.{}{unique}={}", c.table, c.name, c.stored.signature())
+        })
+        .collect();
 
-    let mut value = format!("{MIGRATION_VERSION}:");
-    for byte in &hasher.finalize()[..8] {
-        let _ = write!(value, "{byte:02x}");
-    }
-
-    value
+    versioned_fingerprint(MIGRATION_VERSION, &parts)
 }
 
 /// Every column of a target holding email or text values: main-table columns
@@ -338,39 +356,6 @@ fn holds_text(fields: &[FieldDefinition]) -> bool {
     })
 }
 
-/// The email and text fields of `fields` at any depth, named by path.
-fn canonical_paths(fields: &[FieldDefinition]) -> String {
-    let mut paths = Vec::new();
-
-    for field in fields {
-        match field_children(field) {
-            FieldChildren::Leaf if has_canonical_form(&field.field_type) => {
-                paths.push(format!("{}:{}", field.name, field.field_type.as_str()));
-            }
-            FieldChildren::Leaf => {}
-            FieldChildren::Group(sub) | FieldChildren::Array(sub) => {
-                paths.push(format!("{}({})", field.name, canonical_paths(sub)));
-            }
-            FieldChildren::Wrapper(sub) => paths.push(canonical_paths(sub)),
-            FieldChildren::Tabs(tabs) => {
-                paths.extend(tabs.iter().map(|tab| canonical_paths(&tab.fields)));
-            }
-            FieldChildren::Blocks(defs) => {
-                paths.push(format!("{}[{}]", field.name, blocks_paths(defs)));
-            }
-        }
-    }
-
-    paths.join(",")
-}
-
-fn blocks_paths(defs: &[BlockDefinition]) -> String {
-    defs.iter()
-        .map(|d| format!("{}:{}", d.block_type, canonical_paths(&d.fields)))
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
 /// Canonicalize the email and text values of a JSON value — the value of the
 /// field `name` when given, otherwise an object of fields. `None` when nothing
 /// changes or the value isn't JSON of that shape.
@@ -441,24 +426,44 @@ fn column_collisions(
         return Ok(Vec::new());
     };
 
-    let mut by_value: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-    for (id, values) in stored_rows(conn, &column.table, &[&column.name], active_only)? {
-        let Some(Some(raw)) = values.into_iter().next() else {
-            continue;
-        };
-
-        let canonical = canonical_text(field_type, &raw).unwrap_or(raw);
-        if !canonical.is_empty() {
-            by_value.entry(canonical).or_default().push(id);
-        }
-    }
+    let by_value = column_canonical_ids(conn, column, field_type, active_only)?;
 
     Ok(by_value
         .into_iter()
         .filter(|(_, ids)| ids.len() > 1)
         .map(|(value, ids)| format!("{}: \"{value}\" — {}", column.name, ids.join(", ")))
         .collect())
+}
+
+/// The ids holding each canonical value of a unique column. Only the values —
+/// not the rows — are held, so the scan costs what the column's distinct values
+/// do however many rows there are. A NULL or blank value never collides.
+fn column_canonical_ids(
+    conn: &dyn DbConnection,
+    column: &Column,
+    field_type: &FieldType,
+    active_only: bool,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut by_value: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let columns = [column.name.as_str()];
+    let scan = Scan::builder(&column.table, &columns)
+        .active_only(active_only)
+        .build();
+
+    for_each_row(conn, &scan, &mut |row| {
+        let (Some(id), Some(raw)) = (row.opt_text_at(0), row.opt_text_at(1)) else {
+            return Ok(());
+        };
+
+        let canonical = canonical_text(field_type, &raw).unwrap_or(raw);
+        if !canonical.is_empty() {
+            by_value.entry(canonical).or_default().push(id);
+        }
+
+        Ok(())
+    })?;
+
+    Ok(by_value)
 }
 
 /// A unique index spanning several fields, and the columns it spans.
@@ -491,13 +496,7 @@ fn index_collisions(
     }
 
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    let mut by_values: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
-
-    for (id, values) in stored_rows(conn, &table, &names, false)? {
-        if let Some(canonical) = canonical_row(values, &types) {
-            by_values.entry(canonical).or_default().push(id);
-        }
-    }
+    let by_values = index_canonical_ids(conn, &table, &names, &types)?;
 
     Ok(by_values
         .into_iter()
@@ -551,38 +550,40 @@ fn canonical_row(values: Vec<Option<String>>, types: &[Option<&FieldType>]) -> O
         .collect()
 }
 
-/// The id and the values of `columns` of every row of `table`, soft-deleted
-/// rows left out when `active_only`.
-fn stored_rows(
+/// The ids holding each combination of canonical index values. The scan leaves
+/// out the rows whose last index column is NULL — [`canonical_row`] drops every
+/// row holding a NULL anyway, so those could never have collided.
+fn index_canonical_ids(
     conn: &dyn DbConnection,
     table: &str,
-    columns: &[&str],
-    active_only: bool,
-) -> Result<Vec<(String, Vec<Option<String>>)>> {
-    if !table_exists(conn, table)? {
-        return Ok(Vec::new());
-    }
+    names: &[&str],
+    types: &[Option<&FieldType>],
+) -> Result<BTreeMap<Vec<String>, Vec<String>>> {
+    let mut by_values: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
 
-    let select: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
-    let active = if active_only {
-        " WHERE _deleted_at IS NULL"
-    } else {
-        ""
-    };
-    let sql = format!("SELECT id, {} FROM \"{table}\"{active}", select.join(", "));
+    // A scan leaves out the rows whose LAST listed column is NULL. That is what
+    // this check wants: a NULL never collides in a unique index, and
+    // `canonical_row` drops every row holding one anyway. Listing the columns
+    // in another order, or reading the rows another way, would only add rows
+    // that are then dropped.
+    let scan = Scan::builder(table, names).build();
 
-    Ok(conn
-        .query_all(&sql, &[])?
-        .iter()
-        .filter_map(|row| {
-            let id = row.opt_text_at(0)?;
-            let values = (1..=columns.len())
-                .map(|i| row.get_value(i).and_then(value_text))
-                .collect();
+    for_each_row(conn, &scan, &mut |row| {
+        let Some(id) = row.opt_text_at(0) else {
+            return Ok(());
+        };
+        let values = (1..=names.len())
+            .map(|i| row.get_value(i).and_then(value_text))
+            .collect();
 
-            Some((id, values))
-        })
-        .collect())
+        if let Some(canonical) = canonical_row(values, types) {
+            by_values.entry(canonical).or_default().push(id);
+        }
+
+        Ok(())
+    })?;
+
+    Ok(by_values)
 }
 
 /// A stored value as comparable text — `None` for NULL. An index can span
@@ -597,21 +598,19 @@ fn value_text(value: &DbValue) -> Option<String> {
     }
 }
 
-/// Rewrite the values of one column that aren't canonical yet. Returns how
-/// many rows changed.
+/// Rewrite the values of one column that aren't canonical yet, a page at a
+/// time. Returns how many rows changed.
 fn rewrite_column(conn: &dyn DbConnection, column: &Column) -> Result<usize> {
-    let updates = canonical_updates(conn, column)?;
-    let rewritten = updates.len();
+    let selected = scanned_columns(column);
+    let scan = Scan::builder(&column.table, &selected).build();
+    let update = update_by_id(conn, &column.table, &column.name);
+    let mut rewritten = 0;
 
-    let update = format!(
-        "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
-        column.table,
-        column.name,
-        conn.placeholder(1),
-        conn.placeholder(2)
-    );
+    for_each_row(conn, &scan, &mut |row| {
+        let Some((id, canonical)) = canonical_update(column, row) else {
+            return Ok(());
+        };
 
-    for (id, canonical) in updates {
         conn.execute(&update, &[DbValue::Text(canonical), DbValue::Text(id)])
             .with_context(|| {
                 format!(
@@ -619,43 +618,38 @@ fn rewrite_column(conn: &dyn DbConnection, column: &Column) -> Result<usize> {
                     column.table, column.name
                 )
             })?;
-    }
+        rewritten += 1;
+
+        Ok(())
+    })?;
 
     Ok(rewritten)
 }
 
-/// The id and canonical value of each row of a column whose value isn't
-/// canonical yet.
-fn canonical_updates(conn: &dyn DbConnection, column: &Column) -> Result<Vec<(String, String)>> {
-    if !table_exists(conn, &column.table)? {
-        return Ok(Vec::new());
+/// The columns a rewrite reads beside `id`: a blocks row's type decides which
+/// block definition its `data` is canonicalized against, so it comes along. The
+/// value is last, the one the scan requires to be non-NULL.
+fn scanned_columns(column: &Column) -> Vec<&str> {
+    match column.stored {
+        Stored::Blocks(_) => vec!["_block_type", column.name.as_str()],
+        _ => vec![column.name.as_str()],
     }
+}
 
-    let block_type = if matches!(column.stored, Stored::Blocks(_)) {
-        "_block_type"
+/// The id and canonical value of a scanned row, or `None` when its value is
+/// canonical already.
+fn canonical_update(column: &Column, row: &DbRow) -> Option<(String, String)> {
+    let blocks = matches!(column.stored, Stored::Blocks(_));
+    let (value_at, block_type) = if blocks {
+        (2, row.opt_text_at(1))
     } else {
-        "NULL"
+        (1, None)
     };
-    let rows = conn.query_all(
-        &format!(
-            "SELECT id, \"{col}\", {block_type} FROM \"{table}\" WHERE \"{col}\" IS NOT NULL",
-            col = column.name,
-            table = column.table,
-        ),
-        &[],
-    )?;
 
-    Ok(rows
-        .iter()
-        .filter_map(|row| {
-            let (id, raw) = (row.opt_text_at(0)?, row.opt_text_at(1)?);
-            let canonical = column
-                .stored
-                .canonical(&raw, row.opt_text_at(2).as_deref())?;
+    let (id, raw) = (row.opt_text_at(0)?, row.opt_text_at(value_at)?);
+    let canonical = column.stored.canonical(&raw, block_type.as_deref())?;
 
-            Some((id, canonical))
-        })
-        .collect())
+    Some((id, canonical))
 }
 
 #[cfg(test)]
@@ -663,13 +657,54 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::db::InMemoryConn;
+    use crate::db::{InMemoryConn, migrate::helpers::PAGE_SIZE};
 
     fn registry_with(def: CollectionDefinition) -> Registry {
         let shared = Registry::shared();
         shared.write().unwrap().register_collection(def);
 
         (*Registry::snapshot(&shared)).clone()
+    }
+
+    fn registry_with_global(def: GlobalDefinition) -> Registry {
+        let shared = Registry::shared();
+        shared.write().unwrap().register_global(def);
+
+        (*Registry::snapshot(&shared)).clone()
+    }
+
+    /// The gate moved from the slug to the table. A collection's slug is its
+    /// table, so its row carried on; a GLOBAL's old `:{slug}` row named no pass
+    /// any more and outlived the conversion forever.
+    #[test]
+    fn removes_a_globals_slug_keyed_gate() {
+        let conn = InMemoryConn::open();
+        conn.0
+            .execute_batch(
+                "CREATE TABLE _crap_meta (key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE _global_site (id TEXT PRIMARY KEY, tagline TEXT);
+                 INSERT INTO _global_site VALUES ('default', 'Rene\u{301}');
+                 INSERT INTO _crap_meta VALUES ('canonical_text:site', '1:stale');",
+            )
+            .unwrap();
+
+        let mut def = GlobalDefinition::new("site");
+        def.fields = vec![text("tagline")];
+
+        canonicalize_if_needed(&conn, &registry_with_global(def), &locales()).unwrap();
+
+        assert_eq!(meta::get(&conn, "canonical_text:site").unwrap(), None);
+        assert!(
+            meta::get(&conn, &meta_key("_global_site"))
+                .unwrap()
+                .is_some(),
+            "the table-keyed gate is the live one"
+        );
+        assert_eq!(
+            stored(&conn, "SELECT tagline FROM _global_site"),
+            "Ren\u{e9}",
+            "the pass still runs"
+        );
     }
 
     fn stored(conn: &InMemoryConn, sql: &str) -> String {
@@ -993,5 +1028,55 @@ mod tests {
 
         canonicalize_if_needed(&conn, &registry_with(people_def()), &locales()).unwrap();
         assert_eq!(stored(&conn, "SELECT name FROM people"), "Ren\u{e9}");
+    }
+
+    /// Regression: the rewrite read every row of a column in one SELECT, so a
+    /// large table was materialised whole inside the migration transaction.
+    /// The scan is paged — and still reaches the last row, in the main table,
+    /// an array join table and a blocks join table alike.
+    #[test]
+    fn rewrites_every_row_past_the_first_page() {
+        let conn = InMemoryConn::open();
+        people_tables(&conn);
+        let rows = PAGE_SIZE * 2 + 1;
+
+        for i in 0..rows {
+            let id = format!("r{i:05}");
+            conn.0
+                .execute(
+                    "INSERT INTO people (id, name) VALUES (?1, 'Rene\u{301}')",
+                    [&id],
+                )
+                .unwrap();
+            conn.0
+                .execute(
+                    "INSERT INTO people_contacts VALUES (?1, 'p1', 0, 'Bob@Example.com', NULL)",
+                    [&id],
+                )
+                .unwrap();
+            conn.0
+                .execute(
+                    "INSERT INTO people_content VALUES (?1, 'p1', 0, 'quote', '{\"body\":\"Noe\u{308}l\"}')",
+                    [&id],
+                )
+                .unwrap();
+        }
+
+        canonicalize_if_needed(&conn, &registry_with(people_def()), &locales()).unwrap();
+
+        for (sql, expected) in [
+            ("SELECT COUNT(*) FROM people WHERE name = 'Ren\u{e9}'", rows),
+            (
+                "SELECT COUNT(*) FROM people_contacts WHERE address = 'bob@example.com'",
+                rows,
+            ),
+            (
+                "SELECT COUNT(*) FROM people_content WHERE json_extract(data, '$.body') = 'No\u{eb}l'",
+                rows,
+            ),
+        ] {
+            let count: i64 = conn.0.query_row(sql, [], |r| r.get(0)).unwrap();
+            assert_eq!(count, i64::try_from(expected).unwrap(), "{sql}");
+        }
     }
 }

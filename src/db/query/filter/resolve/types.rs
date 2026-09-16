@@ -5,13 +5,15 @@ use crate::core::FieldType;
 /// A filter resolved to its SQL representation.
 #[derive(Debug)]
 pub(in crate::db::query::filter) enum ResolvedFilter {
-    /// Direct column on parent table (existing behavior).
+    /// Direct column on the parent table, as the ready-to-embed SQL
+    /// expression a read takes its value from — a quoted column, or the
+    /// fallback `COALESCE` of a localized one, exactly as the SELECT emits it.
     ///
     /// `field_type` is the leaf field's type, used to cast filter operand
     /// values when binding. `None` when the type cannot be determined —
     /// binding falls back to `DbValue::Text`.
     Column {
-        col: String,
+        expr: String,
         field_type: Option<FieldType>,
     },
     /// EXISTS subquery against a join table.

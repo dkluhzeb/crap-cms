@@ -8,6 +8,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Admin template context: the duplicate locale-picker keys are gone.** The
+  collection edit/create, collection form-error, global edit and global
+  form-error page contexts no longer emit `has_locales` / `current_locale` /
+  `locales`. No shipped template read them — they were a second description
+  of the same editor locale. Template overrides read `has_editor_locales`
+  (boolean), `editor_locale` (the active locale code) and `editor_locales`
+  (array of `{ value, label, selected }`), which carry identical values.
+- **Publishing means "the latest draft plus this request" on every surface.**
+  An update with `draft = false` while a draft is pending takes the latest
+  draft snapshot as its base and applies the request's fields on top: the
+  drafted title, body, rows and file become live, and a field the request
+  sends wins. A bare API update used to publish only the fields it sent and
+  leave the rest of the draft pending; a draft saved with a new file never
+  published that file at all (the derived upload columns were stripped as
+  untrusted, so the document kept its old file). A publisher who may not write
+  a field cannot publish a drafted change to it.
+- **A stored upload file is deleted only when nothing references it.** A key
+  is removed after the write commits when neither the live row nor any draft
+  or version snapshot of the document names it; replacing a file on a
+  versioned collection keeps the previous file until the last snapshot naming
+  it is pruned, `max_versions` pruning deletes the files it releases, and a
+  superseded draft's file goes when no snapshot names it. Queued-format
+  conversions of a drafted file are enqueued at publish, not at draft save.
+  Purge deletes every file any snapshot of the document references.
+- **`locale = "all"` is rejected on writes.** A create, update, bulk write,
+  global update, validate or upload write that passes `locale = "all"` used to
+  write the default locale silently and skip the shared-field lock; it is now a
+  `locale` validation error on every surface. Writes target exactly one
+  locale.
+- **Graceful shutdown drains running jobs before exiting**, and `crap-cms serve
+  --stop` / `work --stop` wait for the same deadline before sending SIGKILL: the longest
+  configured `[jobs.queues.*] timeout` plus five minutes (3900 s with the
+  defaults) instead of a fixed 10 s. A stop used to kill jobs mid-run with a fresh
+  heartbeat, leaving them `running` until stale recovery and making a queued
+  bulk run terminally stale. Lower the relevant queue timeout for a faster
+  stop; a Lua job's own `timeout` is not part of the deadline.
+- **`[upload] storage = "custom"` no longer falls back to local storage** when
+  the storage is created without a Lua runtime; it is an error naming the
+  runtime-backed constructor. No shipped code path took the fallback; a plugin
+  calling `create_storage` directly must use the lease-taking variant.
 - **Values inside blocks and nested rows are stored typed.** In a blocks row, and
   in any group, array or blocks nested inside a row, a checkbox is `true`/`false`, a
   number a number, a scalar has-many list a typed array, a date normalized (a
@@ -409,11 +449,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   otherwise ambiguous with `create_<many_slug>`), so they are now rejected at
   load. **Migration:** rename any such collection/global.
 
-- **MCP `create_many` / `update_many` reject a `password` field on auth
-  collections** (matching gRPC and Lua), instead of setting it with no policy
-  check (`create_many`) or silently ignoring it (`update_many`). Set passwords
-  via the single `create` / `update` tool. On non-auth collections a field named
-  `password` is now preserved as ordinary data (previously dropped).
+- **MCP `update_many` rejects a `password` field on auth collections**
+  (matching gRPC and Lua) instead of silently ignoring it; `create_many`
+  validates and hashes each item's password like the single `create` tool. On
+  non-auth collections a field named `password` is now preserved as ordinary
+  data (previously dropped).
 
 - **gRPC document values now use a typed `FieldValue` message instead of
   `google.protobuf.Struct`.** Every `data` / `fields` field on the wire
@@ -429,11 +469,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   via `null_value`) instead of Struct's `number_value`. Integers now arrive as
   `int_value`, not a float.
 
-- **gRPC `CreateMany` rejects a `password` field for auth collections.**
-  Previously a per-document `password` in a bulk create was silently dropped
-  (the user was created unable to authenticate). It now returns
-  `INVALID_ARGUMENT`, matching `UpdateMany`. **Migration:** set the password with
-  a follow-up single `Create` / `Update`, which extract and policy-validate it.
+- **gRPC `CreateMany` no longer drops a per-document `password`** on auth
+  collections. It used to be silently discarded (the user was created unable to
+  authenticate); each item's password is now validated against the policy and
+  hashed, as on every other surface. `UpdateMany` still rejects a `password`,
+  because it applies one value to many rows.
 
 - **Scheduler behavior changes (stabilization).** Three runtime behaviors
   changed and are now frozen: (1) a crashed worker's in-flight jobs are
@@ -2080,6 +2120,148 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The first startup erased multi-value selections inside array and blocks
+  rows saved by an earlier release.** Those forms stored a has-many text,
+  number, select or radio list in a nested row as comma-separated text; the
+  one-time conversion to typed values read only a JSON array and stored `[]`.
+  A comma-separated list now reads as its elements, and the conversion runs
+  again on databases it already touched.
+- **Correcting a validation error in the admin form wrote to the default
+  locale.** The re-rendered form carried no `_locale`, so the corrected save of
+  a German edit landed in the English columns and overwrote shared fields; the
+  re-render also showed shared fields editable and dropped the auth inputs and,
+  on create, the submitted upload metadata. The error page now carries the same
+  locale and auth data the form was rendered with.
+- **A display condition on a field inside a group never fired unless a sibling
+  at the same level also had one**; the condition walk returned early when a
+  level declared none. Conditions are evaluated at every depth.
+- **`crap-cms backup --include-uploads` reported "Backup complete" when `tar`
+  was missing or failed**; the command fails, as `restore` does.
+- **`crap-cms db cleanup` ignored global tables and never reported join rows of
+  a removed locale.** It reports orphan columns of globals and stale-locale
+  junction rows for collections and globals, and removes them with
+  `--confirm`.
+- **Every admin save unchecked a hidden checkbox and emptied a hidden
+  multi-value list.** The form renders fields with `admin.hidden` nowhere, but
+  the "absent means unchecked / empty" rule ran over every field; one predicate
+  now decides both what the form renders and what an absent value means, in
+  groups and rows too. Globals honour `admin.hidden` as collections do.
+- **Admin list cells showed a has-many select as empty and a has-many text or
+  number list as raw JSON**, and rendered a timezone date in the viewer's zone
+  while the form showed the stored zone; the cells use the form's display
+  conversions.
+- **A code field inside a group inside an array or blocks row lost its
+  language pick on save**; the group seeds every companion value now.
+- **`admin.readonly` had no effect on checkbox, select and radio fields**; they
+  render disabled with a hidden input carrying the stored value (a disabled
+  radio used to submit nothing and clear a multi-value list).
+- **A multi-value text element containing a comma was split into two by the
+  admin form** (`"Hello, world"` became two tags on the next save); the tag
+  input carries a JSON list in both directions.
+- **The tag input never showed its error state**, and a select or radio value
+  that is no longer among the declared options was shown as empty and cleared
+  by the next save; it is now shown as a marked option, and an update that
+  leaves it unchanged passes validation (a new undeclared value is still
+  rejected).
+- **Display conditions on a multi-value text or number field now see a JSON
+  list** (`["a","b"]`) instead of comma-separated text, matching what the
+  field submits.
+- **Saving a draft with a new file deleted the file the published document
+  still referenced** in the admin edit form, and replacing a file there left the
+  previous file's conversions queued so an older conversion could overwrite the
+  new derivative URLs. Every upload write now goes through the one service path
+  the API already used: a stored file is deleted only when the document row
+  stops referencing it, after the write commits, and the previous file's
+  conversions are cancelled and the new ones queued inside the write
+  transaction.
+- **An admin upload whose request was dropped mid-write could commit the row
+  and delete its files.** The cleanup guard lived in the request handler while
+  the write ran on a blocking task; it now lives with the write.
+- **Filters, sorts and cursors ignored a localized field's fallback.** With
+  `fallback = true` a document listed with its fallback value was missed by a
+  filter on that value, sorted as empty and skipped or repeated across pages;
+  select, filter, sort and keyset now share one read expression, and `count`
+  counts what `find` lists. This includes `exists`/`not_exists`: with
+  `fallback = true`, `not_exists` on a localized field now means "no value in
+  the requested locale or its fallback", as the listed values show — it used to
+  mean "no value in the requested locale" and was the way to list untranslated
+  documents. To find missing translations, read with `fallback = false` or
+  compare the per-locale map of a `locale = "all"` read. The same widening
+  applies to the match set of `update_many`/`delete_many`.
+- **Marking an existing field `localized` stranded its values.** The schema
+  sync added an empty `title__en` and left `title` unread (and `db cleanup`
+  would drop it); the default locale's column now takes the bare column's
+  values when it is created, and the reverse when localization is turned off.
+- **Adding or removing a locale left `_ref_count` wrong for references held in
+  the changed locale**, blocking or allowing deletes incorrectly; the backfill
+  runs again once when the locale list changes.
+- **Changing `default_locale` was silent**; startup now warns what it changes
+  (where existing content stays, fallback direction, completeness).
+- **Locale codes differing only by separator (`pt-BR`, `pt_BR`) were accepted**
+  and shared one column; they are rejected at config load.
+- **Restoring a version taken before a locale was added cleared that locale**;
+  a locale the snapshot never carried is left untouched. A timezone date the
+  snapshot carries without its zone restores with the zone cleared, as the
+  date's write rule says; a code field's language the snapshot doesn't name is
+  kept.
+- **A collection defined after the first startup kept space-formatted
+  timestamps** on SQLite: the one-time rewrite was gated once per database, not
+  per table.
+- **The canonical-text conversion loaded every text column of every table into
+  memory** at the first startup; it reads in pages now.
+- **A cron schedule due while the server was down never fired**: the scheduler
+  started its window at boot time although each schedule's last fire is
+  stored. The stored time is the window start, capped to one catch-up fire.
+- **A password-reset token was committed before its email was queued**, so a
+  failure in between left the account holding a live reset link nobody
+  received. Token and email job are written in one transaction, through one
+  path shared by the admin and gRPC forgot-password flows.
+- **A hard delete removed only the published row's files**, so a file that
+  only a never-published draft (or an older version) named leaked in storage.
+  The service delete, bulk delete, `crap-cms trash purge` and the retention
+  purge share one resolver that takes the live row's and every snapshot's
+  files.
+- **A crash right after sign-up could leave an account with no verification
+  email and no token**; the token and the queued email are now part of the
+  account's write transaction, and a failure to queue it fails the sign-up
+  instead of creating an unverifiable account.
+- **A live `Subscribe` stream kept the gRPC server from shutting down**, so the
+  PID file and the WAL checkpoint were skipped; streams end on shutdown and the
+  gRPC server has the same bounded drain as the admin server. gRPC health
+  reports not-serving as soon as shutdown starts, and `/ready` returns 503
+  until startup stale-job recovery has completed.
+- **The retention purge, the cron check and the fire-and-forget email tasks
+  opened write transactions on read-pool connections**, starving concurrent
+  readers on SQLite; they take a write connection now.
+- **Redis cache entries never expired at the default `max_age_secs = 0`**,
+  although the periodic clear skips Redis on that premise; entries now carry a
+  TTL (24 h by default).
+- **S3 storage reported success for rejected requests.** The S3 client is built
+  without its fail-on-error mode, so a `put` answered with 403 or 5xx returned
+  success and the document row was committed pointing at an object that was
+  never stored; a rejected `delete` left the object behind; a rejected `get`
+  served the provider's error XML as the file (cached as an image on a public
+  collection); and `exists` reported a missing object as present. Every S3
+  operation now checks the HTTP status: a rejection fails the operation with
+  the operation, key and status (never the response body), a missing object
+  is not-found on read, absent on `exists`, and a no-op on delete, as on local
+  storage.
+- **A local upload could be left truncated by a crash mid-write.** Files are
+  written to a staging sibling, synced and renamed into place, so a key never
+  holds a partial object. A leftover `.<name>.<pid>.<n>.crap-tmp` file after a
+  kill is inert and safe to delete.
+- **`crap-cms restore` left no database on disk between two renames.** A kill
+  in that window made the next `serve` create, migrate and serve an empty
+  database. The previous database is now kept at `<db>.pre-restore` (linked or
+  copied) before one overwriting rename puts the restored copy in place; the
+  live path is never absent.
+- **`crap-cms restore --include-uploads` extracted files into the local uploads
+  directory even when `[upload] storage` is S3 or custom**, and reported them
+  restored. It now skips them with a note, as `backup --include-uploads` does.
+- **An image conversion still running when its source file was replaced wrote
+  the old file's derivative URL over the new file's.** The conversion now only
+  writes if the document still references its source, and discards its output
+  otherwise.
 - **A draft read showed another locale's value for fields inside a group.** A
   group's localized sub-field was resolved beside the group instead of in it,
   so a reader saw the locale the draft was last saved in — and a read-denied
@@ -4550,6 +4732,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **The version restore confirmation lists the version's files that storage no
+  longer holds**, next to the relationships it can no longer resolve.
 - **`locale` on the MCP `list_versions` tool.** A version snapshot is returned
   in the requested locale, or as a per-locale map with `locale: "all"`, as
   `find_by_id` does; without it a snapshot comes back in the default locale.
@@ -5375,6 +5559,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- The one-time conversions are gated per table (`nested_values:{table}`,
+  `canonical_text:{table}`, `legacy_timestamps:{table}`), so a collection and a
+  global sharing a slug no longer share one gate, and the nested-values gate
+  carries a fingerprint of the columns it converts, so a field added later is
+  converted too. Retired whole-database gate keys are removed at startup.
 - Companion columns (a timezone date's `_tz`, a code field's `_lang`) are one
   list on the field definition that schema, column lists, locale handling,
   writes, array rows, snapshots, restore, field access and generated types all

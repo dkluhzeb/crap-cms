@@ -11,6 +11,9 @@ mod depth;
 mod email;
 mod hooks;
 mod jobs;
+
+#[cfg(test)]
+pub(crate) use jobs::JOB_DRAIN_GRACE_SECS;
 mod live;
 mod locale;
 mod logging;
@@ -26,7 +29,7 @@ pub use email::{EmailConfig, EmailProvider, SmtpTls};
 pub use hooks::HooksConfig;
 pub(crate) use jobs::{
     DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
-    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS,
+    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, SELF_LIMITING_JOB_GRACE_SECS,
 };
 pub use jobs::{JobsConfig, QueueConfig};
 pub use live::{LiveConfig, LiveTransport};

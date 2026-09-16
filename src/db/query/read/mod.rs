@@ -8,6 +8,7 @@ mod find;
 mod find_by_id;
 mod missing_relations;
 pub(super) mod select;
+mod stale_locale_rows;
 
 pub use back_references::{BackReference, filter_visible_ids, find_back_references};
 pub use completeness::{fetch_row_columns, localized_join_row_exists};
@@ -18,3 +19,4 @@ pub use find_by_id::{find_by_id, find_by_id_unfiltered, find_by_ids};
 pub(crate) use find_by_id::{find_by_id_raw, select_columns};
 pub use missing_relations::{MissingRelation, find_missing_relations};
 pub use select::apply_select_to_document;
+pub use stale_locale_rows::{count_rows_outside_locales, delete_rows_outside_locales};

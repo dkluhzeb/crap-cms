@@ -99,63 +99,113 @@ fn collect_locale_restore_fields(
             let base = prefixed_name(prefix, &field.name);
             let key = (base.as_str(), prefix, field.name.as_str());
 
-            // A field the snapshot carries no value for at all — no bare key and
-            // no locale column — was either removed from the restore (the
-            // caller is write-denied on it) or did not exist when the snapshot
-            // was taken. Leave its stored columns alone, exactly as a missing
-            // non-localized field is left alone, instead of NULLing every
-            // translation.
-            if !snapshot.carries(key)? {
-                return Ok(());
-            }
-
             // A snapshot taken before email and text were stored canonically holds
             // the value as typed; the restore writes the stored form. Stored
             // dates are already normalized, so no zone is applied again.
-            restore_locale_columns(set, &snapshot, key, |v| column_value(field, v, None))?;
+            //
+            // A field the snapshot carries no value for in ANY locale — no bare
+            // key and no locale column — was either removed from the restore
+            // (the caller is write-denied on it) or did not exist when the
+            // snapshot was taken, so nothing is emitted and its stored columns
+            // are left alone, exactly as a missing non-localized field is.
+            let restored =
+                restore_value_locales(set, &snapshot, key, |v| column_value(field, v, None))?;
 
-            // Each companion (`{base}_tz`, `{base}_lang`) is localized the same
-            // way and present in the snapshot (the locale SELECT emits it).
-            // Restore its per-locale values too, with the same lookup order —
-            // otherwise restoring an old version leaves the companion at its
-            // current post-edit value.
-            let companions = field
-                .companion_columns(&base)
-                .zip(field.companion_columns(&field.name));
-
-            for (column, name) in companions {
-                let companion_key = (column.as_str(), prefix, name.as_str());
-
-                restore_locale_columns(set, &snapshot, companion_key, |v| {
-                    companion_value(Some(v))
-                })?;
-            }
-
-            Ok(())
+            restore_companions(set, &snapshot, &LocalizedLeaf { field, key }, &restored)
         },
     )
 }
 
-/// Emit SET clauses restoring every locale column of a field from the
-/// snapshot: each locale takes the snapshot's value for that locale, and a
-/// locale the snapshot has no value for is set to NULL. Restoring used to NULL
-/// every non-default locale even though snapshots carry the decorated `__xx`
-/// values — wiping translations.
-fn restore_locale_columns(
+/// A localized leaf as the restore reaches it: where its value sits in the
+/// snapshot, and the definition that decides which companions a write stores
+/// beside it.
+struct LocalizedLeaf<'a> {
+    field: &'a FieldDefinition,
+    key: SnapshotKey<'a>,
+}
+
+/// Emit SET clauses restoring every locale column of a field's value from the
+/// snapshot, and report the locales they cover. Restoring used to NULL every
+/// non-default locale even though snapshots carry the decorated `__xx` values —
+/// wiping translations.
+///
+/// A locale the snapshot has NO key for at all was not configured when the
+/// snapshot was taken, so it is left untouched instead of erasing a translation
+/// the version never knew about. A key that IS present and holds `null` still
+/// clears the column: a snapshot records every configured locale's column,
+/// `null` included, so a locale that was empty at snapshot time is restored
+/// empty.
+fn restore_value_locales<'s>(
     set: &mut SetClauses<'_>,
-    snapshot: &LocaleSnapshot<'_>,
+    snapshot: &LocaleSnapshot<'s>,
     key: SnapshotKey<'_>,
     column_value: impl Fn(&Value) -> DbValue,
-) -> Result<()> {
-    for locale in &snapshot.config.locales {
-        let col = locale_column(key.0, locale)?;
+) -> Result<Vec<&'s str>> {
+    let mut restored = Vec::new();
+    let config = snapshot.config;
 
-        let db_val = snapshot
-            .value(key, locale)?
-            .map(&column_value)
-            .filter(|v| !v.is_null());
+    for locale in &config.locales {
+        let Some(value) = snapshot.value(key, locale)? else {
+            continue;
+        };
+
+        let col = locale_column(key.0, locale)?;
+        let db_val = Some(column_value(value)).filter(|v| !v.is_null());
 
         set.push(&col, db_val);
+        restored.push(locale.as_str());
+    }
+
+    Ok(restored)
+}
+
+/// Emit SET clauses restoring a field's companion columns (`{base}_tz`,
+/// `{base}_lang`) for each locale whose VALUE the restore writes — each
+/// companion is localized the same way and present in the snapshot (the locale
+/// SELECT emits it), so restoring an old version would otherwise leave it at
+/// its current post-edit value.
+///
+/// Which companions a write stores is decided by
+/// `written_companion_columns`, and a restore is a write: a zone travels with
+/// its date, so a snapshot taken before the date gained one clears today's zone
+/// instead of pinning it on a rolled-back value; a language the snapshot does
+/// not name keeps the stored pick, the way an update that sends no language
+/// does. A locale whose value is left untouched keeps its companion untouched
+/// too.
+fn restore_companions(
+    set: &mut SetClauses<'_>,
+    snapshot: &LocaleSnapshot<'_>,
+    leaf: &LocalizedLeaf<'_>,
+    locales: &[&str],
+) -> Result<()> {
+    let LocalizedLeaf { field, key } = *leaf;
+    let (base, prefix, name) = key;
+
+    let with_value: Vec<String> = field
+        .written_companion_columns(base, true, |_| false)
+        .collect();
+    let companions = field
+        .companion_columns(base)
+        .zip(field.companion_columns(name));
+
+    for (column, companion_name) in companions {
+        let companion_key = (column.as_str(), prefix, companion_name.as_str());
+        let travels_with_value = with_value.contains(&column);
+
+        for locale in locales {
+            let stored = snapshot.value(companion_key, locale)?;
+
+            if stored.is_none() && !travels_with_value {
+                continue;
+            }
+
+            let col = locale_column(column.as_str(), locale)?;
+            let db_val = stored
+                .map(|value| companion_value(Some(value)))
+                .filter(|v| !v.is_null());
+
+            set.push(&col, db_val);
+        }
     }
 
     Ok(())
@@ -163,7 +213,7 @@ fn restore_locale_columns(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::{
         config::LocaleConfig,
@@ -268,6 +318,211 @@ mod tests {
             "Europe/Berlin",
             "the non-default-locale _tz companion must be restored"
         );
+    }
+
+    /// A locale added AFTER a version was taken has no key in that snapshot.
+    /// Restoring wrote NULL for it and wiped the translation — the opposite of
+    /// the rule a field the snapshot doesn't carry at all follows. A key that
+    /// IS present and holds `null` still clears its column.
+    #[test]
+    fn restore_leaves_a_locale_the_snapshot_predates_untouched() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title__en TEXT,
+                title__de TEXT,
+                title__fr TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO posts (id, title__en, title__de, title__fr)
+                VALUES ('p1', 'Now', 'Jetzt', 'Maintenant');",
+        )
+        .unwrap();
+
+        // `fr` was added after this snapshot; `de` was configured then and
+        // held nothing, so the snapshot records it as an explicit null.
+        let locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string(), "fr".to_string()],
+            fallback: true,
+        };
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let snapshot = json!({
+            "title": "Then",
+            "title__en": "Then",
+            "title__de": Value::Null,
+        });
+
+        restore_version(&conn, "posts", &def, "p1", &snapshot, "published", &locale).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT title__en, title__de, title__fr FROM posts WHERE id = 'p1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("title__en").unwrap(), "Then");
+        assert!(
+            row.opt_text_at(1).is_none(),
+            "a locale the snapshot records as null is cleared"
+        );
+        assert_eq!(
+            row.get_string("title__fr").unwrap(),
+            "Maintenant",
+            "a locale the snapshot predates must be left untouched"
+        );
+    }
+
+    /// Regression: the per-locale skip (a locale the snapshot has no key for is
+    /// left untouched) also skipped an absent COMPANION of a value the snapshot
+    /// DOES carry, so restoring a snapshot taken before the date gained
+    /// `timezone = true` rolled the date back and kept today's zone on it. A
+    /// zone travels with its date: it is cleared where the snapshot carries
+    /// none.
+    #[test]
+    fn restore_clears_a_timezone_the_snapshot_predates() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date__en TEXT,
+                start_date__de TEXT,
+                start_date_tz__en TEXT,
+                start_date_tz__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_events (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO events
+                (id, start_date__en, start_date__de, start_date_tz__en, start_date_tz__de)
+                VALUES ('e1', '2025-01-01T10:00:00.000Z', '2025-01-01T10:00:00.000Z',
+                        'Europe/London', 'Europe/London');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // Taken while the field stored no zone at all: the values are there,
+        // the companions are not.
+        let snapshot = json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date__en": "2024-06-15T14:00:00.000Z",
+            "start_date__de": "2024-06-15T14:00:00.000Z",
+        });
+
+        restore_version(
+            &conn,
+            "events",
+            &def,
+            "e1",
+            &snapshot,
+            "published",
+            &en_de(),
+        )
+        .unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT start_date_tz__en, start_date_tz__de FROM events WHERE id = 'e1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            row.opt_text_at(0).is_none() && row.opt_text_at(1).is_none(),
+            "a restored date must not keep the zone it was given after the snapshot"
+        );
+    }
+
+    /// The other half of the rule a write follows: a language the snapshot does
+    /// not name keeps the stored pick, the way an update that sends no language
+    /// does — only a companion that travels with its value is cleared.
+    #[test]
+    fn restore_keeps_a_language_the_snapshot_does_not_name() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(&format!(
+            "CREATE TABLE snippets (
+                id TEXT PRIMARY KEY,
+                snippet__en TEXT,
+                snippet__de TEXT,
+                snippet_lang__en TEXT,
+                snippet_lang__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            {VERSIONS_SNIPPETS_DDL}
+            INSERT INTO snippets
+                (id, snippet__en, snippet__de, snippet_lang__en, snippet_lang__de)
+                VALUES ('s1', 'x', 'y', 'python', 'python');"
+        ))
+        .unwrap();
+
+        let snapshot = json!({
+            "snippet": "console.log(1)",
+            "snippet__en": "console.log(1)",
+            "snippet__de": "print(1)",
+        });
+
+        restore_version(
+            &conn,
+            "snippets",
+            &code_lang_def(true),
+            "s1",
+            &snapshot,
+            "published",
+            &en_de(),
+        )
+        .unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT snippet_lang__en, snippet_lang__de FROM snippets WHERE id = 's1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("snippet_lang__en").unwrap(), "python");
+        assert_eq!(row.get_string("snippet_lang__de").unwrap(), "python");
     }
 
     /// Regression: restoring a snapshot taken before email values were stored

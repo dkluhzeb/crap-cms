@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::parsing::{serde_duration, serde_duration_option};
+use crate::{
+    config::parsing::{serde_duration, serde_duration_option},
+    core::{email::SYSTEM_EMAIL_QUEUE, job::SYSTEM_BULK_QUEUE, upload::IMAGE_CONVERT_QUEUE},
+};
 
 /// Default concurrency cap applied to the `images` queue when the
 /// operator doesn't set `[jobs.queues.images]` explicitly. Image
@@ -51,6 +54,28 @@ const DEFAULT_BULK_QUEUE_RETRIES: u32 = 0;
 /// handshake + delivery within `30s` is the historical default from
 /// the now-removed `[email] queue_timeout` field.
 pub(crate) const DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS: u64 = 30;
+
+/// Extra wall-clock the scheduler's outer timer allows a job that enforces its
+/// own cooperative deadline (`_system_bulk` aborts and rolls back at its
+/// `timeout`), covering the post-commit work — event publishing, upload-file
+/// deletion — that happens after the last in-batch deadline check.
+///
+/// Lives here rather than next to the scheduler because the drain deadline is
+/// derived from it and config must not depend on the scheduler.
+pub(crate) const SELF_LIMITING_JOB_GRACE_SECS: u64 = 300;
+
+/// Extra wall-clock a graceful stop allows on top of the longest a single
+/// job run can legitimately take. Covers the terminal status write (and, for
+/// a self-limiting run, the rollback) that still has to happen after a run
+/// hits its own deadline. One number for `serve`, the standalone worker, and
+/// `work --stop`, so a stop can neither outrun nor undercut a running job.
+///
+/// It is the self-limiting grace itself, not an independent number: a
+/// self-limiting run's outer timer already runs to `timeout +
+/// SELF_LIMITING_JOB_GRACE_SECS`, so anything shorter would abandon a run that
+/// hit its cooperative deadline and is still winding down — the two numbers
+/// drifting apart is exactly the bug this shares one constant to prevent.
+pub(crate) const JOB_DRAIN_GRACE_SECS: u64 = SELF_LIMITING_JOB_GRACE_SECS;
 
 /// Default retry budget applied to the `email` queue when the
 /// operator doesn't set `[jobs.queues.email]` explicitly. `3` retries
@@ -255,7 +280,7 @@ impl JobsConfig {
 
         let bulk = self
             .queues
-            .entry(crate::core::job::SYSTEM_BULK_QUEUE.to_string())
+            .entry(SYSTEM_BULK_QUEUE.to_string())
             .or_default();
         if bulk.concurrency.is_none() {
             bulk.concurrency = Some(DEFAULT_BULK_QUEUE_CONCURRENCY);
@@ -281,6 +306,57 @@ impl JobsConfig {
         if email.retries.is_none() {
             email.retries = Some(DEFAULT_EMAIL_QUEUE_RETRIES);
         }
+    }
+
+    /// This queue's configured timeout, or `fallback` when the queue has no
+    /// entry or opted out of a per-queue timeout with `Some(0)` — the
+    /// scheduler falls back to the same hard-coded default for system jobs in
+    /// that queue, so the two views of "how long may this run take" agree.
+    fn queue_timeout_or(&self, name: &str, fallback: u64) -> u64 {
+        self.queues
+            .get(name)
+            .map(QueueConfig::effective_timeout)
+            .filter(|t| *t > 0)
+            .unwrap_or(fallback)
+    }
+
+    /// The longest a single job run can occupy a worker, per configuration.
+    ///
+    /// Every framework-owned queue contributes its configured timeout or the
+    /// scheduler's hard-coded default for it, whichever is larger in effect;
+    /// operator-declared queues contribute their configured timeout. A user
+    /// job's own `crap.jobs.define({ timeout = N })` is NOT visible here —
+    /// it lives in the registry, not in `crap.toml` — so a deployment whose
+    /// Lua jobs declare longer timeouts than any queue should raise the
+    /// matching `[jobs.queues.<name>] timeout` to keep a graceful stop from
+    /// cutting those runs short.
+    #[must_use]
+    pub fn longest_job_timeout_secs(&self) -> u64 {
+        [
+            (IMAGE_CONVERT_QUEUE, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS),
+            (SYSTEM_EMAIL_QUEUE, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS),
+            (SYSTEM_BULK_QUEUE, DEFAULT_BULK_QUEUE_TIMEOUT_SECS),
+        ]
+        .into_iter()
+        .map(|(name, fallback)| self.queue_timeout_or(name, fallback))
+        .chain(self.queues.values().map(QueueConfig::effective_timeout))
+        .max()
+        .unwrap_or(0)
+    }
+
+    /// How long a graceful stop waits for in-flight jobs before giving up:
+    /// the longest a run can legitimately take plus the drain grace.
+    ///
+    /// `serve`, the standalone worker, and `work --stop` all derive their
+    /// deadline from this one value. Killing a worker below it turns a
+    /// graceful stop into a crash: the run dies with a fresh heartbeat (so
+    /// stale recovery waits out the full heartbeat window before reclaiming
+    /// it), a no-retry run like `_system_bulk` goes terminally stale, and any
+    /// post-commit effect it had not reached yet is simply lost.
+    #[must_use]
+    pub fn drain_deadline_secs(&self) -> u64 {
+        self.longest_job_timeout_secs()
+            .saturating_add(JOB_DRAIN_GRACE_SECS)
     }
 
     /// Effective `max_attempts` for the `_system_image_convert`
@@ -540,17 +616,10 @@ mod tests {
     /// and `retries = 0` on a fresh config and silently misbehave.
     #[test]
     fn system_queues_have_all_defaults_seeded() {
-        use crate::core::email::SYSTEM_EMAIL_QUEUE;
-        use crate::core::upload::IMAGE_CONVERT_QUEUE;
-
         let mut cfg = JobsConfig::default();
         cfg.apply_queue_defaults();
 
-        for queue in [
-            SYSTEM_EMAIL_QUEUE,
-            IMAGE_CONVERT_QUEUE,
-            crate::core::job::SYSTEM_BULK_QUEUE,
-        ] {
+        for queue in [SYSTEM_EMAIL_QUEUE, IMAGE_CONVERT_QUEUE, SYSTEM_BULK_QUEUE] {
             let q = cfg.queues.get(queue).unwrap_or_else(|| {
                 panic!(
                     "system queue '{queue}' missing from apply_queue_defaults — \
@@ -717,6 +786,149 @@ mod tests {
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.priority_decay, 3600);
+    }
+
+    // ── graceful-stop deadline ──────────────────────────────────────
+
+    /// A bare `Default` has no `queues` entries at all, yet the scheduler
+    /// still runs system jobs with its hard-coded timeouts — the deadline
+    /// must cover the longest of those (bulk), not collapse to the grace.
+    #[test]
+    fn drain_deadline_covers_the_framework_defaults_without_queue_entries() {
+        let cfg = JobsConfig::default();
+
+        assert_eq!(
+            cfg.longest_job_timeout_secs(),
+            DEFAULT_BULK_QUEUE_TIMEOUT_SECS
+        );
+        assert_eq!(
+            cfg.drain_deadline_secs(),
+            DEFAULT_BULK_QUEUE_TIMEOUT_SECS + JOB_DRAIN_GRACE_SECS
+        );
+    }
+
+    /// Seeding the load-time defaults must not move the number: the same
+    /// worker behaviour has to yield the same stop deadline whether or not
+    /// `apply_queue_defaults` has run (`work --stop` reads a loaded config,
+    /// defensive paths may not).
+    #[test]
+    fn drain_deadline_is_unchanged_by_applying_queue_defaults() {
+        let bare = JobsConfig::default().drain_deadline_secs();
+
+        let mut seeded = JobsConfig::default();
+        seeded.apply_queue_defaults();
+
+        assert_eq!(seeded.drain_deadline_secs(), bare);
+    }
+
+    /// The drain deadline must cover the LONGEST outer timer the scheduler can
+    /// arm, which for a self-limiting job (`_system_bulk`) is its own timeout
+    /// plus [`SELF_LIMITING_JOB_GRACE_SECS`]. A shorter drain abandons a run
+    /// that reached its cooperative deadline and is still rolling back and
+    /// writing its terminal status — it dies with a fresh heartbeat, and a
+    /// no-retry job like `_system_bulk` then goes terminally stale.
+    #[test]
+    fn drain_deadline_covers_the_self_limiting_outer_timer() {
+        let mut configs = vec![JobsConfig::default()];
+
+        let mut seeded = JobsConfig::default();
+        seeded.apply_queue_defaults();
+        configs.push(seeded);
+
+        let mut short_bulk = JobsConfig::default();
+        short_bulk.queues.insert(
+            SYSTEM_BULK_QUEUE.to_string(),
+            QueueConfig {
+                concurrency: None,
+                timeout: Some(30),
+                retries: None,
+            },
+        );
+        configs.push(short_bulk);
+
+        let mut long_operator_queue = JobsConfig::default();
+        long_operator_queue.queues.insert(
+            "reports".to_string(),
+            QueueConfig {
+                concurrency: None,
+                timeout: Some(7200),
+                retries: None,
+            },
+        );
+        configs.push(long_operator_queue);
+
+        for cfg in configs {
+            assert!(
+                cfg.drain_deadline_secs()
+                    >= cfg
+                        .longest_job_timeout_secs()
+                        .saturating_add(SELF_LIMITING_JOB_GRACE_SECS),
+                "drain deadline {} must cover the self-limiting outer timer for {:?}",
+                cfg.drain_deadline_secs(),
+                cfg.queues
+            );
+        }
+    }
+
+    /// An operator queue that outlasts every system queue sets the deadline.
+    #[test]
+    fn drain_deadline_follows_the_longest_operator_timeout() {
+        let mut cfg = JobsConfig::default();
+        cfg.queues.insert(
+            "reports".to_string(),
+            QueueConfig {
+                concurrency: None,
+                timeout: Some(DEFAULT_BULK_QUEUE_TIMEOUT_SECS * 2),
+                retries: None,
+            },
+        );
+
+        assert_eq!(
+            cfg.drain_deadline_secs(),
+            DEFAULT_BULK_QUEUE_TIMEOUT_SECS * 2 + JOB_DRAIN_GRACE_SECS
+        );
+    }
+
+    /// `timeout = 0` is "no per-queue timeout", which sends the scheduler to
+    /// its hard-coded default for that system queue — so the deadline must
+    /// keep covering that default rather than reading `0`.
+    #[test]
+    fn explicit_zero_timeout_still_counts_the_scheduler_fallback() {
+        let mut cfg = JobsConfig::default();
+        cfg.queues.insert(
+            SYSTEM_BULK_QUEUE.to_string(),
+            QueueConfig {
+                concurrency: None,
+                timeout: Some(0),
+                retries: None,
+            },
+        );
+
+        assert_eq!(
+            cfg.longest_job_timeout_secs(),
+            DEFAULT_BULK_QUEUE_TIMEOUT_SECS
+        );
+    }
+
+    /// A shortened bulk timeout genuinely shortens the wait — the deadline
+    /// tracks configuration instead of pinning the framework maximum.
+    #[test]
+    fn a_shorter_configured_bulk_timeout_shortens_the_deadline() {
+        let mut cfg = JobsConfig::default();
+        cfg.queues.insert(
+            SYSTEM_BULK_QUEUE.to_string(),
+            QueueConfig {
+                concurrency: None,
+                timeout: Some(120),
+                retries: None,
+            },
+        );
+
+        // `images` (300s) is now the longest configured run.
+        assert_eq!(
+            cfg.drain_deadline_secs(),
+            DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS + JOB_DRAIN_GRACE_SECS
+        );
     }
 
     // ── queues ──────────────────────────────────────────────────────

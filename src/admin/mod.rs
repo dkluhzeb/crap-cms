@@ -78,4 +78,4 @@ pub use translations::Translations;
 // `crate::admin::Foo` instead of reaching into `admin::handlers::Foo`.
 // Stays `pub(crate)` because both consumers live in this crate; a future
 // workspace split would promote to `pub`.
-pub(crate) use handlers::{FormData, parse_multipart_form};
+pub(crate) use handlers::{FormData, parse_multipart_form, strip_locale_locked_for_publish};

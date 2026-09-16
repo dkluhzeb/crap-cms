@@ -6,6 +6,7 @@ use crate::{
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, persist_create,
         run_after_change_hooks,
+        write::{UploadSettle, settle_upload_write},
     },
 };
 
@@ -162,6 +163,15 @@ pub fn create_document_in_conn(
         .build();
 
     let mut doc = persist_create(ctx, &final_data, &opts)?;
+
+    // The new file's conversions go into the queue on THIS connection, inside
+    // the write transaction — a create has no previous file to clean up.
+    settle_upload_write(
+        ctx,
+        &UploadSettle::builder(def, &doc.id)
+            .conversions(input.upload_conversions.as_ref())
+            .build(),
+    )?;
 
     // Hydrate join fields (arrays, blocks, has-many) BEFORE after-change hooks so
     // they can react to nested array/blocks/has-many data, not just scalar columns.

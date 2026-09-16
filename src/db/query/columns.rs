@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldDefinition},
+    core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition},
     db::{
         LocaleContext,
         query::{
@@ -62,6 +62,33 @@ pub fn collect_column_names(fields: &[FieldDefinition], names: &mut Vec<String>)
     });
 }
 
+/// Expected column names for a field tree, plus whatever system columns the
+/// owning definition carries (added by `system`).
+///
+/// The one computation behind both the collection and the global flavor, so
+/// orphan detection cannot disagree with itself about what a table should hold.
+fn expected_columns(
+    fields: &[FieldDefinition],
+    locale_config: &LocaleConfig,
+    system: impl FnOnce(&mut HashSet<String>),
+) -> Result<HashSet<String>> {
+    let mut expected = HashSet::new();
+
+    expected.insert("id".to_string());
+
+    if locale_config.is_enabled() {
+        collect_expected_locale_inner(fields, &mut expected, locale_config)?;
+    } else {
+        let mut names = Vec::new();
+        collect_column_names(fields, &mut names);
+        expected.extend(names);
+    }
+
+    system(&mut expected);
+
+    Ok(expected)
+}
+
 /// Get expected column names including locale suffixes for localized fields.
 /// Used by orphan column detection where actual DB columns have locale suffixes.
 ///
@@ -72,21 +99,57 @@ pub fn get_expected_column_names(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<HashSet<String>> {
-    if !locale_config.is_enabled() {
-        return Ok(get_column_names(def).into_iter().collect());
-    }
+    expected_columns(&def.fields, locale_config, |expected| {
+        push_system_columns(def, |col| {
+            expected.insert(col.to_string());
+        });
+    })
+}
 
-    let mut expected = HashSet::new();
+/// The same for a global's single-row table.
+///
+/// A global has no soft delete and no `timestamps` toggle — its table always
+/// carries `created_at`/`updated_at` — and `_status` only when it keeps drafts.
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
+pub fn get_expected_global_column_names(
+    def: &GlobalDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<HashSet<String>> {
+    expected_columns(&def.fields, locale_config, |expected| {
+        if def.has_drafts() {
+            expected.insert("_status".to_string());
+        }
 
-    expected.insert("id".to_string());
+        expected.insert("created_at".to_string());
+        expected.insert("updated_at".to_string());
+    })
+}
 
-    collect_expected_locale_inner(&def.fields, &mut expected, locale_config)?;
+/// The join tables a field tree implies, as their `__`-joined names off the
+/// owning table: array, blocks, and has-many relationship/upload fields, with
+/// Group prefixes applied and layout wrappers transparent.
+///
+/// Pair each with the owning table through
+/// [`join_table`](crate::db::query::helpers::join_table) to get the table name.
+#[must_use]
+pub fn join_field_names(fields: &[FieldDefinition]) -> Vec<String> {
+    let mut names = Vec::new();
 
-    push_system_columns(def, |col| {
-        expected.insert(col.to_string());
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if matches!(
+            field.field_type,
+            FieldType::Array | FieldType::Blocks | FieldType::Relationship | FieldType::Upload
+        ) {
+            names.push(prefixed_name(prefix, &field.name));
+        }
+
+        Ok(())
     });
 
-    Ok(expected)
+    names
 }
 
 fn collect_expected_locale_inner(

@@ -1,14 +1,17 @@
 //! Scalar field validation. Called from `ValidationWalker::walk` for any field
 //! that isn't a layout container (Group/Row/Collapsible/Tabs/Join).
 
+use std::slice;
+
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, validate::FieldError},
     db::{
         LocaleContext,
         query::helpers::{column_value, prefixed_name, tz_column},
-        query::locale_write_column,
+        query::{fetch_row_columns, locale_write_column},
     },
     hooks::lifecycle::validation::{
         checks,
@@ -42,6 +45,98 @@ impl ValidationWalker<'_> {
         );
     }
 
+    /// The values the stored row already holds for a select/radio field.
+    ///
+    /// Read only on an update whose submission carries a value the field no
+    /// longer declares — the rare case, so an ordinary save costs no query. A
+    /// retired option must not make every later save of a document that carries
+    /// it fail; a value the row does not already hold is still rejected.
+    ///
+    /// Empty on create, for a field with no column of its own, and when the read
+    /// fails: the value is then judged on the declared options alone, which is
+    /// the fail-closed direction.
+    fn held_choice_values(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        value: Option<&Value>,
+        inherited_localized: bool,
+    ) -> Vec<String> {
+        let Some(id) = self.ctx.exclude_id else {
+            return Vec::new();
+        };
+
+        if !field.has_parent_column() || checks::undeclared_values(field, value).is_empty() {
+            return Vec::new();
+        }
+
+        let Ok(column) =
+            locale_write_column(data_key, field, self.ctx.locale_ctx, inherited_localized)
+        else {
+            return Vec::new();
+        };
+
+        let stored = fetch_row_columns(self.ctx.conn, self.ctx.table, slice::from_ref(&column), id)
+            .inspect_err(|e| {
+                warn!(
+                    table = self.ctx.table,
+                    column, "could not read the stored option value: {e}"
+                );
+            })
+            .ok()
+            .flatten();
+
+        stored
+            .as_ref()
+            .and_then(|row| row.get(&column))
+            .map(|db_value| checks::held_values(field, &db_value.to_json()))
+            .unwrap_or_default()
+    }
+
+    /// Whether `field` is required for this write: statically (`required`) or
+    /// when its `required_when` predicate holds for the document. A predicate
+    /// failure is reported as a field error and reads as not required.
+    fn field_required(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        operation: &str,
+        errors: &mut Vec<FieldError>,
+    ) -> bool {
+        let Some(required_when) = field.required_when.as_ref() else {
+            return field.required;
+        };
+
+        if field.required {
+            return true;
+        }
+
+        let source = ValidateCtxSource {
+            data: self.document,
+            document: self.document,
+            collection: self.ctx.table,
+            field_name: &field.name,
+            locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
+            operation,
+            id: self.ctx.exclude_id,
+            options: required_when.options(),
+        };
+
+        match run_required_condition_inner(self.lua, required_when.reference(), &source) {
+            Ok(required) => required,
+            Err(e) => {
+                errors.push(FieldError::new(
+                    data_key.to_owned(),
+                    format!(
+                        "required_when predicate '{}' failed: {e}",
+                        required_when.reference()
+                    ),
+                ));
+                false
+            }
+        }
+    }
+
     /// Validate a single scalar field (not Group/Row/Collapsible/Tabs).
     /// Dispatches to individual check functions in `checks` module.
     pub(super) fn scalar(
@@ -70,44 +165,10 @@ impl ValidationWalker<'_> {
         // being edited (derived from the validation context's `exclude_id`).
         let operation = if is_update { "update" } else { "create" };
 
-        // A field is required either statically (`required = true`) or when its
-        // `required_when` predicate returns truthy for this document. Skip the
-        // predicate entirely when the required check itself is skipped (drafts,
-        // locale-scoped fields): there is nothing to enforce, and a predicate
-        // error must not be able to block a draft save.
         let required = if skip_required {
             false
         } else {
-            field.required
-                || match field.required_when.as_ref() {
-                    None => false,
-                    Some(required_when) => match run_required_condition_inner(
-                        self.lua,
-                        required_when.reference(),
-                        &ValidateCtxSource {
-                            data: self.document,
-                            document: self.document,
-                            collection: self.ctx.table,
-                            field_name: &field.name,
-                            locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
-                            operation,
-                            id: self.ctx.exclude_id,
-                            options: required_when.options(),
-                        },
-                    ) {
-                        Ok(req) => req,
-                        Err(e) => {
-                            errors.push(FieldError::new(
-                                data_key.clone(),
-                                format!(
-                                    "required_when predicate '{}' failed: {e}",
-                                    required_when.reference()
-                                ),
-                            ));
-                            false
-                        }
-                    },
-                }
+            self.field_required(field, &data_key, operation, errors)
         };
 
         checks::check_required(
@@ -145,7 +206,11 @@ impl ValidationWalker<'_> {
         checks::check_numeric_bounds(field, &data_key, value, is_empty, errors);
         checks::check_checkbox_value(field, &data_key, value, is_empty, errors);
         checks::check_email_format(field, &data_key, value, is_empty, errors);
-        checks::check_option_valid(field, &data_key, value, is_empty, errors);
+        let held = self.held_choice_values(field, &data_key, value, inherited_localized);
+        checks::check_option_valid(
+            &checks::OptionCheck::new(field, &data_key, value, is_empty).held(&held),
+            errors,
+        );
         checks::check_has_many_elements(
             field,
             &data_key,

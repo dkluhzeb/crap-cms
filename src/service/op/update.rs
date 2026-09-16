@@ -8,7 +8,7 @@ use crate::{
 
 use crate::core::Builder;
 
-use super::Operation;
+use super::{Operation, locale::write_locale_ctx};
 
 /// Owned arguments for [`Update`]. Mirrors [`super::CreateArgs`] plus the
 /// target document id.
@@ -55,6 +55,8 @@ impl Operation for Update {
             events: _,
             trusted_upload_metadata,
         } = args;
+
+        let locale_ctx = write_locale_ctx(locale_ctx)?;
 
         update_document(
             ctx,

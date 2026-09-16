@@ -20,10 +20,11 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts, editor_locale_ctx,
-                enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
-                parse_request_locale, paths, redirect_response, split_sidebar_fields,
-                strip_locale_locked_for_publish, toast_only_error, translate_validation_errors,
+                EnrichOptions, apply_display_conditions, build_field_contexts, editor_read_ctx,
+                enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
+                is_non_default_locale, page_with_toast, parse_request_locale, paths,
+                redirect_response, split_sidebar_fields, strip_locale_locked_for_publish,
+                toast_only_error, translate_validation_errors,
             },
         },
     },
@@ -89,77 +90,96 @@ fn update_global_document_blocking(
     }
 }
 
+/// What the validation re-render needs beyond the errors themselves.
+struct ValidationRender<'a> {
+    state: &'a AdminState,
+    def: &'a GlobalDefinition,
+    form: &'a FormData,
+    auth_user: Option<&'a Extension<AuthUser>>,
+    /// The content locale the form was submitted in (`_locale`), taken out of
+    /// the raw form before the write — the re-render has to put it back, or
+    /// the corrected save writes the translation into the default locale.
+    submitted_locale: Option<&'a str>,
+}
+
 /// Build the validation error response with re-rendered form fields.
-async fn render_validation_error(
-    state: &AdminState,
-    def: &GlobalDefinition,
-    form: &FormData,
-    ve: &ValidationError,
-    auth_user: Option<&Extension<AuthUser>>,
-) -> Response {
-    let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
+async fn render_validation_error(p: &ValidationRender<'_>, ve: &ValidationError) -> Response {
+    let locale = p
+        .auth_user
+        .map_or("en", |Extension(au)| au.ui_locale.as_str());
 
-    let error_map = translate_validation_errors(ve, &state.translations, locale);
-    let toast_msg = state.translations.get(locale, "validation.error_summary");
+    let error_map = translate_validation_errors(ve, &p.state.translations, locale);
+    let toast_msg = p.state.translations.get(locale, "validation.error_summary");
 
-    let mut fields = build_field_contexts(&def.fields, form.raw(), &error_map, false, false);
+    // Same locale resolution the success-path form makes, so the re-render
+    // stays in the submitted locale: the read context for relationship labels,
+    // and the lock on the shared fields. The picker itself comes from the same
+    // locale via `with_editor_locale` below.
+    let locale_ctx = editor_read_ctx(p.state, p.submitted_locale);
+    let non_default_locale = is_non_default_locale(p.state, p.submitted_locale);
 
-    let doc_fields = form.to_doc_fields();
-    // The locale the form was submitted in, for the relationship labels.
-    let locale_ctx = editor_locale_ctx(
-        &state.config.locale,
-        form.raw().get("_locale").map(String::as_str),
+    let mut fields = build_field_contexts(
+        &p.def.fields,
+        p.form.raw(),
+        &error_map,
+        true,
+        non_default_locale,
     );
+
+    let doc_fields = p.form.to_doc_fields();
 
     enrich_field_contexts(
         &mut fields,
-        &def.fields,
+        &p.def.fields,
         &doc_fields,
-        state,
+        p.state,
         &EnrichOptions::builder(&error_map)
-            .user(get_user_doc(auth_user))
+            .filter_hidden(true)
+            .non_default_locale(non_default_locale)
+            .user(get_user_doc(p.auth_user))
             .locale_ctx(locale_ctx.as_ref())
             .build(),
     );
 
     let form_data_json = json!(doc_fields);
     let cond_ctx = ConditionContext {
-        collection: &def.slug,
+        collection: &p.def.slug,
         operation: "update",
-        user: get_user_doc(auth_user),
-        ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
-        locale: None,
+        user: get_user_doc(p.auth_user),
+        ui_locale: p.auth_user.map(|Extension(au)| au.ui_locale.as_str()),
+        locale: p.submitted_locale,
         options: None,
     };
     apply_display_conditions(
         &mut fields,
-        &def.fields,
+        &p.def.fields,
         &form_data_json,
-        &state.infra.hook_runner,
-        false,
+        &p.state.infra.hook_runner,
+        true,
         &cond_ctx,
     );
 
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
     let base = BasePageContext::for_handler(
-        state,
+        p.state,
         None,
-        auth_user,
-        PageMeta::new(PageType::GlobalEdit, def.display_name()),
-    );
+        p.auth_user,
+        PageMeta::new(PageType::GlobalEdit, p.def.display_name()),
+    )
+    .with_editor_locale(p.submitted_locale, p.state);
 
-    let perms = GlobalPermissions::for_user(state, def, auth_user);
+    let perms = GlobalPermissions::for_user(p.state, p.def, p.auth_user);
 
     let ctx = GlobalFormErrorPage {
         base,
-        global: GlobalContext::from_def(def),
+        global: GlobalContext::from_def(p.def),
         perms,
         fields: main_fields,
         sidebar_fields,
     };
 
-    page_with_toast(state, auth_user, "globals/edit", &ctx, toast_msg).await
+    page_with_toast(p.state, p.auth_user, "globals/edit", &ctx, toast_msg).await
 }
 
 /// POST /admin/globals/{slug} — update a global
@@ -178,8 +198,10 @@ pub async fn update_action(
 
     let mut form = FormData::from_raw(form_data, &def.fields);
     let action = form.take_action();
-    let locale_ctx = match parse_request_locale(form.take_locale().as_deref(), &state.config.locale)
-    {
+
+    // Kept past the write for the error re-render — see `ValidationRender`.
+    let submitted_locale = form.take_locale();
+    let locale_ctx = match parse_request_locale(submitted_locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return toast_only_error(&msg),
     };
@@ -207,7 +229,15 @@ pub async fn update_action(
                 forbidden(&state, "You don't have permission to update this global")
             }
             ServiceError::Validation(ref ve) => {
-                render_validation_error(&state, &def, &form_for_error, ve, auth_user.as_ref()).await
+                let render = ValidationRender {
+                    state: &state,
+                    def: &def,
+                    form: &form_for_error,
+                    auth_user: auth_user.as_ref(),
+                    submitted_locale: submitted_locale.as_deref(),
+                };
+
+                render_validation_error(&render, ve).await
             }
             other => {
                 error!("Global update error: {}", other);

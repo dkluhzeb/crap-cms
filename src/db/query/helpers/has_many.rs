@@ -27,7 +27,7 @@ pub(crate) fn coerce_has_many_scalar(field_type: &FieldType, val: &Value) -> DbV
 
     let elements = match val {
         Value::Array(arr) => arr.clone(),
-        Value::String(s) => serde_json::from_str::<Vec<Value>>(s).unwrap_or_default(),
+        Value::String(s) => text_list_elements(s),
         _ => Vec::new(),
     };
 
@@ -37,6 +37,22 @@ pub(crate) fn coerce_has_many_scalar(field_type: &FieldType, val: &Value) -> DbV
         .collect();
 
     DbValue::Text(Value::Array(canonical).to_string())
+}
+
+/// The elements a has-many list spelled as text holds: a JSON array's
+/// elements, or — the form an HTML form submits and earlier releases stored
+/// inside array and blocks rows — comma-separated values, trimmed, empties
+/// dropped. A JSON array keeps an element's commas.
+fn text_list_elements(text: &str) -> Vec<Value> {
+    if let Ok(elements) = serde_json::from_str::<Vec<Value>>(text) {
+        return elements;
+    }
+
+    text.split(',')
+        .map(str::trim)
+        .filter(|el| !el.is_empty())
+        .map(|el| Value::String(el.to_string()))
+        .collect()
 }
 
 /// The number a Number value holds — a single value or a has-many element: a
@@ -107,6 +123,21 @@ mod tests {
     use super::*;
 
     // ── scalar has-many coercion (write) + parse (read) ─────────────────
+
+    /// Regression: an earlier admin form stored a has-many list inside an
+    /// array or blocks row as comma-separated text (`"a,b"`); the JSON-only
+    /// reading turned it into an empty list, so the one-time conversion of
+    /// nested values erased every such selection. Both forms read the same.
+    #[test]
+    fn a_comma_separated_list_reads_as_its_elements() {
+        assert_eq!(stored(&FieldType::Text, &json!("a,b")), r#"["a","b"]"#);
+        assert_eq!(stored(&FieldType::Text, &json!(" a , b ")), r#"["a","b"]"#);
+        assert_eq!(stored(&FieldType::Number, &json!("1,2.5")), "[1,2.5]");
+        assert_eq!(stored(&FieldType::Text, &json!("single")), r#"["single"]"#);
+        assert_eq!(stored(&FieldType::Text, &json!("")), "[]");
+        // A JSON array keeps its exact elements, commas included.
+        assert_eq!(stored(&FieldType::Text, &json!(r#"["a,b"]"#)), r#"["a,b"]"#);
+    }
 
     fn stored(field_type: &FieldType, v: &Value) -> String {
         match coerce_has_many_scalar(field_type, v) {

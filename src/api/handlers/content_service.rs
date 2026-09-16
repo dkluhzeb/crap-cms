@@ -8,6 +8,7 @@ use std::{
 
 use tokio::task;
 use tokio_stream::Stream;
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
 use tracing::error;
 
@@ -83,6 +84,9 @@ pub struct ContentService {
     pub(in crate::api::handlers) max_subscribe_connections: usize,
     /// Per-subscriber outbound send timeout for live-update streams.
     pub(in crate::api::handlers) subscriber_send_timeout_ms: u64,
+    /// Process shutdown token. `Subscribe` pumps end on it, so a graceful
+    /// shutdown isn't held open for as long as one subscriber stays connected.
+    pub(in crate::api::handlers) shutdown: CancellationToken,
     /// Process-stable infrastructure bundle (pool, registry, hook runner, caches,
     /// transports, providers, config-derived infra), assembled once at boot and
     /// shared across surfaces. Handlers thread it into a `ServiceContext` via
@@ -276,6 +280,7 @@ impl ContentService {
             subscribe_connections: Arc::new(AtomicUsize::new(0)),
             max_subscribe_connections,
             subscriber_send_timeout_ms,
+            shutdown: deps.shutdown,
             infra: deps.infra,
         }
     }

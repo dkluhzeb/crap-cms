@@ -6,9 +6,9 @@ use tracing::{debug, info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, DocumentFields, Registry, upload},
+    core::{CollectionDefinition, Registry},
     db::{DbConnection, DbValue, LocaleContext, query, query::jobs as job_query},
-    service::purge_document,
+    service::{owned_file_keys, purge_document},
 };
 
 /// Parse a retention duration string like "30d", "7d", "24h" into seconds.
@@ -72,7 +72,7 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let (purged, files) = purge_collection(&PurgeCollectionInput {
+        let (purged, keys) = purge_collection(&PurgeCollectionInput {
             conn,
             slug,
             def,
@@ -80,14 +80,7 @@ pub fn purge_soft_deleted(
             locale_config,
         })?;
         total += purged;
-
-        // Resolve the server-derived file keys here, where this collection's
-        // upload config is in scope, so the drained queue carries plain keys.
-        if let Some(upload) = def.upload.as_ref() {
-            for fields in &files {
-                keys_to_clean.extend(upload::upload_file_keys(fields, upload));
-            }
-        }
+        keys_to_clean.extend(keys);
     }
 
     Ok((total, keys_to_clean))
@@ -104,11 +97,12 @@ struct PurgeCollectionInput<'a> {
 
 /// Purge expired soft-deleted documents from a single collection.
 ///
-/// Collects the upload documents' fields before deleting them, so the caller
-/// removes their files once the DB deletes commit. A crash between DB delete
-/// and file delete leaves orphaned files (safe), rather than orphaned DB records
-/// pointing to deleted files (unsafe).
-fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFields>)> {
+/// Collects the storage keys each upload owns — its row's AND its version
+/// snapshots' — before deleting them, so the caller removes those files once
+/// the DB deletes commit. A crash between DB delete and file delete leaves
+/// orphaned files (safe), rather than orphaned DB records pointing to deleted
+/// files (unsafe).
+fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<String>)> {
     // Find docs past the retention threshold
     let (offset_sql, offset_param) = p.conn.date_offset_expr(p.retention_seconds, 1);
     let threshold_sql = format!(
@@ -119,7 +113,7 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
     let rows = p.conn.query_all(&threshold_sql, &[offset_param])?;
 
     let mut purged = 0u64;
-    let mut upload_docs = Vec::new();
+    let mut upload_keys = Vec::new();
     // The upload row lookup needs the locale context: a collection with
     // localized fields has no bare columns to select.
     let locale_ctx = LocaleContext::default_for(p.locale_config);
@@ -158,23 +152,21 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
             continue;
         }
 
-        // Collect upload file field-maps BEFORE deleting from DB; the caller
-        // deletes the actual files after committing the transaction. A failed
-        // read must SKIP this row (not proceed): deleting anyway would orphan
-        // the files on disk with nothing left to find them by. This runs
-        // before the hard delete so a skipped row leaves the targets' ref
-        // counts untouched for the retry on the next purge tick.
-        if p.def.is_upload_collection() {
-            match query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, locale_ctx.as_ref()) {
-                Ok(Some(doc)) => upload_docs.push(doc.fields),
-                Ok(None) => {}
-                Err(e) => {
-                    warn!(
-                        "Skipping purge of {}/{}: failed to read upload fields: {e}",
-                        p.slug, id
-                    );
-                    continue;
-                }
+        // Collect the storage keys the document owns BEFORE deleting it from
+        // the DB; the caller deletes the actual files after committing the
+        // transaction. A failed read must SKIP this row (not proceed):
+        // deleting anyway would orphan the files on disk with nothing left to
+        // find them by. This runs before the hard delete so a skipped row
+        // leaves the targets' ref counts untouched for the retry on the next
+        // purge tick.
+        match owned_file_keys(p.conn, p.def, &id, locale_ctx.as_ref()) {
+            Ok(keys) => upload_keys.extend(keys),
+            Err(e) => {
+                warn!(
+                    "Skipping purge of {}/{}: failed to read upload files: {e}",
+                    p.slug, id
+                );
+                continue;
             }
         }
 
@@ -192,7 +184,7 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFi
         );
     }
 
-    Ok((purged, upload_docs))
+    Ok((purged, upload_keys))
 }
 
 /// Dedup slug used to claim the retention-purge cron tick via
@@ -226,7 +218,7 @@ mod tests {
         core::{
             FieldDefinition, FieldType,
             job::JobStatus,
-            upload::{CollectionUpload, SYSTEM_IMAGE_CONVERT_JOB},
+            upload::{self, CollectionUpload, SYSTEM_IMAGE_CONVERT_JOB},
         },
         scheduler::runner::test_support::{convert_job, make_test_pool},
     };

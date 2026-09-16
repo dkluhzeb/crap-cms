@@ -25,12 +25,15 @@ use crate::{
             ArrayField, BaseFieldData, BlockDefinition, BlocksField, CodeField, ConditionData,
             FieldContext, TabPanel, TextareaField, ValidationAttrs,
         },
-        handlers::field_context::{
-            MAX_FIELD_DEPTH,
-            builder::build_single_field_context,
-            count_errors_in_field_contexts,
-            enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
-            locale_locked_display, localize_date_display, safe_template_id,
+        handlers::{
+            field_context::{
+                MAX_FIELD_DEPTH,
+                builder::build_single_field_context,
+                count_errors_in_field_contexts,
+                enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
+                locale_locked_display, localize_date_display, safe_template_id,
+            },
+            shared::admin_form_fields,
         },
     },
     core::field::{FieldDefinition, FieldType},
@@ -138,9 +141,7 @@ fn apply_array_template(
 ) {
     let template_prefix = format!("{child_name}[__INDEX__]");
 
-    af.sub_fields = child
-        .fields
-        .iter()
+    af.sub_fields = admin_form_fields(&child.fields)
         .map(|sf| {
             build_single_field_context(
                 sf,
@@ -182,9 +183,7 @@ fn apply_blocks_template(
         .blocks
         .iter()
         .map(|bd| {
-            let fields: Vec<FieldContext> = bd
-                .fields
-                .iter()
+            let fields: Vec<FieldContext> = admin_form_fields(&bd.fields)
                 .map(|sf| {
                     build_single_field_context(
                         sf,
@@ -444,6 +443,10 @@ fn build_child(
 ///
 /// Used by layout wrapper handlers (Tabs/Row/Collapsible) inside Array/Blocks
 /// rows to correctly propagate structured data to nested layout wrappers.
+///
+/// Only the fields the form renders become contexts ([`admin_form_fields`]), so
+/// a hidden field gets no input at any depth and the passes that later zip these
+/// contexts against their defs pair the same entries.
 pub fn build_enriched_children_from_data(
     fields: &[FieldDefinition],
     data: Option<&Value>,
@@ -466,8 +469,7 @@ pub fn build_enriched_children_from_data(
         errors,
     };
 
-    fields
-        .iter()
+    admin_form_fields(fields)
         .map(|child| build_child(child, data, data_obj, parent_name, &opts))
         .collect()
 }

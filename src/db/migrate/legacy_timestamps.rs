@@ -25,7 +25,21 @@ use super::meta;
 /// Stored as the meta value; bump to force a re-run after a change here.
 const MIGRATION_VERSION: &str = "1";
 
-const META_KEY: &str = "legacy_timestamps_normalized";
+/// The gate of the pass this replaced, which covered the whole database at
+/// once. Tables are never dropped, so a collection absent from the registry at
+/// that run kept its space-form timestamps and — the gate being stamped — would
+/// never have been rewritten once it was added back. Removed so no orphaned
+/// gate outlives it.
+const RETIRED_META_KEY: &str = "legacy_timestamps_normalized";
+
+/// The job table, rewritten under a gate of its own.
+const JOBS_TABLE: &str = "_crap_jobs";
+
+/// The gate of one target, keyed by its table so a collection and a global of
+/// the same slug can't share one.
+fn meta_key(table: &str) -> String {
+    format!("legacy_timestamps:{table}")
+}
 
 /// Every column that holds a system timestamp, on any table this touches.
 /// Columns a table lacks are skipped.
@@ -39,7 +53,12 @@ const TIMESTAMP_COLUMNS: &[&str] = &[
     "retry_after",
 ];
 
-/// Rewrite legacy timestamps once per database (`SQLite` only).
+/// Rewrite legacy timestamps once per collection, global and the job table
+/// (`SQLite` only).
+///
+/// The gate is per target, not per database: a table left in the database by a
+/// collection absent from the registry is rewritten the first time that
+/// collection is defined again, however long after the other tables were.
 ///
 /// # Errors
 ///
@@ -50,33 +69,38 @@ pub(super) fn normalize_if_needed(conn: &dyn DbConnection, registry: &Registry) 
         return Ok(());
     }
 
-    if meta::get(conn, META_KEY)?.as_deref() == Some(MIGRATION_VERSION) {
-        return Ok(());
-    }
+    // Deleting an absent key changes nothing, so this runs whether or not the
+    // replaced pass ever did.
+    meta::delete(conn, RETIRED_META_KEY)?;
 
-    for table in candidate_tables(registry) {
-        normalize_table(conn, &table)?;
-    }
-
-    meta::upsert(conn, META_KEY, MIGRATION_VERSION)
-}
-
-/// Collection, global and version tables, plus the job table.
-fn candidate_tables(registry: &Registry) -> Vec<String> {
-    let mut tables = vec!["_crap_jobs".to_string()];
+    normalize_target(conn, JOBS_TABLE, &[JOBS_TABLE.to_string()])?;
 
     for slug in registry.collections.keys() {
-        tables.push(slug.to_string());
-        tables.push(versions_table(slug));
+        let tables = [slug.to_string(), versions_table(slug)];
+        normalize_target(conn, slug, &tables)?;
     }
 
     for slug in registry.globals.keys() {
         let global = global_table(slug);
-        tables.push(versions_table(&global));
-        tables.push(global);
+        let tables = [global.clone(), versions_table(&global)];
+        normalize_target(conn, &global, &tables)?;
     }
 
-    tables
+    Ok(())
+}
+
+/// Rewrite the `tables` of one target, once per [`MIGRATION_VERSION`].
+fn normalize_target(conn: &dyn DbConnection, gate: &str, tables: &[String]) -> Result<()> {
+    let key = meta_key(gate);
+    if meta::get(conn, &key)?.as_deref() == Some(MIGRATION_VERSION) {
+        return Ok(());
+    }
+
+    for table in tables {
+        normalize_table(conn, table)?;
+    }
+
+    meta::upsert(conn, &key, MIGRATION_VERSION)
 }
 
 fn normalize_table(conn: &dyn DbConnection, table: &str) -> Result<()> {
@@ -106,14 +130,21 @@ mod tests {
     use super::*;
     use crate::{core::CollectionDefinition, db::InMemoryConn};
 
-    fn registry_with_posts() -> Registry {
+    fn registry_with(slugs: &[&str]) -> Registry {
         let shared = Registry::shared();
-        shared
-            .write()
-            .unwrap()
-            .register_collection(CollectionDefinition::new("posts"));
+
+        for slug in slugs {
+            shared
+                .write()
+                .unwrap()
+                .register_collection(CollectionDefinition::new(*slug));
+        }
 
         (*Registry::snapshot(&shared)).clone()
+    }
+
+    fn registry_with_posts() -> Registry {
+        registry_with(&["posts"])
     }
 
     fn created_at(conn: &InMemoryConn, table: &str, id: &str) -> String {
@@ -159,7 +190,7 @@ mod tests {
             "2024-01-15T09:00:00.000Z"
         );
         assert_eq!(
-            meta::get(&conn, META_KEY).unwrap().as_deref(),
+            meta::get(&conn, &meta_key("posts")).unwrap().as_deref(),
             Some(MIGRATION_VERSION)
         );
 
@@ -173,5 +204,58 @@ mod tests {
             "2024-03-01 00:00:00",
             "the gate must stop a second scan"
         );
+    }
+
+    /// Regression: one gate for the whole database stamped itself on the first
+    /// boot, so a table left behind by a collection the registry didn't hold
+    /// yet kept its space-form timestamps for good — misordering its lists and
+    /// breaking its keyset cursors. Each target carries its own gate, so the
+    /// collection is rewritten the first boot it is defined.
+    #[test]
+    fn a_collection_defined_later_is_still_rewritten() {
+        let conn = InMemoryConn::open();
+        conn.0
+            .execute_batch(
+                "CREATE TABLE _crap_meta (key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE posts (id TEXT PRIMARY KEY, created_at TEXT);
+                 CREATE TABLE pages (id TEXT PRIMARY KEY, created_at TEXT);
+                 CREATE TABLE _crap_jobs (id TEXT PRIMARY KEY, created_at TEXT);
+                 INSERT INTO posts VALUES ('p1', '2024-01-15 12:30:45');
+                 INSERT INTO pages VALUES ('g1', '2024-01-16 08:00:00');",
+            )
+            .unwrap();
+
+        // `pages` exists in the database but not in the registry — its Lua
+        // definition is added after the first boot.
+        normalize_if_needed(&conn, &registry_with(&["posts"])).unwrap();
+
+        assert_eq!(created_at(&conn, "posts", "p1"), "2024-01-15T12:30:45.000Z");
+        assert_eq!(created_at(&conn, "pages", "g1"), "2024-01-16 08:00:00");
+
+        normalize_if_needed(&conn, &registry_with(&["posts", "pages"])).unwrap();
+
+        assert_eq!(
+            created_at(&conn, "pages", "g1"),
+            "2024-01-16T08:00:00.000Z",
+            "a collection defined after the first boot must still be rewritten"
+        );
+    }
+
+    /// The gate of the pass this replaced is removed, so no orphaned
+    /// whole-database flag outlives it.
+    #[test]
+    fn removes_the_replaced_passs_gate() {
+        let conn = InMemoryConn::open();
+        conn.0
+            .execute_batch(
+                "CREATE TABLE _crap_meta (key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE _crap_jobs (id TEXT PRIMARY KEY, created_at TEXT);
+                 INSERT INTO _crap_meta VALUES ('legacy_timestamps_normalized', '1');",
+            )
+            .unwrap();
+
+        normalize_if_needed(&conn, &registry_with(&[])).unwrap();
+
+        assert_eq!(meta::get(&conn, RETIRED_META_KEY).unwrap(), None);
     }
 }

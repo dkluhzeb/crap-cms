@@ -27,6 +27,27 @@ pub struct FormatQuality {
     pub queue: bool,
 }
 
+impl FormatOptions {
+    /// Every configured format paired with its options, in the order the upload
+    /// pipeline produces them.
+    fn configured(&self) -> impl Iterator<Item = (&'static str, &FormatQuality)> {
+        [("webp", self.webp.as_ref()), ("avif", self.avif.as_ref())]
+            .into_iter()
+            .filter_map(|(name, opts)| Some((name, opts?)))
+    }
+
+    /// The formats configured to convert on the background queue instead of
+    /// during the upload — the variants a stored file still owes.
+    ///
+    /// One rule for both sides of a deferred conversion: the upload pipeline
+    /// defers them, and the publish that makes a drafted file live re-derives
+    /// exactly the same set from the stored size columns.
+    #[must_use]
+    pub fn deferred(&self) -> Vec<(&'static str, &FormatQuality)> {
+        self.configured().filter(|(_, opts)| opts.queue).collect()
+    }
+}
+
 impl FormatQuality {
     #[must_use]
     pub fn new(quality: u8, queue: bool) -> Self {
@@ -70,6 +91,23 @@ mod tests {
 
         let parsed: FormatOptions = serde_json::from_value(json!({})).unwrap();
         assert!(parsed.webp.is_none() && parsed.avif.is_none());
+    }
+
+    /// Only a `queue = true` format is deferred; a synchronously converted one
+    /// is produced during the upload and owes nothing to the queue.
+    #[test]
+    fn deferred_lists_only_the_queued_formats() {
+        let opts = FormatOptions {
+            webp: Some(FormatQuality::new(80, true)),
+            avif: Some(FormatQuality::new(50, false)),
+        };
+
+        let deferred = opts.deferred();
+        assert_eq!(deferred.len(), 1, "{deferred:?}");
+        assert_eq!(deferred[0].0, "webp");
+        assert_eq!(deferred[0].1.quality, 80);
+
+        assert!(FormatOptions::default().deferred().is_empty());
     }
 
     #[test]

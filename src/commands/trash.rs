@@ -10,12 +10,12 @@ use crate::{
     commands::{Project, open_project},
     config::{CrapConfig, LocaleConfig, UploadStorage},
     core::{
-        CollectionDefinition, Document, DocumentFields, Registry, upload,
+        CollectionDefinition, Document, Registry, upload,
         upload::{StorageBackend, create_storage_with_lease},
     },
     db::{BoxedConnection, DbConnection, DbPool, DbValue, query},
     hooks::HookRunner,
-    service::purge_document,
+    service::{owned_file_keys, purge_document},
 };
 
 /// Validate that a collection exists and has `soft_delete` enabled.
@@ -260,44 +260,39 @@ fn purge_collection(
     let purged = purge_documents(&tx, (slug, def), ids, p.locale)?;
     tx.commit().context("Commit purge")?;
 
-    delete_purged_files(p.storage, def, &purged);
+    delete_purged_files(p.storage, &purged);
 
     Ok(purged.skipped)
 }
 
 /// Delete the files of the uploads a committed purge removed.
-fn delete_purged_files(storage: &dyn StorageBackend, def: &CollectionDefinition, purged: &Purged) {
-    let Some(upload) = def.upload.as_ref() else {
-        return;
-    };
-
-    for fields in &purged.upload_docs {
-        upload::delete_upload_files(storage, fields, upload);
-    }
+fn delete_purged_files(storage: &dyn StorageBackend, purged: &Purged) {
+    upload::delete_storage_keys(storage, &purged.upload_keys);
 }
 
 /// What purging one collection's documents did.
 struct Purged {
     /// Documents skipped because others still reference them.
     skipped: u64,
-    /// The stored fields of each purged upload, whose files go once the purge
-    /// commits.
-    upload_docs: Vec<DocumentFields>,
+    /// Every storage key the purged uploads owned — each document's row AND
+    /// its version snapshots — whose files go once the purge commits.
+    upload_keys: Vec<String>,
 }
 
 impl Purged {
     fn new() -> Self {
         Self {
             skipped: 0,
-            upload_docs: Vec::new(),
+            upload_keys: Vec::new(),
         }
     }
 }
 
 /// Permanently delete a list of documents, cleaning up FTS and reference
-/// counts, and collect the purged uploads' fields for file cleanup. Documents
-/// that are still referenced by others (`_ref_count > 0`) are skipped — the
-/// same delete protection the server surfaces enforce.
+/// counts, and collect the storage keys the purged uploads owned — their rows'
+/// and their version snapshots' — for file cleanup. Documents that are still
+/// referenced by others (`_ref_count > 0`) are skipped — the same delete
+/// protection the server surfaces enforce.
 fn purge_documents(
     tx: &dyn DbConnection,
     (slug, def): (&str, &CollectionDefinition),
@@ -318,11 +313,11 @@ fn purge_documents(
             continue;
         }
 
-        if def.upload.is_some()
-            && let Some(doc) = query::find_by_id_unfiltered(tx, slug, def, id, locale_ctx.as_ref())?
-        {
-            purged.upload_docs.push(doc.fields);
-        }
+        // Every file the document owns, its version snapshots' included —
+        // collected before the purge removes the rows that name them.
+        purged
+            .upload_keys
+            .extend(owned_file_keys(tx, def, id, locale_ctx.as_ref())?);
 
         purge_document(tx, def, id, locale)?;
     }
@@ -448,7 +443,7 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
     let purged = purge_documents(&tx, (collection, &def), &ids, locale)?;
 
     tx.commit().context("Commit empty trash")?;
-    delete_purged_files(storage, &def, &purged);
+    delete_purged_files(storage, &purged);
 
     let skipped = purged.skipped;
     cli::success(&format!(
@@ -752,15 +747,11 @@ mod tests {
         drop(tx);
 
         assert!(file.exists(), "a purge that doesn't commit keeps the file");
-        assert_eq!(purged.upload_docs.len(), 1);
-        assert_eq!(purged.upload_docs[0].get("filename"), Some(&"a.png".into()));
+        assert_eq!(purged.upload_keys, vec!["media/a.png".to_string()]);
 
         let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
-        delete_purged_files(&*storage, &media_def, &purged);
-        assert!(
-            !file.exists(),
-            "the collected fields name the file to delete"
-        );
+        delete_purged_files(&*storage, &purged);
+        assert!(!file.exists(), "the collected keys name the file to delete");
     }
 
     /// Regression: the purge held a pooled connection for the candidate lookup

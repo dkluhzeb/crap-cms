@@ -1,16 +1,17 @@
-//! WHERE clause building, subquery SQL generation, and locale column resolution.
+//! WHERE clause building and subquery SQL generation.
+//!
+//! Locale resolution is NOT done here: every filter leaf gets its column
+//! expression from [`resolve_filter`], which reads a localized column through
+//! the same fallback expression the SELECT, the sort and the keyset use.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use super::{
     operators::{build_filter_condition, build_op_condition},
     resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
 };
-use crate::core::{BLOCK_TYPE_KEY, CollectionDefinition, FieldDefinition, FieldType};
-use crate::db::{
-    DbConnection, DbValue, Filter, FilterClause, LocaleContext,
-    query::{column_is_localized, helpers::locale_column, is_valid_identifier},
-};
+use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType};
+use crate::db::{DbConnection, DbValue, Filter, FilterClause, LocaleContext};
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
 
@@ -26,16 +27,9 @@ fn build_filter_sql(
 ) -> Result<String> {
     let resolved = resolve_filter(conn, &f.field, slug, fields, locale_ctx)?;
     match resolved {
-        ResolvedFilter::Column { col, field_type } => build_filter_condition(
-            conn,
-            &Filter {
-                field: col,
-                op: f.op.clone(),
-            },
-            &f.field,
-            field_type.as_ref(),
-            params,
-        ),
+        ResolvedFilter::Column { expr, field_type } => {
+            build_op_condition(conn, &f.field, &expr, &f.op, field_type.as_ref(), params)
+        }
         ResolvedFilter::Subquery {
             ref join_table,
             ref parent_table,
@@ -71,10 +65,18 @@ fn build_subquery_sql(
     let op = &f.op;
     match condition {
         SubqueryCondition::Column { col, field_type } => {
-            if !is_valid_identifier(col) {
-                bail!("Invalid column name '{col}' in subquery");
-            }
-            let op_sql = build_op_condition(conn, &f.field, col, op, field_type.as_ref(), params)?;
+            // The same validate-then-quote guard the parent-table path applies,
+            // so a join-table column can't reach SQL unchecked either.
+            let op_sql = build_filter_condition(
+                conn,
+                &Filter {
+                    field: col.clone(),
+                    op: op.clone(),
+                },
+                &f.field,
+                field_type.as_ref(),
+                params,
+            )?;
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
@@ -235,82 +237,6 @@ fn build_junction_sql(
     Ok(format!("({})", parts.join(&format!(" {sep} "))))
 }
 
-/// Resolve filter clauses to use locale-specific column names.
-///
-/// Walks every [`FilterClause`] (including nested OR groups) and replaces each
-/// filter's field name with the locale-suffixed column name returned by
-/// [`resolve_filter_column`]. Non-localized fields pass through unchanged.
-///
-/// This is a pure transformation — no database access required.
-///
-/// # Errors
-///
-/// Returns an error if any filter references an unknown field.
-pub fn resolve_filters(
-    filters: &[FilterClause],
-    def: &CollectionDefinition,
-    locale_ctx: Option<&LocaleContext>,
-) -> Result<Vec<FilterClause>> {
-    filters
-        .iter()
-        .map(|clause| resolve_clause(clause, def, locale_ctx))
-        .collect()
-}
-
-/// Locale-rewrite one [`FilterClause`] tree node, recursing through `And`/`Or`.
-/// Structure-preserving — variants and arity are kept exactly; only leaf field
-/// names are remapped.
-fn resolve_clause(
-    clause: &FilterClause,
-    def: &CollectionDefinition,
-    locale_ctx: Option<&LocaleContext>,
-) -> Result<FilterClause> {
-    match clause {
-        FilterClause::Single(f) => Ok(FilterClause::Single(Filter {
-            field: resolve_filter_column(&f.field, def, locale_ctx)?,
-            op: f.op.clone(),
-        })),
-        FilterClause::And(subs) => Ok(FilterClause::And(resolve_clauses(subs, def, locale_ctx)?)),
-        FilterClause::Or(subs) => Ok(FilterClause::Or(resolve_clauses(subs, def, locale_ctx)?)),
-    }
-}
-
-/// Locale-rewrite a slice of sub-clauses, preserving order.
-fn resolve_clauses(
-    subs: &[FilterClause],
-    def: &CollectionDefinition,
-    locale_ctx: Option<&LocaleContext>,
-) -> Result<Vec<FilterClause>> {
-    subs.iter()
-        .map(|c| resolve_clause(c, def, locale_ctx))
-        .collect()
-}
-
-/// Map a filter field name to its actual SQL column name, accounting for locale.
-///
-/// When a [`LocaleContext`] is present and localization is enabled:
-/// - If the field is a localized top-level field, returns `"field__locale"`.
-/// - If the field is a group sub-field (`"group__sub"`) where either the group
-///   or the sub-field is localized, returns `"group__sub__locale"`.
-/// - For [`LocaleMode::Single`] the requested locale is used; otherwise the
-///   default locale from config is used.
-///
-/// Non-localized fields (or disabled locale config) pass through unchanged.
-pub(crate) fn resolve_filter_column(
-    field_name: &str,
-    def: &CollectionDefinition,
-    locale_ctx: Option<&LocaleContext>,
-) -> Result<String> {
-    if let Some(ctx) = locale_ctx
-        && ctx.config.is_enabled()
-        && column_is_localized(field_name, &def.fields) == Some(true)
-    {
-        return locale_column(field_name, ctx.access_locale());
-    }
-
-    Ok(field_name.to_string())
-}
-
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -338,7 +264,7 @@ mod tests {
         },
         db::{
             BoxedConnection, DbValue, pool,
-            query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode},
+            query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode, column_read_expr},
         },
     };
 
@@ -708,58 +634,64 @@ mod tests {
         assert_eq!(params.len(), 2);
     }
 
-    // ── resolve_filter_column ─────────────────────────────────────────────
+    // ── column_read_expr (the locale read expression) ─────────────────────
+
+    /// The `de` read expression of a localized column under a configuration
+    /// with fallback on.
+    fn de_expr(column: &str) -> String {
+        format!("COALESCE(\"{column}__de\", \"{column}__en\")")
+    }
+
+    fn de_ctx() -> LocaleContext {
+        LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        }
+    }
+
+    fn read_expr(name: &str, def: &CollectionDefinition, ctx: Option<&LocaleContext>) -> String {
+        column_read_expr(name, &def.fields, ctx).unwrap()
+    }
 
     #[test]
-    fn resolve_column_non_localized_passthrough() {
+    fn read_expr_non_localized_passthrough() {
         let def = make_collection(vec![make_field("title", FieldType::Text, false)]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "title");
+
+        assert_eq!(read_expr("title", &def, Some(&de_ctx())), "title");
     }
 
     #[test]
-    fn resolve_column_localized_single_locale() {
+    fn read_expr_localized_single_locale() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "title__de");
+
+        assert_eq!(read_expr("title", &def, Some(&de_ctx())), de_expr("title"));
     }
 
     #[test]
-    fn resolve_column_group_sub_field_localized() {
+    fn read_expr_group_sub_field_localized() {
         let mut group = make_field("meta", FieldType::Group, false);
-        let sub = make_field("description", FieldType::Text, true);
-        group.fields = vec![sub];
-
+        group.fields = vec![make_field("description", FieldType::Text, true)];
         let def = make_collection(vec![group]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("meta__description", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "meta__description__de");
+
+        assert_eq!(
+            read_expr("meta__description", &def, Some(&de_ctx())),
+            de_expr("meta__description")
+        );
     }
 
     #[test]
-    fn resolve_column_localized_default_mode() {
+    fn read_expr_localized_default_mode() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
         let ctx = LocaleContext {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "title__en");
+
+        assert_eq!(read_expr("title", &def, Some(&ctx)), "\"title__en\"");
     }
 
     #[test]
-    fn resolve_column_group_localized_default_mode() {
+    fn read_expr_group_localized_default_mode() {
         let mut group = make_field("meta", FieldType::Group, true);
         group.fields = vec![make_field("title", FieldType::Text, false)];
         let def = make_collection(vec![group]);
@@ -767,15 +699,18 @@ mod tests {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("meta__title", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "meta__title__en");
+
+        assert_eq!(
+            read_expr("meta__title", &def, Some(&ctx)),
+            "\"meta__title__en\""
+        );
     }
 
     /// Regression: the filter/sort column resolution looked one level deep, so
     /// a localized value below a nested group or a layout wrapper inside a
     /// group resolved to a bare column that doesn't exist.
     #[test]
-    fn resolve_column_nested_localized_paths() {
+    fn read_expr_nested_localized_paths() {
         let deep = FieldDefinition::builder("a", FieldType::Group)
             .localized(true)
             .fields(vec![
@@ -800,82 +735,52 @@ mod tests {
             ])
             .build();
         let def = make_collection(vec![deep, seo, meta]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
+        let ctx = de_ctx();
 
-        for (name, column) in [
-            ("a__b__c", "a__b__c__de"),
-            ("seo__title", "seo__title__de"),
-            ("meta__title", "meta__title__de"),
-        ] {
-            assert_eq!(
-                resolve_filter_column(name, &def, Some(&ctx)).unwrap(),
-                column
-            );
+        for name in ["a__b__c", "seo__title", "meta__title"] {
+            assert_eq!(read_expr(name, &def, Some(&ctx)), de_expr(name));
         }
     }
 
     #[test]
-    fn resolve_column_no_locale_ctx() {
+    fn read_expr_no_locale_ctx() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let result = resolve_filter_column("title", &def, None).unwrap();
-        assert_eq!(result, "title");
+
+        assert_eq!(read_expr("title", &def, None), "title");
     }
 
     #[test]
-    fn resolve_column_row_sub_field_localized() {
-        // Sub-field inside a Row wrapper is localized
+    fn read_expr_row_sub_field_localized() {
         let mut row_field = make_field("layout", FieldType::Row, false);
-        let localized_sub = make_field("slug", FieldType::Text, true);
-        row_field.fields = vec![localized_sub];
-
+        row_field.fields = vec![make_field("slug", FieldType::Text, true)];
         let def = make_collection(vec![row_field]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        // Filtering by "slug" should resolve to "slug__de" because it's localized inside a Row
-        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "slug__de");
+
+        assert_eq!(read_expr("slug", &def, Some(&de_ctx())), de_expr("slug"));
     }
 
     #[test]
-    fn resolve_column_row_sub_field_non_localized_passthrough() {
-        // Sub-field inside a Row wrapper is NOT localized — should pass through unchanged
+    fn read_expr_row_sub_field_non_localized_passthrough() {
         let mut row_field = make_field("layout", FieldType::Row, false);
-        let non_localized_sub = make_field("slug", FieldType::Text, false);
-        row_field.fields = vec![non_localized_sub];
-
+        row_field.fields = vec![make_field("slug", FieldType::Text, false)];
         let def = make_collection(vec![row_field]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "slug");
+
+        assert_eq!(read_expr("slug", &def, Some(&de_ctx())), "slug");
     }
 
     #[test]
-    fn resolve_column_collapsible_sub_field_localized() {
-        // Sub-field inside a Collapsible wrapper is localized
+    fn read_expr_collapsible_sub_field_localized() {
         let mut collapsible = make_field("advanced", FieldType::Collapsible, false);
-        let localized_sub = make_field("summary", FieldType::Textarea, true);
-        collapsible.fields = vec![localized_sub];
-
+        collapsible.fields = vec![make_field("summary", FieldType::Textarea, true)];
         let def = make_collection(vec![collapsible]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("summary", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "summary__de");
+
+        assert_eq!(
+            read_expr("summary", &def, Some(&de_ctx())),
+            de_expr("summary")
+        );
     }
 
     #[test]
-    fn resolve_column_tabs_sub_field_localized() {
-        // Sub-field inside a Tabs wrapper is localized
+    fn read_expr_tabs_sub_field_localized() {
         let tabs_field = FieldDefinition::builder("page_tabs", FieldType::Tabs)
             .tabs(vec![FieldTab::new(
                 "Content",
@@ -883,17 +788,15 @@ mod tests {
             )])
             .build();
         let def = make_collection(vec![tabs_field]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "description__de");
+
+        assert_eq!(
+            read_expr("description", &def, Some(&de_ctx())),
+            de_expr("description")
+        );
     }
 
     #[test]
-    fn resolve_column_tabs_sub_field_non_localized_passthrough() {
-        // Sub-field inside a Tabs wrapper is NOT localized
+    fn read_expr_tabs_sub_field_non_localized_passthrough() {
         let tabs_field = FieldDefinition::builder("page_tabs", FieldType::Tabs)
             .tabs(vec![FieldTab::new(
                 "Content",
@@ -901,17 +804,14 @@ mod tests {
             )])
             .build();
         let def = make_collection(vec![tabs_field]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "description");
+
+        let ctx = de_ctx();
+
+        assert_eq!(read_expr("description", &def, Some(&ctx)), "description");
     }
 
     #[test]
-    fn resolve_column_locale_disabled_passthrough() {
-        // Even with a ctx, if config.is_enabled() is false, passthrough
+    fn read_expr_locale_disabled_passthrough() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
         let ctx = LocaleContext {
             mode: LocaleMode::Single("de".into()),
@@ -921,37 +821,39 @@ mod tests {
                 fallback: false,
             },
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
-        assert_eq!(result, "title");
+
+        assert_eq!(read_expr("title", &def, Some(&ctx)), "title");
     }
 
-    // ── resolve_filters ───────────────────────────────────────────────────
+    // ── locale in the WHERE clause ────────────────────────────────────────
 
     #[test]
-    fn resolve_filters_non_localized_passthrough() {
+    fn where_clause_non_localized_passthrough() {
+        let (_dir, conn) = test_conn();
         let def = make_collection(vec![make_field("status", FieldType::Text, false)]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
         let filters = vec![FilterClause::Single(Filter {
             field: "status".into(),
             op: FilterOp::Equals("active".into()),
         })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
-        match &resolved[0] {
-            FilterClause::Single(f) => assert_eq!(f.field, "status"),
-            other => panic!("Expected Single, got {other:?}"),
-        }
+
+        let mut params = Vec::new();
+        let sql = build_where_clause(
+            &conn,
+            &filters,
+            "test",
+            &def.fields,
+            Some(&de_ctx()),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(sql, " WHERE status = ?1");
     }
 
     #[test]
-    fn resolve_filters_or_groups() {
+    fn where_clause_applies_the_locale_read_expression_in_or_groups() {
+        let (_dir, conn) = test_conn();
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
         let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "title".into(),
@@ -962,18 +864,45 @@ mod tests {
                 op: FilterOp::Equals("B".into()),
             }],
         ])];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
-        match &resolved[0] {
-            FilterClause::Or(alts) => {
-                let (FilterClause::Single(f0), FilterClause::Single(f1)) = (&alts[0], &alts[1])
-                else {
-                    panic!("expected single-filter alternatives");
-                };
-                assert_eq!(f0.field, "title__de");
-                assert_eq!(f1.field, "title__de");
-            }
-            other => panic!("Expected Or, got {other:?}"),
-        }
+
+        let mut params = Vec::new();
+        let sql = build_where_clause(
+            &conn,
+            &filters,
+            "test",
+            &def.fields,
+            Some(&de_ctx()),
+            &mut params,
+        )
+        .unwrap();
+
+        let expr = de_expr("title");
+        assert_eq!(sql, format!(" WHERE ({expr} = ?1 OR {expr} = ?2)"));
+    }
+
+    /// A localized filter compares the same expression the SELECT returns the
+    /// value through, so a row listed under its fallback value still matches.
+    #[test]
+    fn where_clause_filters_a_localized_column_through_its_fallback() {
+        let (_dir, conn) = test_conn();
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let filters = vec![FilterClause::Single(Filter {
+            field: "title".into(),
+            op: FilterOp::Equals("Hallo".into()),
+        })];
+
+        let mut params = Vec::new();
+        let sql = build_where_clause(
+            &conn,
+            &filters,
+            "test",
+            &def.fields,
+            Some(&de_ctx()),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(sql, format!(" WHERE {} = ?1", de_expr("title")));
     }
 
     /// A locale code with capitals (`de-DE` → `title__de_DE`) names a column
@@ -987,7 +916,7 @@ mod tests {
             config: LocaleConfig {
                 default_locale: "en".to_string(),
                 locales: vec!["en".to_string(), "de-DE".to_string()],
-                fallback: true,
+                fallback: false,
             },
         };
         let filters = vec![FilterClause::Single(Filter {
@@ -995,11 +924,10 @@ mod tests {
             op: FilterOp::Equals("Hallo".into()),
         })];
 
-        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         let mut params = Vec::new();
         let sql = build_where_clause(
             &conn,
-            &resolved,
+            &filters,
             "test",
             &def.fields,
             Some(&ctx),
@@ -1008,23 +936,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(sql, " WHERE \"title__de_DE\" = ?1");
-    }
-
-    #[test]
-    fn resolve_filters_applies_locale() {
-        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let ctx = LocaleContext {
-            mode: LocaleMode::Single("de".into()),
-            config: locale_config_en_de(),
-        };
-        let filters = vec![FilterClause::Single(Filter {
-            field: "title".into(),
-            op: FilterOp::Equals("Hallo".into()),
-        })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
-        match &resolved[0] {
-            FilterClause::Single(f) => assert_eq!(f.field, "title__de"),
-            other => panic!("Expected Single, got {other:?}"),
-        }
     }
 }

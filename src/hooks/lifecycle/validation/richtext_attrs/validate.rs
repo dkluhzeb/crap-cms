@@ -10,6 +10,7 @@ use crate::{
     core::{FieldDefinition, registry::Registry, validate::FieldError},
     hooks::lifecycle::validation::{
         checks,
+        checks::OptionCheck,
         custom::{ValidateCtxSource, run_validate_function_inner},
         is_empty_value,
     },
@@ -178,7 +179,10 @@ fn validate_node_instance(
         checks::check_length_bounds(attr_def, &data_key, value, is_empty, errors);
         checks::check_numeric_bounds(attr_def, &data_key, value, is_empty, errors);
         checks::check_email_format(attr_def, &data_key, value, is_empty, errors);
-        checks::check_option_valid(attr_def, &data_key, value, is_empty, errors);
+        checks::check_option_valid(
+            &OptionCheck::new(attr_def, &data_key, value, is_empty),
+            errors,
+        );
         checks::check_date_field(attr_def, &data_key, value, is_empty, errors);
         // A `has_many` node attr (Text/Number/Select/Radio list) gets the same
         // per-element + count validation as at the top level and in array/blocks

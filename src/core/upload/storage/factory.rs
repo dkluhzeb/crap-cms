@@ -2,10 +2,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use anyhow::Result;
-#[cfg(not(feature = "s3-storage"))]
-use anyhow::bail;
-use tracing::info;
+use anyhow::{Result, bail};
 
 use crate::config::{UploadConfig, UploadStorage};
 use crate::core::lua_lease::LuaVmLease;
@@ -14,10 +11,14 @@ use super::{CustomStorage, LocalStorage, SharedStorage};
 
 /// Create the appropriate storage backend from config.
 ///
+/// Handles every backend that needs no Lua VM. `storage = "custom"` is
+/// refused here: it is delegated to Lua and must be built through
+/// [`create_storage_with_lease`].
+///
 /// # Errors
 ///
-/// Returns an error if the chosen backend fails to initialize (or requires a
-/// feature the binary wasn't built with).
+/// Returns an error if the chosen backend fails to initialize, requires a
+/// feature the binary wasn't built with, or is `custom` (which needs a lease).
 pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<SharedStorage> {
     match config.storage {
         UploadStorage::Local => {
@@ -31,17 +32,15 @@ pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<Shared
             "S3 upload storage requires the `s3-storage` feature. \
              Rebuild with `--features s3-storage`."
         ),
-        UploadStorage::Custom => {
-            // No lease available here (config-only call site). The
-            // pool/local-backed custom backend is built via
-            // `create_storage_with_lease`; this placeholder only fires if
-            // a caller forgot to use that path.
-            info!("Custom storage selected without a Lua lease — using local placeholder");
-
-            let base_dir = config_dir.join("uploads");
-
-            Ok(Arc::new(LocalStorage::new(base_dir)))
-        }
+        // Falling back to a local backend here would write the operator's
+        // files to this machine's disk while `[upload] storage = "custom"`
+        // says they belong somewhere else — a silent, unrecoverable
+        // misplacement of user data. Every call site that can reach a Lua
+        // VM builds the backend through `create_storage_with_lease`.
+        UploadStorage::Custom => bail!(
+            "`[upload] storage = \"custom\"` needs a Lua VM lease — \
+             build the backend with `create_storage_with_lease`."
+        ),
     }
 }
 
@@ -49,8 +48,9 @@ pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<Shared
 ///
 /// Use this at call sites that have a Lua VM lease (a hook-runner pool
 /// lease, or a per-VM local lease) so `[upload] storage = "custom"`
-/// resolves to a working [`CustomStorage`] instead of the local
-/// placeholder. Non-custom backends ignore the lease.
+/// resolves to a working [`CustomStorage`]. It is the only way to build a
+/// custom backend — [`create_storage`] refuses one. Non-custom backends
+/// ignore the lease.
 ///
 /// # Errors
 ///
@@ -82,18 +82,31 @@ mod tests {
         assert!(storage.exists("k/x.txt").unwrap());
     }
 
+    /// Regression: a lease-less `create_storage` downgraded `custom` to a
+    /// local backend, so an operator who configured storage elsewhere had
+    /// user files written to this machine's disk instead — silently, and
+    /// reported as success.
     #[test]
-    fn custom_backend_falls_back_to_a_working_local_placeholder() {
+    fn custom_backend_without_a_lease_is_refused_rather_than_written_locally() {
         let tmp = tempfile::tempdir().unwrap();
         let config = UploadConfig {
             storage: UploadStorage::Custom,
             ..Default::default()
         };
-        // Until Lua's `crap.storage.register()` runs, Custom is a working
-        // local backend rather than a failure.
-        let storage = create_storage(tmp.path(), &config).unwrap();
-        storage.put("a.txt", b"x", "text/plain").unwrap();
-        assert!(storage.exists("a.txt").unwrap());
+
+        let err = create_storage(tmp.path(), &config)
+            .err()
+            .expect("custom storage needs a lease");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("create_storage_with_lease"),
+            "the error should name the path that works, got: {msg}"
+        );
+
+        assert!(
+            !tmp.path().join("uploads").exists(),
+            "nothing may be written locally for a custom backend"
+        );
     }
 
     #[cfg(not(feature = "s3-storage"))]

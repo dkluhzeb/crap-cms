@@ -15,5 +15,6 @@ pub(super) use helpers::{
     MAX_FIELD_DEPTH, apply_display_conditions, collect_node_attr_errors,
     count_errors_in_field_contexts, date_picker_values, inject_lang_values_from_row,
     inject_timezone_values_from_row, locale_locked_display, localize_date_display,
-    safe_template_id, set_date_picker_values, split_sidebar_fields, tag_values,
+    safe_template_id, set_date_picker_values, split_sidebar_fields, tag_values, tag_values_of,
+    tags_input_value,
 };

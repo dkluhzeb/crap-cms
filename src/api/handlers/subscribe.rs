@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     pin::Pin,
     sync::{
         Arc,
@@ -11,8 +12,9 @@ use std::{
     time::Duration,
 };
 
-use tokio::{sync::mpsc, task, time::timeout};
+use tokio::{select, sync::mpsc, task, time::timeout};
 use tokio_stream::{Stream, wrappers::ReceiverStream};
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
@@ -268,39 +270,74 @@ async fn handle_invalidation(
     Err(())
 }
 
-/// Spawn the pumping task that forwards events and honours invalidation.
-fn spawn_pump(
-    mut event_rx: EventReceiver,
-    mut invalidation_rx: InvalidationReceiver,
+/// Everything one subscriber's pump task owns for its lifetime. Built at the
+/// single call site and consumed there, so a plain struct literal is enough.
+struct PumpInput {
+    event_rx: EventReceiver,
+    invalidation_rx: InvalidationReceiver,
     tx: mpsc::Sender<OutboundItem>,
     ctx: SubscriberCtx,
     my_user_id: Option<String>,
     send_timeout_dur: Duration,
-) {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                recv = event_rx.recv() => {
-                    if handle_event(&tx, &ctx, recv, &mut event_rx, send_timeout_dur)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
+    shutdown: CancellationToken,
+}
+
+/// Spawn the pumping task that forwards events and honours invalidation.
+fn spawn_pump(input: PumpInput) {
+    let shutdown = input.shutdown.clone();
+
+    tokio::spawn(end_on_shutdown(shutdown, pump_loop(input)));
+}
+
+/// Drive `pump` until it ends on its own or `shutdown` fires.
+///
+/// Abandoning the pump drops its outbound sender, which ends the client's
+/// stream. That is what lets a graceful gRPC shutdown complete: the server
+/// counts a server-streaming RPC as in-flight until its stream ends, so a
+/// single subscriber that never disconnects would otherwise hold the whole
+/// process open and skip the post-shutdown cleanup.
+async fn end_on_shutdown(shutdown: CancellationToken, pump: impl Future<Output = ()>) {
+    select! {
+        () = pump => {}
+        () = shutdown.cancelled() => {}
+    }
+}
+
+/// Forward events to one subscriber until the client goes away, the stream
+/// lags past recovery, or the subscriber's session is revoked.
+async fn pump_loop(input: PumpInput) {
+    let PumpInput {
+        mut event_rx,
+        mut invalidation_rx,
+        tx,
+        ctx,
+        my_user_id,
+        send_timeout_dur,
+        shutdown: _,
+    } = input;
+
+    loop {
+        select! {
+            recv = event_rx.recv() => {
+                if handle_event(&tx, &ctx, recv, &mut event_rx, send_timeout_dur)
+                    .await
+                    .is_err()
+                {
+                    break;
                 }
-                recv = invalidation_rx.recv() => {
-                    if handle_invalidation(
-                        &tx,
-                        my_user_id.as_deref(),
-                        recv,
-                        send_timeout_dur,
-                    ).await.is_err() {
-                        break;
-                    }
+            }
+            recv = invalidation_rx.recv() => {
+                if handle_invalidation(
+                    &tx,
+                    my_user_id.as_deref(),
+                    recv,
+                    send_timeout_dur,
+                ).await.is_err() {
+                    break;
                 }
             }
         }
-    });
+    }
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -372,14 +409,15 @@ impl ContentService {
             registry: Arc::clone(&self.infra.registry),
         };
 
-        spawn_pump(
+        spawn_pump(PumpInput {
             event_rx,
             invalidation_rx,
             tx,
-            subscriber,
+            ctx: subscriber,
             my_user_id,
             send_timeout_dur,
-        );
+            shutdown: self.shutdown.clone(),
+        });
 
         let stream = ReceiverStream::new(rx);
 
@@ -648,5 +686,47 @@ mod tests {
         let item = rx.recv().await.expect("a terminal item should be sent");
         let status = item.expect_err("terminal item should be a Status error");
         assert_eq!(status.code(), tonic::Code::PermissionDenied);
+    }
+
+    /// A subscriber that never disconnects must not keep the process alive:
+    /// the shutdown token ends the pump, which drops the outbound sender and
+    /// closes the client's stream so the gRPC server can finish draining.
+    #[tokio::test]
+    async fn cancelling_the_shutdown_token_closes_the_subscriber_stream() {
+        let (tx, mut rx) = mpsc::channel::<OutboundItem>(4);
+        let shutdown = CancellationToken::new();
+
+        // Stands in for a pump with a live, silent subscriber: it holds the
+        // sender and never finishes on its own.
+        let pump = async move {
+            let _tx = tx;
+
+            std::future::pending::<()>().await;
+        };
+
+        tokio::spawn(end_on_shutdown(shutdown.clone(), pump));
+        shutdown.cancel();
+
+        let recv = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the pump must end on the shutdown token");
+
+        assert!(
+            recv.is_none(),
+            "the outbound channel must close so the gRPC stream ends"
+        );
+    }
+
+    /// The token only ends the pump — a pump that finishes on its own (client
+    /// disconnected) still returns without waiting for a shutdown.
+    #[tokio::test]
+    async fn a_pump_that_finishes_on_its_own_does_not_wait_for_shutdown() {
+        let result = timeout(
+            Duration::from_secs(5),
+            end_on_shutdown(CancellationToken::new(), async {}),
+        )
+        .await;
+
+        assert!(result.is_ok());
     }
 }

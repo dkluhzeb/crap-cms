@@ -1,13 +1,10 @@
-//! Locale helpers — editor locale extraction and template data building.
+//! Locale helpers — editor locale extraction and read-context resolution.
 
 use axum::http::{HeaderMap, header};
 use tracing::warn;
 
 use crate::{
-    admin::{
-        AdminState, context::LocaleTemplateData, handlers::auth::EDITOR_LOCALE_COOKIE,
-        server::extract_cookie,
-    },
+    admin::{AdminState, handlers::auth::EDITOR_LOCALE_COOKIE, server::extract_cookie},
     config::LocaleConfig,
     core::{DocumentFields, FieldDefinition, flatten_group_fields},
     db::{LocaleContext, query::locale_locked_field_names},
@@ -61,22 +58,24 @@ pub fn parse_request_locale(
     LocaleContext::from_locale_string(locale, config).map_err(|e| e.to_string())
 }
 
-/// Build locale template context (selector data) from config + current locale.
-/// Returns `(locale_ctx_for_db, locale_template_data)` — the second element
-/// is `None` when locale support is disabled, otherwise carries the typed
-/// picker data the page contexts flatten into themselves.
-pub fn build_locale_template_data(
+/// The read context a page render works in: the requested editor locale
+/// resolved against the config, falling back to the default locale when none
+/// was requested. `None` when locale support is disabled.
+///
+/// The locale *picker* data the page carries is not built here — it comes from
+/// [`BasePageContext::with_editor_locale`], which every page that calls this
+/// also calls with the same locale, so the rendered picker and the read
+/// context cannot disagree.
+///
+/// [`BasePageContext::with_editor_locale`]: crate::admin::context::BasePageContext::with_editor_locale
+pub fn editor_read_ctx(
     state: &AdminState,
     requested_locale: Option<&str>,
-) -> (Option<LocaleContext>, Option<LocaleTemplateData>) {
+) -> Option<LocaleContext> {
     let config = &state.config.locale;
-
     let current = requested_locale.unwrap_or(&config.default_locale);
-    let locale_ctx = editor_locale_ctx(config, Some(current));
 
-    let template_data = LocaleTemplateData::for_locale(config, requested_locale);
-
-    (locale_ctx, template_data)
+    editor_locale_ctx(config, Some(current))
 }
 
 /// Check if the current locale is a non-default locale (fields should be locked).

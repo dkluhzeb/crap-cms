@@ -188,6 +188,29 @@ storage = "custom"
 
 Binary data is passed natively between Rust and Lua (no base64 encoding). The `crap.http.request` function handles binary request/response bodies.
 
+### Storage guarantees
+
+- **Local:** a file is staged beside its final path, synced and renamed into
+  place, so a key never holds a partial object after a crash. A stray
+  `.<name>.<pid>.<n>.crap-tmp` sibling is a leftover from a killed process and
+  safe to delete.
+- **S3:** every request's HTTP status is checked. A rejected upload (403, 5xx)
+  fails the write instead of committing a document that points at an object
+  that was never stored; a rejected read fails instead of serving the
+  provider's error body as the file; a rejected delete fails instead of
+  silently leaving the object; `exists` reports a missing object as absent.
+  Errors name the operation, key and status, never the response body.
+- **Custom:** `[upload] storage = "custom"` needs the Lua runtime; creating the
+  storage without one is an error, never a silent fallback to local storage.
+- **Replacing a file** cancels the previous file's queued image conversions;
+  a conversion already running when its file is replaced discards its output.
+  A stored file is deleted only when nothing references it any more — not the
+  live row, not a draft, not a version snapshot — after the write commits;
+  pruning versions releases the files they were the last reference to, and a
+  hard delete removes every file the document's row or snapshots ever named.
+  A draft save with a new file leaves the published file in place; the
+  drafted file becomes live when the draft is published.
+
 ## URL Structure
 
 Files are served at `/uploads/<collection>/<filename>`:

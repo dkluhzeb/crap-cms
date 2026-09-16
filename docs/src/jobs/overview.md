@@ -195,6 +195,21 @@ crashes will run again, so **job handlers must be idempotent**. A job that must
 never run twice needs its own guard (e.g. a unique key or an idempotency check
 at the top of the handler).
 
+### Cron schedules across restarts
+
+A schedule's last fire is stored per schedule, so a schedule that came due
+while the server was down fires once on the next check after a restart (not
+once per missed slot). A schedule that was not due does not fire.
+
+### Shutdown
+
+A stop (`SIGTERM`, `crap-cms serve --stop`, `crap-cms work --stop`) waits for
+running jobs before exiting, up to the longest configured
+`[jobs.queues.<name>] timeout` plus five minutes (3900 s with the defaults). Lower
+the relevant queue timeout for a faster stop; a Lua job's own `timeout` is not
+part of the deadline. `/ready` returns 503 until the startup stale-job
+recovery has completed.
+
 ## System jobs
 
 The framework queues three job kinds of its own. They live outside

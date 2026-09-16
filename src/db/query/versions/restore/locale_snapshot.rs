@@ -7,7 +7,7 @@ use crate::{config::LocaleConfig, db::query::helpers::locale_column};
 
 /// Resolve a snapshot value by trying the flat `"group__sub"` key first,
 /// then navigating into the nested JSON object using the prefix segments.
-fn resolve_snapshot_value<'a>(
+pub(super) fn resolve_snapshot_value<'a>(
     obj: &'a Map<String, Value>,
     base: &str,
     prefix: &str,
@@ -66,17 +66,6 @@ impl<'a> LocaleSnapshot<'a> {
         }
 
         Ok(resolve_snapshot_value(self.obj, base, prefix, field))
-    }
-
-    /// Whether the snapshot carries a value of `key` for any locale.
-    pub(super) fn carries(&self, key: SnapshotKey<'_>) -> Result<bool> {
-        for locale in &self.config.locales {
-            if self.value(key, locale)?.is_some() {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 }
 

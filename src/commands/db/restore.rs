@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::{self, ErrorKind},
+    io::ErrorKind,
     path::{Path, PathBuf},
     process,
 };
@@ -13,12 +13,13 @@ use crate::{
     cli::{self, Spinner},
     commands::{
         db::{
+            helpers::classify_tar_status,
             manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
             secret::{configured_secret_overrides, has_generated_secret, restore_secret},
         },
         helpers,
     },
-    config::CrapConfig,
+    config::{CrapConfig, UploadStorage},
     db::{DbConnection, pool},
 };
 
@@ -68,7 +69,7 @@ pub fn restore(
     restore_secret(&config_dir, &backup_dir, had_secret)?;
 
     if include_uploads {
-        restore_uploads(&config_dir, &backup_dir)?;
+        restore_local_uploads(&cfg, &config_dir, &backup_dir)?;
     }
 
     cli::success("Restore complete.");
@@ -158,17 +159,85 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Drop the current database's `-wal` / `-shm` sidecars. They belong to the
+/// database being replaced; left in place, they would be applied to the
+/// restored file and corrupt it. The checkpoint folded the WAL into the main
+/// file first, so nothing is lost with them.
+///
+/// Removal is unconditional and tolerates a missing file: a `wal_checkpoint`
+/// or the OS can drop a sidecar between listing and removal, so an `exists()`
+/// guard would race. Any other failure is a hard error — never proceed past a
+/// leftover.
+fn remove_sidecars(sidecars: &[PathBuf]) -> Result<()> {
+    for sidecar in sidecars {
+        match fs::remove_file(sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to remove {} — aborting before touching the database",
+                        sidecar.display()
+                    )
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Give the current database a second name, `*.db.pre-restore`, *without*
+/// unlinking the live one — so the restore's final rename replaces only the
+/// live directory entry and the operator keeps a working copy either way.
+///
+/// A hard link is instant and shares the bytes (the aside name survives the
+/// overwriting rename because it points at the old inode). Filesystems that
+/// refuse hard links fall back to a full copy.
+fn keep_previous_database(db_path: &Path, aside: &Path) -> Result<()> {
+    // A leftover from an earlier restore would make the link fail.
+    match fs::remove_file(aside) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!("Failed to clear the earlier copy at {}", aside.display())
+            });
+        }
+    }
+
+    if fs::hard_link(db_path, aside).is_ok() {
+        return Ok(());
+    }
+
+    fs::copy(db_path, aside).with_context(|| {
+        format!(
+            "Failed to keep the previous database at {}",
+            aside.display()
+        )
+    })?;
+
+    Ok(())
+}
+
 /// Replace the live database with the backup copy — crash-safe at every step.
 ///
 /// Sequence:
 /// 1. checkpoint the current DB so its WAL folds into the main file (a stale
 ///    WAL applied to the restored file would corrupt it; folding it first
-///    also keeps the kept-aside copy self-consistent),
+///    also makes the kept-aside copy self-consistent),
 /// 2. stage the backup copy next to the target (same dir → atomic rename),
-/// 3. delete the old sidecars (hard error — never proceed past a leftover),
-/// 4. move the old DB aside as `*.pre-restore` and rename the staged copy
-///    into place. An interrupt at any point leaves either the old or the
-///    new database intact on disk, never a half-written one.
+/// 3. give the current database its second `*.pre-restore` name, leaving the
+///    live one in place,
+/// 4. delete the old sidecars (hard error — never proceed past a leftover),
+/// 5. rename the staged copy over the target.
+///
+/// The live path is never absent: the only operation that touches it is that
+/// final overwriting rename, so an interrupt at any point leaves either the
+/// old or the new database there, never nothing and never a half-written
+/// file. (Moving the old database aside *before* the staged copy was in place
+/// left a window in which a kill produced no database at all — the next
+/// `serve` then created and migrated an empty one and served it.)
 #[cfg(not(tarpaulin_include))]
 fn restore_database(
     config_dir: &Path,
@@ -189,40 +258,20 @@ fn restore_database(
     fs::copy(backup_dir.join("crap.db"), &staged)
         .with_context(|| format!("Failed to stage database copy at {}", staged.display()))?;
 
-    for sidecar in &sidecars {
-        // Remove unconditionally and tolerate a missing file: a `wal_checkpoint`
-        // (above) or the OS can drop a `-wal`/`-shm` sidecar between listing and
-        // removal, so an `exists()` guard would race. NotFound = already gone.
-        match fs::remove_file(sidecar) {
-            Ok(()) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e).with_context(|| {
-                    format!(
-                        "Failed to remove {} — aborting before touching the database",
-                        sidecar.display()
-                    )
-                });
-            }
-        }
+    let aside = db_path.with_extension("db.pre-restore");
+    let kept = db_path.exists();
+    if kept {
+        keep_previous_database(db_path, &aside)?;
     }
 
-    let aside = db_path.with_extension("db.pre-restore");
-    if db_path.exists() {
-        fs::rename(db_path, &aside).with_context(|| {
-            format!(
-                "Failed to move the previous database to {}",
-                aside.display()
-            )
-        })?;
-    }
+    remove_sidecars(&sidecars)?;
 
     fs::rename(&staged, db_path)
         .with_context(|| format!("Failed to move restored database to {}", db_path.display()))?;
 
     spin.finish_success("Database restored");
 
-    if aside.exists() {
+    if kept {
         cli::info(&format!(
             "Previous database kept at {} — delete it once the restore is verified.",
             aside.display()
@@ -258,15 +307,22 @@ fn checkpoint_and_list_sidecars(
         .collect())
 }
 
-/// Classify a `tar` invocation result. `Ok(())` = the archive extracted; `Err`
-/// names why it did not (non-zero exit, or `tar` missing/unspawnable). A missing
-/// backup archive is handled by the caller before this point, never here.
-fn classify_tar_status(status: io::Result<process::ExitStatus>) -> Result<()> {
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => bail!("tar exited with status {s}"),
-        Err(e) => bail!("tar not found or failed: {e}"),
+/// Extract the backup's uploads only when this project keeps its uploads in
+/// itself. Uploads held in another storage are restored with that service —
+/// extracting them into `<config>/uploads` would drop files nothing ever reads
+/// and report it as a success. Mirrors what `backup` skips on the way out.
+fn restore_local_uploads(cfg: &CrapConfig, config_dir: &Path, backup_dir: &Path) -> Result<()> {
+    let storage = cfg.upload.storage;
+
+    if !matches!(storage, UploadStorage::Local) {
+        cli::info(&format!(
+            "Uploads are kept in {storage:?} storage, not in this project — restore them \
+             with that service. Skipping."
+        ));
+        return Ok(());
     }
+
+    restore_uploads(config_dir, backup_dir)
 }
 
 /// Extract the uploads.tar.gz archive from the backup directory. A backup with
@@ -313,21 +369,102 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt as _;
-
     use super::*;
 
-    #[cfg(unix)]
+    /// Regression: `--include-uploads` extracted the archive into
+    /// `<config>/uploads` and reported "Uploads restored" whatever
+    /// `[upload] storage` said, so on S3/custom storage it was a silent
+    /// no-op dressed up as success. `backup` already skips those with a
+    /// note; restore now mirrors it.
     #[test]
-    fn tar_status_success_is_ok_failure_is_err() {
-        assert!(classify_tar_status(Ok(process::ExitStatus::from_raw(0))).is_ok());
+    fn uploads_kept_in_another_storage_are_not_extracted_into_the_project() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+        // Not a real archive: reaching `tar` at all would fail the call, so
+        // an `Ok` here can only mean the skip happened.
+        fs::write(backup_dir.path().join("uploads.tar.gz"), b"not-an-archive").unwrap();
 
-        // Exit code 1 → wait-status 256 on unix.
-        let failed = classify_tar_status(Ok(process::ExitStatus::from_raw(256)));
-        assert!(failed.is_err());
+        let mut cfg = CrapConfig::default();
+        cfg.upload.storage = UploadStorage::S3;
 
-        let spawn_err = classify_tar_status(Err(io::Error::from(ErrorKind::NotFound)));
-        assert!(spawn_err.is_err());
+        restore_local_uploads(&cfg, config_dir.path(), backup_dir.path()).unwrap();
+
+        assert!(
+            !config_dir.path().join("uploads").exists(),
+            "nothing may be extracted for uploads kept in another storage"
+        );
+    }
+
+    /// Regression: the previous database was renamed aside *before* the
+    /// staged copy was moved in, so a kill between the two left no database
+    /// at all and the next `serve` created and migrated an empty one. The
+    /// live path must still hold a database while the copy is taken.
+    #[test]
+    fn the_live_database_stays_in_place_while_the_previous_copy_is_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("crap.db");
+        fs::write(&db_path, b"old database").unwrap();
+        let aside = db_path.with_extension("db.pre-restore");
+
+        keep_previous_database(&db_path, &aside).unwrap();
+
+        assert!(
+            db_path.exists(),
+            "the live database must never be unlinked to make the copy"
+        );
+        assert_eq!(fs::read(&aside).unwrap(), b"old database");
+    }
+
+    /// The swap itself: one overwriting rename publishes the restored file,
+    /// and the kept copy still holds the previous bytes afterwards (it names
+    /// the old inode, which the rename does not touch).
+    #[test]
+    fn the_staged_copy_replaces_the_database_without_losing_the_kept_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("crap.db");
+        fs::write(&db_path, b"old database").unwrap();
+        let aside = db_path.with_extension("db.pre-restore");
+        let staged = db_path.with_extension("db.restore-tmp");
+        fs::write(&staged, b"restored database").unwrap();
+
+        keep_previous_database(&db_path, &aside).unwrap();
+        fs::rename(&staged, &db_path).unwrap();
+
+        assert_eq!(fs::read(&db_path).unwrap(), b"restored database");
+        assert_eq!(
+            fs::read(&aside).unwrap(),
+            b"old database",
+            "the kept copy must survive the overwriting rename"
+        );
+        assert!(!staged.exists(), "the staging file must not linger");
+    }
+
+    /// A `*.pre-restore` left by an earlier restore is replaced, not kept —
+    /// the operator's fallback must be the database that was just replaced.
+    #[test]
+    fn an_earlier_previous_copy_is_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("crap.db");
+        fs::write(&db_path, b"current").unwrap();
+        let aside = db_path.with_extension("db.pre-restore");
+        fs::write(&aside, b"from a restore two weeks ago").unwrap();
+
+        keep_previous_database(&db_path, &aside).unwrap();
+
+        assert_eq!(fs::read(&aside).unwrap(), b"current");
+    }
+
+    /// Sidecars are removed before the swap; one already gone is not an error
+    /// (a checkpoint or the OS can drop it between listing and removal).
+    #[test]
+    fn sidecar_removal_tolerates_one_that_is_already_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal = tmp.path().join("crap.db-wal");
+        let shm = tmp.path().join("crap.db-shm");
+        fs::write(&wal, b"wal").unwrap();
+
+        remove_sidecars(&[wal.clone(), shm]).unwrap();
+
+        assert!(!wal.exists());
     }
 }

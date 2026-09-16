@@ -409,6 +409,11 @@ pub struct SelectOption {
     pub label: String,
     pub value: String,
     pub selected: bool,
+
+    /// The document holds this value but the field no longer declares it. The
+    /// option is kept so the editor sees what is stored and re-saving the form
+    /// doesn't drop it; templates mark it as not one of the declared choices.
+    pub unlisted: bool,
 }
 
 #[cfg(test)]
@@ -586,11 +591,13 @@ mod tests {
                     label: "Red".to_string(),
                     value: "red".to_string(),
                     selected: false,
+                    unlisted: false,
                 },
                 SelectOption {
                     label: "Green".to_string(),
                     value: "green".to_string(),
                     selected: true,
+                    unlisted: false,
                 },
             ],
             has_many: None,

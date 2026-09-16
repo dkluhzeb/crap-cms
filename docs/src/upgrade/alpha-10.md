@@ -37,6 +37,11 @@ of the API.
 
 ## TL;DR
 
+- **Back up first — this upgrade is one-way.** The first startup rewrites
+  stored data in place (canonical text and email, typed values in nested rows,
+  nested timezone dates as UTC, Postgres checkbox columns) and nothing converts
+  it back. Run `crap-cms backup` (or `pg_dump`) before swapping the binary; see
+  *Before you upgrade* below.
 - **Do one thing before you swap the binary.** If your Lua encrypts data with
   `crap.crypto.encrypt` and you never set `[auth] secret`, decrypt it *on
   alpha.9* — the key changes and old ciphertext becomes unrecoverable
@@ -151,6 +156,54 @@ of the API.
   can't take `data/crap.lock` (see Behavior changes).
 
 ## Required action items
+
+### Before you upgrade: take a backup (there is no way back)
+
+Do this first, before item 18 and before you swap the binary.
+
+```bash
+crap-cms backup --include-uploads      # → <config_dir>/backups/backup-<timestamp>/
+```
+
+`crap-cms backup` copies the **SQLite** database file and, with
+`--include-uploads`, the local `uploads/` directory. Two caveats:
+
+- **Postgres:** `backup` refuses to run and tells you to use `pg_dump`. Take
+  that dump yourself.
+- **Non-local upload storage:** with `[upload] storage` set to anything but
+  `local`, `--include-uploads` prints a notice and skips the files — back them
+  up with that service (S3 versioning/snapshot, or your custom backend's own
+  tooling).
+
+The backup also carries `data/.jwt_secret` when one exists, so keep it as
+private as the secret (item 34). To go back on SQLite: `crap-cms restore
+<backup-dir> --confirm` (add `--include-uploads` if the archive has them);
+`restore` is SQLite-only, so on Postgres restore the `pg_dump` you took.
+
+**Why this is not optional.** The first startup on alpha.10 rewrites stored
+data in place, inside the migration transaction, and nothing converts it back:
+
+- **Text and email values** are rewritten NFC-normalized, and emails also
+  trimmed and lowercased — in columns, localized columns, array rows and
+  values nested in rows (item 33).
+- **Values inside blocks and nested rows** are rewritten in typed form: a
+  checkbox as `true`/`false`, a number as a number, a multi-value field as an
+  array, a blank as `null` (item 36).
+- **Timezone dates nested in JSON rows** are rewritten as UTC; the wall-clock
+  digits that were stored are gone (item 32).
+- **Postgres checkbox columns** are retyped `BIGINT` → `SMALLINT`.
+- **Legacy SQLite timestamps** (`YYYY-MM-DD HH:MM:SS`) are rewritten as ISO
+  8601 (`…THH:MM:SS.sssZ`).
+
+(`_ref_count` is also recomputed for every document, but that is derived data
+and recomputed again by any later version.)
+
+alpha.9 has no migration that undoes any of this — its readers and writers
+assume the old forms (wall-clock nested dates, string values in rows, emails
+as typed). Password-reset, verification and MFA codes issued after the upgrade
+are stored hashed and would not verify there either (item 19). **Downgrading
+means restoring the backup**, and everything written since is lost with it — so
+take the backup immediately before the upgrade, not the night before.
 
 ### 0. Rename camelCase keys to snake_case (API casing unified)
 
@@ -295,10 +348,11 @@ nothing. The full list:
   rule (e.g. `read = some_function` or `read = true`) was silently
   dropped, falling back to the default policy — a security footgun.
   String hook references and omitting the rule are unchanged.
-- **Globals reject `access.create` / `access.delete` / `access.trash`.**
-  A global has a single row with only `get`/`update` operations, so
-  these access keys never fired — they were silently ignored and now
-  error at load. Use `access.read`, `access.draft`, `access.update`, or
+- **Globals reject `access.create` / `access.delete` / `access.trash` /
+  `access.unlock`.** A global has a single row with only `get`/`update`
+  operations, and no account to lock, so these access keys never fired —
+  they were silently ignored and now error at load. Use `access.read`,
+  `access.draft`, `access.update`, or
   the `access.versions` toggle. (An access key whose enabling feature is
   off — e.g. `access.draft` without `versions.drafts` — now logs a
   startup warning instead of being silently dead, on collections and
@@ -396,9 +450,12 @@ Each only bites a definition that was already relying on ignored input:
   silently meant "public").
 - **`crap.email.send { retries = N }`** is rejected — `retries` only
   applies to `crap.email.queue`.
-- **Over-long generated identifiers** (>63 bytes on Postgres) are
+- **Over-long generated identifiers** (>63 bytes — Postgres's limit) are
   rejected at migration — shorten very long collection/group/field/locale
-  name combinations. The error names the offending identifier.
+  name combinations. The error names the offending identifier. The check
+  runs on **every** backend, before any table is created, so an SQLite
+  project fails here rather than at its first Postgres deployment, where
+  the identifier would be silently truncated and could collide.
 
 ### 6d. Stricter data validation (values that used to slip through now error)
 
@@ -985,6 +1042,10 @@ older version stores its values in canonical form.
   lowercase addresses.
 - If a hook or filter matched an email with different casing, match the
   lowercase form.
+- Large databases: this is the widest of the first-startup passes — it reads
+  every email, text and textarea value of every collection and global,
+  including their localized columns and their array, blocks and nested rows.
+  Expect the first restart to take noticeably longer than the others.
 
 ### 34. Backups and exports: secret, credentials and trash
 
@@ -1060,7 +1121,341 @@ and blocks. `null` and an absent key are unchanged (`required` decides those).
 
 **Action:** if a client sent something else to a checkbox, send a boolean.
 
+### 38. Hook authors: the document id is `ctx.id`, not `ctx.document_id`
+
+Lua hook contexts now expose the affected document's id as **`ctx.id`**,
+matching the field-hook, validator and access contexts, which always spelled it
+that way. The old `ctx.document_id` key is gone — a hook that still reads it
+gets `nil`, silently, with no error. This is the one rename in this release
+that fails quietly, so grep for it:
+
+```bash
+grep -rn 'ctx\.document_id' hooks/ collections/ globals/ jobs/ routes/ init.lua
+```
+
+```diff
+-  local id = ctx.document_id
++  local id = ctx.id
+```
+
+`ctx.id` is set across the write lifecycle — `update` / `delete` before- and
+after-hooks, `after_change` on create (the freshly assigned id), `after_read`,
+and `before_broadcast` — plus `"default"` for globals. It is `nil` in create's
+*before*-hooks, where no row exists yet, so keep any nil guard you already had.
+
+### 39. Access-rule authors: empty constraint tables deny, and only equality operators are allowed
+
+Two changes to what a collection or global `access.*` function may return.
+Both are enforced at the single chokepoint every access evaluation passes
+through, so they apply uniformly to direct reads, Lua CRUD, relationship and
+join population, and live event streams.
+
+**An access function that returns a table now needs at least one filter.** In
+Lua, `{ tenant_id = ctx.user.tenant_id }` collapses to the empty table `{}`
+when `tenant_id` is `nil` — the constructor drops nil-valued keys. That empty
+constraint used to AND *nothing* into the query, so a rule written to restrict
+matched every row. A table that produces no filters (an empty table, a
+nil-valued key, an empty operator table like `{ score = {} }`) is now
+**Denied**, with a warning naming the rule.
+
+```diff
+  return function(ctx)
++     if ctx.user == nil or ctx.user.tenant_id == nil then
++         return false
++     end
+      return { tenant_id = ctx.user.tenant_id }
+  end
+```
+
+If you used `return {}` to mean "allow everything", return `true` instead.
+
+**Only equality and membership operators are accepted.** An access constraint
+may use `equals`, `not_equals`, `in`, `not_in`, `exists`, `not_exists`.
+`like`, `contains`, `greater_than`, `greater_than_or_equal`, `less_than` and
+`less_than_or_equal` are a hard error naming the operator and field — access
+constraints are matched both in SQL and in memory (live events, populated
+targets), and those operators can disagree between the two in a way that
+biases toward showing the row. Re-model them as an exact match or a membership
+set; *user* filters keep the full operator set.
+
+Rejected for the same reason, in the same place:
+
+- a dotted path (`author.id`) — denormalize to a flat own column
+  (`author_id`);
+- a constraint on a **localized** field — it is stored per locale, so the
+  target is ambiguous;
+- a constraint on a system column (`_status` and friends) — with one
+  exception: a bulk update on a drafts collection may constrain `_status`,
+  since the operation injects it itself.
+
+User-facing `where` filters are unaffected by all of this.
+
+### 40. Auth collections: `email` must be `type = "email"` and `unique = true`
+
+If you declare the `email` field of an auth collection yourself, it must now be
+typed `email` and marked unique. A `text`-typed one dodges the
+case-insensitive uniqueness check (which is scoped to the Email field type),
+and a non-unique one lets two accounts share an address that logins then
+collapse into one. Both now stop the boot:
+
+```
+Auth collection field 'email' must have type 'email' (got 'text') — the
+case-insensitive uniqueness and login lookup depend on it
+Auth collection field 'email' must be unique = true — it is the login identity
+```
+
+```diff
+  crap.collections.define("users", {
+      auth = { enabled = true },
+      fields = {
+-         { name = "email", type = "text" },
++         { name = "email", type = "email", unique = true, required = true },
+      },
+  })
+```
+
+Collections that never declared an `email` field are unaffected — one is still
+injected for them, typed and unique. Before restarting, check for accounts
+that differ only by case or Unicode form: they will also trip the canonical-form
+check in item 33.
+
+### 41. OAuth callbacks: scope the route when you have more than one auth collection
+
+The un-scoped callback route `/admin/auth/callback/{name}` can only bind a
+session when the target auth collection is unambiguous. It now resolves to the
+**single** auth collection when there is exactly one, and **fails closed**
+otherwise — with two or more auth collections it logs the ambiguity and
+redirects to the login page instead of guessing.
+
+**Action:** if your project defines more than one auth collection, point the
+provider's redirect URI at the collection-scoped route:
+
+```diff
+- https://example.com/admin/auth/callback/github
++ https://example.com/admin/auth/callback/users/github
+```
+
+The hook (`hooks.auth_callback.{name}`) is unchanged; either route dispatches
+to it, and either way the user it returns must exist in the bound collection.
+Projects with exactly one auth collection can keep the un-scoped URL.
+
+### 42. Filter clients: one operator grammar on every surface
+
+The comparison operators had per-surface spellings. All surfaces now share one
+verbose grammar — `equals`, `not_equals`, `greater_than`,
+`greater_than_or_equal`, `less_than`, `less_than_or_equal`, `like`,
+`contains`, `in`, `not_in`, `exists`, `not_exists` — read from a single
+mapping, so no surface can drift again. An unrecognized operator is rejected
+with the list of valid ones.
+
+**Action, admin list-view URLs and anything that builds them** (saved views,
+bookmarked filter links, links generated by your own code):
+
+```diff
+- ?where[price][gt]=10&where[stock][lte]=5
++ ?where[price][greater_than]=10&where[stock][less_than_or_equal]=5
+```
+
+`gt → greater_than`, `gte → greater_than_or_equal`, `lt → less_than`,
+`lte → less_than_or_equal`.
+
+**Action, MCP clients:** the `greater_than_equal` / `less_than_equal` aliases
+are gone — use `greater_than_or_equal` / `less_than_or_equal`.
+
+gRPC, Lua and service-layer filters already used the verbose forms and are
+unchanged.
+
+### 43. Subscribers: live streams gate drafts and trash per view
+
+Mutation events (gRPC `Subscribe` and the admin SSE stream) used to check
+collection access once at connect and then apply only the `read` rule's row
+constraints — there was no status-aware filtering, so a subscriber with `read`
+received events for **draft** documents and for soft deletes regardless of
+whether it could see that content.
+
+Each event is now gated by the content view it belongs to: a published
+document's event needs `read`, a draft's needs `access.draft`, a soft delete
+needs `access.trash`, and a hard delete is gated by the view the document was
+last in. The views are independent — a reviewer granted `draft` but denied
+`read` receives draft events and no published ones. Events carry this view
+metadata regardless of the collection's `live` mode, so `metadata` mode and
+delete events (whose payload is empty) are gated too.
+
+**Action:**
+
+- A subscriber that relied on seeing draft or soft-delete events needs the
+  matching `access.draft` / `access.trash` rule; without it those events stop
+  arriving.
+- If you hand-wrote a `{ _status = "published" }` constraint on `access.read`
+  to filter drafts out of a stream, drop it — the view model does this now, and
+  a system-column constraint is rejected outright (item 39).
+- An event that arrives without view metadata is dropped rather than guessed
+  at. During a rolling upgrade an alpha.9 node publishing into a shared Redis
+  produces exactly that, so upgrade all nodes that share a Redis together
+  (item 27).
+
+### 44. Admin XHR clients: the back-references endpoint returns an object
+
+`GET /admin/collections/{slug}/{id}/back-references` returned a bare JSON
+array. It now returns an object, because referrers the viewer cannot read are
+dropped from the list and reported only as a flag:
+
+```diff
+- [ { "collection": "posts", "field": "author", "count": 3, … } ]
++ {
++   "references": [ { "collection": "posts", "field": "author", "count": 3, … } ],
++   "has_inaccessible": true
++ }
+```
+
+Each group's `count` now covers only documents the viewer may read — through
+whichever view applies (`read`, `access.draft`, `access.trash`), with row
+constraints matched. `has_inaccessible` is `true` when at least one referrer
+was dropped; it is deliberately not a count.
+
+**Action:** read `response.references` instead of the array, and surface
+`has_inaccessible` as an unquantified note. Only custom tooling that called
+this endpoint is affected — the bundled admin UI is updated. The delete
+*block* itself is unchanged: it still uses the raw `_ref_count`, which stays
+visibility-blind so the database cannot be left with orphaned references. The
+delete page and edit sidebar no longer print that raw count as a number
+("Referenced by other content" instead of "Referenced by N documents"), since
+it aggregates references the viewer cannot see.
+
+### 45. Hook authors: `crap.pages.list()` returns tables, and oversized HTTP responses error
+
+Two `crap.*` return-value changes:
+
+- **`crap.pages.list()`** returns a list of `crap.PageInfo` tables
+  (`{ slug, section?, label?, icon?, access = "public"|"gated" }`), not a list
+  of slug strings — mirroring `crap.routes.list()`.
+
+  ```diff
+  - for _, slug in ipairs(crap.pages.list()) do
+  + for _, page in ipairs(crap.pages.list()) do
+  +     local slug = page.slug
+  ```
+
+  The order is iteration order and is not stable across runs; sort by `slug`
+  if you need determinism.
+
+- **`crap.http.request`** errors when the response body exceeds
+  `[hooks] http_max_response_bytes` (default 10 MB). The limit existed but the
+  oversized body was returned truncated, so a hook silently parsed half a
+  document. Raise the limit if a hook legitimately downloads large files, or
+  handle the error with `pcall`.
+
+### 46. CI scripts: `status --check` and `jobs healthcheck` exit 2 on warnings
+
+So a pipeline can distinguish a clean audit from one that found problems:
+
+| command | 0 | 1 | 2 |
+| --- | --- | --- | --- |
+| `crap-cms status --check` | no warnings | — | warnings found |
+| `crap-cms jobs healthcheck` | healthy | unhealthy (stale running job) | warning (recent failures, long-pending or never-run scheduled jobs) |
+| `crap-cms update check` | up to date | an update is available | — |
+
+**Action:** a script that treated any non-zero exit from `status --check` as a
+hard failure now also trips on warnings; branch on `2` if you want warnings to
+be non-fatal. Note that `jobs healthcheck` uses `1` for the *worse* outcome —
+it mirrors `update check`, where `1` means "action needed".
+
+### 47. Seeding scripts: passwords are policy-checked on every write surface
+
+`[auth.password_policy]` used to be applied by some write paths and not
+others, so a password set through Lua or a bulk create could land in the
+database below the configured minimum. The check now lives
+at the single create/update chokepoint the service layer runs for every
+surface and every operation — admin form, REST, gRPC, MCP, Lua, single and
+bulk — so no weak password can reach the database whichever caller wrote it.
+A context that fails to pass the configured policy falls back to the *default*
+policy (minimum 8 characters, maximum 128 bytes, no character-class
+requirements), never to no enforcement.
+
+An empty `password` still means "leave it alone" on update; on **create** it is
+now rejected on every surface, which used to produce a passwordless auth
+document.
+
+gRPC `CreateMany` no longer drops a per-document `password`: a bulk create
+used to discard it silently (the user came out unable to sign in); each item's
+password is now validated against the policy and hashed, as on every other
+surface. `UpdateMany` still rejects a `password`, because it would apply one
+credential to every matched row.
+
+**Action:** a seed script or fixture that created auth users with a short
+throwaway password (`"test"`, `"1234"`) through Lua, a bulk create, or any API
+now fails validation with a `password` field error. Use a policy-compliant
+value, or relax `[auth.password_policy]` for that environment.
+(`crap-cms import --include-credentials` carries password *hashes*, not
+plaintext, so imports are unaffected.)
+
+### 48a. Write clients: publishing means "the latest draft plus this request"
+
+An update with `draft = false` while a draft is pending now takes the latest
+draft snapshot as its base and applies the request's fields on top — on every
+surface. A bare gRPC/Lua/MCP update used to publish only the fields it sent
+and leave the rest of the draft pending; a draft saved with a new file never
+published that file. Now the drafted values, rows and file become live, a
+field the request sends wins, and a publisher who may not write a field
+cannot publish a drafted change to it.
+
+**Action:** a client that published with a partial update while a draft was
+pending, and relied on the draft's other fields staying unpublished, must
+discard the draft first (restore the published version) or send the intended
+values explicitly.
+
+Files: a stored upload file is deleted only when nothing references it — it
+survives as long as any draft or version snapshot of its document names it,
+so storage on versioned upload collections
+grows with retained versions; `max_versions` pruning deletes the files it
+releases — lowering `max_versions` on an existing upload collection deletes
+old files on the next write to each document. Queued-format conversions of a
+drafted file run at publish.
+
+### 48. Write clients: `locale = "all"` is rejected on writes
+
+`locale = "all"` is a read shape (every locale as a per-locale map). A write
+that passed it — `create`, `update`, `create_many`, `update_many`,
+`update_global`, `validate`, on any surface — used to write the default locale
+silently and skip the shared-field lock. It is now a validation error on the
+`locale` field.
+
+**Action:** pass one locale code on writes (or none for the default locale).
+
+### 49. Operators: graceful shutdown drains running jobs before exiting
+
+A stop (SIGTERM, `crap-cms serve --stop`, `crap-cms work --stop`) used to exit
+at once, killing running jobs mid-run: they kept a fresh heartbeat, so stale
+recovery waited for them, and a queued bulk run (one attempt) became
+terminally stale. The scheduler now waits for running jobs before exiting, and
+`serve --stop` / `work --stop` wait for the same deadline before sending
+SIGKILL: the longest
+configured `[jobs.queues.*] timeout` plus five minutes — 3900 s with the
+defaults, instead of a fixed 10 s.
+
+**Action:** if your deployment expects a faster stop, lower the relevant
+`[jobs.queues.<name>] timeout`. A Lua job's own `timeout` is not part of the
+deadline, so raise the matching queue timeout for long Lua jobs. `/ready`
+returns 503 until startup stale-job recovery has completed, and gRPC
+`Subscribe` streams are closed at shutdown, so subscribers must reconnect.
+
 ## Admin UI behavior
+
+### Template overrides: the duplicate locale-picker keys are gone
+
+The admin page context used to carry two parallel descriptions of the same
+editor locale. The `has_locales` / `current_locale` / `locales` set has been
+removed; `has_editor_locales` / `editor_locale` / `editor_locales` — which
+every shipped template already used — is now the only one.
+
+**Action:** if an overridden `collections/edit.hbs`, `globals/edit.hbs` or
+`layout/header.hbs` reads a removed key, rename it. The values are identical.
+
+| Removed | Read instead | Shape |
+|---|---|---|
+| `has_locales` | `has_editor_locales` | boolean; absent entirely when `[locale] locales` is empty |
+| `current_locale` | `editor_locale` | the active locale code (`"de"`) — what the hidden `_locale` input submits |
+| `locales` | `editor_locales` | array of `{ value, label, selected }`: the code, its upper-case label, `selected` for the active one |
 
 ### Navigation now partial-swaps `#main`
 
@@ -1424,6 +1819,44 @@ continue to work.
   none.
 - **MCP job tools no longer leak raw backend text on internal errors.**
   **Action:** none.
+- **gRPC account RPCs authenticate before checking the collection.**
+  `LockAccount` / `UnlockAccount` / `VerifyAccount` / `UnverifyAccount` ran the
+  "is this an auth collection / does it have `verify_email`" checks *before*
+  the authentication check, so an unauthenticated caller could probe which
+  collections exist and how they are configured. They now answer
+  `UNAUTHENTICATED` first; shape errors reach authenticated callers only.
+  **Action:** a client that distinguished those shape errors while
+  unauthenticated now sees `UNAUTHENTICATED` instead.
+- **`admin.access` / `access.admin` is a boolean gate.** A rule that returned a
+  filter table used to pass it — there is no row scope at the admin gate, so
+  `Allowed` and `Constrained` were treated alike. A filter table is now logged
+  as an error and **denies**, matching the fail-closed `access.mcp` twin; a
+  hook error or an exhausted connection pool denies too. **Action:** an
+  `admin` / `mcp` access rule must `return true` or `return false`. Returning a
+  table now locks the admin UI out.
+- **Relationship population enforces the target collection's read access.**
+  Populating a relationship or upload field at `depth > 0` embedded the target
+  document after checking only the draft filter — never the target
+  collection's `read` rule or its row constraints — so a user denied read on a
+  collection could still see its documents embedded inside one they could
+  read. (Join fields already enforced this.) Population now resolves the
+  target collection's access and hides denied targets: a has-one resolves to
+  `null`, a has-many drops the entry. The populate cache was reworked to hold
+  raw, user-independent documents and apply access per request, so one user's
+  cached document is never served to another. **Action:** a client that assumed
+  a populated relationship is always an object must handle `null`, and a
+  has-many list that comes back shorter than its stored id list. Reading with
+  `depth = 0` (ids only) is unaffected.
+- **MCP reads bypass access, consistently with MCP writes.** MCP is a
+  single-token, full-access surface with no per-user identity. Its writes
+  already bypassed collection and field access, but its reads did not — so a
+  client could `update` a row that its own `find` had just refused to return,
+  and read-access hooks ran against a `nil` user. MCP reads now set the same
+  override, matching writes and the documented "MCP operates with full access"
+  contract. **Action:** treat the MCP API key as a full-access credential.
+  Scope what MCP can reach with `[mcp] include_collections` /
+  `exclude_collections` and the per-collection `access.mcp` gate — not with
+  `access.read`, which no longer narrows it.
 
 ## gRPC clients (regenerate from `proto/content.proto`)
 
@@ -1948,7 +2381,54 @@ if you use versions on a localized collection.
   that never supported them — enable `versions` / `soft_delete`, or stop calling
   them there.
 
+- **Restoring a version preserves the snapshot's publication status.**
+  `restore_version` used to force-publish the document whatever the snapshot's
+  status was. A restore now returns the document to its exact state at that
+  point in time: a draft snapshot restores as a draft, a published one as
+  published. On a collection without a status axis every snapshot is
+  `published`, so nothing changes there. **Action:** if a workflow relied on
+  "restore always publishes", publish explicitly after restoring a draft
+  snapshot.
+
+- **The `bulk` queue is seeded with its own defaults.** Queued bulk operations
+  (`queue = true` on the gRPC/MCP bulk ops) run as `_system_bulk` job runs on a
+  queue named `bulk`, which is now seeded with `concurrency = 1` (a run holds a
+  write transaction for its whole batch, so two at once would contend),
+  `timeout = 3600` seconds (large batches are the reason to queue at all) and
+  `retries = 0` (the batch is atomic, but a crash between its commit and the
+  completion mark would make a retry re-apply the whole thing — re-queue
+  explicitly instead). **Action:** none by default — a worker with no `--queues`
+  filter serves every queue. If you run `crap-cms work --queues …` with an
+  explicit list, add `bulk` to it or queued bulk ops sit pending forever.
+  Override any of the three defaults under `[jobs.queues.bulk]` in `crap.toml`;
+  `bulk`, like `images` and `email`, is exempt from the "configured queue that
+  no job uses" startup warning.
+
 ## Additive features (alpha.10)
+
+### `access.unlock` — a dedicated gate for account lock/unlock
+
+Auth collections gain an `access.unlock` key. It authorizes the account
+lock/unlock operations (`LockAccount` / `UnlockAccount` on gRPC and their
+admin equivalents) and, when unset, falls back to `access.update` — so
+existing projects behave exactly as before.
+
+```lua
+crap.collections.define("users", {
+    auth = { enabled = true },
+    access = {
+        update = "hooks.access.self_or_admin",
+        unlock = "hooks.access.admins_only",   -- only admins may unlock
+    },
+})
+```
+
+`Verify` / `Unverify` are **not** covered by it — they keep using
+`access.update`. Setting `unlock` on a non-auth collection logs a warning (the
+lock/unlock operations do not exist there), and a global rejects it at load
+(item 6).
+
+Additive; no action needed.
 
 ### gRPC MFA completion (`VerifyMfa`) + the `mfa_when` gate
 
@@ -2026,10 +2506,12 @@ Every member runs and the reply is an array holding one response per member
 that carried an `id`, in the order sent. A batch of nothing but notifications
 gets no reply at all (HTTP `204`).
 
-A batch may hold at most 100 members; that and an empty array are refused
-whole with a single `-32600` error rather than expanding into unbounded work.
-The `initialize` handshake may not appear in a batch, so a batch never opens a
-session.
+A batch may hold at most `[mcp] max_batch_members` members (default `50`);
+an over-long batch and an empty array are refused whole with a single
+`-32600` error rather than expanding into unbounded work. Setting
+`max_batch_members = 0` disables batching entirely — every batch is then
+refused with "Batching is disabled". The `initialize` handshake may not appear
+in a batch, so a batch never opens a session.
 
 ### Smaller additions
 

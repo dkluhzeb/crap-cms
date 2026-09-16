@@ -2,12 +2,12 @@
 //!
 //! Enabled via `--features s3-storage`.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
-use tokio::task::block_in_place;
+use tokio::{runtime::Handle, task::block_in_place};
 
 use crate::config::S3Config;
 
@@ -31,14 +31,51 @@ impl S3Storage {
     }
 }
 
-/// Classify whether an error string from `head_object` represents
-/// "object does not exist" (true) versus any other failure (false).
-/// Pulled out so the classification can be unit-tested without a live
-/// bucket — the underlying `s3::error::S3Error` does not expose a
-/// stable HTTP-status accessor across versions, so we match the
-/// `Display` form against the well-known "not found" markers.
-fn is_not_found_error(err_str: &str) -> bool {
-    err_str.contains("404") || err_str.contains("NoSuchKey") || err_str.contains("Not Found")
+/// Drive one bucket request to completion from the synchronous
+/// [`StorageBackend`] trait. The trait is blocking while the bucket client is
+/// async, so every verb crosses that boundary through this one place.
+fn block_on_s3<F: Future>(fut: F) -> F::Output {
+    block_in_place(|| Handle::current().block_on(fut))
+}
+
+/// What a `404` means for the verb whose response is being classified.
+#[derive(Clone, Copy)]
+enum Missing {
+    /// The object genuinely is not there: the typed [`StorageNotFound`] a
+    /// serve handler turns into a 404 (as opposed to a 503 for a transient
+    /// failure).
+    NotFound,
+    /// The verb's goal is already met — deleting an object that is not
+    /// there succeeds, matching `LocalStorage::delete`.
+    Success,
+    /// The request addressed no object, so a `404` is the *bucket* missing:
+    /// a real failure, not an absent key.
+    Failure,
+}
+
+/// Turn an S3 response status into the storage contract's outcome.
+///
+/// The bucket client is built without `fail-on-err`, so every response —
+/// `403`, `500`, `503` included — arrives as an `Ok` carrying the status.
+/// Unchecked, a rejected write reports success and leaves a document row
+/// pointing at an object that was never stored, and a rejected read hands
+/// the provider's error XML back as the file's bytes. The error names the
+/// operation, key and status only: the response body can carry request
+/// identifiers and bucket internals, so it is never quoted.
+fn check_status(op: &str, key: &str, status: u16, missing: Missing) -> Result<()> {
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+
+    if status != 404 {
+        bail!("S3 {op} failed for '{key}': HTTP {status}");
+    }
+
+    match missing {
+        Missing::NotFound => Err(StorageNotFound(key.to_string()).into()),
+        Missing::Success => Ok(()),
+        Missing::Failure => bail!("S3 {op} failed for '{key}': bucket not found (HTTP 404)"),
+    }
 }
 
 impl StorageBackend for S3Storage {
@@ -46,33 +83,24 @@ impl StorageBackend for S3Storage {
         validate_key(key)?;
         let full_key = self.full_key(key);
 
-        block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.bucket.put_object_with_content_type(
-                &full_key,
-                data,
-                content_type,
-            ))
-        })
+        let response = block_on_s3(self.bucket.put_object_with_content_type(
+            &full_key,
+            data,
+            content_type,
+        ))
         .with_context(|| format!("S3 put failed: {full_key}"))?;
 
-        Ok(())
+        check_status("put", &full_key, response.status_code(), Missing::Failure)
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
         validate_key(key)?;
         let full_key = self.full_key(key);
-        let response = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.bucket.get_object(&full_key))
-        })
-        .with_context(|| format!("S3 get failed: {full_key}"))?;
 
-        // A genuine miss arrives as an `Ok` response with status 404 (the
-        // bucket client is built without `fail-on-err`, so non-2xx is not
-        // an `Err`); map it to the typed not-found. Network/other failures
-        // surface via the `?` above and stay transient.
-        if response.status_code() == 404 {
-            return Err(StorageNotFound(key.to_string()).into());
-        }
+        let response = block_on_s3(self.bucket.get_object(&full_key))
+            .with_context(|| format!("S3 get failed: {full_key}"))?;
+
+        check_status("get", &full_key, response.status_code(), Missing::NotFound)?;
 
         Ok(response.to_vec())
     }
@@ -81,12 +109,15 @@ impl StorageBackend for S3Storage {
         validate_key(key)?;
         let full_key = self.full_key(key);
 
-        block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.bucket.delete_object(&full_key))
-        })
-        .with_context(|| format!("S3 delete failed: {full_key}"))?;
+        let response = block_on_s3(self.bucket.delete_object(&full_key))
+            .with_context(|| format!("S3 delete failed: {full_key}"))?;
 
-        Ok(())
+        check_status(
+            "delete",
+            &full_key,
+            response.status_code(),
+            Missing::Success,
+        )
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
@@ -97,30 +128,21 @@ impl StorageBackend for S3Storage {
         }
 
         let full_key = self.full_key(key);
-        let result = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.bucket.head_object(&full_key))
-        });
 
-        match result {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                let err_str = e.to_string();
+        // `head_object` carries its HTTP status in the `Ok` tuple; the `Err`
+        // arm is transport/signing failures only, which must surface rather
+        // than read as "doesn't exist".
+        let (_, status) = block_on_s3(self.bucket.head_object(&full_key))
+            .with_context(|| format!("S3 exists check failed: {full_key}"))?;
 
-                // Only "object not present" maps to false; auth failures
-                // (403), transient outages (5xx), and network errors must
-                // surface so callers see real failures rather than a
-                // misleading "doesn't exist". The previous fallthrough
-                // returned `Ok(false)` for any non-404 error, which let
-                // upload-then-verify orphan its DB rows on a 503 and
-                // reported permission problems as missing files.
-                if is_not_found_error(&err_str) {
-                    Ok(false)
-                } else {
-                    Err(anyhow::anyhow!(
-                        "S3 exists check failed for '{full_key}': {err_str}"
-                    ))
-                }
-            }
+        // Only a confirmed absence is `false`. Auth failures (403) and
+        // transient outages (5xx) stay errors so upload-then-verify does not
+        // orphan its DB rows and a permission problem is not reported as a
+        // missing file.
+        match check_status("exists", &full_key, status, Missing::NotFound) {
+            Ok(()) => Ok(true),
+            Err(e) if e.downcast_ref::<StorageNotFound>().is_some() => Ok(false),
+            Err(e) => Err(e),
         }
     }
 
@@ -197,41 +219,109 @@ pub fn create_s3_storage(config: &S3Config) -> Result<SharedStorage> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Error;
+
     use super::*;
     use crate::config::S3Config;
 
-    /// Regression: only "object not present" errors should map to
-    /// `Ok(false)` from `exists()`. Other variants (auth, transient,
-    /// network) must surface as `Err` so callers don't mistake them for
-    /// a missing file.
-    #[test]
-    fn is_not_found_error_recognises_404_markers() {
-        // S3 / CloudFront / generic 404 forms.
-        assert!(is_not_found_error(
-            "Got HTTP 404: <Error><Code>NoSuchKey</Code></Error>"
-        ));
-        assert!(is_not_found_error("status: 404, message: NoSuchKey"));
-        assert!(is_not_found_error("HTTP 404 Not Found"));
-        assert!(is_not_found_error("Not Found"));
+    /// True when `err` is the typed "object genuinely absent" marker.
+    fn is_not_found(err: &Error) -> bool {
+        err.downcast_ref::<StorageNotFound>().is_some()
     }
 
-    /// Regression: auth, transient, and network failures must NOT be
-    /// classified as "not found" — that's the bug the round-9 audit
-    /// caught (a 403 silently turning into "doesn't exist" lets
-    /// upload-then-verify orphan DB rows).
+    /// Regression: `put` ignored the response status entirely, so a bucket
+    /// that answered `403`/`500`/`503` returned `Ok(())`. The upload's
+    /// cleanup guard then committed a document row pointing at an object
+    /// that was never stored.
     #[test]
-    fn is_not_found_error_rejects_non_404_failures() {
-        assert!(!is_not_found_error("Got HTTP 403: AccessDenied"));
-        assert!(!is_not_found_error("Got HTTP 500: InternalError"));
-        assert!(!is_not_found_error("Got HTTP 503: SlowDown"));
-        assert!(!is_not_found_error(
-            "error sending request: connection refused"
-        ));
-        assert!(!is_not_found_error("dns error: failed to lookup address"));
-        assert!(!is_not_found_error("SignatureDoesNotMatch"));
-        // Empty / unrelated noise also passes through to error.
-        assert!(!is_not_found_error(""));
-        assert!(!is_not_found_error("OK"));
+    fn a_rejected_put_is_an_error() {
+        for status in [403, 500, 503] {
+            let err = check_status("put", "media/a.png", status, Missing::Failure)
+                .expect_err("a non-2xx put must fail");
+            assert!(!is_not_found(&err), "a rejected put is not a missing key");
+        }
+
+        // A 404 answering a PUT is the bucket missing, not an absent object.
+        let err = check_status("put", "media/a.png", 404, Missing::Failure).unwrap_err();
+        assert!(!is_not_found(&err), "{err:#}");
+
+        for status in [200, 201, 204] {
+            assert!(check_status("put", "media/a.png", status, Missing::Failure).is_ok());
+        }
+    }
+
+    /// Regression: `get` mapped only `404`, so a `403`/`5xx` handed the
+    /// provider's error XML back as the file's bytes — which the serve
+    /// route shipped as a `200` under the stored image content type (and,
+    /// on a public collection, an immutable cache header).
+    #[test]
+    fn a_rejected_get_is_an_error_not_file_bytes() {
+        for status in [403, 500, 503] {
+            let err = check_status("get", "media/a.png", status, Missing::NotFound)
+                .expect_err("a non-2xx get must fail");
+            assert!(
+                !is_not_found(&err),
+                "a transient/auth failure must not read as a missing key: {err:#}"
+            );
+        }
+
+        let missing = check_status("get", "media/a.png", 404, Missing::NotFound).unwrap_err();
+        assert!(is_not_found(&missing), "{missing:#}");
+
+        assert!(check_status("get", "media/a.png", 200, Missing::NotFound).is_ok());
+    }
+
+    /// Regression: `delete` ignored the response status, so a rejected
+    /// delete reported success and left the object orphaned in the bucket.
+    /// A `404` stays a success — deleting something that is not there is
+    /// the same no-op `LocalStorage::delete` performs.
+    #[test]
+    fn a_rejected_delete_is_an_error_but_a_missing_object_is_not() {
+        for status in [403, 500, 503] {
+            assert!(
+                check_status("delete", "media/a.png", status, Missing::Success).is_err(),
+                "a non-2xx delete must fail (status {status})"
+            );
+        }
+
+        assert!(check_status("delete", "media/a.png", 204, Missing::Success).is_ok());
+        assert!(
+            check_status("delete", "media/a.png", 404, Missing::Success).is_ok(),
+            "deleting an absent object matches LocalStorage: success"
+        );
+    }
+
+    /// Regression: `exists` looked for a `404` in the `Err` arm, but
+    /// `head_object` carries its status in the `Ok` tuple — so a missing
+    /// object reported `true`. The classification `exists` maps to
+    /// `Ok(false)` is the typed not-found, and nothing else.
+    #[test]
+    fn exists_classifies_only_a_404_as_absent() {
+        assert!(check_status("exists", "media/a.png", 200, Missing::NotFound).is_ok());
+
+        let missing = check_status("exists", "media/a.png", 404, Missing::NotFound).unwrap_err();
+        assert!(is_not_found(&missing), "a 404 head is an absent object");
+
+        for status in [403, 500, 503] {
+            let err = check_status("exists", "media/a.png", status, Missing::NotFound).unwrap_err();
+            assert!(
+                !is_not_found(&err),
+                "an auth/transient failure must surface, not read as absent: {err:#}"
+            );
+        }
+    }
+
+    /// The failure message identifies the operation, key and status — and
+    /// never quotes the response body, which can carry request identifiers
+    /// and bucket internals.
+    #[test]
+    fn a_failure_names_the_operation_key_and_status() {
+        let err = check_status("put", "media/a.png", 503, Missing::Failure).unwrap_err();
+        let msg = format!("{err:#}");
+
+        assert!(msg.contains("put"), "{msg}");
+        assert!(msg.contains("media/a.png"), "{msg}");
+        assert!(msg.contains("503"), "{msg}");
     }
 
     /// Regression: the storage key contract (`validate_key`) is enforced on

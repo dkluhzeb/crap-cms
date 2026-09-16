@@ -12,14 +12,15 @@ use anyhow::{Context as _, Result};
 use chrono::Utc;
 use tokio::{
     select,
-    time::{Duration, interval},
+    time::{Duration, Interval, interval, timeout},
 };
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{
         DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
-        DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig, LocaleConfig,
+        DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig, LocaleConfig, SELF_LIMITING_JOB_GRACE_SECS,
     },
     core::{
         JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
@@ -40,6 +41,16 @@ use super::{
     },
     types::{SchedulerParams, TickJobConfig},
 };
+
+/// The poll, cron and heartbeat tickers of the loop, from their configured
+/// periods in seconds.
+fn tickers(poll_secs: u64, cron_secs: u64, heartbeat_secs: u64) -> (Interval, Interval, Interval) {
+    (
+        interval(Duration::from_secs(poll_secs)),
+        interval(Duration::from_secs(cron_secs)),
+        interval(Duration::from_secs(heartbeat_secs)),
+    )
+}
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
 ///
@@ -74,9 +85,11 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 
     announce_and_recover(&config, &pool, &registry, stale_threshold_secs)?;
 
-    let poll_interval = Duration::from_secs(config.poll_interval);
-    let cron_interval = Duration::from_secs(config.cron_interval);
-    let heartbeat_interval = Duration::from_secs(config.heartbeat_interval);
+    // Startup recovery has rewritten every job row a previous process left
+    // `running`; only now does the rest of the process describe reality, so
+    // only now may a readiness probe answer OK.
+    infra.readiness.mark_ready();
+
     let auto_purge_secs = config.auto_purge;
     let priority_decay = config.priority_decay;
 
@@ -86,11 +99,20 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         queue_retries,
     } = build_queue_maps(&config);
 
-    let mut poll_ticker = interval(poll_interval);
-    let mut cron_ticker = interval(cron_interval);
-    let mut heartbeat_ticker = interval(heartbeat_interval);
+    let (mut poll_ticker, mut cron_ticker, mut heartbeat_ticker) = tickers(
+        config.poll_interval,
+        config.cron_interval,
+        config.heartbeat_interval,
+    );
 
     let running_jobs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Every poll task and every job task it spawns is tracked here, so the
+    // shutdown arm can wait for the work already in flight. Without it a stop
+    // drops a running job mid-transaction: the row keeps a fresh heartbeat
+    // (stale recovery waits the full window before reclaiming it), a no-retry
+    // run goes terminally stale, and its post-commit effects never happen.
+    let job_tasks = TaskTracker::new();
+    let drain_deadline = Duration::from_secs(config.drain_deadline_secs());
     // Single-flight guard for the poll: at most one `poll_and_execute` runs at
     // a time. Without it, two overlapping poll tasks each read the same stale
     // `count_running` before either claim commits and each claim up to
@@ -103,6 +125,9 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         select! {
             () = shutdown.cancelled() => {
                 info!("Scheduler shutting down");
+
+                drain_job_tasks(&job_tasks, &running_jobs, drain_deadline).await;
+
                 break Ok(());
             }
             _ = poll_ticker.tick() => {
@@ -126,9 +151,13 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                     queue_timeouts: &queue_timeouts,
                     storage: &storage,
                     lua_infra: &job_lua_infra,
+                    job_tasks: &job_tasks,
                 });
 
-                tokio::spawn(async move {
+                // Tracked like the jobs it spawns: a poll caught mid-claim by
+                // the shutdown must finish handing its claimed runs to the
+                // tracker before the drain decides what to wait for.
+                job_tasks.spawn(async move {
                     if let Err(e) = poll_and_execute(
                         &pool, &hook_runner, &registry, max_concurrent, &running_jobs, ep.as_ref(), &sys,
                     ) {
@@ -292,7 +321,7 @@ fn run_periodic_purges(p: &PurgeTickInput<'_>) {
         return;
     }
 
-    let Ok(mut conn) = p.pool.get() else {
+    let Ok(mut conn) = p.pool.write() else {
         return;
     };
 
@@ -432,11 +461,6 @@ fn announce_and_recover(
     recover_on_startup(pool, registry, stale_threshold_secs)
 }
 
-/// Extra wall-clock the outer timer allows a job that enforces its own
-/// cooperative deadline, covering post-commit work (event publishing,
-/// upload-file deletion) that happens after the last in-batch check.
-const SELF_LIMITING_JOB_GRACE_SECS: u64 = 300;
-
 /// Borrowed sources for one [`TickJobConfig`] snapshot.
 struct TickConfigSource<'a> {
     infra: &'a Arc<AppInfra>,
@@ -445,6 +469,7 @@ struct TickConfigSource<'a> {
     queue_timeouts: &'a HashMap<String, u64>,
     storage: &'a SharedStorage,
     lua_infra: &'a LuaCrudInfra,
+    job_tasks: &'a TaskTracker,
 }
 
 /// Snapshot the per-tick execution config (cheap clones) handed to the
@@ -457,7 +482,55 @@ fn tick_job_config(s: &TickConfigSource<'_>) -> TickJobConfig {
         queue_timeouts: s.queue_timeouts.clone(),
         storage: s.storage.clone(),
         lua_infra: s.lua_infra.clone(),
+        job_tasks: s.job_tasks.clone(),
     }
+}
+
+/// Wait for the job tasks already in flight when the shutdown token fired.
+///
+/// The tracker is closed first so `wait()` can complete; the poll ticker is
+/// no longer running, so nothing new is claimed. `deadline` comes from the
+/// configured job timeouts — a run that outlives it has already blown past
+/// its own timeout, and the outer per-job timer will stamp it `failed`.
+async fn drain_job_tasks(
+    job_tasks: &TaskTracker,
+    running_jobs: &Arc<Mutex<Vec<String>>>,
+    deadline: Duration,
+) {
+    job_tasks.close();
+
+    if job_tasks.is_empty() {
+        return;
+    }
+
+    let ids: Vec<String> = running_jobs
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    info!(
+        "Waiting up to {}s for {} in-flight scheduler task(s) to finish (jobs: {})",
+        deadline.as_secs(),
+        job_tasks.len(),
+        if ids.is_empty() {
+            "none claimed yet".to_string()
+        } else {
+            ids.join(", ")
+        }
+    );
+
+    if timeout(deadline, job_tasks.wait()).await.is_err() {
+        warn!(
+            "{} scheduler task(s) still running after {}s — exiting anyway; \
+             stale-job recovery will reclaim whatever they left behind",
+            job_tasks.len(),
+            deadline.as_secs()
+        );
+
+        return;
+    }
+
+    info!("All in-flight scheduler tasks finished");
 }
 
 /// Poll for pending jobs and execute them.
@@ -509,6 +582,7 @@ fn poll_and_execute(
             job_def: &job_def,
             lua_infra: &system.lua_infra,
             app_infra: &system.app_infra,
+            job_tasks: &system.job_tasks,
         });
     }
 
@@ -693,6 +767,7 @@ struct SpawnJobInput<'a> {
     job_def: &'a JobDefinition,
     lua_infra: &'a LuaCrudInfra,
     app_infra: &'a Arc<AppInfra>,
+    job_tasks: &'a TaskTracker,
 }
 
 /// Spawn a tokio task to execute a job with timeout enforcement.
@@ -733,9 +808,11 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let lua_infra = s.lua_infra.clone();
     let app_infra = Arc::clone(s.app_infra);
 
-    tokio::spawn(async move {
+    // Tracked, not detached: a shutdown waits for this run rather than
+    // dropping it mid-transaction.
+    s.job_tasks.spawn(async move {
         let timeout_dur = Duration::from_secs(timeout_secs);
-        let result = tokio::time::timeout(
+        let result = timeout(
             timeout_dur,
             tokio::task::spawn_blocking(move || {
                 execute_job(ExecuteJobParams {
@@ -798,9 +875,68 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use tokio::time::sleep;
+
     use crate::config::{JobsConfig, QueueConfig};
 
     use super::*;
+
+    /// The shutdown arm must not return while a claimed run is still
+    /// executing: dropping it would leave a `running` row with a fresh
+    /// heartbeat and skip its post-commit effects.
+    #[tokio::test]
+    async fn the_drain_waits_for_a_task_that_finishes_after_the_token() {
+        let job_tasks = TaskTracker::new();
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&finished);
+
+        job_tasks.spawn(async move {
+            sleep(Duration::from_millis(40)).await;
+
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        let running_jobs = Arc::new(Mutex::new(vec!["job-1".to_string()]));
+
+        drain_job_tasks(&job_tasks, &running_jobs, Duration::from_secs(30)).await;
+
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "the drain returned before the in-flight job task finished"
+        );
+    }
+
+    /// A task that never finishes must not hold the process open forever —
+    /// the deadline bounds the wait.
+    #[tokio::test]
+    async fn the_drain_gives_up_once_the_deadline_passes() {
+        let job_tasks = TaskTracker::new();
+        job_tasks.spawn(std::future::pending::<()>());
+
+        let running_jobs = Arc::new(Mutex::new(Vec::new()));
+        let started = Instant::now();
+
+        drain_job_tasks(&job_tasks, &running_jobs, Duration::from_millis(30)).await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the drain ignored its deadline"
+        );
+    }
+
+    /// Nothing in flight: the drain is a no-op, not a wait.
+    #[tokio::test]
+    async fn the_drain_returns_immediately_when_nothing_is_running() {
+        let job_tasks = TaskTracker::new();
+        let running_jobs = Arc::new(Mutex::new(Vec::new()));
+        let started = Instant::now();
+
+        drain_job_tasks(&job_tasks, &running_jobs, Duration::from_hours(1)).await;
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn build_queue_maps_applies_a_distinct_gate_per_map() {

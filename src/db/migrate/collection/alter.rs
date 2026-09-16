@@ -9,9 +9,12 @@ use crate::{
     core::{CollectionDefinition, collection::MfaMode},
     db::{
         DbConnection,
-        migrate::helpers::{
-            ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-            get_table_columns, reconcile_scalar_list_column,
+        migrate::{
+            helpers::{
+                ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
+                get_table_columns, reconcile_scalar_list_column,
+            },
+            locale_change::{LocaleShape, column_plans},
         },
         query::helpers::{locale_column, quote_ident},
     },
@@ -50,12 +53,13 @@ fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
 }
 
 /// Add a single field column if it doesn't exist, with optional default value.
+/// Returns whether the column was created by this call.
 fn add_field_column(
     ctx: &AlterCtx,
     col_name: &str,
     expected_type: &str,
     spec: &ColumnSpec,
-) -> Result<()> {
+) -> Result<bool> {
     if ctx.existing.contains(col_name) {
         if spec.field.is_has_many_scalar() {
             reconcile_scalar_list_column(ctx.conn, ctx.slug, col_name, ctx.column_types)?;
@@ -63,7 +67,7 @@ fn add_field_column(
             warn_type_mismatch(ctx, col_name, expected_type);
         }
 
-        return Ok(());
+        return Ok(false);
     }
 
     let mut col_def = expected_type.to_string();
@@ -73,25 +77,35 @@ fn add_field_column(
     }
 
     let full_def = format!("{} {col_def}", quote_ident(col_name));
-    add_column_if_missing(ctx.conn, ctx.slug, col_name, &full_def, ctx.existing)
+    add_column_if_missing(ctx.conn, ctx.slug, col_name, &full_def, ctx.existing)?;
+
+    Ok(true)
 }
 
 /// Add missing user-defined field columns (including localized variants).
+///
+/// A field whose `localized` flag changed reads its values from another column
+/// from then on — the plan carries them across so the content stays reachable
+/// instead of being stranded in a column nothing reads. The shape says which
+/// flags flipped since the last sync, so a field flipped back moves its values
+/// back even though the column they move into is already there.
 fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()> {
-    for spec in &collect_column_specs(&ctx.def.fields, locale_config) {
+    let specs = collect_column_specs(&ctx.def.fields, locale_config);
+    let shape = LocaleShape::load(ctx.conn, ctx.slug, &specs)?;
+
+    for spec in &specs {
         let expected_type = spec.ddl_type(ctx.conn);
 
-        if spec.is_localized {
-            for locale in &locale_config.locales {
-                let col_name = locale_column(&spec.col_name, locale)?;
-                add_field_column(ctx, &col_name, expected_type, spec)?;
+        for plan in column_plans(&spec.col_name, spec.is_localized, locale_config)? {
+            let created = add_field_column(ctx, &plan.name, expected_type, spec)?;
+
+            if shape.must_carry(&spec.col_name, created) {
+                plan.carry_values(ctx.conn, ctx.slug, ctx.existing)?;
             }
-        } else {
-            add_field_column(ctx, &spec.col_name, expected_type, spec)?;
         }
     }
 
-    Ok(())
+    shape.record(ctx.conn, ctx.slug)
 }
 
 /// Add a column to a table if it doesn't already exist.
@@ -431,6 +445,171 @@ mod tests {
             row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
             column_value(&def2.fields[1], &json!([1, 2]), None)
         );
+    }
+
+    /// Marking an existing field `localized` adds `title__en` beside the bare
+    /// `title` the content sits in. Without carrying the values across, every
+    /// read returns the new empty column and the content is unreachable — and
+    /// a schema cleanup drops the bare column with it.
+    #[test]
+    fn turning_localization_on_keeps_existing_values_in_the_default_locale() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let shared = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+        conn.execute("INSERT INTO posts (id, title) VALUES ('p1', 'Hello')", &[])
+            .unwrap();
+
+        let localized = simple_collection("posts", vec![localized_field("title")]);
+        alter_collection_table(&conn, "posts", &localized, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT title__en, title__de FROM posts WHERE id = 'p1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("title__en").unwrap(),
+            "Hello",
+            "the default locale must keep the content"
+        );
+        assert!(
+            row.opt_text_at(1).is_none(),
+            "the other locales start untranslated"
+        );
+    }
+
+    /// A checkbox, and a field with a `default_value`.
+    fn defaulted_fields(localized: bool) -> Vec<FieldDefinition> {
+        vec![
+            FieldDefinition::builder("featured", FieldType::Checkbox)
+                .localized(localized)
+                .build(),
+            FieldDefinition::builder("tagline", FieldType::Text)
+                .default_value(json!("draft"))
+                .localized(localized)
+                .build(),
+        ]
+    }
+
+    /// Regression: `ADD COLUMN ... DEFAULT x` backfills every existing row, so
+    /// the column a flip moves values into is never empty for a checkbox (always
+    /// `DEFAULT 0`) or any field with a `default_value` — the carry used to skip
+    /// every row on that ground and left the content in the bare column a schema
+    /// cleanup drops. Marking such fields `localized` must still move them.
+    #[test]
+    fn turning_localization_on_keeps_a_defaulted_columns_values() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let shared = simple_collection("posts", defaulted_fields(false));
+        create_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, featured, tagline) VALUES ('p1', 1, 'Hello')",
+            &[],
+        )
+        .unwrap();
+
+        let localized = simple_collection("posts", defaulted_fields(true));
+        alter_collection_table(&conn, "posts", &localized, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one(
+                "SELECT featured__en, tagline__en FROM posts WHERE id = 'p1'",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_i64("featured__en").unwrap(),
+            1,
+            "a checkbox's DEFAULT 0 backfill must not swallow the stored value"
+        );
+        assert_eq!(row.get_string("tagline__en").unwrap(), "Hello");
+    }
+
+    /// The mirror: clearing `localized` on the same defaulted fields moves the
+    /// default locale's values back into the bare column, which the ALTER also
+    /// created with the field's DEFAULT.
+    #[test]
+    fn turning_localization_off_reclaims_defaulted_values() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let localized = simple_collection("posts", defaulted_fields(true));
+        create_collection_table(&conn, "posts", &localized, &locale_en_de()).unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, featured__en, tagline__en) VALUES ('p1', 1, 'Hello')",
+            &[],
+        )
+        .unwrap();
+
+        let shared = simple_collection("posts", defaulted_fields(false));
+        alter_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one("SELECT featured, tagline FROM posts WHERE id = 'p1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_i64("featured").unwrap(), 1);
+        assert_eq!(row.get_string("tagline").unwrap(), "Hello");
+    }
+
+    /// Regression: the carry keyed on column creation, so flipping a field back
+    /// found the bare column already there (the first flip left it behind),
+    /// carried nothing, and the reads returned the value the field held BEFORE
+    /// the first flip — every edit made while it was localized was lost to the
+    /// reader. The recorded shape makes the second flip carry too.
+    #[test]
+    fn flipping_localization_back_keeps_the_edits_made_in_between() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let shared = simple_collection("posts", vec![text_field("title")]);
+        let localized = simple_collection("posts", vec![localized_field("title")]);
+
+        create_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+        conn.execute("INSERT INTO posts (id, title) VALUES ('p1', 'Hello')", &[])
+            .unwrap();
+
+        alter_collection_table(&conn, "posts", &localized, &locale_en_de()).unwrap();
+        conn.execute("UPDATE posts SET title__en = 'Edited'", &[])
+            .unwrap();
+
+        alter_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one("SELECT title FROM posts WHERE id = 'p1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("title").unwrap(),
+            "Edited",
+            "the reads must follow the content, not the pre-flip copy"
+        );
+    }
+
+    /// Clearing `localized` is the mirror: the bare column the reads return to
+    /// takes the default locale's content back.
+    #[test]
+    fn turning_localization_off_reclaims_the_default_locale_values() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let localized = simple_collection("posts", vec![localized_field("title")]);
+        create_collection_table(&conn, "posts", &localized, &locale_en_de()).unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, title__en) VALUES ('p1', 'Hello')",
+            &[],
+        )
+        .unwrap();
+
+        let shared = simple_collection("posts", vec![text_field("title")]);
+        alter_collection_table(&conn, "posts", &shared, &locale_en_de()).unwrap();
+
+        let row = conn
+            .query_one("SELECT title FROM posts WHERE id = 'p1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("title").unwrap(), "Hello");
     }
 
     #[test]

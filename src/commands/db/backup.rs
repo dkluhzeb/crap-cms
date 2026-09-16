@@ -1,7 +1,7 @@
 //! `backup` subcommand: database snapshot + optional uploads archive.
 
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     process,
 };
@@ -12,7 +12,11 @@ use chrono::Local;
 use crate::{
     cli::{self, Spinner},
     commands::{
-        db::{manifest::BackupManifest, secret::backup_secret},
+        db::{
+            helpers::classify_tar_status,
+            manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
+            secret::backup_secret,
+        },
         helpers::hold_instance_lock,
     },
     config::{CrapConfig, DatabaseBackend, UploadStorage},
@@ -62,6 +66,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
 
     let uploads_size = include_uploads
         .then(|| backup_local_uploads(&cfg, &config_dir, &backup_dir))
+        .transpose()?
         .flatten();
 
     write_backup_manifest(&WriteManifestParams {
@@ -81,7 +86,11 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
 
 /// Archive the uploads when they live in this project. Uploads kept in another
 /// storage are backed up with that service, so they are skipped with a note.
-fn backup_local_uploads(cfg: &CrapConfig, config_dir: &Path, backup_dir: &Path) -> Option<u64> {
+fn backup_local_uploads(
+    cfg: &CrapConfig,
+    config_dir: &Path,
+    backup_dir: &Path,
+) -> Result<Option<u64>> {
     let storage = cfg.upload.storage;
 
     if !matches!(storage, UploadStorage::Local) {
@@ -89,7 +98,8 @@ fn backup_local_uploads(cfg: &CrapConfig, config_dir: &Path, backup_dir: &Path) 
             "Uploads are kept in {storage:?} storage, not in this project — back them up \
              with that service. Skipping."
         ));
-        return None;
+
+        return Ok(None);
     }
 
     backup_uploads(config_dir, backup_dir)
@@ -169,23 +179,19 @@ fn backup_database(config_dir: &Path, cfg: &CrapConfig, backup_dir: &Path) -> Re
     Ok(db_size)
 }
 
-/// Compress the uploads directory into a tar.gz archive. Returns the archive size if successful.
+/// What a failed uploads step means for the backup as a whole. `backup` must
+/// not go on to report success once the operator asked for uploads and they
+/// are not in the backup.
+const UPLOADS_FAILED: &str = "Uploads backup failed — no uploads archive was written";
+
+/// Compress `<config_dir>/uploads` into `staged_path`.
+///
+/// The archive is staged under a temp name — an interrupted `tar` must never
+/// leave a truncated `uploads.tar.gz` that looks like a valid backup. The
+/// caller renames it into place once `tar` reports success.
 #[cfg(not(tarpaulin_include))]
-fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
-    let uploads_dir = config_dir.join("uploads");
-
-    if !uploads_dir.exists() || !uploads_dir.is_dir() {
-        cli::info("No uploads directory found — skipping.");
-        return None;
-    }
-
-    let archive_path = backup_dir.join("uploads.tar.gz");
-    // Write to a temp name and rename on success — an interrupted tar must
-    // never leave a truncated uploads.tar.gz that looks like a valid backup.
-    let staged_path = backup_dir.join("uploads.tar.gz.tmp");
-    let spin = Spinner::new("Compressing uploads...");
-
-    let status = process::Command::new("tar")
+fn run_uploads_tar(config_dir: &Path, staged_path: &Path) -> io::Result<process::ExitStatus> {
+    process::Command::new("tar")
         .args([
             "czf",
             &staged_path.to_string_lossy(),
@@ -193,44 +199,77 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
             &config_dir.to_string_lossy(),
             "uploads",
         ])
-        .status();
+        .status()
+}
 
-    match status {
-        Ok(s) if s.success() => {
-            if let Err(e) = fs::rename(&staged_path, &archive_path) {
-                spin.finish_warning(&format!("Failed to finalize uploads archive: {e}"));
-                return None;
-            }
+/// Read the `tar` outcome, dropping whatever a failed run staged. `Err` fails
+/// the whole `backup` — the same treatment `restore` gives a failed `tar`.
+fn finish_uploads_tar(status: io::Result<process::ExitStatus>, staged_path: &Path) -> Result<()> {
+    let Err(e) = classify_tar_status(status) else {
+        return Ok(());
+    };
 
-            match fs::metadata(&archive_path).map(|m| m.len()) {
-                Ok(size) => {
-                    spin.finish_success(&format!(
-                        "Uploads archive: {} ({size} bytes)",
-                        archive_path.display()
-                    ));
-                    Some(size)
-                }
-                Err(e) => {
-                    spin.finish_warning(&format!(
-                        "Uploads archive written but its size could not be read: {e}"
-                    ));
-                    None
-                }
-            }
-        }
-        Ok(s) => {
-            let _ = fs::remove_file(&staged_path);
-            spin.finish_warning(&format!("tar exited with status {s}"));
-            None
-        }
-        Err(e) => {
-            let _ = fs::remove_file(&staged_path);
-            spin.finish_warning(&format!(
-                "tar not found or failed: {e}. Skipping uploads backup."
-            ));
-            None
-        }
+    let _ = fs::remove_file(staged_path);
+
+    Err(e).context(UPLOADS_FAILED)
+}
+
+/// Publish the staged archive under its final name and report its size.
+///
+/// A rename that fails leaves no archive, so it fails the backup like a failed
+/// `tar` does. A size that can't be read does not: the archive itself is in
+/// place, only the manifest's recorded size is missing.
+fn finalize_uploads_archive(
+    spin: &Spinner,
+    staged_path: &Path,
+    archive_path: &Path,
+) -> Result<Option<u64>> {
+    if let Err(e) = fs::rename(staged_path, archive_path) {
+        spin.finish_warning(&format!("Failed to finalize uploads archive: {e}"));
+
+        return Err(e).context(UPLOADS_FAILED);
     }
+
+    let size = match fs::metadata(archive_path).map(|m| m.len()) {
+        Ok(size) => size,
+        Err(e) => {
+            spin.finish_warning(&format!(
+                "Uploads archive written but its size could not be read: {e}"
+            ));
+
+            return Ok(None);
+        }
+    };
+
+    spin.finish_success(&format!(
+        "Uploads archive: {} ({size} bytes)",
+        archive_path.display()
+    ));
+
+    Ok(Some(size))
+}
+
+/// Compress the uploads directory into a tar.gz archive. `Ok(None)` means
+/// there was nothing to archive; a `tar` or rename failure is an error.
+fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Result<Option<u64>> {
+    if !config_dir.join("uploads").is_dir() {
+        cli::info("No uploads directory found — skipping.");
+
+        return Ok(None);
+    }
+
+    let staged_path = backup_dir.join("uploads.tar.gz.tmp");
+    let spin = Spinner::new("Compressing uploads...");
+
+    let status = run_uploads_tar(config_dir, &staged_path);
+
+    if let Err(e) = finish_uploads_tar(status, &staged_path) {
+        spin.finish_warning(&format!("{e:#}"));
+
+        return Err(e);
+    }
+
+    finalize_uploads_archive(&spin, &staged_path, &backup_dir.join("uploads.tar.gz"))
 }
 
 /// Args for [`write_backup_manifest`]. Path triple + sizes + what the
@@ -250,7 +289,7 @@ struct WriteManifestParams<'a> {
 #[cfg(not(tarpaulin_include))]
 fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
     let manifest = BackupManifest {
-        format_version: crate::commands::db::manifest::BACKUP_FORMAT_VERSION,
+        format_version: BACKUP_FORMAT_VERSION,
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: Local::now().to_rfc3339(),
         db_size: p.db_size,
@@ -270,27 +309,83 @@ fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_local_uploads, ensure_file_database, preflight_writable};
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::{fs::PermissionsExt as _, process::ExitStatusExt as _};
+    #[cfg(unix)]
+    use std::{
+        io::{Error, ErrorKind},
+        process::ExitStatus,
+    };
+
+    use super::{
+        backup_local_uploads, ensure_file_database, finish_uploads_tar, preflight_writable,
+    };
     use crate::config::{CrapConfig, DatabaseBackend, UploadStorage};
+
+    /// Regression: a `tar` that never ran (binary missing) or exited non-zero
+    /// was reported as a warning and the command went on to print "Backup
+    /// complete" — the operator asked for uploads and got a backup without
+    /// them. Both outcomes now fail the command, and neither leaves the
+    /// half-written staging file behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_uploads_tar_fails_the_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("uploads.tar.gz.tmp");
+
+        fs::write(&staged, b"truncated").unwrap();
+        let missing =
+            finish_uploads_tar(Err(Error::from(ErrorKind::NotFound)), &staged).unwrap_err();
+        let msg = format!("{missing:#}");
+        assert!(msg.contains("no uploads archive was written"), "{msg}");
+        assert!(msg.contains("tar not found"), "{msg}");
+        assert!(
+            !staged.exists(),
+            "a failed tar must not leave a staged file"
+        );
+
+        // Exit code 1 → wait-status 256 on unix.
+        fs::write(&staged, b"truncated").unwrap();
+        let nonzero = finish_uploads_tar(Ok(ExitStatus::from_raw(256)), &staged).unwrap_err();
+        let msg = format!("{nonzero:#}");
+        assert!(msg.contains("no uploads archive was written"), "{msg}");
+        assert!(msg.contains("tar exited with status"), "{msg}");
+        assert!(!staged.exists());
+    }
+
+    /// A `tar` that succeeded leaves the staged archive for the caller to
+    /// rename into place.
+    #[cfg(unix)]
+    #[test]
+    fn a_successful_uploads_tar_keeps_the_staged_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("uploads.tar.gz.tmp");
+        fs::write(&staged, b"archive").unwrap();
+
+        finish_uploads_tar(Ok(ExitStatus::from_raw(0)), &staged).unwrap();
+
+        assert!(staged.exists());
+    }
 
     /// Uploads kept outside the project aren't archived, even when asked for.
     #[test]
     fn backup_skips_uploads_kept_in_another_storage() {
         let config_dir = tempfile::tempdir().unwrap();
         let uploads = config_dir.path().join("uploads").join("media");
-        std::fs::create_dir_all(&uploads).unwrap();
-        std::fs::write(uploads.join("stale-local-copy.png"), b"x").unwrap();
+        fs::create_dir_all(&uploads).unwrap();
+        fs::write(uploads.join("stale-local-copy.png"), b"x").unwrap();
         let backup_dir = tempfile::tempdir().unwrap();
 
         let mut cfg = CrapConfig::default();
         cfg.upload.storage = UploadStorage::S3;
 
         assert_eq!(
-            backup_local_uploads(&cfg, config_dir.path(), backup_dir.path()),
+            backup_local_uploads(&cfg, config_dir.path(), backup_dir.path()).unwrap(),
             None
         );
         assert_eq!(
-            std::fs::read_dir(backup_dir.path()).unwrap().count(),
+            fs::read_dir(backup_dir.path()).unwrap().count(),
             0,
             "nothing is archived for uploads in another storage"
         );
@@ -305,11 +400,6 @@ mod tests {
         let err = ensure_file_database(&cfg).unwrap_err().to_string();
         assert!(err.contains("pg_dump"), "{err}");
     }
-
-    #[cfg(unix)]
-    use std::fs;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn preflight_succeeds_on_new_subdir() {

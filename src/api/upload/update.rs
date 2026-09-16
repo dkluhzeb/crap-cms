@@ -11,11 +11,13 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::{AdminState, handlers::shared::response::on_blocking_section, parse_multipart_form},
+    admin::{
+        AdminState, FormData, handlers::shared::response::on_blocking_section, parse_multipart_form,
+    },
     core::{CollectionDefinition, Document, upload::UploadedFile},
     service::{
         AppInfra, ServiceContext, ServiceError,
-        upload::{self, UpdateUploadInput, UploadUpdateResult},
+        upload::{UpdateUploadInput, UploadUpdateResult, update_upload as update_upload_document},
     },
 };
 
@@ -51,17 +53,27 @@ fn update_upload_blocking(
     // matching the gRPC/admin write paths (see `create_upload_blocking`).
     let db_kind = input.infra.pool.kind();
 
-    upload::update_upload(
+    let mut form = FormData::from_raw(input.form_data, &input.def.fields);
+    let draft = form.take_action() == "save_draft";
+    let password = form.take_password(&input.def);
+
+    update_upload_document(
         &ctx,
         UpdateUploadInput {
             id: &input.id,
             storage: &input.infra.storage,
             file: input.file,
-            form_data: input.form_data,
+            form,
+            locale_ctx: None,
+            password,
             ui_locale: input.ui_locale,
-            locale_config: &input.infra.locale_config,
+            draft,
             upload_max_file_size: input.max_file_size,
             image_max_attempts: input.image_max_attempts,
+            // A programmatic caller spells out the fields it means to write, so
+            // a shared field under a non-default locale stays a rejected write
+            // rather than a silently dropped value.
+            form_echoes_locked_fields: false,
         },
     )
     .map_err(|e| e.reclassify(db_kind))

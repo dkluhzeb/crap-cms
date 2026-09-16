@@ -6,11 +6,14 @@ use crate::{
     admin::{
         AdminState,
         context::field::{FieldContext, RelationshipSelectedItem, TabsField},
-        handlers::field_context::{
-            builder::visible_field_defs,
-            enrich::{
-                EnrichCtx, EnrichOptions, gated_find_by_id, nested::enrich_nested_fields, types,
+        handlers::{
+            field_context::{
+                builder::visible_field_defs,
+                enrich::{
+                    EnrichCtx, EnrichOptions, gated_find_by_id, nested::enrich_nested_fields, types,
+                },
             },
+            shared::admin_form_fields,
         },
     },
     config::LocaleConfig,
@@ -161,15 +164,13 @@ fn enrich_tabs(
     }
 }
 
-/// Enrich a 1:1-aligned list of nested sub-field contexts against their defs.
+/// Enrich a nested sub-field context list (layout wrappers: Row/Collapsible/
+/// Tabs) against its defs.
 ///
-/// Used by layout wrappers (Row/Collapsible/Tabs) whose sub-field *contexts* are
-/// built UNFILTERED by `build_layout_sub_fields` — exactly one context per def,
-/// in def order. So the defs are deliberately NOT run through `visible_field_defs`
-/// here: filtering them would drop entries the context list still has, desyncing
-/// the `zip`. Hidden-field filtering happens once, at the top level (see
-/// [`enrich_field_contexts`]), consistently with `build_field_contexts`. Reuses
-/// the parent [`EnrichCtx`] so the whole tree shares one pooled connection.
+/// `build_layout_sub_fields` builds one context per def the form renders, so
+/// the defs are filtered through the same [`admin_form_fields`] here and the
+/// `zip` pairs each context with the def it was built from. Reuses the parent
+/// [`EnrichCtx`] so the whole tree shares one pooled connection.
 fn enrich_nested_aligned(
     fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
@@ -177,7 +178,7 @@ fn enrich_nested_aligned(
     opts: &EnrichOptions,
     enrich_ctx: &EnrichCtx,
 ) {
-    for (fc, field_def) in fields.iter_mut().zip(field_defs.iter()) {
+    for (fc, field_def) in fields.iter_mut().zip(admin_form_fields(field_defs)) {
         enrich_single_field(fc, field_def, doc_fields, opts, enrich_ctx);
     }
 }
@@ -223,8 +224,9 @@ pub fn enrich_field_contexts(
 
     // Filter the top-level defs through the SAME single source of truth as
     // `build_field_contexts` so this `zip` pairs each enriched context with the
-    // def it was built from. Nested layout sub-fields are handled separately by
-    // `enrich_nested_aligned` (unfiltered, 1:1) — see its doc comment.
+    // def it was built from. Nested sub-fields filter through
+    // `admin_form_fields` in `enrich_nested_aligned` / `enrich_nested_fields`,
+    // the same filter their builders used.
     for (fc, field_def) in fields
         .iter_mut()
         .zip(visible_field_defs(field_defs, opts.filter_hidden))

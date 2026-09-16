@@ -3,7 +3,10 @@
 
 use anyhow::{Result, bail};
 
-use crate::config::LocaleConfig;
+use crate::{
+    config::LocaleConfig,
+    db::query::helpers::{locale_column, quote_ident},
+};
 
 /// How to handle localized fields in a query.
 #[derive(Debug, Clone)]
@@ -27,6 +30,32 @@ pub(crate) struct ReadLocale<'a> {
 impl<'a> ReadLocale<'a> {
     pub(crate) fn new(locale: &'a str, fallback: Option<&'a str>) -> Self {
         Self { locale, fallback }
+    }
+
+    /// The SQL expression a read takes `column`'s value from: the reading
+    /// locale's column, wrapped in `COALESCE` with the fallback locale's while
+    /// the reading one holds nothing.
+    ///
+    /// The SELECT's value, a filter's comparand, the ORDER BY key and the
+    /// keyset cursor's comparand are all this one expression. A surface that
+    /// compared the bare `title__de` while the SELECT returned
+    /// `COALESCE(title__de, title__en)` disagreed with the values it listed: a
+    /// document shown with its fallback title was missed by a filter on that
+    /// title, sorted as NULL, and skipped or repeated across pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a locale code has no column form.
+    pub(crate) fn column_expr(&self, column: &str) -> Result<String> {
+        let read = quote_ident(&locale_column(column, self.locale)?);
+
+        let Some(fallback) = self.fallback else {
+            return Ok(read);
+        };
+
+        let fallback = quote_ident(&locale_column(column, fallback)?);
+
+        Ok(format!("COALESCE({read}, {fallback})"))
     }
 }
 
@@ -225,6 +254,32 @@ mod tests {
         };
         assert_eq!(all.read_locale(), None);
         assert_eq!(all.rows_read_locale(), ReadLocale::new("en", None));
+    }
+
+    /// The read expression is the fallback `COALESCE` while a fallback locale
+    /// is in play, and the plain quoted column otherwise.
+    #[test]
+    fn the_read_expression_carries_the_fallback() {
+        let with_fallback = ReadLocale::new("de", Some("en"));
+        assert_eq!(
+            with_fallback.column_expr("title").unwrap(),
+            "COALESCE(\"title__de\", \"title__en\")"
+        );
+
+        let without = ReadLocale::new("en", None);
+        assert_eq!(without.column_expr("title").unwrap(), "\"title__en\"");
+    }
+
+    /// A locale code with a hyphen or capitals reaches SQL in its column form,
+    /// quoted so Postgres does not fold the case away.
+    #[test]
+    fn the_read_expression_quotes_a_hyphenated_locale_column() {
+        let read = ReadLocale::new("pt-BR", Some("en"));
+
+        assert_eq!(
+            read.column_expr("seo__title").unwrap(),
+            "COALESCE(\"seo__title__pt_BR\", \"seo__title__en\")"
+        );
     }
 
     #[test]

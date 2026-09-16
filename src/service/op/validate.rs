@@ -28,7 +28,7 @@ use crate::{
 
 use crate::core::Builder;
 
-use super::Operation;
+use super::{Operation, locale::write_locale_ctx};
 
 /// Owned arguments for [`Validate`] / [`ValidateGlobal`].
 #[derive(Builder)]
@@ -72,6 +72,10 @@ fn run_validate(
         draft,
         exclude_id: _,
     } = args;
+
+    // The dry-run answers for the write it previews, so it refuses the same
+    // locales the write refuses.
+    let locale_ctx = write_locale_ctx(locale_ctx)?;
 
     // Canonicalize (nested groups, canonical email and text) BEFORE the access
     // check — the real write bodies do so first too, so an access hook reading

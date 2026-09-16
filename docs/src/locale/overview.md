@@ -21,6 +21,9 @@ fallback = true
 
 When `locales` is empty (the default), localization is completely disabled and all behavior is unchanged.
 
+Locale codes must differ by more than a separator: `pt-BR` and `pt_BR` name
+the same `__pt_BR` column and are rejected when the config loads.
+
 ## Per-Field Opt-In
 
 Mark individual fields as localized in your Lua definitions:
@@ -43,6 +46,18 @@ crap.collections.define("pages", {
 ```
 
 Only fields with `localized = true` are affected. Non-localized fields behave exactly as before.
+
+### Enabling localization on an existing field
+
+Setting `localized = true` on a field that already holds data moves the stored
+values into `{field}__{default_locale}` during the next schema sync; the bare
+`{field}` column is left behind and can be removed with
+`crap-cms db cleanup --confirm`, which names it as an orphan. Clearing
+`localized` is the mirror: the default locale's column is copied back into
+`{field}` (overwriting whatever the bare column still held), and other locales'
+translations stay in their columns — they are not merged. The move happens
+whenever the flag flips, not only when a column is first created, so flipping
+back after editing keeps the edits.
 
 ## Storage
 
@@ -123,6 +138,20 @@ crap.fields.text({
 
 This also applies to fields inside a localized Group — uniqueness is checked against the fully suffixed column (e.g., `seo__slug__en`).
 
+### Changing the locale configuration
+
+- **Changing `default_locale`** is allowed and warned at startup, never
+  blocked. Existing content stays in the old default's columns; default reads
+  switch to the new locale; `fallback` now resolves toward the new default;
+  `required` and completeness are judged against the new default. Copy or
+  re-save content into the new default locale before switching.
+- **Adding or removing a locale** re-runs the reference-count backfill once on
+  the next start. A removed locale's columns and join rows are left in place;
+  `crap-cms db cleanup` reports them — for collections and globals — and
+  removes them with `--confirm`. A
+  version taken before a locale was added leaves that locale untouched when
+  restored.
+
 ## API Behavior
 
 All read and write RPCs accept an optional `locale` parameter:
@@ -168,6 +197,11 @@ to be silently skipped — a success response that discarded data). This
 protects the canonical value from being clobbered by a translation edit while
 never letting a write half-apply. To change shared fields, write without a
 `locale` parameter or with the default locale.
+
+`locale = "all"` is a read shape. A write — `create`, `update`, `create_many`,
+`update_many`, `update_global`, `validate`, and an upload write from the admin
+form or `POST/PUT /api/upload` — that passes it is rejected with a `locale`
+field error; writes target exactly one locale.
 
 ### Removing a translation
 

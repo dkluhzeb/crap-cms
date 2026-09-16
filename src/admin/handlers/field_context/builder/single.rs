@@ -17,10 +17,13 @@ use crate::{
             NumberField, RelationshipField, RichtextField, RowField, TabPanel, TabsField,
             TextField, TextareaField, TimezoneOption, UploadField, ValidationAttrs,
         },
-        handlers::field_context::{
-            MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-            count_errors_in_field_contexts, date_picker_values, locale_locked_display,
-            safe_template_id, tag_values,
+        handlers::{
+            field_context::{
+                MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
+                count_errors_in_field_contexts, date_picker_values, locale_locked_display,
+                safe_template_id, tag_values, tags_input_value,
+            },
+            shared::admin_form_fields,
         },
     },
     core::{FieldDefinition, FieldType, parse_truthy, prefixed_name, timezone::TIMEZONE_OPTIONS},
@@ -195,7 +198,7 @@ fn construct_field_variant(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCon
 
 fn construct_text_tags(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let tags = tag_values(fc.value);
-    base.value = Value::String(tags.join(","));
+    base.value = tags_input_value(&tags);
 
     FieldContext::Text(TextField {
         base,
@@ -235,7 +238,7 @@ fn construct_number(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 
 fn construct_number_tags(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let tags = tag_values(fc.value);
-    base.value = Value::String(tags.join(","));
+    base.value = tags_input_value(&tags);
 
     FieldContext::Number(NumberField {
         base,
@@ -480,6 +483,9 @@ fn construct_join(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext 
 
 /// Build sub-fields for layout wrappers (Row, Collapsible, Tabs).
 /// Top-level wrappers use empty prefix, nested ones use the `full_name`.
+///
+/// Only the fields the form renders become contexts ([`admin_form_fields`]),
+/// so the enrichment and display-condition passes pair the same entries.
 fn build_layout_sub_fields(
     fields: &[FieldDefinition],
     values: &HashMap<String, String>,
@@ -495,8 +501,7 @@ fn build_layout_sub_fields(
         full_name
     };
 
-    fields
-        .iter()
+    admin_form_fields(fields)
         .map(|sf| {
             build_single_field_context(sf, values, errors, prefix, non_default_locale, depth + 1)
         })
@@ -528,9 +533,7 @@ fn construct_group(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
             fc.non_default_locale
         };
 
-        fc.field
-            .fields
-            .iter()
+        admin_form_fields(&fc.field.fields)
             .map(|sf| {
                 build_single_field_context(
                     sf,
@@ -634,9 +637,7 @@ fn construct_array(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let sub_fields: Vec<FieldContext> = if fc.depth >= MAX_FIELD_DEPTH {
         Vec::new()
     } else {
-        fc.field
-            .fields
-            .iter()
+        admin_form_fields(&fc.field.fields)
             .map(|sf| {
                 build_single_field_context(
                     sf,
@@ -680,9 +681,7 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
             .blocks
             .iter()
             .map(|bd| {
-                let fields: Vec<FieldContext> = bd
-                    .fields
-                    .iter()
+                let fields: Vec<FieldContext> = admin_form_fields(&bd.fields)
                     .map(|sf| {
                         build_single_field_context(
                             sf,
@@ -750,7 +749,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::build_single_field_context;
-    use crate::core::{FieldDefinition, FieldType};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType};
 
     fn group_field(name: &str, localized: bool, children: Vec<FieldDefinition>) -> FieldDefinition {
         FieldDefinition {
@@ -767,6 +766,30 @@ mod tests {
             name: name.to_string(),
             field_type: FieldType::Text,
             ..Default::default()
+        }
+    }
+
+    /// `admin.readonly` reaches the context as `readonly` for every field type,
+    /// including the two whose templates used to branch on `locale_locked`
+    /// alone and so rendered an editable Checkbox / Select. `locale_locked`
+    /// stays the narrower flag — a readonly field is not locale-locked.
+    #[test]
+    fn admin_readonly_reaches_the_context_for_every_field_type() {
+        let empty = HashMap::new();
+
+        for field_type in [FieldType::Checkbox, FieldType::Select, FieldType::Text] {
+            let label = format!("{field_type:?}");
+            let field = FieldDefinition::builder("flag", field_type)
+                .admin(FieldAdmin::builder().readonly(true).build())
+                .build();
+
+            let fc = build_single_field_context(&field, &empty, &empty, "", false, 0);
+
+            assert!(fc.base().readonly, "{label} must render readonly");
+            assert!(
+                !fc.base().locale_locked,
+                "{label}: readonly is not the same as locale-locked"
+            );
         }
     }
 
@@ -828,6 +851,82 @@ mod tests {
             ctx["sub_fields"][0]["name"], "items[__INDEX__][meta][0][author]",
             "group children in an array row need the [0] index the parser requires",
         );
+    }
+
+    /// Regression: `admin.hidden` was honored only for top-level fields, so a
+    /// hidden checkbox inside a group still got an input. The editor could
+    /// uncheck it, but the submit-side normalizer reads a key the form "never
+    /// rendered" as "not an edit" — the stored `true` survived the uncheck. The
+    /// builder now applies the same answer at every depth.
+    #[test]
+    fn a_hidden_field_inside_a_group_gets_no_input() {
+        let hidden = FieldDefinition::builder("internal", FieldType::Checkbox)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        let field = group_field(
+            "meta",
+            false,
+            vec![text_field("author"), hidden, text_field("note")],
+        );
+        let empty = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+
+        let names: Vec<&str> = ctx["sub_fields"]
+            .as_array()
+            .expect("a group renders sub-fields")
+            .iter()
+            .map(|sf| sf["name"].as_str().expect("each sub-field is named"))
+            .collect();
+
+        assert_eq!(
+            names,
+            vec!["meta__author", "meta__note"],
+            "a hidden sub-field must not be rendered, and the surviving ones keep their order"
+        );
+    }
+
+    /// The same rule one level further in: a hidden field inside a layout
+    /// wrapper (transparent, so its children are top-level columns) is not
+    /// rendered either.
+    #[test]
+    fn a_hidden_field_inside_a_layout_wrapper_gets_no_input() {
+        let hidden = FieldDefinition::builder("internal", FieldType::Checkbox)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        let field = FieldDefinition::builder("row", FieldType::Row)
+            .fields(vec![text_field("title"), hidden])
+            .build();
+        let empty = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+
+        let subs = ctx["sub_fields"]
+            .as_array()
+            .expect("a row renders children");
+        assert_eq!(subs.len(), 1, "the hidden child is not rendered");
+        assert_eq!(subs[0]["name"], "title");
+    }
+
+    /// And inside an array's new-row `<template>`: a hidden sub-field would
+    /// otherwise reach every JS-added row.
+    #[test]
+    fn a_hidden_sub_field_is_absent_from_the_array_row_template() {
+        let hidden = FieldDefinition::builder("internal", FieldType::Checkbox)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        let field = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![text_field("label"), hidden])
+            .build();
+        let empty = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+
+        let subs = ctx["sub_fields"]
+            .as_array()
+            .expect("an array renders template sub-fields");
+        assert_eq!(subs.len(), 1, "the hidden sub-field is not templated");
+        assert_eq!(subs[0]["name"], "items[__INDEX__][label]");
     }
 
     /// A top-level group keeps flat `group__sub` column naming (no `[0]`).

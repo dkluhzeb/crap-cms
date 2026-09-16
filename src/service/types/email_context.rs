@@ -7,13 +7,13 @@ use crate::{
     core::{Builder, CollectionDefinition, email::EmailRenderer},
     db::DbPool,
     service::{
-        ResendVerificationInput, VerificationEmailInput, VerificationMailer,
-        resend_verification_email, send_verification_email,
+        ResendVerificationInput, ResetEmailInput, ResetMailer, VerificationEmailInput,
+        VerificationMailer, resend_verification_email, send_reset_email, send_verification_email,
     },
 };
 
-/// Bundled email configuration for verification emails.
-/// Cloning is cheap (configs are small, renderer is Arc).
+/// Bundled email configuration for the verification and password-reset
+/// emails. Cloning is cheap (configs are small, renderer is Arc).
 #[derive(Clone)]
 pub struct EmailContext {
     pub email_config: EmailConfig,
@@ -43,6 +43,27 @@ pub(crate) struct ResendTarget {
     pub email: String,
 }
 
+/// Everything the forgot-password flow needs beyond the mailer itself.
+///
+/// Built at two call sites (the admin action and the gRPC handler), so it
+/// takes the builder the project's >2-field rule asks for.
+#[derive(Builder)]
+pub(crate) struct ResetTarget {
+    #[builder(required)]
+    pub pool: DbPool,
+    #[builder(required)]
+    pub locale_config: LocaleConfig,
+    #[builder(required)]
+    pub slug: String,
+    #[builder(required)]
+    pub def: Arc<CollectionDefinition>,
+    #[builder(required)]
+    pub email: String,
+    /// `[auth] reset_token_expiry`, in seconds.
+    #[builder(required)]
+    pub reset_expiry: u64,
+}
+
 impl EmailContext {
     /// The render-and-queue half of the verification flow, detached from
     /// `self` so it can move into a blocking task.
@@ -70,6 +91,35 @@ impl EmailContext {
             slug,
             user_id: doc_id,
             user_email: email,
+        });
+    }
+
+    /// The render-and-queue half of the password-reset flow, detached from
+    /// `self` so it can move into a blocking task.
+    fn reset_mailer(&self, reset_expiry: u64) -> ResetMailer {
+        ResetMailer {
+            email_config: self.email_config.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.server_config.clone(),
+            email_max_attempts: self.email_max_attempts,
+            reset_expiry,
+        }
+    }
+
+    /// Spawn a password-reset email. Fire-and-forget, and deliberately silent
+    /// about whether the address belongs to an account.
+    ///
+    /// The token and the email job are written in one transaction inside the
+    /// task, so a crash can never leave a live reset token whose only link
+    /// was never queued for delivery.
+    pub(crate) fn send_reset(&self, target: ResetTarget) {
+        send_reset_email(ResetEmailInput {
+            pool: target.pool,
+            mailer: self.reset_mailer(target.reset_expiry),
+            locale_config: target.locale_config,
+            slug: target.slug,
+            def: target.def,
+            email: target.email,
         });
     }
 

@@ -15,7 +15,7 @@ That's it. The server starts the admin UI, gRPC API, and background job schedule
 ```bash
 crap-cms serve --detach       # start in background
 crap-cms serve --status       # check if running
-crap-cms serve --stop         # graceful shutdown
+crap-cms serve --stop         # graceful shutdown: drains running jobs first
 crap-cms serve --restart      # stop + start
 ```
 

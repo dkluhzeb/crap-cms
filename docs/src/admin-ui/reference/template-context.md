@@ -204,9 +204,6 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`versions_url`** (string)
 - **`document_title`** (string)
 - **`ref_count`** (integer)
-- **`has_locales`** (boolean) _(optional)_
-- **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 - **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_ — Upload preview block — present only on upload collections.
 
 ## Collection create form
@@ -231,9 +228,6 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
-- **`has_locales`** (boolean) _(optional)_
-- **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 - **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_
 
 ## Collection form-error re-render
@@ -259,7 +253,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
-- **`upload_hidden_fields`** (Option&lt;Vec&lt;any&gt;&gt;) _(optional)_ — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).
+- **`upload_hidden_fields`** (Option&lt;Vec&lt;any&gt;&gt;) _(optional)_ — Hidden upload inputs preserved from the submitted form — the focal point the edit page renders inside its file-preview block, which this slim context does not carry. Without them a failed save resets the focal point the user just moved.
 
 ## Collection delete confirmation
 
@@ -325,6 +319,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`document`** ([DocumentRef](#documentref))
 - **`version_number`** (any) — Version number being restored (from the version row's `version` column).
 - **`missing_relations`** (Vec&lt;any&gt;) — IDs of relationship references whose targets no longer exist.
+- **`missing_files`** (Vec&lt;string&gt;) — Storage keys the version names whose files are gone. Always empty for a collection without uploads.
 - **`restore_url`** (string)
 - **`back_url`** (string)
 
@@ -355,9 +350,6 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`restore_url_prefix`** (string)
 - **`versions_url`** (string)
 - **`doc_status`** (string)
-- **`has_locales`** (boolean) _(optional)_
-- **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 
 ## Global form-error re-render
 
@@ -420,6 +412,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`global`** ([GlobalContext](#globalcontext))
 - **`version_number`** (any)
 - **`missing_relations`** (Vec&lt;any&gt;)
+- **`missing_files`** (Vec&lt;string&gt;) — Storage keys the version names whose files are gone. A global is never an upload collection, so this is always empty — the field exists because both surfaces render the same confirmation partial.
 - **`restore_url`** (string)
 - **`back_url`** (string)
 
@@ -532,14 +525,6 @@ Identifying data about the currently authenticated user.
 ### EditorLocaleOption
 
 One row in the editor-locale picker dropdown.
-
-- **`value`** (string)
-- **`label`** (string)
-- **`selected`** (boolean)
-
-### LocaleTemplateOption
-
-Per-locale option in the template-data picker.
 
 - **`value`** (string)
 - **`label`** (string)
@@ -1134,6 +1119,7 @@ One row in a Select/Radio's `options` array.
 - **`label`** (string) _(optional)_
 - **`value`** (string) _(optional)_
 - **`selected`** (boolean) _(optional)_
+- **`unlisted`** (boolean) _(optional)_ — The document holds this value but the field no longer declares it. The option is kept so the editor sees what is stored and re-saving the form doesn't drop it; templates mark it as not one of the declared choices.
 
 ### RelationshipField
 

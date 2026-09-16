@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use anyhow::{Context as _, Result};
 
 use crate::core::CollectionDefinition;
-use crate::db::query::filter::{build_where_clause, resolve_filters};
+use crate::db::query::filter::build_where_clause;
 use crate::db::{DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext};
 
 /// Maximum candidate ids per `IN (…)` chunk. Kept well under `SQLite`'s 999
@@ -64,11 +64,9 @@ pub fn filter_visible_ids(
         }));
         clauses.extend(visibility.iter().cloned());
 
-        let resolved = resolve_filters(&clauses, def, locale_ctx)?;
-
         let mut params: Vec<DbValue> = Vec::new();
         let where_clause =
-            build_where_clause(conn, &resolved, slug, &def.fields, locale_ctx, &mut params)?;
+            build_where_clause(conn, &clauses, slug, &def.fields, locale_ctx, &mut params)?;
         let sql = format!("SELECT id FROM \"{slug}\"{where_clause}");
 
         let rows = conn

@@ -12,11 +12,20 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::core::{FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
+use crate::{
+    admin::handlers::shared::for_each_admin_form_leaf,
+    core::{FieldDefinition, FieldType},
+};
 
 /// Normalize `has_many` select/radio/text/number form values into canonical JSON
-/// array strings. The flat-column walk ([`walk_leaf_fields`]) handles Group
-/// `__`-prefixing and transparent layout wrappers.
+/// array strings. The flat-column walk ([`for_each_admin_form_leaf`]) handles
+/// Group `__`-prefixing and transparent layout wrappers.
+///
+/// Only the leaves the form rendered are normalized: an absent one means the
+/// editor cleared the list, which is an empty list. A `has_many` the form never
+/// rendered (`admin.hidden`, or one inside a hidden group) is left absent so its
+/// stored list survives the save — the same rule the checkbox normalizer
+/// follows, from the same answer.
 pub(crate) fn transform_select_has_many(
     form: &mut HashMap<String, String>,
     field_defs: &[FieldDefinition],
@@ -24,22 +33,19 @@ pub(crate) fn transform_select_has_many(
     // Collect transforms first to avoid double-borrow on `form`
     let mut updates: Vec<(String, String)> = Vec::new();
 
-    let _ = walk_leaf_fields(field_defs, "", false, &mut |field, prefix, _| {
+    for_each_admin_form_leaf(field_defs, |field, column| {
         let is_multi_leaf = matches!(
             field.field_type,
             FieldType::Select | FieldType::Radio | FieldType::Text | FieldType::Number
         );
         if !is_multi_leaf || !field.has_many {
-            return Ok(());
+            return;
         }
 
-        let full_name = prefixed_name(prefix, &field.name);
         let json_val = form
-            .get(&full_name)
+            .get(&column)
             .map_or_else(|| "[]".to_string(), |val| canonical_json_array(val));
-        updates.push((full_name, json_val));
-
-        Ok(())
+        updates.push((column, json_val));
     });
 
     for (name, val) in updates {
@@ -105,7 +111,7 @@ fn parse_as_json_array(val: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }
@@ -288,6 +294,32 @@ mod tests {
 
         transform_select_has_many(&mut form, &[field]);
         assert_eq!(form.get("skills").unwrap(), "[]");
+    }
+
+    /// Regression: a `has_many` the form never rendered must stay absent, so
+    /// the write keeps its stored list. Normalizing every `has_many` — rendered
+    /// or not — replaced a hidden list with `[]` on every admin save.
+    #[test]
+    fn transform_select_has_many_skips_fields_the_form_never_rendered() {
+        let mut hidden = FieldDefinition::builder("internal", FieldType::Select)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        hidden.has_many = true;
+
+        let mut in_hidden_group = make_field("tags", FieldType::Text);
+        in_hidden_group.has_many = true;
+        let group = FieldDefinition::builder("system", FieldType::Group)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .fields(vec![in_hidden_group])
+            .build();
+
+        let mut form = HashMap::new();
+        transform_select_has_many(&mut form, &[hidden, group]);
+
+        assert!(
+            form.is_empty(),
+            "a hidden has-many keeps its stored list, got {form:?}"
+        );
     }
 
     /// A comma-separated value that merely *starts* with `[` must not be

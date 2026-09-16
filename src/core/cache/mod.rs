@@ -10,6 +10,7 @@
 
 mod backend;
 mod custom;
+mod expiry;
 mod factory;
 mod keys;
 mod memory;
@@ -20,6 +21,7 @@ mod redis;
 
 pub use backend::{CacheBackend, SharedCache};
 pub use custom::CustomCache;
+pub use expiry::redis_entry_ttl_secs;
 pub use factory::{create_cache, create_cache_with_lease, warn_if_custom_cache_multi_vm};
 pub use keys::{CACHE_KEY_NAMESPACE, cache_clear_pattern, cache_key, cache_namespace};
 pub use memory::MemoryCache;

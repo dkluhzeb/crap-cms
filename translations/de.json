@@ -130,6 +130,7 @@
   "view": "Ansehen",
   "upload_new": "Neu hochladen",
   "no_related_items": "Keine verknüpften Einträge",
+  "option_no_longer_offered": "(nicht mehr verfügbar)",
   "select_placeholder": "-- Auswählen --",
   "type_and_press_enter": "Eingeben und Enter drücken",
   "focal_point_hint": "Klicken Sie auf das Bild, um den Fokuspunkt festzulegen",
@@ -161,6 +162,8 @@
   "restore_has_missing_relations": "Diese Version referenziert Inhalte, die nicht mehr existieren:",
   "restore_missing_warning": "Beim Wiederherstellen werden veraltete Referenzen in das Dokument geschrieben.",
   "missing_of_total": "von {{total}} Referenz(en) fehlen",
+  "restore_has_missing_files": "Diese Version referenziert Dateien, die nicht mehr gespeichert sind:",
+  "restore_missing_files_warning": "Beim Wiederherstellen werden Links auf fehlende Dateien in das Dokument geschrieben.",
   "confirm_restore_version": "Version v{{version}} wiederherstellen?",
 
   "badge_auth": "Auth",

@@ -6,7 +6,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     admin::{
@@ -14,14 +14,17 @@ use crate::{
         context::{
             BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, PageMeta,
             PageType,
-            field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
+            field::FieldContext,
             page::collections::{CollectionCreatePage, UploadFormContext},
         },
-        handlers::shared::{
-            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, collection_base, editor_locale_ctx,
-            enrich_field_contexts, extract_editor_locale, forbidden, get_user_doc,
-            is_non_default_locale, render_page, require_collection, split_sidebar_fields,
+        handlers::{
+            collections::shared::password_field,
+            shared::{
+                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+                check_access_or_forbid, collection_base, editor_locale_ctx, enrich_field_contexts,
+                extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, render_page,
+                require_collection, split_sidebar_fields,
+            },
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
@@ -74,28 +77,7 @@ fn prepare_create_fields(
     );
 
     if def.is_auth_collection() {
-        fields.push(FieldContext::Password(TextField {
-            base: BaseFieldData {
-                name: "password".to_string(),
-                field_name: "password".to_string(),
-                label: "password".to_string(),
-                required: true,
-                value: Value::String(String::new()),
-                placeholder: None,
-                description: Some("set_password_description".to_string()),
-                readonly: false,
-                localized: false,
-                locale_locked: false,
-                position: None,
-                template: None,
-                extra: serde_json::Map::new(),
-                error: None,
-                validation: ValidationAttrs::default(),
-                condition: ConditionData::default(),
-            },
-            has_many: None,
-            tags: None,
-        }));
+        fields.push(password_field(true));
     }
 
     split_sidebar_fields(fields)
@@ -149,7 +131,6 @@ pub async fn create_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (main_fields, sidebar_fields) =
         prepare_create_fields(&state, &def, editor_locale.as_deref(), auth_user.as_ref());
-    let (_locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
@@ -180,7 +161,6 @@ pub async fn create_form(
         sidebar_fields,
         editing: false,
         has_drafts: def.has_drafts(),
-        locale_data,
         upload,
     };
 

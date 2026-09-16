@@ -8,7 +8,7 @@ use crate::{
     core::{FieldDefinition, Registry},
     db::{
         DbConnection,
-        migrate::meta,
+        migrate::{helpers::versioned_fingerprint, meta},
         query::{helpers::global_table, ref_count},
     },
 };
@@ -25,15 +25,36 @@ fn collection_meta_key(slug: &str) -> String {
     format!("ref_count_backfilled:{slug}")
 }
 
-/// A collection/global is up to date only when its stored value matches the
-/// current backfill version — a missing or stale value triggers a recompute.
-fn is_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<bool> {
-    Ok(meta::get(conn, &collection_meta_key(slug))?.as_deref() == Some(BACKFILL_VERSION))
+/// The gate a completed backfill stores: the computation version and the
+/// locale configuration it counted under.
+///
+/// The walk visits exactly the configured locales' columns, so the locale list
+/// is part of the result. Gating on the version alone left a removed locale's
+/// references counted forever — phantom counts that block deletes — and never
+/// counted an added locale's at all.
+fn gate_value(locale_config: &LocaleConfig) -> String {
+    versioned_fingerprint(BACKFILL_VERSION, &[locale_config.fingerprint()])
 }
 
-/// Mark a collection/global as backfilled at the current version.
-fn mark_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<()> {
-    meta::upsert(conn, &collection_meta_key(slug), BACKFILL_VERSION)
+/// A collection/global is up to date only when its stored value matches the
+/// current gate — a missing or stale value triggers a recompute.
+fn is_backfilled(
+    conn: &dyn DbConnection,
+    slug: &str,
+    locale_config: &LocaleConfig,
+) -> Result<bool> {
+    let stored = meta::get(conn, &collection_meta_key(slug))?;
+
+    Ok(stored.as_deref() == Some(gate_value(locale_config).as_str()))
+}
+
+/// Mark a collection/global as backfilled at the current gate.
+fn mark_backfilled(
+    conn: &dyn DbConnection,
+    slug: &str,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    meta::upsert(conn, &collection_meta_key(slug), &gate_value(locale_config))
 }
 
 /// Run the ref count backfill for any collections/globals not yet backfilled.
@@ -49,9 +70,10 @@ pub(crate) fn backfill_if_needed(
     // covered even if the database was already fully backfilled once. (The old
     // global `ref_count_backfilled` flag short-circuited this whole loop once
     // set, so a later-added collection was silently never backfilled — an
-    // under-count that defeats O(1) delete protection.) Version-gating still
-    // works: `is_backfilled` compares the per-slug value to `BACKFILL_VERSION`,
-    // so bumping the version re-walks everything. The per-slug reads are cheap,
+    // under-count that defeats O(1) delete protection.) Gating still works:
+    // `is_backfilled` compares the per-slug value to the current version and
+    // locale fingerprint, so bumping the version — or changing the configured
+    // locales — re-walks everything. The per-slug reads are cheap,
     // and a fully up-to-date database still early-returns below.
     //
     // A DB error from `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
@@ -63,13 +85,13 @@ pub(crate) fn backfill_if_needed(
     let mut needs_backfill_globals = Vec::new();
 
     for (slug, def) in &registry.collections {
-        if !is_backfilled(conn, slug)? {
+        if !is_backfilled(conn, slug, locale_config)? {
             needs_backfill_collections.push((slug, def));
         }
     }
 
     for (slug, def) in &registry.globals {
-        if !is_backfilled(conn, slug)? {
+        if !is_backfilled(conn, slug, locale_config)? {
             needs_backfill_globals.push((slug, def));
         }
     }
@@ -107,11 +129,11 @@ pub(crate) fn backfill_if_needed(
 
     // Phase 3: Mark newly backfilled collections.
     for (slug, _) in &needs_backfill_collections {
-        mark_backfilled(conn, slug)?;
+        mark_backfilled(conn, slug, locale_config)?;
     }
 
     for (slug, _) in &needs_backfill_globals {
-        mark_backfilled(conn, slug)?;
+        mark_backfilled(conn, slug, locale_config)?;
     }
 
     info!("Ref count backfill complete");
@@ -552,12 +574,71 @@ mod tests {
 
         // Per-collection flags should be set for both.
         assert!(
-            is_backfilled(&conn, "posts").unwrap(),
+            is_backfilled(&conn, "posts", &no_locale()).unwrap(),
             "posts per-collection flag should be set"
         );
         assert!(
-            is_backfilled(&conn, "pages").unwrap(),
+            is_backfilled(&conn, "pages", &no_locale()).unwrap(),
             "pages per-collection flag should be set"
+        );
+    }
+
+    /// Removing (or adding) a locale changes which columns the count walks, so
+    /// a gate stamped under the old locale list must not pass. It used to, and
+    /// the dropped locale's references stayed counted forever — phantom counts
+    /// that block deletes.
+    #[test]
+    fn a_changed_locale_list_reopens_the_backfill_gate() {
+        let en_de = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let en_only = LocaleConfig {
+            locales: vec!["en".to_string()],
+            ..en_de.clone()
+        };
+
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _registry) = setup_db(&[media], &[], &en_de);
+        let conn = pool.get().unwrap();
+
+        mark_backfilled(&conn, "media", &en_de).unwrap();
+
+        assert!(is_backfilled(&conn, "media", &en_de).unwrap());
+        assert!(
+            !is_backfilled(&conn, "media", &en_only).unwrap(),
+            "dropping a locale must force a recompute"
+        );
+
+        mark_backfilled(&conn, "media", &en_only).unwrap();
+        assert!(is_backfilled(&conn, "media", &en_only).unwrap());
+    }
+
+    /// Listing the same locales in another order changes no column the walk
+    /// visits, so the gate must stay closed: reopening it re-counted every
+    /// reference of every collection on the next boot for nothing.
+    #[test]
+    fn reordering_the_locales_keeps_the_backfill_gate_closed() {
+        let en_de = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let reordered = LocaleConfig {
+            locales: vec!["de".to_string(), "en".to_string()],
+            ..en_de.clone()
+        };
+
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _registry) = setup_db(&[media], &[], &en_de);
+        let conn = pool.get().unwrap();
+
+        mark_backfilled(&conn, "media", &en_de).unwrap();
+
+        assert!(
+            is_backfilled(&conn, "media", &reordered).unwrap(),
+            "a reordered locale list must not reopen the gate"
         );
     }
 }

@@ -12,6 +12,7 @@ use crate::{
     db::query::helpers::tz_column,
     hooks::lifecycle::validation::{
         checks,
+        checks::OptionCheck,
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
         is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
@@ -423,8 +424,9 @@ fn validate_leaf_sub_field(
     // 6. Email format validation
     checks::check_email_format(sf, qualified, value, is_empty, errors);
 
-    // 7. Select/radio option validation
-    checks::check_option_valid(sf, qualified, value, is_empty, errors);
+    // 7. Select/radio option validation. A row's values have no column of
+    //    their own, so the declared options are all there is to judge them on.
+    checks::check_option_valid(&OptionCheck::new(sf, qualified, value, is_empty), errors);
 
     // 8. Has-many element validation (per-element length/numeric bounds, row counts)
     checks::check_has_many_elements(sf, qualified, value, is_empty, ctx.is_draft, errors);

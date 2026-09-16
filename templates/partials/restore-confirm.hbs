@@ -13,6 +13,18 @@
     <p class="text--muted">{{t "restore_missing_warning"}}</p>
   {{/partials/warning-card}}
 {{/if}}
+{{#if missing_files}}
+  {{#> partials/warning-card title_key="restore_has_missing_files"}}
+    <ul>
+      {{#each missing_files}}
+        <li>
+          <code>{{this}}</code>
+        </li>
+      {{/each}}
+    </ul>
+    <p class="text--muted">{{t "restore_missing_files_warning"}}</p>
+  {{/partials/warning-card}}
+{{/if}}
 
 <div class="card">
   <div class="card__body">

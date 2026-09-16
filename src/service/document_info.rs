@@ -6,11 +6,12 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use serde_json::Value;
 use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, Registry, document::VersionSnapshot},
+    core::{Document, Registry, document::VersionSnapshot, upload::snapshot_file_keys},
     db::{
         AccessResult, DbConnection, FilterClause, LocaleContext, ops,
         query::{self, BackReference, MissingRelation, filter_visible_ids},
@@ -263,42 +264,94 @@ fn keep_visible_group(
     }
 }
 
-/// A version as the viewer reads it, with the relations its restore would
-/// write whose targets no longer exist.
+/// What restoring one version would not find any more.
 ///
-/// The check inspects what a restore writes — the stored snapshot, every locale
-/// it records — read the way the viewer reads it: one view per locale, holding
-/// that locale's own values, with the read-denied and hidden fields stripped as
-/// a version read strips them. A value the viewer cannot read is never
-/// reported. `None` when the version does not exist or is hidden from the
-/// viewer.
+/// Both halves are warnings, never blocks: the restore still runs, and the
+/// confirmation page says what it would leave dangling.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct VersionGaps {
+    /// Relations the restore would write whose target documents are gone.
+    pub relations: Vec<MissingRelation>,
+    /// Storage keys the snapshot names whose bytes the backend no longer
+    /// holds — a file a later write replaced and the cleanup removed.
+    pub files: Vec<String>,
+}
+
+/// A version as the viewer reads it, plus what its restore would no longer
+/// find.
+///
+/// The relation check inspects what a restore writes — the stored snapshot,
+/// every locale it records — read the way the viewer reads it: one view per
+/// locale, holding that locale's own values, with the read-denied and hidden
+/// fields stripped as a version read strips them. A value the viewer cannot
+/// read is never reported. `None` when the version does not exist or is hidden
+/// from the viewer.
 ///
 /// # Errors
 ///
 /// Returns the version read's errors (access denied, hook errors), or a
 /// backend error if the stored snapshot cannot be read.
-pub fn version_missing_relations(
+pub fn version_restore_gaps(
     ctx: &ServiceContext,
     registry: &Registry,
     version_id: &str,
-) -> Result<Option<(VersionSnapshot, Vec<MissingRelation>)>, ServiceError> {
-    // The gated read row, still carrying the STORED snapshot: the views below
-    // are what a restore would write, so they must be built before the read
-    // shaping rewrites the snapshot into the document a read returns.
+) -> Result<Option<(VersionSnapshot, VersionGaps)>, ServiceError> {
+    // The gated read row, still carrying the STORED snapshot: the views and the
+    // file keys below are what a restore would write, so both must be taken
+    // before the read shaping rewrites the snapshot into the document a read
+    // returns.
     let Some(mut version) = find_stored_version(ctx, version_id)? else {
         return Ok(None);
     };
 
     let views = readable_locale_views(ctx, &version)?;
+    let files = missing_snapshot_files(ctx, &version.snapshot);
 
     // The per-locale `views` above already cover every locale the restore
     // would write; the returned snapshot is the default-locale read shape.
     read_version_snapshot(ctx, ctx.read_hooks()?, &mut version, None)?;
 
     let conn = ctx.resolve_conn()?;
-    let missing = query::find_missing_relations(conn.as_ref(), registry, &views, ctx.fields()?);
+    let relations = query::find_missing_relations(conn.as_ref(), registry, &views, ctx.fields()?);
 
-    Ok(Some((version, missing)))
+    Ok(Some((version, VersionGaps { relations, files })))
+}
+
+/// The files a restore of this snapshot would leave dangling: the storage keys
+/// it names whose bytes the backend no longer holds.
+///
+/// The file columns are server-derived and not localized, so they are read from
+/// the snapshot as stored rather than per locale. Nothing to report without an
+/// upload collection or without a storage backend to ask.
+///
+/// A backend that cannot answer for a key reports it present: existence is a
+/// membership question, and a transient backend failure must not turn into a
+/// confident "this file is gone" on the confirmation page.
+fn missing_snapshot_files(ctx: &ServiceContext, snapshot: &Value) -> Vec<String> {
+    let Some(storage) = ctx.storage.as_ref() else {
+        return Vec::new();
+    };
+
+    let Some(upload) = ctx
+        .collection_def()
+        .ok()
+        .and_then(|def| def.upload.as_ref())
+        .filter(|upload| upload.enabled)
+    else {
+        return Vec::new();
+    };
+
+    let mut missing: Vec<String> = snapshot_file_keys(snapshot, upload)
+        .into_iter()
+        .filter(|key| !storage.exists(key).unwrap_or(true))
+        .collect();
+
+    // A size url and its format variants can name the same key; report each
+    // missing file once, in a stable order.
+    missing.sort();
+    missing.dedup();
+
+    missing
 }
 
 /// Each locale's view of a stored snapshot as the viewer reads it: resolved for
@@ -353,6 +406,8 @@ fn exact_locale_contexts(config: Option<&LocaleConfig>) -> Vec<Option<LocaleCont
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::{fs, sync::Arc};
+
     use anyhow::Result;
     use serde_json::{Map, Value, json};
 
@@ -361,8 +416,9 @@ mod tests {
         config::{CrapConfig, DatabaseConfig},
         core::{
             CollectionDefinition, DocumentFields, FieldDefinition, FieldType, HookRef,
-            RelationshipConfig, ReqContext,
+            RelationshipConfig, ReqContext, SharedStorage,
             collection::{Hooks, VersionsConfig},
+            upload::{CollectionUpload, ImageSizeBuilder, storage::LocalStorage},
         },
         db::{DbPool, Filter, FilterOp, migrate, pool},
         hooks::lifecycle::{AfterReadCtx, access::strip_read_access_data_aware},
@@ -670,11 +726,11 @@ mod tests {
             .locale_config(Some(&locale))
             .build();
 
-        let (_, missing) = version_missing_relations(&ctx, registry, &version.id)
+        let (_, gaps) = version_restore_gaps(&ctx, registry, &version.id)
             .unwrap()
             .expect("the version is visible");
 
-        missing
+        gaps.relations
     }
 
     /// Each reported field's sorted missing ids and total id count.
@@ -770,6 +826,84 @@ mod tests {
 
         let names: Vec<&str> = missing.iter().map(|m| m.field_name.as_str()).collect();
         assert_eq!(names, vec!["image"], "{missing:?}");
+    }
+
+    /// A restore rewrites the snapshot's file urls onto the row, so the
+    /// confirmation has to say which of those files storage no longer holds.
+    /// Every url column the snapshot carries is checked — the main file and
+    /// each size — and a file that is still there is not reported.
+    #[test]
+    fn a_version_naming_a_deleted_file_reports_it_as_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uploads = tmp.path().join("uploads").join("media");
+        fs::create_dir_all(&uploads).unwrap();
+        fs::write(uploads.join("here.png"), b"bytes").unwrap();
+
+        let storage: SharedStorage = Arc::new(LocalStorage::new(tmp.path().join("uploads")));
+
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumbnail")
+                .width(300)
+                .height(300)
+                .build(),
+        ];
+
+        let mut media = CollectionDefinition::new("media");
+        media.upload = Some(upload);
+        media.versions = Some(VersionsConfig::new(false, 0));
+
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+
+        let shared = Registry::shared();
+        shared.write().unwrap().register_collection(media);
+        let registry = (*Registry::snapshot(&shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).unwrap();
+
+        let conn = db_pool.get().unwrap();
+        conn.execute("INSERT INTO \"media\" (id) VALUES ('m1')", &[])
+            .unwrap();
+
+        let snapshot = json!({
+            "url": "/uploads/media/gone.png",
+            "filename": "gone.png",
+            "thumbnail_url": "/uploads/media/here.png",
+        });
+        let version = query::create_version(&conn, "media", "m1", "published", &snapshot).unwrap();
+
+        let def = registry.get_collection("media").unwrap();
+        let hooks = NoStripHooks;
+        let ctx = ServiceContext::collection("media", def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .storage(Some(storage))
+            .build();
+
+        let (_, gaps) = version_restore_gaps(&ctx, &registry, &version.id)
+            .unwrap()
+            .expect("the version is visible");
+
+        assert_eq!(gaps.files, vec!["media/gone.png".to_string()], "{gaps:?}");
+    }
+
+    /// Without a storage backend there is nothing to ask, so the report stays
+    /// empty rather than claiming every file is gone.
+    #[test]
+    fn a_context_without_storage_reports_no_missing_files() {
+        let mut media = CollectionDefinition::new("media");
+        media.upload = Some(CollectionUpload::new());
+
+        let ctx = ServiceContext::collection("media", &media).build();
+        let snapshot = json!({ "url": "/uploads/media/gone.png" });
+
+        assert!(missing_snapshot_files(&ctx, &snapshot).is_empty());
     }
 
     /// Read hooks that allow every access check and strip nothing.

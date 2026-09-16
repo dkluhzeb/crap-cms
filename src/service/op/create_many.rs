@@ -10,7 +10,7 @@ use crate::{
 
 use crate::core::Builder;
 
-use super::Operation;
+use super::{Operation, locale::write_locale_ctx};
 
 /// Owned arguments for [`CreateMany`]. Items carry per-item policed
 /// passwords (auth seeding); the service chokepoint validates and hashes.
@@ -54,7 +54,7 @@ impl Operation for CreateMany {
             draft: args.draft,
             max_documents: args.max_documents,
             deadline: args.deadline,
-            locale_ctx: args.locale_ctx,
+            locale_ctx: write_locale_ctx(args.locale_ctx)?,
         };
 
         create_many(ctx, &args.items, &opts)

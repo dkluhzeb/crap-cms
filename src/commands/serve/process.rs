@@ -5,16 +5,15 @@ use anyhow::bail;
 use anyhow::{Context as _, Result};
 use std::{env, path::Path, process};
 #[cfg(unix)]
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{fs, time::Duration};
 #[cfg(unix)]
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::cli;
 #[cfg(unix)]
-use crate::commands::helpers::send_signal;
+use crate::commands::helpers::{
+    STOP_DEADLINE_SOURCE, force_kill, send_signal, stop_deadline, wait_for_exit,
+};
 
 use super::pid::write_pid_file;
 #[cfg(unix)]
@@ -110,39 +109,11 @@ pub fn detach(
     Ok(())
 }
 
-/// Poll `predicate` until it returns `false` or the timeout elapses.
-///
-/// Returns `true` iff the predicate transitioned to `false` before the
-/// deadline, `false` iff the timeout elapsed first. The predicate is called
-/// once immediately, then at each `poll_interval` until the deadline.
+/// The PID of the running detached instance, or an error naming why there is
+/// none to stop. A PID file left behind by a process that is gone is removed
+/// on the way out.
 #[cfg(unix)]
-fn wait_until_false<F>(timeout: Duration, poll_interval: Duration, mut predicate: F) -> bool
-where
-    F: FnMut() -> bool,
-{
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if !predicate() {
-            return true;
-        }
-
-        thread::sleep(poll_interval);
-    }
-
-    !predicate()
-}
-
-/// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
-///
-/// # Errors
-///
-/// Returns an error if the config dir is invalid, no PID file is found, the
-/// process can't be signalled, or it fails to exit after both signals.
-#[cfg(unix)]
-pub fn stop(config_dir: &Path) -> Result<()> {
-    validate_config_dir(config_dir)?;
-
+fn running_pid(config_dir: &Path) -> Result<u32> {
     let pid = read_pid(config_dir).context(
         "No PID file found — is there a detached instance running?\n\
          Start one with: crap-cms serve --detach",
@@ -154,35 +125,55 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         bail!("Process {pid} is not running (stale PID file removed)");
     }
 
+    Ok(pid)
+}
+
+/// The instance outlasted its stop deadline: force-kill it and clean up.
+#[cfg(unix)]
+fn force_stop(config_dir: &Path, pid: u32, grace: Duration) {
+    cli::warning(&format!(
+        "Process {pid} did not stop within {}s, sending SIGKILL",
+        grace.as_secs()
+    ));
+
+    force_kill(pid);
+    remove_pid_file(config_dir);
+
+    cli::success(&format!("Force-stopped crap-cms (PID {pid})"));
+}
+
+/// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
+///
+/// # Errors
+///
+/// Returns an error if the config dir is invalid, no PID file is found, or the
+/// process can't be signalled.
+#[cfg(unix)]
+pub fn stop(config_dir: &Path) -> Result<()> {
+    validate_config_dir(config_dir)?;
+
+    let pid = running_pid(config_dir)?;
+
     // Send SIGTERM for graceful shutdown.
     send_signal(pid, libc::SIGTERM)?;
 
-    // Wait for graceful shutdown (up to 10 seconds).
-    let exited = wait_until_false(Duration::from_secs(10), Duration::from_millis(100), || {
-        is_process_running(pid)
-    });
+    let grace = stop_deadline(config_dir);
 
-    if exited {
-        remove_pid_file(config_dir);
+    info!(
+        "Waiting up to {}s for crap-cms {pid} to finish its in-flight requests and job runs \
+         ({STOP_DEADLINE_SOURCE})",
+        grace.as_secs()
+    );
 
-        cli::success(&format!("Stopped crap-cms (PID {pid})"));
+    if !wait_for_exit(pid, grace) {
+        force_stop(config_dir, pid, grace);
 
         return Ok(());
     }
 
-    // Still running — force kill.
-    cli::warning(&format!(
-        "Process {pid} did not stop within 10s, sending SIGKILL"
-    ));
-
-    let _ = send_signal(pid, libc::SIGKILL);
-
-    // Brief wait for the force kill to take effect.
-    thread::sleep(Duration::from_millis(500));
-
     remove_pid_file(config_dir);
 
-    cli::success(&format!("Force-stopped crap-cms (PID {pid})"));
+    cli::success(&format!("Stopped crap-cms (PID {pid})"));
 
     Ok(())
 }
@@ -327,8 +318,6 @@ mod tests {
 
     #[cfg(unix)]
     use crate::commands::serve::pid::pid_file_path;
-    #[cfg(unix)]
-    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     #[cfg(unix)]
@@ -371,30 +360,6 @@ mod tests {
         status(tmp.path()).unwrap();
         // Stale PID file should be removed
         assert!(!pid_file_path(tmp.path()).exists());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn wait_until_false_returns_true_when_predicate_flips() {
-        let counter = AtomicU32::new(0);
-        let exited = wait_until_false(Duration::from_secs(5), Duration::from_millis(10), || {
-            counter.fetch_add(1, Ordering::SeqCst) < 3
-        });
-        assert!(exited, "predicate flipped false, should return true");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn wait_until_false_returns_false_when_predicate_stays_true() {
-        // Simulate a process that never responds to SIGTERM — the 10s wait
-        // must elapse so the caller issues SIGKILL. We use a short timeout
-        // in the test so it runs quickly.
-        let exited = wait_until_false(
-            Duration::from_millis(100),
-            Duration::from_millis(10),
-            || true,
-        );
-        assert!(!exited, "predicate never flipped, should return false");
     }
 
     #[test]

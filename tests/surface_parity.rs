@@ -86,10 +86,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // Upload-field handling reads the *old* document's fields to plan file
     // cleanup on update — an internal read on an already access-gated write
     // path, not a user-facing content read.
-    (
-        "admin/handlers/collections/shared/upload.rs",
-        "query::find_by_id(",
-    ),
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
 ];

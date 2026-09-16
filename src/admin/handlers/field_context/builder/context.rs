@@ -2,14 +2,48 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::from_str;
-
 use crate::{
-    admin::context::field::{FieldContext, SelectOption},
+    admin::{
+        context::field::{FieldContext, SelectOption},
+        handlers::{field_context::tag_values, shared::renders_in_admin_form},
+    },
     core::FieldDefinition,
 };
 
 use super::single::build_single_field_context;
+
+/// The values a Select/Radio field holds: the whole list for `has_many`, the
+/// single stored value otherwise.
+fn selected_values(field: &FieldDefinition, value: &str) -> Vec<String> {
+    if field.has_many {
+        tag_values(value)
+    } else {
+        vec![value.to_string()]
+    }
+}
+
+/// Options for values the field no longer declares, marked `unlisted`.
+///
+/// A stored value outside `options` used to render as nothing: the picker came
+/// back blank and re-saving the form dropped the value. Keeping it as a
+/// selected option shows the editor what the document holds and survives the
+/// round trip.
+fn unlisted_options(field: &FieldDefinition, selected: &[String]) -> Vec<SelectOption> {
+    let mut seen = HashSet::new();
+
+    selected
+        .iter()
+        .filter(|value| !value.is_empty())
+        .filter(|value| !field.options.iter().any(|opt| opt.value == **value))
+        .filter(|value| seen.insert((*value).clone()))
+        .map(|value| SelectOption {
+            label: value.clone(),
+            value: value.clone(),
+            selected: true,
+            unlisted: true,
+        })
+        .collect()
+}
 
 /// Build select/radio options with `selected` flags, handling both single and
 /// multi-select. Returns `(options, is_has_many)`.
@@ -17,33 +51,22 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
     field: &FieldDefinition,
     value: &str,
 ) -> (Vec<SelectOption>, bool) {
-    if field.has_many {
-        let selected_values: HashSet<String> = from_str(value).unwrap_or_default();
+    let selected = selected_values(field, value);
 
-        let options: Vec<_> = field
-            .options
-            .iter()
-            .map(|opt| SelectOption {
-                label: opt.label.resolve_default().to_string(),
-                value: opt.value.clone(),
-                selected: selected_values.contains(&opt.value),
-            })
-            .collect();
+    let mut options: Vec<SelectOption> = field
+        .options
+        .iter()
+        .map(|opt| SelectOption {
+            label: opt.label.resolve_default().to_string(),
+            value: opt.value.clone(),
+            selected: selected.contains(&opt.value),
+            unlisted: false,
+        })
+        .collect();
 
-        (options, true)
-    } else {
-        let options: Vec<_> = field
-            .options
-            .iter()
-            .map(|opt| SelectOption {
-                label: opt.label.resolve_default().to_string(),
-                value: opt.value.clone(),
-                selected: opt.value == value,
-            })
-            .collect();
+    options.extend(unlisted_options(field, &selected));
 
-        (options, false)
-    }
+    (options, field.has_many)
 }
 
 /// Build field context objects for template rendering.
@@ -78,20 +101,32 @@ pub fn build_field_contexts(
 }
 
 /// The top-level field defs that become form fields, in order — the **single
-/// source of truth** for "which fields are visible." Shared by
+/// source of truth** for "which top-level fields are visible." Shared by
 /// [`build_field_contexts`], `apply_display_conditions`, and
 /// `enrich_field_contexts` so their per-field `zip`s stay aligned: `field.hidden`
 /// is always dropped, `admin.hidden` only when `filter_hidden`. Duplicating this
 /// filter (as these three sites used to) silently desyncs the zips when a
 /// top-level hidden field shifts the pairing.
+///
+/// With `filter_hidden` the question is [`renders_in_admin_form`] — the same
+/// answer the submit-side normalizers use to decide what an absent key means.
+///
+/// Sub-fields ask
+/// [`admin_form_fields`](crate::admin::handlers::shared::admin_form_fields)
+/// instead, which is that same answer without the toggle: a composite's
+/// children are only ever built for the form, so a hidden one is rendered at no
+/// depth.
 pub(in crate::admin::handlers::field_context) fn visible_field_defs(
     field_defs: &[FieldDefinition],
     filter_hidden: bool,
 ) -> impl Iterator<Item = &FieldDefinition> {
-    field_defs
-        .iter()
-        .filter(|f| !f.hidden)
-        .filter(move |f| !filter_hidden || !f.admin.hidden)
+    field_defs.iter().filter(move |f| {
+        if filter_hidden {
+            renders_in_admin_form(f)
+        } else {
+            !f.hidden
+        }
+    })
 }
 
 #[cfg(test)]
@@ -99,8 +134,82 @@ mod tests {
     use super::*;
     use crate::{
         admin::handlers::field_context::test_helpers::{build_value_contexts, make_field},
-        core::field::{BlockDefinition, FieldTab, FieldType, LocalizedString, RelationshipConfig},
+        core::field::{
+            BlockDefinition, FieldTab, FieldType, LocalizedString, RelationshipConfig,
+            SelectOption as CoreSelectOption,
+        },
     };
+
+    // ── Select options ────────────────────────────────────────────────
+
+    fn choice(name: &str, has_many: bool, values: &[&str]) -> FieldDefinition {
+        let mut field = make_field(name, FieldType::Select);
+        field.has_many = has_many;
+        field.options = values
+            .iter()
+            .map(|v| CoreSelectOption::new(LocalizedString::Plain(v.to_uppercase()), *v))
+            .collect();
+
+        field
+    }
+
+    /// Regression: a stored value the field no longer declares rendered as
+    /// nothing — the picker came back blank and re-saving the form dropped the
+    /// value. It is kept as a selected option, marked `unlisted`.
+    #[test]
+    fn a_stored_value_outside_the_options_is_kept_and_marked() {
+        let field = choice("status", false, &["draft"]);
+        let (options, has_many) = build_select_options(&field, "gone");
+
+        assert!(!has_many);
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            (
+                options[0].value.as_str(),
+                options[0].selected,
+                options[0].unlisted
+            ),
+            ("draft", false, false)
+        );
+        assert_eq!(
+            (
+                options[1].value.as_str(),
+                options[1].label.as_str(),
+                options[1].selected,
+                options[1].unlisted
+            ),
+            ("gone", "gone", true, true),
+            "the submitted value survives the re-render, marked as undeclared"
+        );
+    }
+
+    /// The same for a `has_many` picker, and a repeated undeclared value is
+    /// kept once. An empty value never becomes an option — that is the
+    /// template's placeholder.
+    #[test]
+    fn unlisted_values_are_deduped_and_never_empty() {
+        let field = choice("tags", true, &["a"]);
+        let (options, has_many) = build_select_options(&field, r#"["a","x","x",""]"#);
+
+        assert!(has_many);
+        let unlisted: Vec<&str> = options
+            .iter()
+            .filter(|o| o.unlisted)
+            .map(|o| o.value.as_str())
+            .collect();
+        assert_eq!(unlisted, vec!["x"]);
+        assert!(options[0].selected, "a declared stored value is selected");
+    }
+
+    /// A declared option list with nothing stored is untouched.
+    #[test]
+    fn declared_options_are_unchanged_without_a_stored_value() {
+        let field = choice("status", false, &["draft", "live"]);
+        let (options, _) = build_select_options(&field, "");
+
+        assert_eq!(options.len(), 2);
+        assert!(options.iter().all(|o| !o.unlisted && !o.selected));
+    }
 
     // ── Array / Blocks sub-field enrichment ───────────────────────────
 
@@ -126,11 +235,8 @@ mod tests {
     fn build_field_contexts_array_select_sub_field_includes_options() {
         let mut select_sf = make_field("status", FieldType::Select);
         select_sf.options = vec![
-            crate::core::SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
-            crate::core::SelectOption::new(
-                LocalizedString::Plain("Published".to_string()),
-                "published",
-            ),
+            CoreSelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+            CoreSelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
         ];
         let mut arr_field = make_field("items", FieldType::Array);
         arr_field.fields = vec![select_sf];
@@ -173,8 +279,8 @@ mod tests {
     fn build_field_contexts_blocks_select_sub_field_includes_options() {
         let mut select_sf = make_field("align", FieldType::Select);
         select_sf.options = vec![
-            crate::core::SelectOption::new(LocalizedString::Plain("Left".to_string()), "left"),
-            crate::core::SelectOption::new(LocalizedString::Plain("Center".to_string()), "center"),
+            CoreSelectOption::new(LocalizedString::Plain("Left".to_string()), "left"),
+            CoreSelectOption::new(LocalizedString::Plain("Center".to_string()), "center"),
         ];
         let mut blocks_field = make_field("layout", FieldType::Blocks);
         blocks_field.blocks = vec![BlockDefinition::new("section", vec![select_sf])];
@@ -620,8 +726,8 @@ mod tests {
     fn build_field_contexts_select_marks_selected_option() {
         let mut sel = make_field("color", FieldType::Select);
         sel.options = vec![
-            crate::core::SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
-            crate::core::SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
+            CoreSelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+            CoreSelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
         ];
         let mut values = HashMap::new();
         values.insert("color".to_string(), "blue".to_string());
@@ -926,7 +1032,7 @@ mod tests {
         assert_eq!(tags_arr.len(), 2);
         assert_eq!(tags_arr[0], "rust");
         assert_eq!(tags_arr[1], "lua");
-        assert_eq!(sub[0]["value"], "rust,lua");
+        assert_eq!(sub[0]["value"], r#"["rust","lua"]"#);
     }
 
     // ── Position / labels / readonly ──────────────────────────────────

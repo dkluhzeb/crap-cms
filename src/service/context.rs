@@ -15,6 +15,7 @@ use crate::{
         LiveMode, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         SharedStorage,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
+        upload::FALLBACK_MAX_ATTEMPTS,
     },
     db::{
         BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
@@ -23,7 +24,7 @@ use crate::{
     hooks::HookRunner,
     hooks::lifecycle::PublishEventInput,
     service::{
-        AppInfra, ServiceError,
+        AppInfra, ServiceError, VerificationRecipient,
         hooks::{ReadHooks, WriteHooks},
         types::{EmailContext, EventQueue, PendingEvent, PendingVerification, VerificationQueue},
     },
@@ -137,6 +138,11 @@ pub struct ServiceContext<'a> {
     /// is *always* enforced, so a context that forgets to thread it degrades to
     /// the default rules, never to no enforcement.
     pub password_policy: Option<&'a PasswordPolicy>,
+    /// `max_attempts` the image-conversion jobs this write queues are inserted
+    /// with. Defaults to [`FALLBACK_MAX_ATTEMPTS`] for a context built without
+    /// infra, so a forgotten thread-through degrades to the fallback retry
+    /// budget, never to "no retries".
+    pub image_max_attempts: u32,
 }
 
 impl<'a> ServiceContext<'a> {
@@ -354,21 +360,43 @@ impl<'a> ServiceContext<'a> {
     /// Send a verification email if this is an auth collection with
     /// `verify_email` enabled and the document has an email field.
     /// No-op when email context is not attached.
-    pub fn maybe_send_verification(&self, doc: &Document) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the token or the email job can't be written on
+    /// this context's connection — which rolls the account's own write back,
+    /// rather than committing an account nobody can ever verify.
+    pub fn maybe_send_verification(&self, doc: &Document) -> Result<(), ServiceError> {
         let Def::Collection(def) = &self.def else {
-            return;
+            return Ok(());
         };
 
         let should_verify =
             def.is_auth_collection() && def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
         if !should_verify {
-            return;
+            return Ok(());
         }
 
         let Some(email) = doc.get_str("email") else {
-            return;
+            return Ok(());
         };
+
+        // Conn mode: the token and the email job go on the caller's
+        // connection, so for a write transaction they commit with the account
+        // itself. Minting them afterwards from a detached task leaves a window
+        // in which a stop or crash yields a committed account with no
+        // verification token and nothing queued to retry.
+        if let (Some(conn), Some(email_ctx)) = (self.conn, &self.email_ctx) {
+            return email_ctx.verification_mailer().issue_and_queue(
+                conn,
+                &VerificationRecipient {
+                    slug: self.slug,
+                    user_id: &doc.id,
+                    email,
+                },
+            );
+        }
 
         if let (Some(pool), Some(email_ctx)) = (self.pool, &self.email_ctx) {
             email_ctx.send_verification(
@@ -377,9 +405,12 @@ impl<'a> ServiceContext<'a> {
                 doc.id.to_string(),
                 email.to_string(),
             );
-            return;
+
+            return Ok(());
         }
 
+        // No email context here — the enclosing scope owns one and flushes
+        // this queue after its commit.
         if let Some(ref queue) = self.verification_queue {
             queue.borrow_mut().push(PendingVerification {
                 slug: self.slug.to_string(),
@@ -387,6 +418,8 @@ impl<'a> ServiceContext<'a> {
                 email: email.to_string(),
             });
         }
+
+        Ok(())
     }
 
     /// Clear the populate cache after a write operation.
@@ -578,6 +611,7 @@ pub struct ServiceContextBuilder<'a> {
     invalidation_transport: Option<SharedInvalidationTransport>,
     locale_config: Option<&'a LocaleConfig>,
     password_policy: Option<&'a PasswordPolicy>,
+    image_max_attempts: u32,
 }
 
 impl<'a> ServiceContextBuilder<'a> {
@@ -607,6 +641,7 @@ impl<'a> ServiceContextBuilder<'a> {
             invalidation_transport: None,
             locale_config: None,
             password_policy: None,
+            image_max_attempts: FALLBACK_MAX_ATTEMPTS,
         }
     }
 
@@ -630,6 +665,7 @@ impl<'a> ServiceContextBuilder<'a> {
         self.email_ctx = Some(infra.email.clone());
         self.locale_config = Some(&infra.locale_config);
         self.password_policy = Some(&infra.password_policy);
+        self.image_max_attempts = infra.image_max_attempts;
         self
     }
 
@@ -811,6 +847,15 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// `max_attempts` for image-conversion jobs this context's writes queue.
+    /// Set from [`AppInfra`] by [`Self::infra`]; forwarded to a child context
+    /// by [`Self::inherit_write_infra`].
+    #[must_use]
+    pub fn image_max_attempts(mut self, attempts: u32) -> Self {
+        self.image_max_attempts = attempts;
+        self
+    }
+
     /// Inherit the write-infrastructure fields shared by every pool-mode
     /// `inner_ctx` rebuild — `user`, `override_access`, `cache`,
     /// `event_transport`, and `password_policy` — from a parent context in one
@@ -829,6 +874,7 @@ impl<'a> ServiceContextBuilder<'a> {
             .populate_singleflight(parent.populate_singleflight.clone())
             .event_transport(parent.event_transport.clone())
             .password_policy(parent.password_policy)
+            .image_max_attempts(parent.image_max_attempts)
     }
 
     pub fn build(self) -> ServiceContext<'a> {
@@ -857,6 +903,7 @@ impl<'a> ServiceContextBuilder<'a> {
             def: self.def,
             locale_config: self.locale_config,
             password_policy: self.password_policy,
+            image_max_attempts: self.image_max_attempts,
         }
     }
 }

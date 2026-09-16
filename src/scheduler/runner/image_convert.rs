@@ -11,7 +11,7 @@ use crate::{
     core::{
         JobRun,
         event::EventOperation,
-        upload::{self, ImageConvertJobData, SharedStorage},
+        upload::{self, ImageConvertJobData, SharedStorage, served_url},
     },
     db::{
         DbConnection, DbPool, DbValue, LocaleContext, query,
@@ -118,19 +118,14 @@ pub(super) fn execute_system_image_convert(
     Ok(())
 }
 
-/// Write a finished conversion's URL to the document's column — and, for a
-/// collection with timestamps, `updated_at`, so the document reads as changed.
-///
-/// A purge only removes *pending* and *failed* conversions, so a conversion
-/// already running when its document is purged finishes against a row that is
-/// gone. The UPDATE then matches nothing and the derivative it just wrote would
-/// stay in storage forever with nothing referencing it — so it is deleted here.
-fn write_converted_url(
+/// The `SET` clauses of the completion write and their parameters. A
+/// collection with timestamps also gets `updated_at`, so the document reads as
+/// changed.
+fn converted_url_sets(
     conn: &dyn DbConnection,
     data: &ImageConvertJobData,
     timestamps: bool,
-    storage: &SharedStorage,
-) -> Result<()> {
+) -> (Vec<String>, Vec<DbValue>) {
     let mut sets = vec![format!("\"{}\" = {}", data.url_column, conn.placeholder(1))];
     let mut params = vec![DbValue::Text(data.url_value.clone())];
 
@@ -139,15 +134,71 @@ fn write_converted_url(
         params.push(DbValue::Text(utc_now()));
     }
 
-    let id_placeholder = conn.placeholder(params.len() + 1);
+    (sets, params)
+}
+
+/// The document column holding this conversion's source image URL, paired with
+/// the value it must still hold for the conversion to describe the document as
+/// it now stands.
+///
+/// A conversion already running when the document's file is replaced finishes
+/// against the new row, and without this would write the *old* file's
+/// derivative URL over the new file's. Every size image is named after the
+/// upload's unique stem, so a replacement rewrites the size column — the row
+/// still pointing at this job's source is exactly what makes the write current.
+///
+/// `None` for a payload whose `url_column` is not the `{size}_{format}_url`
+/// the upload pipeline produces (a job queued by an older format): such a job
+/// keeps the unguarded write it was enqueued with rather than never landing.
+fn source_url_guard(data: &ImageConvertJobData) -> Option<(String, String)> {
+    let size = data
+        .url_column
+        .strip_suffix(&format!("_{}_url", data.format))?;
+
+    let column = format!("{size}_url");
+    if !query::is_valid_identifier(&column) {
+        return None;
+    }
+
+    Some((column, served_url(&data.source_path)))
+}
+
+/// Write a finished conversion's URL to the document's column — and, for a
+/// collection with timestamps, `updated_at`, so the document reads as changed.
+///
+/// The write applies only while the document still references this job's
+/// source image. Two things break that: a purge removes only *pending* and
+/// *failed* conversions, so one already running finishes against a row that is
+/// gone; and a replacement upload rewrites the size columns, so a conversion
+/// of the previous file finishes against a row it no longer describes. Either
+/// way the UPDATE matches nothing and the derivative just written would sit in
+/// storage forever with nothing referencing it — so it is deleted here.
+fn write_converted_url(
+    conn: &dyn DbConnection,
+    data: &ImageConvertJobData,
+    timestamps: bool,
+    storage: &SharedStorage,
+) -> Result<()> {
+    let (sets, mut params) = converted_url_sets(conn, data, timestamps);
+
+    let mut wheres = vec![format!("id = {}", conn.placeholder(params.len() + 1))];
     params.push(DbValue::Text(data.document_id.clone()));
+
+    if let Some((column, expected)) = source_url_guard(data) {
+        wheres.push(format!(
+            "\"{column}\" = {}",
+            conn.placeholder(params.len() + 1)
+        ));
+        params.push(DbValue::Text(expected));
+    }
 
     let updated = conn
         .execute(
             &format!(
-                "UPDATE \"{}\" SET {} WHERE id = {id_placeholder}",
+                "UPDATE \"{}\" SET {} WHERE {}",
                 data.collection,
-                sets.join(", ")
+                sets.join(", "),
+                wheres.join(" AND ")
             ),
             &params,
         )
@@ -160,12 +211,14 @@ fn write_converted_url(
     Ok(())
 }
 
-/// Remove a derivative whose document no longer exists. Best-effort: the object
-/// is already unreferenced, so a failed delete is logged and the job still
-/// completes rather than retrying a conversion that can never land.
+/// Remove a derivative nothing will reference — its document is gone, or the
+/// document's file has since been replaced so the row no longer points at this
+/// conversion's source. Best-effort: the object is already unreferenced, so a
+/// failed delete is logged and the job still completes rather than retrying a
+/// conversion that can never land.
 fn discard_orphaned_derivative(data: &ImageConvertJobData, storage: &SharedStorage) {
     info!(
-        "Image-convert for {}/{} found no row — discarding {}",
+        "Image-convert for {}/{} no longer applies — discarding {}",
         data.collection, data.document_id, data.target_path
     );
 
@@ -252,14 +305,30 @@ mod tests {
 
     /// Regression: a finished image conversion wrote its URL without touching
     /// `updated_at`, so the document looked unchanged to readers and caches.
+    /// A media table shaped like an upload collection with one image size:
+    /// the size's own URL column plus the format derivative's.
+    fn media_table(rows: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE media (
+                 id TEXT PRIMARY KEY,
+                 thumbnail_url TEXT,
+                 thumbnail_webp_url TEXT,
+                 updated_at TEXT
+             );
+             {rows}"
+        ))
+        .unwrap();
+
+        conn
+    }
+
     #[test]
     fn a_converted_url_bumps_updated_at() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE media (id TEXT PRIMARY KEY, thumbnail_webp_url TEXT, updated_at TEXT);
-             INSERT INTO media (id, updated_at) VALUES ('m1', '2000-01-01T00:00:00.000Z');",
-        )
-        .unwrap();
+        let conn = media_table(
+            "INSERT INTO media (id, thumbnail_url, updated_at) \
+             VALUES ('m1', '/uploads/a.png', '2000-01-01T00:00:00.000Z');",
+        );
         let data = convert_job("media", "m1");
         let tmp = tempfile::tempdir().unwrap();
         let storage = storage_with_derivative(&tmp);
@@ -294,9 +363,7 @@ mod tests {
     /// storage forever, referenced by nothing.
     #[test]
     fn a_conversion_whose_document_is_gone_discards_its_derivative() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE media (id TEXT PRIMARY KEY, thumbnail_webp_url TEXT)")
-            .unwrap();
+        let conn = media_table("");
         let tmp = tempfile::tempdir().unwrap();
         let storage = storage_with_derivative(&tmp);
 
@@ -312,6 +379,87 @@ mod tests {
             !storage.exists("a.webp").unwrap(),
             "the orphaned derivative must be removed from storage"
         );
+    }
+
+    /// Regression: a conversion already running when the document's file was
+    /// replaced finished against the new row and wrote the *old* file's
+    /// derivative URL over the new file's — leaving the document serving a
+    /// derivative of an image it no longer holds. The write now applies only
+    /// while the row still points at the source this job converted.
+    #[test]
+    fn a_conversion_of_a_replaced_file_writes_nothing_and_discards_its_derivative() {
+        // `m1`'s thumbnail is `b.png` now; the running job converted `a.png`.
+        let conn = media_table(
+            "INSERT INTO media (id, thumbnail_url, thumbnail_webp_url) \
+             VALUES ('m1', '/uploads/b.png', '/uploads/b.webp');",
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = storage_with_derivative(&tmp);
+
+        write_converted_url(&conn, &convert_job("media", "m1"), false, &storage).unwrap();
+
+        let row = DbConnection::query_one(
+            &conn,
+            "SELECT thumbnail_webp_url FROM media WHERE id = 'm1'",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            row.get_string("thumbnail_webp_url").unwrap(),
+            "/uploads/b.webp",
+            "the current file's derivative must not be overwritten"
+        );
+        assert!(
+            !storage.exists("a.webp").unwrap(),
+            "the superseded derivative must be removed from storage"
+        );
+    }
+
+    /// The guard names the size's own URL column, derived from the
+    /// `{size}_{format}_url` column the upload pipeline writes — and gives up
+    /// on a payload that does not follow that shape.
+    #[test]
+    fn the_guard_names_the_size_column_of_a_pipeline_payload() {
+        assert_eq!(
+            source_url_guard(&convert_job("media", "m1")),
+            Some(("thumbnail_url".to_string(), "/uploads/a.png".to_string()))
+        );
+
+        let mut older = convert_job("media", "m1");
+        older.url_column = "sizes__medium__formats__webp__url".into();
+        assert_eq!(source_url_guard(&older), None);
+    }
+
+    /// A job queued by an older format carries no size column to match on, so
+    /// it keeps the unguarded write rather than never landing.
+    #[test]
+    fn a_payload_without_a_size_column_keeps_the_unguarded_write() {
+        let conn = media_table(
+            "INSERT INTO media (id, thumbnail_url) VALUES ('m1', '/uploads/elsewhere.png');",
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = storage_with_derivative(&tmp);
+
+        // `thumbnail_webp_url` does not end in `_avif_url`, so no size column
+        // can be derived from it.
+        let mut older = convert_job("media", "m1");
+        older.format = "avif".into();
+
+        write_converted_url(&conn, &older, false, &storage).unwrap();
+
+        let row = DbConnection::query_one(
+            &conn,
+            "SELECT thumbnail_webp_url FROM media WHERE id = 'm1'",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            row.get_string("thumbnail_webp_url").unwrap(),
+            "/uploads/a.webp"
+        );
+        assert!(storage.exists("a.webp").unwrap());
     }
 
     /// An upload collection with one image size and an array field, live in

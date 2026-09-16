@@ -154,6 +154,19 @@ input[type="radio"] {
   accent-color: var(--color-primary);
 }
 
+/* A value the field no longer declares, kept so re-saving doesn't drop it.
+   The option's text already names it; this dims the choice so it doesn't read
+   as an equal option. Option styling is honoured by some browsers only, which
+   is why the marker is in the text and not only here. */
+.form__radio-label:has([data-unlisted]) {
+  color: var(--text-tertiary);
+}
+
+option[data-unlisted] {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
 .form__help {
   font-size: var(--text-xs);
   color: var(--text-tertiary);

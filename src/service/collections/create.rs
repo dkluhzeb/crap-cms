@@ -38,10 +38,20 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
     run_pool_write(
         ctx,
         None,
-        |inner| create_document_in_conn(inner, input),
+        |inner| {
+            let result = create_document_in_conn(inner, input)?;
+
+            // Inside the transaction, not after it: the account, its
+            // verification token, and the queued email commit together or
+            // not at all. Minting the token post-commit leaves a window in
+            // which a stop or crash yields an account nobody can verify and
+            // nothing queued to retry.
+            inner.maybe_send_verification(&result.0)?;
+
+            Ok(result)
+        },
         |ctx, result| {
             ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
-            ctx.maybe_send_verification(&result.0);
         },
     )
 }
@@ -53,7 +63,7 @@ fn create_document_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
     ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
-    ctx.maybe_send_verification(&result.0);
+    ctx.maybe_send_verification(&result.0)?;
 
     Ok(result)
 }

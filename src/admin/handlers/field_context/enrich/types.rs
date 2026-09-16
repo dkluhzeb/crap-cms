@@ -22,7 +22,7 @@ use crate::{
                 inject_lang_values_from_row, inject_timezone_values_from_row,
                 locale_locked_display,
             },
-            shared::compute_row_label,
+            shared::{admin_form_fields, compute_row_label},
         },
     },
     core::{
@@ -205,9 +205,7 @@ fn build_array_row_sub_fields(
 ) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
-    let mut sub_fields: Vec<FieldContext> = field_def
-        .fields
-        .iter()
+    let mut sub_fields: Vec<FieldContext> = admin_form_fields(&field_def.fields)
         .map(|sf| {
             let raw_value = extract_sub_field_value(sf, row, row_obj);
 
@@ -450,9 +448,7 @@ fn build_blocks_row_sub_fields(
 ) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
-    let mut sub_fields: Vec<FieldContext> = block_def
-        .fields
-        .iter()
+    let mut sub_fields: Vec<FieldContext> = admin_form_fields(&block_def.fields)
         .map(|sf| {
             let raw_value = extract_sub_field_value(sf, row, row_obj);
 

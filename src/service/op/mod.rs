@@ -37,6 +37,7 @@ mod delete_many;
 mod find;
 mod find_by_id;
 mod get_global;
+mod locale;
 mod undelete;
 mod unpublish;
 mod update;
@@ -56,6 +57,9 @@ pub use delete_many::{DeleteMany, DeleteManyArgs};
 pub use find::{Find, FindArgs};
 pub use find_by_id::{FindById, FindByIdArgs};
 pub use get_global::{GetGlobal, GetGlobalArgs};
+/// The all-locales rejection every write obeys — the upload service reaches a
+/// write without an operation, so it applies the rule from here.
+pub(crate) use locale::reject_all_locales;
 pub use undelete::{Undelete, UndeleteArgs};
 pub use unpublish::{Unpublish, UnpublishArgs};
 pub use update::{Update, UpdateArgs};

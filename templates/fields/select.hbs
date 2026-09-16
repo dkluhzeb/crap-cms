@@ -1,6 +1,6 @@
 {{#> partials/field}}
   {{#if has_many}}
-    {{#if locale_locked}}
+    {{#if readonly}}
       <input
         type="hidden"
         name="{{name}}"
@@ -16,8 +16,9 @@
           <option
             value="{{this.value}}"
             {{#if this.selected}}selected{{/if}}
+            {{#if this.unlisted}}data-unlisted{{/if}}
           >
-            {{this.label}}
+            {{> partials/option-label}}
           </option>
         {{/each}}
       </select>
@@ -33,14 +34,15 @@
           <option
             value="{{this.value}}"
             {{#if this.selected}}selected{{/if}}
+            {{#if this.unlisted}}data-unlisted{{/if}}
           >
-            {{this.label}}
+            {{> partials/option-label}}
           </option>
         {{/each}}
       </select>
     {{/if}}
   {{else}}
-    {{#if locale_locked}}
+    {{#if readonly}}
       <input
         type="hidden"
         name="{{name}}"
@@ -56,8 +58,9 @@
           <option
             value="{{this.value}}"
             {{#if this.selected}}selected{{/if}}
+            {{#if this.unlisted}}data-unlisted{{/if}}
           >
-            {{this.label}}
+            {{> partials/option-label}}
           </option>
         {{/each}}
       </select>
@@ -73,8 +76,9 @@
           <option
             value="{{this.value}}"
             {{#if this.selected}}selected{{/if}}
+            {{#if this.unlisted}}data-unlisted{{/if}}
           >
-            {{this.label}}
+            {{> partials/option-label}}
           </option>
         {{/each}}
       </select>

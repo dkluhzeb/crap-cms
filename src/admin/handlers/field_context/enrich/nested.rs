@@ -14,10 +14,13 @@ use crate::{
             RelationshipField, RelationshipSelectedItem, RichtextField, RowField, TabsField,
             TextField, TextareaField, UploadField, ValidationAttrs,
         },
-        handlers::field_context::{
-            MAX_FIELD_DEPTH, collect_node_attr_errors,
-            enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
-            locale_locked_display, safe_template_id,
+        handlers::{
+            field_context::{
+                MAX_FIELD_DEPTH, collect_node_attr_errors,
+                enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
+                locale_locked_display, safe_template_id,
+            },
+            shared::admin_form_fields,
         },
     },
     core::{FieldDefinition, FieldType, upload},
@@ -243,12 +246,15 @@ pub fn build_enriched_sub_field_context(
 /// Recursively enrich Upload and Relationship sub-field contexts with options from the database.
 /// Called for sub-fields inside layout containers (Row, Collapsible, Tabs, Group) and
 /// composite fields (Array, Blocks) that can't be enriched during initial context building.
+///
+/// The defs run through [`admin_form_fields`] — the same filter that produced
+/// `sub_fields` — so the `zip` pairs each context with the def it was built from.
 pub fn enrich_nested_fields(
     sub_fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
     ctx: &EnrichCtx,
 ) {
-    for (fc, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
+    for (fc, field_def) in sub_fields.iter_mut().zip(admin_form_fields(field_defs)) {
         match fc {
             FieldContext::Relationship(rf) => {
                 enrich_nested_relationship(rf, field_def, ctx);

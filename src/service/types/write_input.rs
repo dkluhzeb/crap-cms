@@ -4,7 +4,36 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::{core::DocumentFields, db::LocaleContext};
+use crate::{
+    core::{DocumentFields, upload::QueuedConversion},
+    db::LocaleContext,
+};
+
+/// The image conversions the file a write stored still needs, carried into the
+/// write so the job rows are inserted inside the write transaction.
+///
+/// Queueing them afterwards on a second connection is not atomic with the
+/// document: a crash between the commit and the insert leaves the row's
+/// `{size}_{fmt}_url` columns unfilled forever, with nothing left to retry
+/// them.
+///
+/// `Some` with an empty `queued` still means *this write stored a file* — a
+/// format-less upload replaces the previous file just the same, so the
+/// conversions queued for that one are cancelled either way.
+pub struct UploadConversions {
+    pub queued: Vec<QueuedConversion>,
+    pub max_attempts: u32,
+}
+
+impl UploadConversions {
+    #[must_use]
+    pub fn new(queued: Vec<QueuedConversion>, max_attempts: u32) -> Self {
+        Self {
+            queued,
+            max_attempts,
+        }
+    }
+}
 
 /// Wrap each string value in `Value::String` for the form-input boundary.
 ///
@@ -39,6 +68,10 @@ pub struct WriteInput<'a> {
     /// chokepoint strips the derived upload columns from `data` so a caller
     /// can't forge `url`/`*_url`/dimensions. See `CollectionUpload::derived_field_names`.
     pub trusted_upload_metadata: bool,
+    /// Set by the upload write when it stored a file: the conversions that file
+    /// queued, inserted inside the write transaction. `None` on every write
+    /// that stored no file.
+    pub upload_conversions: Option<UploadConversions>,
 }
 
 impl<'a> WriteInput<'a> {
@@ -56,6 +89,7 @@ pub struct WriteInputBuilder<'a> {
     pub(in crate::service) draft: bool,
     pub(in crate::service) ui_locale: Option<String>,
     pub(in crate::service) trusted_upload_metadata: bool,
+    pub(in crate::service) upload_conversions: Option<UploadConversions>,
 }
 
 impl<'a> WriteInputBuilder<'a> {
@@ -67,6 +101,7 @@ impl<'a> WriteInputBuilder<'a> {
             draft: false,
             ui_locale: None,
             trusted_upload_metadata: false,
+            upload_conversions: None,
         }
     }
 
@@ -103,6 +138,15 @@ impl<'a> WriteInputBuilder<'a> {
         self
     }
 
+    /// Carry the conversions the stored file queued into the write transaction.
+    /// Setting it (even to an empty list) marks the write as one that stored a
+    /// file, which cancels the conversions still queued for the previous one.
+    pub fn upload_conversions(mut self, conversions: Option<UploadConversions>) -> Self {
+        self.upload_conversions = conversions;
+
+        self
+    }
+
     pub fn build(self) -> WriteInput<'a> {
         WriteInput {
             data: self.data,
@@ -111,6 +155,7 @@ impl<'a> WriteInputBuilder<'a> {
             draft: self.draft,
             ui_locale: self.ui_locale,
             trusted_upload_metadata: self.trusted_upload_metadata,
+            upload_conversions: self.upload_conversions,
         }
     }
 }

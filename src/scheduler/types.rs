@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     config::JobsConfig,
@@ -62,4 +62,8 @@ pub(super) struct TickJobConfig {
     /// [`AppInfra`] so job writes publish live-update events and invalidate
     /// the populate cache like every other surface.
     pub lua_infra: LuaCrudInfra,
+    /// Tracker every job task is spawned on, so a shutdown can wait for the
+    /// runs already in flight instead of dropping them mid-transaction.
+    /// Cloning is cheap (the tracker is internally shared).
+    pub job_tasks: TaskTracker,
 }

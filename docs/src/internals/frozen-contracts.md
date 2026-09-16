@@ -56,6 +56,26 @@ freeze is unconditional.
 
   A missing value stays missing: only the admin form reads a checkbox absent
   from a submitted row as unchecked, because HTML omits unchecked boxes.
+
+  The one-time conversion that brings existing rows to this form reads both
+  shapes a scalar has-many list was ever written in: a JSON array, and the
+  **comma-separated string** (`"a,b"`) the admin form stored before. A
+  conversion that only understood the newer shape would leave the older rows
+  as a single-element list holding the whole string — silently wrong data, and
+  unrecoverable once the gate is stamped. Any future conversion of a stored
+  form owes the same debt: read every shape the value was ever written in, not
+  only the one written last.
+- **A stored upload file is deleted when, and only when, no live row, draft or
+  version snapshot of its document references it, after the write commits.**
+  Reference is decided by the same rule that derives keys from a row
+  (`upload_file_entries`) applied to the live row and to every snapshot of the
+  document; there is no stored counter. Pruning a snapshot releases the files
+  it was the last reference to; purge deletes them all.
+- **Publishing takes the latest draft as its base.** An update with
+  `draft = false` while a draft is pending merges the latest draft snapshot
+  under the request's fields at the service write chokepoint, so every
+  surface publishes the same thing; the request wins per field, the write
+  access strip still applies to adopted values.
 - **Timestamp write format is one ISO-8601 `…Z` shape on every backend.** Both
   the app-side clock (`utc_now()`, bound as a parameter) and the SQL "current
   time" expression (`DbConnection::now_expr()`, plus `date_offset_expr()` for job
@@ -92,9 +112,27 @@ freeze is unconditional.
   after.
 - **System tables** (`_crap_meta`, `_crap_migrations`, `_crap_cron_fired`,
   `_crap_user_settings`, `_crap_jobs`) and the `_crap_meta` one-time-migration
-  gate keys (`ref_count_backfilled`, …) — renaming a gate key re-runs the
-  migration on every existing database. The gate **value** is the intended
-  re-run lever; never rename the key.
+  gate keys — renaming a gate key re-runs the migration on every existing
+  database. The gate **value** is the intended re-run lever; never rename the
+  key. The keys in use, every one scoped to a single target so no conversion
+  can be skipped for a collection added later:
+  `ref_count_backfilled:{slug}`, `checkbox_columns_smallint:{slug}`, and —
+  keyed by *table*, so a collection and a global of the same slug cannot share
+  a gate — `legacy_timestamps:{table}`, `nested_values:{table}`,
+  `canonical_text:{table}` (`posts`, `_global_site`, …). Two keys are records,
+  not gates: `locale_config` holds the locale fingerprint (default locale +
+  sorted codes) so startup can warn when the default locale changed against
+  existing data, and `locale_shape:{table}` holds `{version}:{sorted localized
+  columns}` so a flip of a field's `localized` flag moves its values exactly
+  once per flip, in either direction.
+- **A retired gate key is deleted, never left behind.** A database must carry
+  no key naming a pass nothing reads any more — an orphaned whole-database flag
+  is exactly what makes a later-added collection skip its conversion forever.
+  A conversion that replaced an earlier one removes the retired key itself
+  (`legacy_timestamps_normalized`, `nested_timezone_dates:{slug}`); the ones
+  with no surviving owner go in `RETIRED_META_KEYS`, deleted at startup
+  (`ref_count_backfilled`, the whole-database flag the per-slug gates
+  replaced).
 - **Generated SQL identifiers are always quoted.** Every column/table name
   interpolated into generated SQL (CREATE/ALTER/INSERT/UPDATE/SELECT and FTS
   sync) goes through `quote_ident`, so a field named after a SQL reserved word
@@ -119,6 +157,18 @@ freeze is unconditional.
   wall-clock input with the zone; a value that already carries an offset is
   stored as given, so re-saving never shifts a date.
 
+- **When a companion is written depends on whether it gives the value its
+  meaning.** A companion bound to the value — a timezone date's `{field}_tz`,
+  without which the date is ambiguous — is written **whenever the value is**,
+  so the two can never drift apart. Any other companion — a code field's
+  `{field}_lang`, the editor's language pick, which the value is readable
+  without — is written **only when its own key is sent**, so a write that omits
+  it keeps the stored pick instead of clearing it. One table
+  (`companion_descriptors`) carries the rule per companion and every write path
+  reads it; a surface never decides per suffix. `{field}_lang` exists only for a
+  Code field with a non-empty `admin.languages` allow-list — with no allow-list
+  there is nothing to pick from, so no column is created.
+
 - **Version snapshots record localized join fields per locale.** For a
   localized array, blocks or has-many relationship field, a snapshot holds each
   locale's rows under a flat `{field}__{locale}` key (`{group}__{field}__{locale}`
@@ -137,7 +187,9 @@ freeze is unconditional.
   constraint matcher alike, a `like` pattern judged after canonicalization.
   Stored values are rewritten at startup, per collection or global, whenever
   the set of its email and text columns differs from the last pass (gate:
-  `_crap_meta` key `canonical_text:{slug}`, value `{version}:{fingerprint}`);
+  `_crap_meta` key `canonical_text:{table}` — the *table*, so `posts` for a
+  collection and `_global_site` for a global of the same slug cannot share one
+  gate — value `{version}:{fingerprint}`);
   a value colliding once canonical in a unique field or unique index stops
   startup.
 - **Index names are unique per database.** Startup rejects two indexes — of
@@ -199,9 +251,15 @@ changing a representation is a breaking change to every consumer.
   Doc(Box<T>), Id(String) }`), Go `Rel[T]` (struct + custom JSON), TypeScript
   `string | TDocument`, Python `str | T`; a has-many field is a list of that. Do
   not flatten either side back to a bare id.
-- **A single (non-`has_many`) relationship is optional on read**, independent of
-  the write-side `required` flag (it can be absent after soft-delete or
-  access-deny). The optionality is part of the type.
+- **Every field of a read type is optional**, independent of the write-side
+  `required` flag, and in the group and row types nested inside it. A read can
+  omit any key: a draft read returns required fields empty, field read access
+  strips them, and `select` leaves them out. In TypeScript the optionality is
+  also nullable (`?: T | null`) because an empty value reads as `null`; in Go a
+  boolean and a single group read through a pointer, so an absent field is
+  distinguishable from `false` / an empty group. The write (`…Data`) types keep
+  their required fields — a read type is never derived by extending a write
+  type.
 - **`select` narrows to a named type, and Rust/Go are lossless.** Rust
   `enum { …, Other(String) }` (`serde(from/into)`), Go a `string` newtype with
   consts — both must preserve an unknown value, not reject it. TypeScript a
@@ -487,16 +545,47 @@ changing a representation is a breaking change to every consumer.
 - **`_status` is written only where it exists.** Restore and unpublish stamp
   it only for a drafts-enabled collection — an audit-trail collection
   (`versions = { drafts = false }`) has no such column.
-- **A user document on an auth response is a normal `Document`.** `Login`,
-  `VerifyMfa` and `Me` return it hydrated, field-read-stripped and
-  API-hidden-stripped, like every other document on the wire.
+- **A write reports the document in the shape a read returns it.** Every write
+  op — create, update, bulk update, restore-version, undelete, unpublish,
+  global update — passes the document it reports through the same three steps
+  before it reaches the caller, the `after_change` context and the emitted
+  event: `hydrate_reported` (read the join-table rows back, for the flat
+  re-read a write query returns — skipped where the document already carries
+  them, so the join tables are never read twice), `shape_reported` (fold an
+  upload's per-size values into `sizes`), and `strip_reported` (shape, then
+  strip read-denied and hidden fields, judged in the write's locale, falling
+  back to the default locale). A surface must never report a raw write result:
+  a write's response and a read of the same document have to agree, field for
+  field, or a client's types split in two. `shape_reported` alone is for a
+  *system* report (a job writing on nobody's behalf), where stripping is left
+  to per-subscriber event delivery.
+  - **A user document on an auth response is a normal `Document`.** `Login`,
+    `VerifyMfa` and `Me` return it hydrated, field-read-stripped and
+    API-hidden-stripped, like every other document on the wire.
+  - **A draft save reports the draft.** The return value, the `after_change`
+    context and the emitted event all carry the stored draft snapshot stamped
+    `_status = "draft"`; the published row is untouched. A published-only
+    subscriber therefore sees nothing for a draft save.
+- **The read strip runs read-access first, hidden second.** `strip_unreadable`
+  (and its batch and event-payload twins) applies the data-aware field-read
+  access strip *before* removing `api_hidden` fields, so an access rule that
+  branches on the document judges the **whole** document — the order is the
+  contract, not an implementation detail. Stripping hidden fields first would
+  hand the rule a document with holes in it, and the same rule would then
+  decide differently on a read than on a write report.
 - **Changing an email address clears the verified flag** on a collection that
   requires verification.
-
-- **A draft save reports the draft.** The return value, the `after_change`
-  context and the emitted event all carry the stored draft snapshot stamped
-  `_status = "draft"`; the published row is untouched. A published-only
-  subscriber therefore sees nothing for a draft save.
+- **A version read and the stored version row are separate lookups.**
+  `find_stored_version` returns the snapshot **as stored** — every access gate
+  of a version read already enforced (`access.versions`, then the
+  read/draft composite), but no read shaping — and is what a restore writes
+  back. `read_version_snapshot` rewrites that snapshot into the document a read
+  returns: shaped for the caller's locale context (so per-locale `field__xx`
+  keys never reach a caller, and `locale = "all"` yields the per-locale map),
+  then stripped like any read document, with the snapshot itself as the
+  `ctx.document` an access rule judges. A caller that needs both reads the row
+  once and shapes it, rather than selecting it twice; a caller that needs only
+  the read shape must never hand out the stored form.
 - **The draft overlay obeys the lifecycle.** A soft-deleted document's draft
   snapshot is never returned by a live read.
 - **The newest published version survives pruning**, whatever `max_versions`
@@ -682,10 +771,18 @@ changing a representation is a breaking change to every consumer.
   `ServiceError::Internal` so typed errors always propagate.
 - **Invalid-locale policy is intentionally surface-dependent.** Machine APIs
   (gRPC / MCP / Lua) propagate an unparseable `locale` as an error. The admin
-  *rendering* helper (`build_locale_template_data`) logs a warning and falls back
-  to no locale context, so a hand-edited `?locale=` query param degrades the edit
-  page to the default view rather than 500-ing it. The admin picker only ever
-  emits configured locales, so this fallback is reachable only off the happy path.
+  *rendering* helper (`editor_read_ctx`) logs a warning and falls back to the
+  **default-locale** read context, so a hand-edited `?locale=` query param
+  degrades the edit page to the default view rather than 500-ing it — and never
+  leaves a localized read with no context, which would select columns that
+  don't exist. The admin picker only ever emits configured locales, so this
+  fallback is reachable only off the happy path.
+- **One locale-picker shape in the admin template context.** A page exposes the
+  editor locale as exactly `has_editor_locales` / `editor_locale` /
+  `editor_locales`, written by `BasePageContext::with_editor_locale` from the
+  same locale `editor_read_ctx` resolves the page's read context from. There is
+  no second, parallel key set, so an override template cannot bind to a copy
+  that drifts from the locale the page reads and writes in.
 
 ## Access model
 
@@ -824,9 +921,13 @@ changing a representation is a breaking change to every consumer.
 - **Discovery directories** `collections/` `globals/` `jobs/` `hooks/` and the
   `init.lua` entrypoint; the `crap` Lua global.
 - **CLI subcommand + flag names, positional-arg order, and exit codes.**
-  Every error exits **1** — that universal mapping is the contract; the only
-  differentiated codes are `status --check` → 2 on warnings and `update check`
-  → 1 when an update exists. (No other exit codes are reserved; scripts may
+  Every error exits **1** — that universal mapping is the contract; the
+  differentiated codes are `status --check` → **2** when the audit found
+  warnings, `jobs healthcheck` → **2** on warning (recent failures, long-pending
+  or never-run scheduled jobs) and **1** on unhealthy (a stale running job), and
+  `update check` → **1** when an update exists. `2` therefore always means
+  "warnings, not a failure", and `1` keeps its "action needed / failed"
+  meaning across all three. (No other exit codes are reserved; scripts may
   treat any non-zero as failure.) `serve --only` accepts `admin`/`grpc`, with
   `api` kept as a backward-compatible alias of `grpc`. Machine output: `export`
   JSON envelope and `serve --json` (and `--json` is forwarded to the detached
@@ -862,8 +963,11 @@ changing a representation is a breaking change to every consumer.
   absent field left untouched, and indexes the written row for full-text search
   exactly as the service write path does. A field the export omits is preserved;
   a field it includes as `null` is cleared. An export carries every document,
-  trashed ones included (`_deleted_at`), timezone companions (`<field>_tz`) and
-  array/blocks row `id`s, and import writes them back under the same ids. A
+  trashed ones included (`_deleted_at`), **every companion a field stores** — a
+  timezone date's `<field>_tz` and a code field's `<field>_lang`, read from the
+  one companion table rather than a per-suffix list, so a new companion is
+  carried without touching export or import — and array/blocks row `id`s, and
+  import writes them back under the same ids. A
   localized array, blocks or has-many field exports every locale's rows as
   `{ "<locale>": rows }`, the shape of a localized column. An account exported
   with `--include-credentials` carries a `_credentials` object keyed by stored

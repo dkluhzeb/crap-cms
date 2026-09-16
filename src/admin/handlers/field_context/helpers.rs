@@ -3,14 +3,27 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Map, Value, from_str};
+use serde_json::{Map, Value, from_str, json};
 
 use crate::{
-    admin::context::field::{DateField, FieldContext, NonRepeatingChildren},
+    admin::{
+        context::field::{DateField, FieldContext, NonRepeatingChildren},
+        handlers::{field_context::builder::visible_field_defs, shared::admin_form_fields},
+    },
     core::{FieldDefinition, HookRef},
     db::query::helpers::{lang_column, tz_column, utc_to_local},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
+
+/// One element of a multi-value list as the editor sees it. A null element
+/// shows nothing; a number or bool shows as its text.
+fn element_tag(element: &Value) -> Option<String> {
+    match element {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
 
 /// The tags a multi-value field shows: the elements of its stored list — text
 /// or numbers, as a read returns them — as strings. Nulls and a malformed list
@@ -18,13 +31,27 @@ use crate::{
 pub fn tag_values(value: &str) -> Vec<String> {
     from_str::<Vec<Value>>(value)
         .unwrap_or_default()
-        .into_iter()
-        .filter_map(|element| match element {
-            Value::Null => None,
-            Value::String(s) => Some(s),
-            other => Some(other.to_string()),
-        })
+        .iter()
+        .filter_map(element_tag)
         .collect()
+}
+
+/// The same tags for a list a read already returned as JSON, so a caller
+/// holding the parsed value doesn't have to re-serialize it to ask. A list
+/// still in its stored JSON text is parsed first; anything else shows no tags.
+pub fn tag_values_of(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(elements) => elements.iter().filter_map(element_tag).collect(),
+        Value::String(text) => tag_values(text),
+        _ => Vec::new(),
+    }
+}
+
+/// The hidden-input value a tag widget round-trips: the list as a JSON array.
+/// Comma-joining could not represent an element that contains a comma — the
+/// widget split it back into two tags, and the next save stored them that way.
+pub fn tags_input_value(tags: &[String]) -> Value {
+    Value::String(json!(tags).to_string())
 }
 
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
@@ -111,6 +138,9 @@ pub fn split_sidebar_fields(fields: Vec<FieldContext>) -> (Vec<FieldContext>, Ve
 ///
 /// For each sub-field definition that is a date field with `timezone: true`, looks up
 /// `{field_name}_tz` in the parent row and sets `timezone_value` on the corresponding context.
+///
+/// The defs run through [`admin_form_fields`], the same filter the row's
+/// sub-field contexts were built with, so the pairing stays aligned.
 pub fn inject_timezone_values_from_row(
     sub_ctxs: &mut [FieldContext],
     field_defs: &[FieldDefinition],
@@ -120,7 +150,7 @@ pub fn inject_timezone_values_from_row(
         return;
     };
 
-    for (fc, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
+    for (fc, fd) in sub_ctxs.iter_mut().zip(admin_form_fields(field_defs)) {
         if fd.has_tz_companion()
             && let FieldContext::Date(df) = fc
         {
@@ -174,6 +204,11 @@ pub fn date_picker_values(
 
 /// A display date cut to what a picker of `appearance` shows: the date for
 /// `dayOnly`, the date and time for `dayAndTime`, neither otherwise.
+///
+/// `timeOnly` and `monthOnly` deliberately cut to neither: their inputs render
+/// the stored value as it is, and only `dayAndTime` may carry a zone at all
+/// (`parse_date_config` drops `timezone` for every other appearance), so there
+/// is no zone conversion left to cut down for them.
 fn cut_to_appearance(display: &str, appearance: &str) -> (Option<String>, Option<String>) {
     match appearance {
         "dayOnly" => (Some(display.get(..10).unwrap_or(display).to_string()), None),
@@ -210,7 +245,8 @@ fn apply_picker_values(df: &mut DateField, values: (Option<String>, Option<Strin
 /// row and sets `language` on the context (when present and non-empty), plus
 /// emits the `languages` allow-list so the template can render the picker.
 /// Mirrors the timezone pattern; both companions are stored as adjacent JSON
-/// keys when the field is nested inside an array/blocks row.
+/// keys when the field is nested inside an array/blocks row, and both pair
+/// their defs through [`admin_form_fields`] so the alignment holds.
 pub fn inject_lang_values_from_row(
     sub_ctxs: &mut [FieldContext],
     field_defs: &[FieldDefinition],
@@ -220,7 +256,7 @@ pub fn inject_lang_values_from_row(
         return;
     };
 
-    for (fc, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
+    for (fc, fd) in sub_ctxs.iter_mut().zip(admin_form_fields(field_defs)) {
         if !fd.has_lang_companion() {
             continue;
         }
@@ -242,6 +278,13 @@ pub fn inject_lang_values_from_row(
 
 // ── Display conditions ──────────────────────────────────────────────
 
+/// What one display-condition pass needs beyond the fields it walks.
+struct ConditionPass<'a, 'c> {
+    form_data: &'a Value,
+    hook_runner: &'a HookRunner,
+    cond_ctx: &'a ConditionContext<'c>,
+}
+
 /// Evaluate display conditions for field contexts and inject condition data.
 /// For fields with `admin.condition`, calls the Lua function and sets:
 /// - `condition_visible`: initial visibility (bool)
@@ -257,71 +300,117 @@ pub fn apply_display_conditions(
 ) {
     // Same visibility filter `build_field_contexts` used to produce `fields`,
     // so the per-field `zip` below stays aligned (see `visible_field_defs`).
-    let defs: Vec<&FieldDefinition> =
-        super::builder::visible_field_defs(field_defs, filter_hidden).collect();
+    let defs: Vec<&FieldDefinition> = visible_field_defs(field_defs, filter_hidden).collect();
 
-    // Pair each conditioned field with its position in `defs` so results map
-    // back per-field — NOT by ref string, which is no longer unique once two
-    // fields can share a ref with different `options`.
-    let conditioned: Vec<(usize, &HookRef)> = defs
-        .iter()
+    let pass = ConditionPass {
+        form_data,
+        hook_runner,
+        cond_ctx,
+    };
+
+    apply_conditions_to_level(fields, &defs, &pass);
+}
+
+/// The same pass one level down. Sub-field contexts are built from the fields
+/// the form renders, so the defs filter through [`admin_form_fields`] — the
+/// builder's filter — and the pairing holds at every depth.
+fn apply_nested_display_conditions(
+    fields: &mut [FieldContext],
+    field_defs: &[FieldDefinition],
+    pass: &ConditionPass<'_, '_>,
+) {
+    let defs: Vec<&FieldDefinition> = admin_form_fields(field_defs).collect();
+
+    apply_conditions_to_level(fields, &defs, pass);
+}
+
+/// The refs to evaluate at one level, each paired with the `defs` slot it came
+/// from so results map back per-field — NOT by ref string, which is no longer
+/// unique once two fields can share a ref with different `options`.
+fn conditioned_slots<'a>(defs: &[&'a FieldDefinition]) -> Vec<(usize, &'a HookRef)> {
+    defs.iter()
         .enumerate()
         .filter_map(|(i, fd)| fd.admin.condition.as_ref().map(|c| (i, c)))
-        .collect();
+        .collect()
+}
 
+/// One condition result per `defs` slot — `None` where the field declares no
+/// condition, and an all-`None` row of the right length when no field at this
+/// level declares one at all.
+///
+/// Always one slot per def, never an empty vec: the caller's walk is driven by
+/// this, and a level whose own fields carry no condition still has to be walked
+/// — a condition can sit on a field nested inside one of them.
+fn level_results(
+    defs: &[&FieldDefinition],
+    pass: &ConditionPass<'_, '_>,
+) -> Vec<Option<DisplayConditionResult>> {
+    let mut by_def: Vec<Option<DisplayConditionResult>> = (0..defs.len()).map(|_| None).collect();
+
+    let conditioned = conditioned_slots(defs);
     if conditioned.is_empty() {
-        return;
+        return by_def;
     }
 
-    let conditions: Vec<(&HookRef, &Value)> =
-        conditioned.iter().map(|&(_, c)| (c, form_data)).collect();
+    let conditions: Vec<(&HookRef, &Value)> = conditioned
+        .iter()
+        .map(|&(_, c)| (c, pass.form_data))
+        .collect();
 
-    let results = hook_runner.call_display_conditions_batch(&conditions, cond_ctx);
+    let results = pass
+        .hook_runner
+        .call_display_conditions_batch(&conditions, pass.cond_ctx);
 
     // Scatter positional results back to their def slots.
-    let mut by_def: Vec<Option<DisplayConditionResult>> = (0..defs.len()).map(|_| None).collect();
     for (&(def_idx, _), result) in conditioned.iter().zip(results) {
         by_def[def_idx] = result;
     }
 
-    for ((fc, field_def), result) in fields.iter_mut().zip(defs.iter()).zip(by_def) {
+    by_def
+}
+
+/// Evaluate and apply the conditions of one already-resolved level, then
+/// recurse into its non-repeating containers.
+fn apply_conditions_to_level(
+    fields: &mut [FieldContext],
+    defs: &[&FieldDefinition],
+    pass: &ConditionPass<'_, '_>,
+) {
+    for ((fc, field_def), result) in fields
+        .iter_mut()
+        .zip(defs.iter())
+        .zip(level_results(defs, pass))
+    {
         if let Some(result) = result {
             apply_single_condition(fc, field_def, &result);
         }
 
-        // Recurse into non-repeating containers via the SHARED FieldContext
-        // classifier (`non_repeating_children_mut`), so conditions on fields
-        // nested in a group/collapsible/row/tabs evaluate against the same
-        // form data. The classifier is the single, compile-forced source
-        // for "which children share this scope" —
-        // array/blocks ROWS (per-row scope) classify as `None` and are a
-        // separate feature. Pairing the child FieldContexts with their
-        // FieldDefinitions is the one place the def side is selected.
-        match fc.non_repeating_children_mut() {
-            NonRepeatingChildren::Flat(sub_fields) => {
-                apply_display_conditions(
-                    sub_fields,
-                    &field_def.fields,
-                    form_data,
-                    hook_runner,
-                    filter_hidden,
-                    cond_ctx,
-                );
-            }
-            NonRepeatingChildren::Tabs(panes) => {
-                for (pane, tab_def) in panes.iter_mut().zip(field_def.tabs.iter()) {
-                    apply_display_conditions(
-                        &mut pane.sub_fields,
-                        &tab_def.fields,
-                        form_data,
-                        hook_runner,
-                        filter_hidden,
-                        cond_ctx,
-                    );
-                }
-            }
-            NonRepeatingChildren::None => {}
+        recurse_into_children(fc, field_def, pass);
+    }
+}
+
+/// Recurse into non-repeating containers via the SHARED `FieldContext`
+/// classifier (`non_repeating_children_mut`), so conditions on fields nested in
+/// a group/collapsible/row/tabs evaluate against the same form data. The
+/// classifier is the single, compile-forced source for "which children share
+/// this scope" — array/blocks ROWS (per-row scope) classify as `None` and are a
+/// separate feature. Pairing the child `FieldContext`s with their
+/// `FieldDefinition`s is the one place the def side is selected.
+fn recurse_into_children(
+    fc: &mut FieldContext,
+    field_def: &FieldDefinition,
+    pass: &ConditionPass<'_, '_>,
+) {
+    match fc.non_repeating_children_mut() {
+        NonRepeatingChildren::Flat(sub_fields) => {
+            apply_nested_display_conditions(sub_fields, &field_def.fields, pass);
         }
+        NonRepeatingChildren::Tabs(panes) => {
+            for (pane, tab_def) in panes.iter_mut().zip(field_def.tabs.iter()) {
+                apply_nested_display_conditions(&mut pane.sub_fields, &tab_def.fields, pass);
+            }
+        }
+        NonRepeatingChildren::None => {}
     }
 }
 
@@ -362,6 +451,92 @@ mod tests {
     };
 
     use super::*;
+
+    // ── display conditions ────────────────────────────────────────────
+
+    fn conditioned(name: &str, reference: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .admin(
+                FieldAdmin::builder()
+                    .condition(HookRef::new(reference))
+                    .build(),
+            )
+            .build()
+    }
+
+    /// Regression: the walk returned before its loop when no field at a level
+    /// declared a condition, so it never descended — a condition on a field
+    /// inside a group never fired unless one of the group's *siblings* also had
+    /// one. The result row is now always one slot per def, whether or not this
+    /// level has anything to evaluate, so the walk always continues.
+    #[test]
+    fn a_level_with_no_conditions_still_yields_one_slot_per_field() {
+        let plain = [
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("body", FieldType::Text).build(),
+        ];
+        let defs: Vec<&FieldDefinition> = plain.iter().collect();
+
+        assert!(
+            conditioned_slots(&defs).is_empty(),
+            "nothing at this level is conditioned"
+        );
+    }
+
+    /// A conditioned field is paired with its own slot, so a preceding
+    /// unconditioned field cannot shift the result onto the wrong field.
+    #[test]
+    fn a_conditioned_field_keeps_its_own_slot() {
+        let mixed = [
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            conditioned("url", "hooks.conditions.show_when_online"),
+        ];
+        let defs: Vec<&FieldDefinition> = mixed.iter().collect();
+
+        let slots = conditioned_slots(&defs);
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].0, 1, "the second field, not the first");
+        assert_eq!(slots[0].1.reference(), "hooks.conditions.show_when_online");
+    }
+
+    // ── tag values ────────────────────────────────────────────────────
+
+    /// Regression: an element containing a comma must survive the widget
+    /// round-trip. The hidden input carries the list as JSON, so the comma
+    /// stays inside its element instead of splitting it into two tags.
+    #[test]
+    fn a_tag_containing_a_comma_round_trips() {
+        let tags = tag_values(r#"["Hello, world","plain"]"#);
+        assert_eq!(tags, vec!["Hello, world".to_string(), "plain".to_string()]);
+
+        assert_eq!(
+            tags_input_value(&tags),
+            json!(r#"["Hello, world","plain"]"#),
+            "the widget reads back exactly the elements it was given"
+        );
+        assert_eq!(
+            tag_values(tags_input_value(&tags).as_str().unwrap()),
+            tags,
+            "round trip is lossless"
+        );
+    }
+
+    /// The parsed-value flavor answers the same as the text one, for a caller
+    /// that already holds the read's JSON.
+    #[test]
+    fn tag_values_of_matches_the_text_form() {
+        assert_eq!(
+            tag_values_of(&json!(["a", 2, null, true])),
+            vec!["a".to_string(), "2".to_string(), "true".to_string()]
+        );
+        assert_eq!(
+            tag_values_of(&json!(r#"["a","b"]"#)),
+            vec!["a".to_string(), "b".to_string()],
+            "a list still in its stored JSON text is parsed"
+        );
+        assert!(tag_values_of(&json!(null)).is_empty());
+        assert!(tag_values_of(&json!(7)).is_empty());
+    }
 
     fn date_field_with_tz(name: &str) -> FieldDefinition {
         FieldDefinition {

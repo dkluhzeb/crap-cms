@@ -46,11 +46,18 @@
   {{/if}}
   {{#if timezone_enabled}}
     <div class="form__timezone">
+      {{#if readonly}}
+        <input
+          type="hidden"
+          name="{{name}}_tz"
+          value="{{timezone_value}}"
+        />
+      {{/if}}
       <select
         name="{{name}}_tz"
         id="field-{{name}}-tz"
         class="form__select form__timezone-select"
-        {{#if locale_locked}}disabled{{/if}}
+        {{#if readonly}}disabled{{/if}}
       >
         <option value="">—</option>
         {{#each timezone_options}}

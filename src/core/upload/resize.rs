@@ -212,24 +212,29 @@ pub(super) struct FormatVariantCtx<'a> {
     pub resized: &'a DynamicImage,
     pub format_name: &'a str,
     pub opts: &'a FormatQuality,
-    pub stem: &'a str,
     pub size_name: &'a str,
     pub size_key: &'a str,
-    pub collection_slug: &'a str,
     pub storage: &'a SharedStorage,
 }
 
 /// Process a format variant (WebP or AVIF) for a resized image.
 /// Either saves immediately or queues for async conversion.
+///
+/// Both branches name the variant through [`QueuedConversion::for_size`], so a
+/// file converted here and one converted later by the queue land at the same
+/// key and fill the same column.
 pub(super) fn process_format_variant(
     ctx: &FormatVariantCtx<'_>,
     guard: &mut CleanupGuard,
     formats: &mut HashMap<String, FormatResult>,
     queued: &mut Vec<QueuedConversion>,
 ) -> Result<()> {
-    let variant_filename = format!("{}_{}.{}", ctx.stem, ctx.size_name, ctx.format_name);
-    let variant_key = format!("{}/{}", ctx.collection_slug, variant_filename);
-    let variant_url = served_url(&variant_key);
+    let variant = QueuedConversion::for_size(
+        ctx.size_key,
+        ctx.size_name,
+        ctx.format_name,
+        ctx.opts.quality,
+    );
 
     if ctx.opts.queue {
         // Enqueue storage KEYS, not absolute filesystem paths. The scheduler
@@ -239,31 +244,34 @@ pub(super) fn process_format_variant(
         // the absolute filesystem path — this was backend-specific (returned
         // `None` for S3) and was rejected by `LocalStorage`'s post-hardening
         // path validator, producing persistent "Source image not found" errors.
-        queued.push(QueuedConversion {
-            source_path: ctx.size_key.to_string(),
-            target_path: variant_key.clone(),
-            format: ctx.format_name.to_string(),
-            quality: ctx.opts.quality,
-            url_column: format!("{}_{}_url", ctx.size_name, ctx.format_name),
-            url_value: variant_url,
-        });
-    } else {
-        let data = match ctx.format_name {
-            "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality),
-            "avif" => avif_to_bytes(ctx.resized, ctx.opts.quality)?,
-            _ => bail!("Unknown format: {}", ctx.format_name),
-        };
+        queued.push(variant);
 
-        let mime = format!("image/{}", ctx.format_name);
-
-        ctx.storage
-            .put(&variant_key, &data, &mime)
-            .with_context(|| format!("Failed to save {}: {}", ctx.format_name, variant_key))?;
-
-        guard.push(variant_key);
-
-        formats.insert(ctx.format_name.to_string(), FormatResult::new(variant_url));
+        return Ok(());
     }
+
+    let data = match ctx.format_name {
+        "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality),
+        "avif" => avif_to_bytes(ctx.resized, ctx.opts.quality)?,
+        _ => bail!("Unknown format: {}", ctx.format_name),
+    };
+
+    let mime = format!("image/{}", ctx.format_name);
+
+    ctx.storage
+        .put(&variant.target_path, &data, &mime)
+        .with_context(|| {
+            format!(
+                "Failed to save {}: {}",
+                ctx.format_name, variant.target_path
+            )
+        })?;
+
+    guard.push(variant.target_path);
+
+    formats.insert(
+        ctx.format_name.to_string(),
+        FormatResult::new(variant.url_value),
+    );
 
     Ok(())
 }
@@ -313,10 +321,8 @@ pub(super) fn process_image_sizes(
                 resized: &resized,
                 format_name: "webp",
                 opts: webp_opts,
-                stem,
                 size_name: &size_def.name,
                 size_key: &size_key,
-                collection_slug,
                 storage,
             };
 
@@ -328,10 +334,8 @@ pub(super) fn process_image_sizes(
                 resized: &resized,
                 format_name: "avif",
                 opts: avif_opts,
-                stem,
                 size_name: &size_def.name,
                 size_key: &size_key,
-                collection_slug,
                 storage,
             };
 

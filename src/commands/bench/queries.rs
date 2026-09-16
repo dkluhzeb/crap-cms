@@ -10,10 +10,7 @@ use crate::{
     core::{CollectionDefinition, Registry},
     db::{
         DbConnection, DbValue, FindQuery,
-        query::{
-            self,
-            filter::{build_where_clause, resolve_filters},
-        },
+        query::{self, filter::build_where_clause},
     },
 };
 
@@ -176,10 +173,16 @@ fn build_explain_sql(
     find_query: &FindQuery,
     def: &CollectionDefinition,
 ) -> Result<(String, Vec<DbValue>)> {
-    let resolved = resolve_filters(&find_query.filters, def, None)?;
     let mut params: Vec<DbValue> = Vec::new();
 
-    let where_clause = build_where_clause(conn, &resolved, slug, &def.fields, None, &mut params)?;
+    let where_clause = build_where_clause(
+        conn,
+        &find_query.filters,
+        slug,
+        &def.fields,
+        None,
+        &mut params,
+    )?;
 
     let mut sql = format!("EXPLAIN QUERY PLAN SELECT * FROM \"{slug}\"");
 

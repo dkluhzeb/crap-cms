@@ -3,6 +3,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::{
     config::CrapConfig,
     core::{
@@ -35,6 +37,10 @@ pub struct ContentServiceDeps {
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub password_provider: SharedPasswordProvider,
+    /// Process shutdown token. Long-lived server streams end on it so a
+    /// graceful shutdown isn't held open by a live subscriber. A test
+    /// construction that doesn't supply one gets a token that never fires.
+    pub shutdown: CancellationToken,
 }
 
 impl ContentServiceDeps {
@@ -67,6 +73,7 @@ pub struct ContentServiceDepsBuilder {
     invalidation_transport: Option<SharedInvalidationTransport>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
     infra: Option<Arc<AppInfra>>,
+    shutdown: Option<CancellationToken>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -92,6 +99,7 @@ impl ContentServiceDepsBuilder {
             invalidation_transport: None,
             populate_singleflight: None,
             infra: None,
+            shutdown: None,
         }
     }
 
@@ -244,6 +252,15 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    /// Process shutdown token, so long-lived server streams end when a
+    /// graceful shutdown starts. Unset = a token that never fires.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
+
+        self
+    }
+
     /// # Panics
     ///
     /// Panics if a required field is missing. When no pre-built [`AppInfra`] was
@@ -284,6 +301,7 @@ impl ContentServiceDepsBuilder {
                     })
                     .locale_config(config.locale.clone())
                     .password_policy(config.auth.password_policy.clone())
+                    .image_max_attempts(config.jobs.system_image_max_attempts())
                     .populate_singleflight(populate_singleflight)
                     .build(),
             )
@@ -321,6 +339,7 @@ impl ContentServiceDepsBuilder {
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
+            shutdown: self.shutdown.unwrap_or_default(),
         }
     }
 }

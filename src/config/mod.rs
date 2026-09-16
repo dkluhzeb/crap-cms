@@ -36,6 +36,9 @@ mod parsing;
 mod auth;
 mod cors;
 mod features;
+
+#[cfg(test)]
+pub(crate) use features::JOB_DRAIN_GRACE_SECS;
 /// Newtype wrapper for MCP API keys.
 pub mod mcp_api_key;
 pub mod redis_url;
@@ -60,7 +63,7 @@ pub use features::{
 };
 pub(crate) use features::{
     DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
-    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS,
+    DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, SELF_LIMITING_JOB_GRACE_SECS,
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};

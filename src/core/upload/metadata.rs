@@ -160,16 +160,26 @@ pub fn inject_upload_metadata(
     }
 }
 
-/// Storage keys of the SERVER-DERIVED url columns (`url`, `{size}_url`,
-/// `{size}_{fmt}_url`) present in `doc_fields`, restricted to the authoritative
-/// [`CollectionUpload::system_field_names`] set. A USER field that merely ends
-/// in `_url` — an external `image_url`, a `source_url`, and so on — is never in
-/// that set, so it is never treated as a managed file: a forged value there
-/// cannot delete another document's file, and an unrelated external URL is not
-/// removed. (This replaces an `ends_with("_url")` string heuristic with a
-/// hand-maintained `image_url` exception that missed every other user field.)
+/// Every SERVER-DERIVED url column of `doc_fields` paired with the storage key
+/// it points at — the one place the "is this a managed file column" rule lives.
+///
+/// The columns are `url`, `{size}_url` and `{size}_{fmt}_url`, restricted to the
+/// authoritative [`CollectionUpload::system_field_names`] set. A USER field that
+/// merely ends in `_url` — an external `image_url`, a `source_url`, and so on —
+/// is never in that set, so it is never treated as a managed file: a forged
+/// value there cannot delete another document's file, and an unrelated external
+/// URL is not removed. (This replaces an `ends_with("_url")` string heuristic
+/// with a hand-maintained `image_url` exception that missed every other user
+/// field.)
+///
+/// Carrying the column name matters to a caller that has to decide per column
+/// rather than per key — a column a queued conversion is about to overwrite
+/// still holds the previous file's url, so its key is not "still referenced".
 #[must_use]
-pub fn upload_file_keys(doc_fields: &DocumentFields, upload: &CollectionUpload) -> Vec<String> {
+pub fn upload_file_entries<'a>(
+    doc_fields: &'a DocumentFields,
+    upload: &CollectionUpload,
+) -> Vec<(&'a str, String)> {
     let system = upload.system_field_names();
 
     doc_fields
@@ -178,8 +188,35 @@ pub fn upload_file_keys(doc_fields: &DocumentFields, upload: &CollectionUpload) 
         .filter(|(key, _)| {
             (key.as_str() == "url" || key.ends_with("_url")) && system.contains(key.as_str())
         })
-        .filter_map(|(_, value)| value.as_str())
-        .filter_map(|url| key_from_served_url(url).map(str::to_string))
+        .filter_map(|(column, value)| Some((column.as_str(), value.as_str()?)))
+        .filter_map(|(column, url)| key_from_served_url(url).map(|key| (column, key.to_string())))
+        .collect()
+}
+
+/// The storage keys one version snapshot names.
+///
+/// A snapshot stands in for a row, so its files are the row's rule applied to
+/// the snapshot's own object. The one place that conversion lives, shared by
+/// the delete that has to remove those files and the restore confirmation that
+/// checks they are still there.
+#[must_use]
+pub fn snapshot_file_keys(snapshot: &Value, upload: &CollectionUpload) -> Vec<String> {
+    let Some(obj) = snapshot.as_object() else {
+        return Vec::new();
+    };
+
+    let fields: DocumentFields = obj.clone().into_iter().collect();
+
+    upload_file_keys(&fields, upload)
+}
+
+/// Storage keys of the SERVER-DERIVED url columns present in `doc_fields` —
+/// [`upload_file_entries`] without the column names.
+#[must_use]
+pub fn upload_file_keys(doc_fields: &DocumentFields, upload: &CollectionUpload) -> Vec<String> {
+    upload_file_entries(doc_fields, upload)
+        .into_iter()
+        .map(|(_, key)| key)
         .collect()
 }
 
@@ -741,6 +778,31 @@ mod tests {
         assert_eq!(
             keys,
             vec!["media/a.png".to_string(), "media/a_thumb.png".to_string()]
+        );
+    }
+
+    /// The entries carry the column each key came from, so a caller can decide
+    /// per column (a column a queued conversion will overwrite is not a live
+    /// reference) instead of per key.
+    #[test]
+    fn upload_file_entries_pair_each_key_with_its_column() {
+        let mut doc_fields = DocumentFields::new();
+        doc_fields.insert("url".into(), json!("/uploads/media/a.png"));
+        doc_fields.insert(
+            "thumb_webp_url".into(),
+            json!("/uploads/media/a_thumb.webp"),
+        );
+        doc_fields.insert("source_url".into(), json!("/uploads/media/other.png"));
+
+        let mut entries = upload_file_entries(&doc_fields, &upload_with_thumb_webp());
+        entries.sort();
+
+        assert_eq!(
+            entries,
+            vec![
+                ("thumb_webp_url", "media/a_thumb.webp".to_string()),
+                ("url", "media/a.png".to_string()),
+            ]
         );
     }
 

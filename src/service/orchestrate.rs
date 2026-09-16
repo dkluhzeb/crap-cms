@@ -27,7 +27,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         Def, DeferredQueue, EffectOutcome, RunnerWriteHooks, ServiceContext, ServiceError,
-        flush_deferred_effects, flush_queue, flush_verification_queue,
+        flush_deferred_effects, flush_queue, flush_verification_queue, warn_orphaned_files,
     },
 };
 
@@ -148,9 +148,13 @@ pub(crate) fn run_pool_write<T>(
     // transaction queued their upload field-maps; the bytes go only now
     // that the rows are durably gone. (On rollback the queue is simply
     // dropped — orphaned files are the safe direction.)
+    let keys: Vec<String> = fq.borrow_mut().drain(..).collect();
     if let Some(storage) = &ctx.storage {
-        let keys: Vec<String> = fq.borrow_mut().drain(..).collect();
         delete_storage_keys(storage.as_ref(), &keys);
+    } else {
+        // Same visibility as a write that found no cleanup queue: the keys were
+        // collected, nothing can delete them, and only a log line says so.
+        warn_orphaned_files(ctx.slug, "storage backend", keys.len());
     }
 
     post_commit(ctx, &result);

@@ -8,7 +8,7 @@
 //! Storing a stored value again changes nothing, so an interrupted run simply
 //! continues.
 
-use std::{fmt::Write as _, slice};
+use std::slice;
 
 use anyhow::{Context as _, Result};
 use serde_json::{Map, Value};
@@ -20,10 +20,12 @@ use crate::{
         flatten_array_sub_fields,
     },
     db::{
-        DbConnection, DbRow, DbValue,
-        migrate::helpers::table_exists,
+        DbConnection, DbValue,
+        migrate::helpers::{
+            Scan, block_paths, field_paths, for_each_row, update_by_id, versioned_fingerprint,
+        },
         query::{
-            helpers::{global_table, join_table, prefixed_name, quote_ident},
+            helpers::{global_table, join_table, prefixed_name},
             join::store_nested_values,
         },
     },
@@ -31,15 +33,17 @@ use crate::{
 
 use super::meta;
 
-/// Stored as the meta value; bump to force a re-run after a change here.
-const MIGRATION_VERSION: &str = "1";
+/// Leads the meta value; bump to force a re-run after a change here. The rest
+/// of the value fingerprints the join-table columns a pass covered, so a
+/// sub-field added or retyped later — including one added to a collection
+/// whose join table already existed — runs it again.
+const MIGRATION_VERSION: &str = "2";
 
-/// Rows read per page, so a conversion never holds a whole join table in
-/// memory.
-const PAGE_SIZE: usize = 500;
-
-fn meta_key(slug: &str) -> String {
-    format!("nested_values:{slug}")
+/// The gate of one target, keyed by its table so a collection and a global of
+/// the same slug can't share one — sharing it would leave the two rewriting
+/// each other's gate on every boot.
+fn meta_key(table: &str) -> String {
+    format!("nested_values:{table}")
 }
 
 /// The meta key of the conversion this one replaced — timezone dates only —
@@ -89,32 +93,78 @@ fn convert_one(
     // changes nothing, so this runs whether or not this conversion has.
     meta::delete(conn, &replaced_meta_key(slug))?;
 
-    let key = meta_key(slug);
-    if meta::get(conn, &key)?.as_deref() == Some(MIGRATION_VERSION) {
+    // This conversion's own gate was once keyed by slug. A collection's slug IS
+    // its table, so only a global left a row behind — one that names no pass any
+    // more and would sit in the database forever.
+    if table != slug {
+        meta::delete(conn, &meta_key(slug))?;
+    }
+
+    let mut join_fields = Vec::new();
+    collect_join_fields(fields, "", &mut join_fields);
+    if join_fields.is_empty() {
         return Ok(());
     }
 
-    let converted = convert_join_tables(conn, table, fields)?;
+    let key = meta_key(table);
+    let gate = gate_value(table, &join_fields);
+    if meta::get(conn, &key)?.as_deref() == Some(gate.as_str()) {
+        return Ok(());
+    }
+
+    let converted = convert_join_tables(conn, table, &join_fields)?;
 
     if converted > 0 {
         info!("Stored the nested values of {converted} row(s) of '{slug}' in their typed form");
     }
 
-    meta::upsert(conn, &key, MIGRATION_VERSION)
+    meta::upsert(conn, &key, &gate)
 }
 
-/// Convert every join table `fields` own on `table`, returning the number of
-/// rows changed.
+/// Every leaf takes part in the fingerprint: a blank value nests as null
+/// whatever its type, so any sub-field added or retyped can change what a row
+/// of the table stores.
+fn keeps_every_leaf(_: &FieldDefinition) -> bool {
+    true
+}
+
+/// `{version}:{fingerprint}` of the join-table columns a pass covers.
+fn gate_value(table: &str, join_fields: &[JoinField<'_>]) -> String {
+    let mut parts = Vec::new();
+
+    for field in join_fields {
+        match field {
+            JoinField::Array { key, sub } => {
+                let join = join_table(table, key);
+
+                for sf in json_sub_fields(sub) {
+                    let paths = field_paths(slice::from_ref(sf), &keeps_every_leaf);
+                    parts.push(format!("{join}.{}={paths}", sf.name));
+                }
+            }
+            JoinField::Blocks { key, defs } => {
+                let join = join_table(table, key);
+                parts.push(format!(
+                    "{join}.data={}",
+                    block_paths(defs, &keeps_every_leaf)
+                ));
+            }
+        }
+    }
+
+    versioned_fingerprint(MIGRATION_VERSION, &parts)
+}
+
+/// Convert every join table of `join_fields`, returning the number of rows
+/// changed.
 fn convert_join_tables(
     conn: &dyn DbConnection,
     table: &str,
-    fields: &[FieldDefinition],
+    join_fields: &[JoinField<'_>],
 ) -> Result<usize> {
-    let mut join_fields = Vec::new();
-    collect_join_fields(fields, "", &mut join_fields);
-
     let mut converted = 0;
-    for field in &join_fields {
+
+    for field in join_fields {
         converted += match field {
             JoinField::Array { key, sub } => {
                 convert_array_table(conn, &join_table(table, key), sub)?
@@ -161,14 +211,9 @@ fn convert_array_table(
     table: &str,
     sub: &[FieldDefinition],
 ) -> Result<usize> {
-    let json_subs = json_sub_fields(sub);
-
-    if json_subs.is_empty() || !table_exists(conn, table)? {
-        return Ok(0);
-    }
-
     let mut converted = 0;
-    for sf in json_subs {
+
+    for sf in json_sub_fields(sub) {
         converted += convert_array_column(conn, table, sf)?;
     }
 
@@ -196,10 +241,12 @@ fn convert_array_column(
     sf: &FieldDefinition,
 ) -> Result<usize> {
     let column = sf.name.as_str();
-    let update = update_sql(conn, table, column);
+    let update = update_by_id(conn, table, column);
+    let columns = [column];
+    let scan = Scan::builder(table, &columns).build();
     let mut converted = 0;
 
-    for_each_row(conn, table, &[column], &mut |row| {
+    for_each_row(conn, &scan, &mut |row| {
         let (Some(id), Some(raw)) = (row.opt_text_at(0), row.opt_text_at(1)) else {
             return Ok(());
         };
@@ -231,80 +278,6 @@ fn stored_column_json(sf: &FieldDefinition, raw: &str) -> Option<String> {
     (holder != before).then(|| holder[&sf.name].to_string())
 }
 
-/// The UPDATE storing a converted value (placeholder 1) in `column` of the row
-/// with an id (placeholder 2).
-fn update_sql(conn: &dyn DbConnection, table: &str, column: &str) -> String {
-    format!(
-        "UPDATE {} SET {} = {} WHERE id = {}",
-        quote_ident(table),
-        quote_ident(column),
-        conn.placeholder(1),
-        conn.placeholder(2)
-    )
-}
-
-/// Visit every row of `table` whose last of `columns` isn't NULL, selected as
-/// `id, columns…`, a page at a time in id order. Keyset paging — each page
-/// starts after the last id of the one before — keeps every read bounded
-/// however large the table, and rows updated during the visit keep their id.
-fn for_each_row(
-    conn: &dyn DbConnection,
-    table: &str,
-    columns: &[&str],
-    visit: &mut dyn FnMut(&DbRow) -> Result<()>,
-) -> Result<()> {
-    let mut after: Option<String> = None;
-
-    loop {
-        let rows = read_page(conn, table, columns, after.as_deref())?;
-
-        for row in &rows {
-            visit(row)?;
-        }
-
-        if rows.len() < PAGE_SIZE {
-            return Ok(());
-        }
-
-        let Some(last) = rows.last().and_then(|row| row.opt_text_at(0)) else {
-            return Ok(());
-        };
-        after = Some(last);
-    }
-}
-
-/// One page of [`for_each_row`]: up to [`PAGE_SIZE`] rows with an id after
-/// `after` (from the first row without one).
-fn read_page(
-    conn: &dyn DbConnection,
-    table: &str,
-    columns: &[&str],
-    after: Option<&str>,
-) -> Result<Vec<DbRow>> {
-    let Some(required) = columns.last() else {
-        return Ok(Vec::new());
-    };
-
-    let selected: Vec<String> = columns.iter().copied().map(quote_ident).collect();
-    let mut sql = format!(
-        "SELECT id, {} FROM {} WHERE {} IS NOT NULL",
-        selected.join(", "),
-        quote_ident(table),
-        quote_ident(required)
-    );
-    let mut params = Vec::new();
-
-    if let Some(after) = after {
-        let _ = write!(sql, " AND id > {}", conn.placeholder(1));
-        params.push(DbValue::Text(after.to_string()));
-    }
-
-    let _ = write!(sql, " ORDER BY id LIMIT {PAGE_SIZE}");
-
-    conn.query_all(&sql, &params)
-        .with_context(|| format!("Failed to read {table}"))
-}
-
 /// Convert the `data` JSON of every row of a blocks join table, each with its
 /// own block definition. Rows of a block type no longer defined are left alone.
 fn convert_blocks_table(
@@ -312,14 +285,12 @@ fn convert_blocks_table(
     table: &str,
     defs: &[BlockDefinition],
 ) -> Result<usize> {
-    if !table_exists(conn, table)? {
-        return Ok(0);
-    }
-
-    let update = update_sql(conn, table, "data");
+    let update = update_by_id(conn, table, "data");
+    let columns = ["_block_type", "data"];
+    let scan = Scan::builder(table, &columns).build();
     let mut converted = 0;
 
-    for_each_row(conn, table, &["_block_type", "data"], &mut |row| {
+    for_each_row(conn, &scan, &mut |row| {
         let (Some(id), Some(block_type), Some(raw)) =
             (row.opt_text_at(0), row.opt_text_at(1), row.opt_text_at(2))
         else {
@@ -361,7 +332,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{CollectionDefinition, FieldType, collection::GlobalDefinition},
-        db::InMemoryConn,
+        db::{InMemoryConn, migrate::helpers::PAGE_SIZE},
     };
 
     /// Berlin is UTC+1 in January.
@@ -619,6 +590,36 @@ mod tests {
         }
     }
 
+    /// The gate moved from the slug to the table. A collection's slug is its
+    /// table, so its row just carried on; a GLOBAL's old `:{slug}` row named no
+    /// pass any more and outlived the conversion forever.
+    #[test]
+    fn removes_a_globals_slug_keyed_gate() {
+        let conn = conn_with(
+            "CREATE TABLE _global_site (id TEXT PRIMARY KEY);
+             CREATE TABLE _global_site_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, meta TEXT);",
+        );
+        conn.0
+            .execute_batch("INSERT INTO _crap_meta VALUES ('nested_values:site', '1:stale');")
+            .unwrap();
+
+        let mut def = GlobalDefinition::new("site");
+        def.fields = vec![items_with_meta()];
+        let shared = Registry::shared();
+        shared.write().unwrap().register_global(def);
+        let registry = (*Registry::snapshot(&shared)).clone();
+
+        convert_if_needed(&conn, &registry).unwrap();
+
+        assert_eq!(meta::get(&conn, "nested_values:site").unwrap(), None);
+        assert!(
+            meta::get(&conn, &meta_key("_global_site"))
+                .unwrap()
+                .is_some(),
+            "the table-keyed gate is the live one"
+        );
+    }
+
     /// Existing group-in-array-row JSON and blocks `data` are converted once;
     /// the gate stops a second pass.
     #[test]
@@ -688,10 +689,8 @@ mod tests {
             serde_json::from_str::<Value>(&data).unwrap()["featured"],
             json!(true)
         );
-        assert_eq!(
-            meta::get(&conn, &meta_key("posts")).unwrap().as_deref(),
-            Some(MIGRATION_VERSION)
-        );
+        let gate = meta::get(&conn, &meta_key("posts")).unwrap().unwrap();
+        assert!(gate.starts_with(&format!("{MIGRATION_VERSION}:")), "{gate}");
 
         conn.0
             .execute(
@@ -705,6 +704,54 @@ mod tests {
             stored_starts(&conn, "SELECT data FROM posts_content WHERE id = 'b1'"),
             LOCAL,
             "the gate must stop a second pass"
+        );
+    }
+
+    /// Regression: the gate held the version alone, so a sub-field added to an
+    /// array after a pass — or a collection whose join table already held rows
+    /// written before its definition came back — was never converted. The gate
+    /// fingerprints the join-table columns, so a changed shape runs it again.
+    #[test]
+    fn a_sub_field_added_later_runs_the_conversion_again() {
+        let conn = conn_with(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, meta TEXT);",
+        );
+        conn.0
+            .execute(
+                "INSERT INTO posts_items VALUES ('r1', 'p1', 0, ?1)",
+                [&local_meta()],
+            )
+            .unwrap();
+
+        // The group holds only the date, so the checkbox beside it is left as
+        // the admin form sent it.
+        let mut without_checkbox = CollectionDefinition::new("posts");
+        without_checkbox.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("meta", FieldType::Group)
+                        .fields(vec![starts()])
+                        .build(),
+                ])
+                .build(),
+        ];
+        convert_if_needed(&conn, &registry_with(without_checkbox)).unwrap();
+
+        assert_eq!(
+            stored_json(&conn, "SELECT meta FROM posts_items WHERE id = 'r1'")["featured"],
+            json!("on"),
+            "a field the definition doesn't hold yet stays as it was written"
+        );
+
+        let mut with_checkbox = CollectionDefinition::new("posts");
+        with_checkbox.fields = vec![items_with_meta()];
+        convert_if_needed(&conn, &registry_with(with_checkbox)).unwrap();
+
+        assert_eq!(
+            stored_json(&conn, "SELECT meta FROM posts_items WHERE id = 'r1'")["featured"],
+            json!(true),
+            "a sub-field added after a pass must run the conversion again"
         );
     }
 }

@@ -15,7 +15,7 @@ use crate::{
         },
         handlers::shared::{
             HxNav, PageRequest, check_access_or_forbid, collection_item_base,
-            extract_editor_locale, forbidden, load_version_with_missing_relations, paths,
+            extract_editor_locale, forbidden, load_version_with_restore_gaps, paths,
             redirect_response, render_page, require_collection, server_error,
         },
     },
@@ -24,12 +24,11 @@ use crate::{
         auth::{AuthUser, Claims},
         document::VersionSnapshot,
     },
-    db::query::{AccessResult, MissingRelation},
-    service::{self, RunnerReadHooks},
+    db::query::AccessResult,
+    service::{self, RunnerReadHooks, VersionGaps},
 };
 
-/// Load the version being restored plus the relations it can no longer
-/// resolve.
+/// Load the version being restored plus what it can no longer resolve.
 ///
 /// Scoped to its own function so the pooled connection and the read hooks
 /// borrowing it — neither of which is `Send` — are dropped before the
@@ -40,7 +39,7 @@ fn load_restore_data(
     def: &CollectionDefinition,
     version_id: &str,
     user_doc: Option<&Document>,
-) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+) -> Result<(VersionSnapshot, VersionGaps), &'static str> {
     let Ok(conn) = state.infra.pool.get() else {
         return Err("Database error");
     };
@@ -48,16 +47,18 @@ fn load_restore_data(
     // The version read runs an access check against the collection's `read`
     // access ref, so `ServiceContext.read_hooks` must be wired or it errors
     // out with "read_hooks not set" → 500. The locale config lets the
-    // missing-relations check read every locale the version records.
+    // missing-relations check read every locale the version records, and the
+    // storage backend lets the missing-files check ask for the bytes.
     let read_hooks = RunnerReadHooks::new(&state.infra.hook_runner, &conn, user_doc, None);
     let ctx = service::ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&read_hooks)
         .user(user_doc)
         .locale_config(Some(&state.infra.locale_config))
+        .storage(Some(state.infra.storage.clone()))
         .build();
 
-    load_version_with_missing_relations(&ctx, &state.infra.registry, version_id)
+    load_version_with_restore_gaps(&ctx, &state.infra.registry, version_id)
 }
 
 /// GET /`admin/collections/{slug}/{id}/versions/{version_id}/restore` — confirmation page
@@ -96,7 +97,7 @@ pub async fn restore_confirm(
 
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
 
-    let (version, missing) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
+    let (version, gaps) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
         Ok(data) => data,
         Err(msg) => return server_error(&state, msg),
     };
@@ -124,7 +125,8 @@ pub async fn restore_confirm(
         collection: CollectionContext::from_def(&def),
         document: DocumentRef::stub(&id),
         version_number: json!(version.version),
-        missing_relations: missing.into_iter().map(|m| json!(m)).collect(),
+        missing_relations: gaps.relations.into_iter().map(|m| json!(m)).collect(),
+        missing_files: gaps.files,
         restore_url,
         back_url,
     };

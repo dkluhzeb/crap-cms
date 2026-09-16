@@ -1,10 +1,10 @@
 //! Shared collection handler utilities — form errors, update, delete, list helpers.
 
+mod auth_fields;
 mod delete;
 mod form_errors;
 mod image;
 mod update;
-mod upload;
 
 // Re-export list helpers
 pub(super) use super::list_helpers::{
@@ -12,15 +12,13 @@ pub(super) use super::list_helpers::{
 };
 
 // Re-export form error rendering
-pub(super) use form_errors::{
-    WriteErrorParams, handle_collection_write_error, render_edit_upload_error, render_upload_error,
-};
+pub(super) use form_errors::{SubmittedMeta, WriteErrorParams, handle_collection_write_error};
+
+// Re-export the synthesized auth-collection inputs
+pub(super) use auth_fields::{locked_field, password_field};
 
 // Re-export shared helpers
 pub(super) use image::thumbnail_url;
-
-// Re-export upload processing
-pub(super) use upload::{UploadParams, UploadResult, process_collection_upload};
 
 // Re-export update/delete handlers
 pub(super) use delete::delete_action_impl;

@@ -2,7 +2,8 @@
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Error, Result};
+use tokio::spawn;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
@@ -15,7 +16,7 @@ use crate::{
     },
     config::CrapConfig,
     core::{
-        SharedPasswordProvider, SharedRateLimitBackend,
+        SERVER_DRAIN_SECS, SharedPasswordProvider, SharedRateLimitBackend, drain_with_deadline,
         rate_limit::{GrpcRateLimiter, LoginRateLimiter},
     },
     service::AppInfra,
@@ -224,6 +225,7 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .forgot_password_limiter(params.forgot_password_limiter)
         .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
         .password_provider(params.password_provider)
+        .shutdown(shutdown.clone())
         .infra(params.infra);
 
     let content_service = ContentService::new(deps_builder.build());
@@ -246,7 +248,19 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .set_serving::<ContentApiServer<ContentService>>()
         .await;
 
-    let shutdown_signal = shutdown.cancelled_owned();
+    // Stop advertising SERVING the moment a shutdown is requested: a load
+    // balancer that keeps routing here during the drain hands this node work
+    // it is about to refuse.
+    let health_shutdown = shutdown.clone();
+    spawn(async move {
+        health_shutdown.cancelled().await;
+
+        health_reporter
+            .set_not_serving::<ContentApiServer<ContentService>>()
+            .await;
+    });
+
+    let shutdown_signal = shutdown.clone().cancelled_owned();
 
     let reflection_service = if grpc_reflection {
         Some(
@@ -267,12 +281,26 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         builder = builder.timeout(Duration::from_secs(timeout_secs));
     }
 
-    builder
-        .add_service(health_service)
-        .add_optional_service(reflection_service)
-        .add_service(content_svc)
-        .serve_with_shutdown(addr, shutdown_signal)
-        .await?;
+    let serve = async move {
+        builder
+            .add_service(health_service)
+            .add_optional_service(reflection_service)
+            .add_service(content_svc)
+            .serve_with_shutdown(addr, shutdown_signal)
+            .await
+            .map_err(Error::from)
+    };
 
-    Ok(())
+    // Same bounded drain as the admin server. `serve_with_shutdown` waits for
+    // every in-flight response, and a server-streaming RPC counts as in-flight
+    // until its stream ends — without a deadline one stuck client keeps the
+    // process alive and the post-shutdown cleanup (PID file, WAL checkpoint)
+    // never runs.
+    drain_with_deadline(
+        serve,
+        shutdown,
+        Duration::from_secs(SERVER_DRAIN_SECS),
+        "gRPC server",
+    )
+    .await
 }

@@ -25,7 +25,9 @@ mod validation;
 mod view_scope;
 
 pub(crate) use columns::get_valid_filter_columns;
-pub use columns::{get_column_names, get_expected_column_names};
+pub use columns::{
+    get_column_names, get_expected_column_names, get_expected_global_column_names, join_field_names,
+};
 pub use cursor::{SortDirection, SortValue};
 pub use find_pagination::{FindPagination, PaginationCtx, TRASH_DEFAULT_ORDER};
 pub use helpers::{apply_pagination_limits, clamp_depth, floor_optional_limit};
@@ -42,7 +44,7 @@ pub use view_scope::{RequestedViews, ViewScope};
 
 pub(crate) use helpers::stored_document_values;
 pub(crate) use locale::{
-    ReadLocale, column_is_localized, group_locale_fields, is_locale_locked_write,
+    ReadLocale, column_is_localized, column_read_expr, group_locale_fields, is_locale_locked_write,
     is_non_default_single_locale, locale_locked_field_names, locale_write_column,
     per_locale_columns, regroup_by_locale, stored_columns,
 };

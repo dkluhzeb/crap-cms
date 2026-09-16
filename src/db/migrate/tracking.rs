@@ -164,15 +164,20 @@ mod tests {
     use super::*;
     use crate::db::migrate::collection::test_helpers::*;
 
+    /// Put the database back to before its first schema sync, for the reads
+    /// that must survive a missing tracking table.
+    fn drop_migrations_table(pool: &DbPool) {
+        let conn = pool.get().unwrap();
+        conn.execute_batch_ddl("DROP TABLE _crap_migrations")
+            .unwrap();
+    }
+
     // ── migration tracking ────────────────────────────────────────────────
 
     #[test]
     fn migration_tracking_roundtrip() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
-        ).unwrap();
 
         record_migration(&conn, "001_init.lua").unwrap();
         record_migration(&conn, "002_add_field.lua").unwrap();
@@ -187,9 +192,6 @@ mod tests {
     fn remove_migration_works() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
-        ).unwrap();
 
         record_migration(&conn, "001_init.lua").unwrap();
         remove_migration(&conn, "001_init.lua").unwrap();
@@ -198,9 +200,13 @@ mod tests {
         assert!(applied.is_empty());
     }
 
+    /// A database that never ran a schema sync has no tracking table at all;
+    /// the read reports nothing applied instead of failing.
     #[test]
     fn get_applied_migrations_no_table() {
         let (_dir, pool) = in_memory_pool();
+        drop_migrations_table(&pool);
+
         let applied = get_applied_migrations(&pool).unwrap();
         assert!(applied.is_empty());
     }
@@ -209,9 +215,6 @@ mod tests {
     fn get_pending_migrations_filters_applied() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
-        ).unwrap();
         record_migration(&conn, "001_init.lua").unwrap();
 
         let tmp = tempfile::tempdir().unwrap();
@@ -260,9 +263,12 @@ mod tests {
 
     // ── get_applied_migrations_desc ──────────────────────────────────────
 
+    /// The mirror for the newest-first read.
     #[test]
     fn get_applied_migrations_desc_no_table() {
         let (_dir, pool) = in_memory_pool();
+        drop_migrations_table(&pool);
+
         let result = get_applied_migrations_desc(&pool).unwrap();
         assert!(result.is_empty());
     }
@@ -271,9 +277,6 @@ mod tests {
     fn get_applied_migrations_desc_ordering() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
-        ).unwrap();
         record_migration(&conn, "001_a.lua").unwrap();
         record_migration(&conn, "002_b.lua").unwrap();
         record_migration(&conn, "003_c.lua").unwrap();

@@ -7,8 +7,7 @@ use serde_json::Value;
 
 use super::BasePageContext;
 use crate::admin::context::{
-    CollectionContext, CollectionPermissions, DocumentRef, FieldContext, LocaleTemplateData,
-    PaginationContext,
+    CollectionContext, CollectionPermissions, DocumentRef, FieldContext, PaginationContext,
 };
 
 /// One row on the `/admin/collections` listing page.
@@ -127,11 +126,6 @@ pub struct CollectionEditPage {
     pub document_title: String,
     pub ref_count: i64,
 
-    /// Locale picker data (flattened: `has_locales`, `current_locale`,
-    /// `locales`). Absent when locale support is disabled.
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub locale_data: Option<LocaleTemplateData>,
-
     /// Upload preview block — present only on upload collections.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload: Option<UploadFormContext>,
@@ -151,17 +145,20 @@ pub struct CollectionCreatePage {
     pub editing: bool,
     pub has_drafts: bool,
 
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub locale_data: Option<LocaleTemplateData>,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload: Option<UploadFormContext>,
 }
 
 /// Slim re-render context for the `collections/edit` template after a
 /// validation / upload error. Carries only what the template needs in the
-/// error path (no version sidebar, no breadcrumbs, no editor-locale data) —
-/// the user is bounced back to the form they just submitted.
+/// error path (no version sidebar, no breadcrumbs) — the user is bounced back
+/// to the form they just submitted.
+///
+/// The `base` must be built with the *submitted* locale, exactly as the
+/// success-path forms build theirs: the re-rendered form has to stay in the
+/// locale it was submitted in — the template's hidden `_locale` input reads
+/// `editor_locale` — or the corrected save writes a translation into the
+/// default locale's columns and overwrites the shared fields.
 #[derive(Serialize, JsonSchema)]
 pub struct CollectionFormErrorPage {
     #[serde(flatten)]
@@ -180,8 +177,10 @@ pub struct CollectionFormErrorPage {
     pub editing: bool,
     pub has_drafts: bool,
 
-    /// Hidden upload fields preserved from the submitted form (edit-mode
-    /// upload errors only, so the user keeps their pending file metadata).
+    /// Hidden upload inputs preserved from the submitted form — the focal point
+    /// the edit page renders inside its file-preview block, which this slim
+    /// context does not carry. Without them a failed save resets the focal
+    /// point the user just moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload_hidden_fields: Option<Vec<Value>>,
 }
@@ -217,6 +216,10 @@ pub struct CollectionRestoreConfirmPage {
     /// IDs of relationship references whose targets no longer exist.
     pub missing_relations: Vec<Value>,
 
+    /// Storage keys the version names whose files are gone. Always empty for a
+    /// collection without uploads.
+    pub missing_files: Vec<String>,
+
     pub restore_url: String,
     pub back_url: String,
 }
@@ -234,4 +237,71 @@ pub struct CollectionVersionsListPage {
     pub doc_title: String,
     pub versions: Vec<Value>,
     pub restore_url_prefix: String,
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use serde_json::to_value;
+
+    use super::*;
+    use crate::{
+        admin::{
+            context::{PageMeta, PageType},
+            test_state::test_admin_state,
+        },
+        config::LocaleConfig,
+        core::CollectionDefinition,
+    };
+
+    /// The edit/create forms carry exactly ONE locale-picker shape: the
+    /// editor-locale trio flattened in from the base context, built from the
+    /// same locale the page reads in. The parallel `has_locales` /
+    /// `current_locale` / `locales` keys are gone, so an override template
+    /// cannot bind to a second copy that could drift out of step with it.
+    #[test]
+    fn create_page_carries_only_the_editor_locale_keys() {
+        let mut state = test_admin_state();
+        state.config.locale = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+
+        let def = CollectionDefinition::builder("posts").build();
+        let base = BasePageContext::for_handler(
+            &state,
+            None,
+            None,
+            PageMeta::new(PageType::CollectionCreate, "create_name"),
+        )
+        .with_editor_locale(Some("de"), &state);
+
+        let ctx = CollectionCreatePage {
+            base,
+            collection: CollectionContext::from_def(&def),
+            perms: CollectionPermissions::default(),
+            fields: Vec::new(),
+            sidebar_fields: Vec::new(),
+            editing: false,
+            has_drafts: false,
+            upload: None,
+        };
+
+        let json = to_value(&ctx).expect("page context serializes");
+
+        assert_eq!(json["has_editor_locales"], Value::Bool(true));
+        assert_eq!(json["editor_locale"], Value::String("de".to_string()));
+        assert_eq!(
+            json["editor_locales"][1]["value"],
+            Value::String("de".to_string())
+        );
+        assert_eq!(json["editor_locales"][1]["selected"], Value::Bool(true));
+
+        for gone in ["has_locales", "current_locale", "locales"] {
+            assert!(
+                json.get(gone).is_none(),
+                "`{gone}` is the removed twin of the editor-locale keys"
+            );
+        }
+    }
 }

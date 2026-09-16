@@ -6,9 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::BasePageContext;
-use crate::admin::context::{
-    FieldContext, GlobalContext, GlobalPermissions, LocaleTemplateData, PaginationContext,
-};
+use crate::admin::context::{FieldContext, GlobalContext, GlobalPermissions, PaginationContext};
 
 /// `/admin/globals/{slug}` edit form context.
 #[derive(Serialize, JsonSchema)]
@@ -29,9 +27,6 @@ pub struct GlobalEditPage {
     pub restore_url_prefix: String,
     pub versions_url: String,
     pub doc_status: String,
-
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub locale_data: Option<LocaleTemplateData>,
 }
 
 /// Slim re-render context for the `globals/edit` template after a validation
@@ -71,6 +66,12 @@ pub struct GlobalRestoreConfirmPage {
 
     pub version_number: Value,
     pub missing_relations: Vec<Value>,
+
+    /// Storage keys the version names whose files are gone. A global is never
+    /// an upload collection, so this is always empty — the field exists because
+    /// both surfaces render the same confirmation partial.
+    pub missing_files: Vec<String>,
+
     pub restore_url: String,
     pub back_url: String,
 }

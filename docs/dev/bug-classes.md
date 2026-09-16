@@ -1108,6 +1108,122 @@ memories; the load-bearing ones:
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-15 (26) — **CONVERGENCE ROUND 16** (5 fresh lenses: admin form
+  round-trip matrix, stored-file lifecycle across storage backends, process
+  death/restart/shutdown, locale configuration as a variable, alpha.9→alpha.10
+  upgrade path + guide completeness). **~45 confirmed — 7 HIGH, ~22 MED, ~16
+  LOW — NOT a quiet round; no new class.** Every HIGH sits in a GUARDED row
+  whose guard didn't reach it:
+  - **P2 (guard failed) — HIGH ×2 + L4 HIGH: the admin edit form
+    re-implemented the upload write lifecycle** instead of calling the
+    service's `update_upload`, missing Round 4's rules: a draft save with a
+    new file deleted the file the PUBLISHED row referenced (unrecoverable
+    404s), a replace never cancelled the old file's conversions, and the
+    cleanup guard lived in the async handler across a `spawn_blocking` await
+    (a dropped request committed the row and deleted its files). Fix: one
+    service entry for every upload write (`service::upload`), deletion keyed
+    on "the row stopped referencing the key" and queued post-commit,
+    conversions cancelled/enqueued inside the write tx, guard never leaving
+    the blocking body; anti-copy guard in `tests/chokepoint_copies.rs`. The
+    routing guard pins service *op bodies*; the file lifecycle sat outside them.
+  - **F1 — HIGH: S3 `put` never checked the HTTP status** (rust-s3 built
+    without `fail-on-err`): a 403/503 committed a row pointing at an object
+    never stored; `delete` orphaned, `get` served the error XML as image bytes
+    (cached a year on public collections), `exists` could not see a 404. One
+    status-check chokepoint for every verb. Same batch: atomic local writes,
+    custom storage refuses instead of a silent local placeholder, restore
+    skips non-local uploads like backup, restore never leaves the DB absent, a
+    conversion of a replaced file discards its output.
+  - **P2 — HIGH: the validation-error re-render dropped `_locale`**, so the
+    corrected save of a German edit wrote the English columns and overwrote
+    shared fields (create too). **P6/D8 — HIGH: `admin.hidden` checkboxes and
+    lists clobbered on every save** — the form rendered non-hidden fields, the
+    absent-value normalizers walked all. One predicate now decides both.
+    Plus list-cell copies, code-in-group-in-row `_lang`, `readonly` inert on
+    checkbox/select/radio, comma in a tag, error state, unlisted select value.
+  - **D9 — HIGH (data loss on first boot, found by the migration trace, not a
+    lens):** alpha.9 stored a has-many scalar list inside a nested row as
+    comma text; the typed-values conversion read JSON only and stored `[]`.
+    `coerce_has_many_scalar` reads both forms; conversion version bumped.
+    Refuted on the way: the same hazard for has-many relationships (alpha.9
+    stored `id1,id2`, which `parse_id_list` reads).
+  - **P12 (guard failed) — MED-HIGH: `fallback` applied by the SELECT only**;
+    filter, sort and keyset used the bare locale column and the cursor took
+    the fallback value → rows missed, sorted as NULL, skipped/repeated across
+    pages. One read expression (`ReadLocale::column_expr`) for all four, and
+    `count` agrees with `find`. Also: localization flip strands the bare
+    column (values carried at column creation), ref-count gate blind to locale
+    changes (fingerprinted), silent `default_locale` change (warn), `pt-BR`/
+    `pt_BR` collision, restore clearing a later-added locale, `all` on writes.
+  - **L4/L5/L6 — shutdown:** `serve` force-exited without draining jobs (a
+    planned restart terminally staled a queued bulk run); gRPC had no drain
+    deadline and `Subscribe` ignored the token; `work --stop` killed at 10 s;
+    cron windows reset to boot time; verification and reset tokens minted
+    outside their email's transaction; Redis cache never expired at the
+    default; `/ready` lied during recovery; scheduler write txs on read-pool
+    connections. Drain deadline derived from queue timeouts, one drain helper
+    for both servers, token+job in one tx (one chokepoint for reset used by
+    admin and gRPC), stored fire time as the cron window.
+  - **D1 (pair never registered) — ~30 Breaking/behaviour bullets had no
+    upgrade-guide entry** (5 HIGH: `ctx.id` rename, empty access constraint
+    denies, `access.unlock`, auth `email` type+unique boot failure, OAuth
+    callback fail-closed), four guide claims contradicted the code, no
+    backup/rollback item. Guide items 38–49 + "Before you upgrade"; guard
+    `tests/upgrade_guide_parity.rs` pins every Breaking lead-in to the guide.
+    Data side CLEAN except gate coarseness: `legacy_timestamps` gated once per
+    DB (per table now), `canonical_text` unpaged (shared paged scanner),
+    `nested_values` gate unfingerprinted, slug-keyed gates shared by a
+    collection and a global of one slug (per table now).
+  - Lessons: (1) a surface that re-implements a *lifecycle* (not just an op)
+    is invisible to the routing guard — the anti-copy scan must name the
+    lifecycle's primitives (`process_upload`, `CleanupGuard`,
+    `delete_upload_files`); (2) a dependency's error mode (`fail-on-err` off)
+    is a fail-open predicate class F1 instance and must be pinned where the
+    crate is wired, not per call; (3) the upgrade guide ↔ CHANGELOG pair is a
+    D1 pair like any other and needs its parity pin; (4) reading the previous
+    release's *storage form* (via `git show <tag>:`) before writing a
+    conversion is part of writing it. Fixed test-first by area; almost no
+    test had a separate red run (agents cannot compile; the coordinator's
+    build was the first run). The first compile of the whole round was
+    error-free; clippy then found seven lints and the suite nine failing tests,
+    all in the round's own tests or doc pins (a test scenario that assumed a
+    create in a non-default locale, which the app refuses by design, was
+    rewritten as an update). Gates green: fmt, clippy `--all-targets
+    --all-features -D warnings`, suite 7327/7327, e2e 321/321, every gen-*
+    check. Convergence: streak stays 0 (7 HIGH); Round 17 pending.
+  - **Post-fix review of the round's own diff** (3 read-only lenses over
+    `git diff`: storage/durability, locale/migration/filter, admin/docs):
+    THREE regressions introduced by the round's fixes — (1) the
+    localization-flip value carry ran `WHERE to IS NULL` against a column
+    created with the field's DEFAULT (every checkbox), so it never fired and
+    marking a checkbox localized would have read false everywhere (fixed:
+    guard on the source, plus a stored per-table `locale_shape` record so a
+    second flip carries again); (2) the "what the admin form renders"
+    predicate assumed hidden fields are filtered at every depth, but the
+    builder filtered only at the root, so unchecking a hidden nested checkbox
+    stopped persisting (fixed: filter at every depth — which also exposed that
+    a display condition on a field nested alone in a group never fired); (3)
+    the reference diff for file deletion counted a queued-format derivative as
+    kept because its column is only overwritten later (fixed: pending
+    conversion columns are excluded). Also: `locale = "all"` still reached the
+    admin upload write; `exists`/`not_exists` semantics under fallback were
+    unrecorded; `serve --stop` still killed at 10 s while the docs said it
+    drained; retired options now block every save unless unchanged; `db
+    cleanup` ignored globals and stale-locale rows; `backup` reported success
+    on a missing `tar`. Decisions (user): publishing = latest draft + request
+    on every surface (drafted files become live at publish; conversions at
+    publish); upload files are deleted only when no live row, draft or version
+    snapshot references them (reference checks, no stored counter; pruning
+    releases files; purge takes all); the duplicate locale-picker template keys
+    are removed after verifying nothing shipped read them. Lesson (again, R14's):
+    a post-fix review of the round's own diff is part of the round — three of
+    the round's fixes carried regressions that no gate caught, because the
+    tests written alongside them pinned the wrong premise.
+    Gates after the post-fix pass: fmt, clippy `--all-targets --all-features
+    -D warnings`, suite 7181/7181, e2e 322/322 (incl. the new nested-condition
+    test), every gen-* check. Two older tests pinned superseded rules and were
+    updated (restore now leaves an uncarried locale untouched; the trash purge
+    no longer needs a file-primitive exemption).
 - 2026-09-07 (21) — **CONVERGENCE ROUND 12** (5 fresh lenses: globals-vs-
   collections parity, relationships/populate/back-refs/ref-count, hook
   semantics & Lua-from-hook contracts, client-side JS/templates/htmx,

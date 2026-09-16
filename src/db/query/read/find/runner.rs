@@ -9,12 +9,10 @@ use super::cursor::{SortInfo, apply_cursor_keyset, check_cursor_sort_value};
 use super::sort::{apply_order_by, resolve_sort};
 use crate::core::CollectionDefinition;
 use crate::core::Document;
-use crate::db::query::filter::{
-    build_where_clause, lookup_column_field_type, resolve_filter_column, resolve_filters,
-};
+use crate::db::query::filter::{build_where_clause, lookup_column_field_type};
 use crate::db::query::read::{decode_row, select::apply_select_filter};
 use crate::db::query::{
-    fts, get_column_names, get_locale_select_columns_full,
+    column_read_expr, fts, get_column_names, get_locale_select_columns_full,
     helpers::{append_soft_delete_filter, append_sql_condition, quote_ident},
     validate_query_fields,
 };
@@ -40,10 +38,9 @@ pub fn find(
     let mut params: Vec<DbValue> = Vec::new();
     let mut has_where = false;
 
-    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
     let where_clause = build_where_clause(
         conn,
-        &resolved_filters,
+        &query.filters,
         slug,
         &def.fields,
         locale_ctx,
@@ -66,7 +63,7 @@ pub fn find(
             using_before,
         };
 
-        let resolved = resolve_filter_column(&sort_col, def, locale_ctx)?;
+        let resolved = column_read_expr(&sort_col, &def.fields, locale_ctx)?;
         let sort_type = lookup_column_field_type(&sort_col, &def.fields);
         check_cursor_sort_value(cursor, &sort_col, sort_type.as_ref())?;
 
@@ -121,10 +118,9 @@ pub fn find_ids(
     let mut params: Vec<DbValue> = Vec::new();
     let mut has_where = false;
 
-    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
     let where_clause = build_where_clause(
         conn,
-        &resolved_filters,
+        &query.filters,
         slug,
         &def.fields,
         locale_ctx,

@@ -24,7 +24,7 @@ pub use self::email::is_valid_email_format;
 pub(crate) use self::has_many::check_has_many_elements;
 pub(crate) use self::length::check_length_bounds;
 pub(crate) use self::numeric::check_numeric_bounds;
-pub(crate) use self::option::check_option_valid;
+pub(crate) use self::option::{OptionCheck, check_option_valid, held_values, undeclared_values};
 pub(crate) use self::polymorphic::check_polymorphic_allowlist;
 pub(crate) use self::relationship_shape::check_relationship_shape;
 pub(crate) use self::required::check_required;

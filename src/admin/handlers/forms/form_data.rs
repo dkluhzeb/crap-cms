@@ -12,28 +12,30 @@
 use std::collections::HashMap;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields},
+    admin::handlers::shared::for_each_admin_form_leaf,
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
     service::values_from_strings,
 };
 
 use super::{join_data::extract_join_data_from_form, select_has_many::transform_select_has_many};
 
-/// Give every checkbox column an explicit value. An HTML checkbox submits
-/// nothing when unchecked, so an absent checkbox in a form submission means
+/// Give every checkbox the form rendered an explicit value. An HTML checkbox
+/// submits nothing when unchecked, so an absent *rendered* checkbox means
 /// "unchecked" — make that explicit as `"0"` so the write path stores false
 /// rather than falling back to the field's `default_value`. That default is for
 /// API creates (Lua / gRPC / MCP) that genuinely omit the field; a form always
 /// reflects the box's shown state (the new-item form pre-checks a `true`
-/// default, so leaving it checked submits `"on"`). Walks groups + transparent
-/// wrappers exactly like the write path, so nested checkbox columns are covered.
+/// default, so leaving it checked submits `"on"`).
+///
+/// A checkbox the form never rendered (`admin.hidden`, or one inside a hidden
+/// group) is left absent: its value is kept, which is what hiding it promises.
+/// The walk is [`for_each_admin_form_leaf`], the same answer the form builder
+/// used to decide what to render, so the two cannot disagree.
 fn normalize_absent_checkboxes(raw: &mut HashMap<String, String>, fields: &[FieldDefinition]) {
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+    for_each_admin_form_leaf(fields, |field, column| {
         if field.field_type == FieldType::Checkbox {
-            raw.entry(prefixed_name(prefix, &field.name))
-                .or_insert_with(|| "0".to_string());
+            raw.entry(column).or_insert_with(|| "0".to_string());
         }
-
-        Ok(())
     });
 }
 
@@ -125,6 +127,17 @@ impl FormData {
     pub fn take_locale(&mut self) -> Option<String> {
         self.take("_locale")
     }
+
+    /// Remove and return the `password` meta key — auth collections only.
+    ///
+    /// Every write surface extracts it the same way: a collection without auth
+    /// has no password to set, and `password` must never reach the write as
+    /// document data.
+    pub fn take_password(&mut self, def: &CollectionDefinition) -> Option<String> {
+        def.is_auth_collection()
+            .then(|| self.take("password"))
+            .flatten()
+    }
 }
 
 impl From<FormData> for DocumentFields {
@@ -139,7 +152,7 @@ impl From<FormData> for DocumentFields {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FieldType;
+    use crate::core::{FieldAdmin, FieldType};
     use serde_json::{Value, json};
 
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
@@ -195,6 +208,100 @@ mod tests {
             form.raw().get("meta__flag"),
             Some(&"0".to_string()),
             "absent nested checkbox -> 0"
+        );
+    }
+
+    /// Regression: a checkbox the form never rendered must stay absent, so the
+    /// write keeps its stored value. Normalizing every checkbox — rendered or
+    /// not — turned an `admin.hidden` `true` into `false` on every save, and
+    /// forced a hidden `default_value = true` to false on create.
+    #[test]
+    fn from_raw_leaves_checkboxes_the_form_never_rendered_absent() {
+        let hidden_box = FieldDefinition::builder("internal", FieldType::Checkbox)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        let hidden_group = FieldDefinition::builder("system", FieldType::Group)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .fields(vec![make_field("flag", FieldType::Checkbox)])
+            .build();
+        let fields = vec![
+            make_field("featured", FieldType::Checkbox),
+            hidden_box,
+            hidden_group,
+        ];
+
+        let form = FormData::from_raw(HashMap::new(), &fields);
+
+        assert_eq!(
+            form.raw().get("featured"),
+            Some(&"0".to_string()),
+            "a rendered absent checkbox is still an explicit uncheck"
+        );
+        assert_eq!(
+            form.raw().get("internal"),
+            None,
+            "a hidden checkbox keeps its stored value"
+        );
+        assert_eq!(
+            form.raw().get("system__flag"),
+            None,
+            "a checkbox inside a hidden group is never rendered either"
+        );
+    }
+
+    /// The two halves of the group case, in one submission: the form renders an
+    /// input for a visible checkbox inside a group but none for a hidden one, so
+    /// a group that submits nothing at all still means "the visible box was
+    /// unchecked" (`meta__flag` -> `"0"`) while the hidden box keeps whatever the
+    /// document holds (`meta__internal` absent). Rendering the hidden box would
+    /// let the editor uncheck it and have the change silently dropped.
+    #[test]
+    fn a_hidden_checkbox_inside_a_visible_group_is_the_only_one_left_absent() {
+        let mut group = make_field("meta", FieldType::Group);
+        group.fields = vec![
+            make_field("flag", FieldType::Checkbox),
+            FieldDefinition::builder("internal", FieldType::Checkbox)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+        ];
+
+        let form = FormData::from_raw(HashMap::new(), &[group]);
+
+        assert_eq!(
+            form.raw().get("meta__flag"),
+            Some(&"0".to_string()),
+            "a rendered checkbox in a group is an explicit uncheck when absent"
+        );
+        assert_eq!(
+            form.raw().get("meta__internal"),
+            None,
+            "a hidden checkbox in a visible group keeps its stored value"
+        );
+    }
+
+    /// Regression: the same rule for a `has_many` scalar — the form renders no
+    /// input for a hidden one, so it must not be normalized to an empty list.
+    #[test]
+    fn from_raw_leaves_has_many_the_form_never_rendered_absent() {
+        let mut visible = make_field("tags", FieldType::Text);
+        visible.has_many = true;
+
+        let mut hidden = FieldDefinition::builder("internal_tags", FieldType::Text)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build();
+        hidden.has_many = true;
+
+        let form = FormData::from_raw(HashMap::new(), &[visible, hidden]);
+
+        assert_eq!(
+            form.raw().get("tags"),
+            Some(&"[]".to_string()),
+            "a rendered has-many with nothing selected is an explicit empty list"
+        );
+        assert_eq!(
+            form.raw().get("internal_tags"),
+            None,
+            "a hidden has-many list survives the save"
         );
     }
 

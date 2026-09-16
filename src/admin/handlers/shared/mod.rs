@@ -4,6 +4,7 @@ mod access;
 mod breadcrumbs;
 mod db_error;
 mod document;
+mod form_fields;
 pub(crate) mod hx;
 mod locale;
 mod pagination;
@@ -19,9 +20,12 @@ pub(crate) use breadcrumbs::{collection_base, collection_item_base, global_base}
 
 // Re-export field context functions from the dedicated module.
 pub(super) use crate::admin::handlers::field_context::{
-    EnrichOptions, apply_display_conditions, build_field_contexts, enrich_field_contexts,
-    split_sidebar_fields,
+    EnrichOptions, apply_display_conditions, build_field_contexts, date_picker_values,
+    enrich_field_contexts, split_sidebar_fields, tag_values_of,
 };
+
+// what the admin form renders
+pub(crate) use form_fields::{admin_form_fields, for_each_admin_form_leaf, renders_in_admin_form};
 
 // Re-export query utilities from the dedicated module.
 pub(crate) use super::query::{
@@ -44,7 +48,7 @@ pub(crate) use document::{
 
 // locale
 pub(crate) use locale::{
-    build_locale_template_data, editor_locale_ctx, extract_editor_locale, is_non_default_locale,
+    editor_locale_ctx, editor_read_ctx, extract_editor_locale, is_non_default_locale,
     parse_request_locale, strip_locale_locked_for_publish,
 };
 
@@ -64,5 +68,5 @@ pub(crate) use response::{
 // versions
 pub(crate) use versions::{
     extract_doc_status, fetch_version_sidebar_data, finish_version_restore,
-    load_version_with_missing_relations, version_to_json,
+    load_version_with_restore_gaps, version_to_json,
 };

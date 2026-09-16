@@ -8,7 +8,7 @@ use crate::core::{Builder, CollectionDefinition};
 use crate::db::{
     DbConnection, DbValue, FilterClause, LocaleContext,
     query::{
-        filter::{build_where_clause, resolve_filters},
+        filter::build_where_clause,
         fts, is_valid_identifier,
         validation::{get_valid_filter_paths, validate_clause_fields},
     },
@@ -58,15 +58,8 @@ pub fn count_with_search(
     let mut sql = format!("SELECT COUNT(*) FROM \"{slug}\"");
     let mut params: Vec<DbValue> = Vec::new();
 
-    let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
-    let where_clause = build_where_clause(
-        conn,
-        &resolved_filters,
-        slug,
-        &def.fields,
-        locale_ctx,
-        &mut params,
-    )?;
+    let where_clause =
+        build_where_clause(conn, filters, slug, &def.fields, locale_ctx, &mut params)?;
     let mut has_where = !where_clause.is_empty();
 
     if has_where {
@@ -129,15 +122,8 @@ pub fn max_updated_at(
     let mut sql = format!("SELECT MAX(updated_at) FROM \"{slug}\"");
     let mut params: Vec<DbValue> = Vec::new();
 
-    let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
-    let where_clause = build_where_clause(
-        conn,
-        &resolved_filters,
-        slug,
-        &def.fields,
-        locale_ctx,
-        &mut params,
-    )?;
+    let where_clause =
+        build_where_clause(conn, filters, slug, &def.fields, locale_ctx, &mut params)?;
     let mut has_where = !where_clause.is_empty();
 
     if has_where {

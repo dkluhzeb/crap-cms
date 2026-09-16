@@ -12,6 +12,7 @@ use crate::{
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
+        write::{UploadSettle, adopt_pending_draft, document_file_keys, settle_upload_write},
     },
 };
 
@@ -157,6 +158,24 @@ pub(crate) fn stored_fields_for_update_rules(
 
 /// Update a document on an existing connection/transaction.
 ///
+/// Authoritative password-policy enforcement for an update (all surfaces): a
+/// weak password on an auth-collection update is rejected as a `password`
+/// field error. An empty password means "no change" and is skipped;
+/// `ctx.password_policy` falls back to the default policy, so this can never
+/// silently skip.
+fn check_update_password(
+    ctx: &ServiceContext,
+    def: &CollectionDefinition,
+    password: Option<&str>,
+) -> Result<()> {
+    validate_password_policy(
+        def.is_auth_collection(),
+        password,
+        ctx.password_policy,
+        EmptyPassword::MeansNoChange,
+    )
+}
+
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
 /// Handles draft-only version saves when `input.draft` is true.
 /// Does NOT manage transactions — caller must open/commit.
@@ -174,6 +193,14 @@ pub(crate) fn update_document_in_conn(
     // whole pipeline sees one shape, the DB edge flattens to columns.
     canonicalize_write_input(&mut input, def);
 
+    // Publishing takes the pending draft as the write's base and lets the
+    // request's own fields win over it — the file that draft stored included,
+    // whose server-derived columns come from the snapshot, read here after the
+    // strip so they are the server's own values and not something a caller
+    // sent. Everything the draft contributes then passes the locale lock, the
+    // access gates and validation exactly like a field the caller sent.
+    adopt_pending_draft(ctx, def, id, &mut input)?;
+
     reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
 
     check_update_access(
@@ -186,16 +213,7 @@ pub(crate) fn update_document_in_conn(
         input.ui_locale.as_deref(),
     )?;
 
-    // Authoritative password-policy enforcement (all surfaces): a weak password
-    // on an auth-collection update is rejected here as a `password` field error.
-    // An empty password means "no change" and is skipped. `ctx.password_policy`
-    // falls back to the default policy, so this can never silently skip.
-    validate_password_policy(
-        def.is_auth_collection(),
-        input.password,
-        ctx.password_policy,
-        EmptyPassword::MeansNoChange,
-    )?;
+    check_update_password(ctx, def, input.password)?;
 
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
@@ -236,12 +254,37 @@ pub(crate) fn update_document_in_conn(
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
 
+    // A draft save writes a version snapshot and leaves the published row —
+    // and every file it references — exactly as it was.
+    let snapshot_only = is_draft && def.has_versions();
+
+    // The files the document references going in — the published row's and
+    // every version snapshot's — so the ones nothing references any more can be
+    // dropped once the write has landed. A draft-only save needs them too: it
+    // can prune the snapshot that was the last reference to an earlier draft's
+    // file. Read last, so a before-hook that rewrote the row through its own
+    // CRUD is accounted for.
+    let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
+
     // A draft save reports its snapshot, read for the write's locale with its own
     // rows. A published write reports the stored row, its join fields (arrays,
     // blocks, has-many) hydrated BEFORE after-change hooks so they can react to
     // nested data, not just scalar columns.
-    let mut doc = if is_draft && def.has_versions() {
-        persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
+    let mut doc = if snapshot_only {
+        let doc = persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?;
+
+        // The published row, its files and their queued conversions are
+        // untouched; the drafted file's own conversions wait for the publish
+        // that makes it live. What can still go is a file whose last reference
+        // was a snapshot this save's pruning removed.
+        settle_upload_write(
+            ctx,
+            &UploadSettle::builder(def, id)
+                .before(Some(&before_files))
+                .build(),
+        )?;
+
+        doc
     } else {
         let opts = PersistOptions::builder()
             .password(input.password)
@@ -250,6 +293,16 @@ pub(crate) fn update_document_in_conn(
             .build();
 
         let mut doc = persist_update(ctx, id, &final_ctx.to_value_map(), &opts)?;
+
+        settle_upload_write(
+            ctx,
+            &UploadSettle::builder(def, id)
+                .before(Some(&before_files))
+                .updated_row(Some(&doc.fields))
+                .conversions(input.upload_conversions.as_ref())
+                .build(),
+        )?;
+
         hydrate_reported(ctx, &mut doc, input.locale_ctx)?;
         doc
     };

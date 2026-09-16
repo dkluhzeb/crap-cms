@@ -18,11 +18,10 @@ use crate::{
         },
         handlers::shared::{
             EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, compute_denied_read_fields, editor_locale_ctx,
-            enrich_field_contexts, extract_doc_status, extract_editor_locale,
-            fetch_version_sidebar_data, flatten_document_values, get_user_doc,
-            is_non_default_locale, paths, render_page, require_global,
-            service_error_to_admin_response, split_sidebar_fields,
+            compute_denied_read_fields, editor_locale_ctx, editor_read_ctx, enrich_field_contexts,
+            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
+            flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
+            require_global, service_error_to_admin_response, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, DocumentFields, FieldDenial, collection::GlobalDefinition},
@@ -50,11 +49,14 @@ fn prepare_edit_fields(
     let values = flatten_document_values(&visible_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
+    // `admin.hidden` means "not in the admin form, value kept" — the same
+    // promise the collection forms make, and the one the submit-side
+    // normalizers rely on when they read an absent key as an edit.
     let mut fields = build_field_contexts(
         &def.fields,
         &values,
         &HashMap::new(),
-        false,
+        true,
         non_default_locale,
     );
 
@@ -65,6 +67,7 @@ fn prepare_edit_fields(
         &visible_fields,
         state,
         &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
             .non_default_locale(non_default_locale)
             .user(get_user_doc(auth_user))
             .locale_ctx(enrich_locale_ctx.as_ref())
@@ -93,7 +96,7 @@ fn prepare_edit_fields(
         &def.fields,
         &form_data_json,
         &state.infra.hook_runner,
-        false,
+        true,
         &cond_ctx,
     );
 
@@ -145,7 +148,7 @@ pub async fn edit_form(
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
-    let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
+    let locale_ctx = editor_read_ctx(&state, editor_locale.as_deref());
 
     // Opt into the draft overlay unconditionally — the service read downgrades
     // (never rejects): an editor sees the latest draft, a read-only viewer falls
@@ -238,7 +241,6 @@ pub async fn edit_form(
         restore_url_prefix: paths::global(&slug),
         versions_url: paths::global_versions(&slug),
         doc_status,
-        locale_data,
     };
 
     render_page(

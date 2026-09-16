@@ -17,7 +17,7 @@ use crate::{
         DbConnection, DbValue,
         query::{
             cursor::{CursorData, SortDirection, SortValue},
-            helpers::{append_sql_condition, sql_ident},
+            helpers::append_sql_condition,
         },
     },
 };
@@ -112,6 +112,12 @@ pub(super) fn apply_cursor_keyset(
 /// surrounding parens). Returns the same shape regardless of NULL
 /// handling so the caller can compose it with an outer `_status`
 /// clause uniformly, or wrap it on its own.
+///
+/// `col` is the sort column's ready-to-embed read expression — for a
+/// localized column the same fallback `COALESCE` the SELECT and the ORDER BY
+/// use. The cursor's `sort_val` comes from the decoded document, i.e. from
+/// that expression, so comparing against anything else made pages skip and
+/// repeat rows.
 fn inner_keyset_clause(
     conn: &dyn DbConnection,
     col: &str,
@@ -120,8 +126,6 @@ fn inner_keyset_clause(
     cursor_id: &str,
     params: &mut Vec<DbValue>,
 ) -> String {
-    let col = sql_ident(col);
-
     if matches!(sort_val, DbValue::Null) {
         let ph_id = conn.placeholder(params.len() + 1);
         params.push(DbValue::Text(cursor_id.to_string()));
@@ -187,22 +191,37 @@ mod tests {
 
     use super::inner_keyset_clause;
 
-    /// The keyset clause quotes a sort column whose locale code has capitals.
+    /// The keyset compares the sort column's read expression verbatim — the
+    /// quoted locale column, and under a fallback the same `COALESCE` the
+    /// SELECT returns the cursor's value through.
     #[test]
-    fn keyset_quotes_an_uppercase_locale_column() {
+    fn the_keyset_compares_the_sort_columns_read_expression() {
         let conn = InMemoryConn::open();
         let mut params = Vec::new();
 
         let clause = inner_keyset_clause(
             &conn,
-            "title__de_DE",
+            "\"title__de_DE\"",
             ">",
             DbValue::Text("a".into()),
             "id1",
             &mut params,
         );
-
         assert!(clause.contains("\"title__de_DE\" > ?1"), "{clause}");
+
+        let mut params = Vec::new();
+        let fallback = inner_keyset_clause(
+            &conn,
+            "COALESCE(\"title__de\", \"title__en\")",
+            ">",
+            DbValue::Text("a".into()),
+            "id1",
+            &mut params,
+        );
+        assert!(
+            fallback.contains("COALESCE(\"title__de\", \"title__en\") > ?1"),
+            "{fallback}"
+        );
     }
 
     /// A text sort value on a numeric/boolean sort column is rejected up

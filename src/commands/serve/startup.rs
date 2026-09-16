@@ -19,7 +19,7 @@ use crate::{
     },
     config::CrapConfig,
     core::{
-        Registry, SharedPasswordProvider, SharedTokenProvider,
+        Readiness, Registry, SharedPasswordProvider, SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::{
             create_cache_with_lease, periodic_clear_interval, spawn_periodic_clear,
@@ -457,7 +457,9 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
             })
             .locale_config(config.locale.clone())
             .password_policy(config.auth.password_policy.clone())
+            .image_max_attempts(config.jobs.system_image_max_attempts())
             .populate_singleflight(populate_singleflight)
+            .readiness(Readiness::new())
             .build(),
     );
 
@@ -543,6 +545,10 @@ async fn run_scheduler_task(
     shutdown: CancellationToken,
 ) -> Result<()> {
     if !enabled {
+        // Nothing else in this process defers readiness — the scheduler's
+        // startup recovery is the only work the probe waits on.
+        res.infra.readiness.mark_ready();
+
         return Ok(());
     }
     scheduler::start(scheduler::SchedulerParams {
@@ -617,7 +623,10 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely
     // for any lingering spawn_blocking threads (e.g. image processing, Lua hooks).
-    // All business logic is complete at this point — let the OS reclaim resources.
+    // Reaching this point means every surface has already finished its own
+    // bounded drain — the servers stopped accepting and closed their in-flight
+    // connections, the scheduler waited out the jobs it had running — so the
+    // only threads left are idle pool workers the OS can reclaim.
     process::exit(exit_code);
 }
 

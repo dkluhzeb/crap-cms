@@ -5,6 +5,27 @@ use anyhow::Result;
 
 use crate::db::{DbConnection, DbValue};
 
+/// The last recorded fire time for `slug`, or `None` if it has never fired.
+///
+/// This is the durable half of the cron window: a process-local "last check"
+/// starts at process start, so a schedule that came due while the process was
+/// down would never be looked at again. Reading the persisted value instead
+/// makes the window survive a restart.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn cron_fired_at(conn: &dyn DbConnection, slug: &str) -> Result<Option<String>> {
+    let p1 = conn.placeholder(1);
+
+    let row = conn.query_one(
+        &format!("SELECT fired_at FROM _crap_cron_fired WHERE slug = {p1}"),
+        &[DbValue::Text(slug.to_string())],
+    )?;
+
+    Ok(row.and_then(|r| r.opt_text_at(0)))
+}
+
 /// Attempt to claim a cron window for a slug. Returns `true` if this
 /// instance won the window (and should fire the job), `false` if another
 /// instance already fired it.
@@ -85,6 +106,30 @@ mod tests {
 
     fn claim(c: &InMemoryConn, fired_at: &str, window_start: &str) -> bool {
         try_claim_cron_window(c, "cleanup", fired_at, window_start).unwrap()
+    }
+
+    #[test]
+    fn a_never_fired_slug_has_no_recorded_window() {
+        let c = conn();
+        assert_eq!(cron_fired_at(&c, "cleanup").unwrap(), None);
+    }
+
+    /// The stored value must come back verbatim: it is compared as a string
+    /// against `window_start` in the claim, so any reformatting on the way
+    /// out would break the equality case the adjacent-window rule relies on.
+    #[test]
+    fn a_recorded_fire_reads_back_verbatim() {
+        let c = conn();
+        claim(
+            &c,
+            "2026-01-01T00:05:00.123456789+00:00",
+            "2026-01-01T00:00:00Z",
+        );
+
+        assert_eq!(
+            cron_fired_at(&c, "cleanup").unwrap().as_deref(),
+            Some("2026-01-01T00:05:00.123456789+00:00")
+        );
     }
 
     #[test]

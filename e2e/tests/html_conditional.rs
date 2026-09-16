@@ -145,6 +145,62 @@ async fn nested_group_condition_is_evaluated() {
     }
 }
 
+// ── a nested condition with no conditioned sibling at the top level ──────
+
+/// The opening tag of the wrapper that carries `marker`, up to the marker.
+///
+/// `group.hbs` stacks the wrapper's attributes over several lines and emits the
+/// `data-field-name` last, so the condition attributes sit *before* the marker;
+/// the tag starts at the nearest preceding `<div`.
+fn wrapper_before<'a>(html: &'a str, marker: &str) -> &'a str {
+    let at = html
+        .find(marker)
+        .unwrap_or_else(|| panic!("rendered form has no {marker}:\n{html}"));
+    let start = html[..at].rfind("<div").unwrap_or(0);
+
+    &html[start..at]
+}
+
+/// Regression: display conditions were only evaluated for a level where at
+/// least one field carried one — the walk returned before its recursion — so a
+/// condition on a field inside a group silently never fired unless one of the
+/// group's *siblings* also had a condition. `events` hides the bug because its
+/// top-level `url` is conditioned too; `workshops` has the condition ONLY on
+/// `details.venue`, which is the shape that used to render with no condition
+/// data at all (the field showed unconditionally).
+#[tokio::test]
+async fn a_condition_nested_alone_in_a_group_is_evaluated_on_the_form() {
+    let app = setup_with_condition_hook();
+    let user_id = create_test_user(&app, "condalone@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "condalone@test.com");
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/workshops/create")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let html = body_string(resp.into_body()).await;
+    let venue = wrapper_before(&html, r#"data-field-name="details__venue""#);
+
+    assert!(
+        venue.contains(r#"data-condition-ref="hooks.conditions.show_when_online""#),
+        "the nested condition must reach the rendered field:\n{venue}"
+    );
+    assert!(
+        venue.contains("form__field--hidden"),
+        "a create form sends no `online`, so the condition resolves false and \
+         the field starts hidden:\n{venue}"
+    );
+}
+
 // ── client_sent_ref_ignored_server_uses_configured_ref ───────────────────
 //
 // Security gate: the handler resolves each field's OWN configured
@@ -258,7 +314,7 @@ end
     config.admin.dev_mode = true;
 
     setup_app_at(
-        vec![make_events_def(), make_users_def()],
+        vec![make_events_def(), make_workshops_def(), make_users_def()],
         vec![],
         config,
         tmp,
@@ -287,6 +343,38 @@ fn make_events_def() -> CollectionDefinition {
             .build(),
         // A group containing a conditioned sub-field — nested conditions in
         // non-repeating containers must evaluate like top-level ones.
+        FieldDefinition::builder("details", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("venue", FieldType::Text)
+                    .admin(
+                        FieldAdmin::builder()
+                            .label(LocalizedString::Plain("Venue".to_string()))
+                            .condition("hooks.conditions.show_when_online")
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build(),
+    ];
+    def
+}
+
+/// The same group/sub-field shape as `events`, but with NO conditioned field at
+/// the top level: the condition sits only on `details.venue`. That is the shape
+/// the display-condition walk used to skip entirely, so it is kept as its own
+/// collection rather than folded into `events`.
+fn make_workshops_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("workshops");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Workshop".to_string())),
+        plural: Some(LocalizedString::Plain("Workshops".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("online", FieldType::Checkbox).build(),
         FieldDefinition::builder("details", FieldType::Group)
             .fields(vec![
                 FieldDefinition::builder("venue", FieldType::Text)

@@ -38,11 +38,11 @@ use hyper_util::{
 };
 use nanoid::nanoid;
 use subtle::ConstantTimeEq;
-use tokio::{net::TcpListener, select, spawn, time::sleep};
+use tokio::{net::TcpListener, select, spawn};
 use tokio_util::sync::CancellationToken;
 use tower::{Service, ServiceBuilder, timeout::TimeoutLayer};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
-use tracing::{info, info_span, warn};
+use tracing::{info, info_span};
 
 use crate::{
     admin::{
@@ -57,8 +57,8 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
     core::{
-        JwtSecret, SharedPasswordProvider, email::create_email_provider_with_lease,
-        rate_limit::LoginRateLimiter,
+        JwtSecret, SERVER_DRAIN_SECS, SharedPasswordProvider, drain_with_deadline,
+        email::create_email_provider_with_lease, rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool},
     service::AppInfra,
@@ -184,8 +184,8 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
     })
 }
 
-/// Bind the listener and run the Axum server (h2c or plain) with a graceful
-/// shutdown and a hard 10s drain deadline.
+/// Bind the listener and run the Axum server (h2c or plain) under the shared
+/// bounded drain (long-lived connections may not close promptly).
 #[cfg(not(tarpaulin_include))]
 async fn serve_admin(
     addr: &str,
@@ -194,39 +194,32 @@ async fn serve_admin(
     shutdown: CancellationToken,
 ) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    let shutdown_timeout = shutdown.clone();
+    let serve_shutdown = shutdown.clone();
 
     let server_future: Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
         info!("Admin server: h2c (HTTP/2 cleartext) enabled");
 
-        Box::pin(serve_h2c(listener, app, shutdown))
+        Box::pin(serve_h2c(listener, app, serve_shutdown))
     } else {
         Box::pin(async move {
             axum::serve(
                 listener,
                 app.into_make_service_with_connect_info::<SocketAddr>(),
             )
-            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .with_graceful_shutdown(serve_shutdown.cancelled_owned())
             .await?;
 
             Ok(())
         })
     };
 
-    // Hard deadline: force-stop after 10s if graceful drain doesn't complete
-    // (SSE streams and other long-lived connections may not close promptly)
-    select! {
-        result = server_future => { result?; }
-        () = async {
-            shutdown_timeout.cancelled().await;
-
-            sleep(Duration::from_secs(10)).await;
-        } => {
-            warn!("Admin server: graceful shutdown timed out after 10s");
-        }
-    }
-
-    Ok(())
+    drain_with_deadline(
+        server_future,
+        shutdown,
+        Duration::from_secs(SERVER_DRAIN_SECS),
+        "Admin server",
+    )
+    .await
 }
 
 /// Run the admin server with h2c (HTTP/2 cleartext) support.
@@ -591,20 +584,39 @@ async fn health_liveness() -> StatusCode {
     StatusCode::OK
 }
 
-/// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
+/// Readiness probe — 200 only once startup has finished AND the DB pool is
+/// healthy; 503 otherwise.
+///
+/// Startup recovery is part of readiness, not just liveness: until the
+/// scheduler has reclaimed the job rows a previous process left `running`,
+/// this node's view of the queue is wrong, so an orchestrator must not route
+/// traffic here or let a rolling deploy move on.
 ///
 /// The pool checkout + probe query are blocking (checkout can park up to
 /// `connection_timeout`), so they run on the blocking thread pool — a
 /// stalled database must not let piling-up probe requests occupy async
 /// worker threads. A join failure reports not-ready.
 async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
+    if !state.infra.readiness.is_ready() {
+        // Skip the probe entirely: the answer is already 503, and a probe
+        // that parks on a pool checkout would only delay saying so.
+        return readiness_status(false, false);
+    }
+
     let pool = state.infra.pool.clone();
 
     let healthy = tokio::task::spawn_blocking(move || db_probe(&pool))
         .await
         .unwrap_or(false);
 
-    if healthy {
+    readiness_status(true, healthy)
+}
+
+/// Ready only when startup has finished AND the database answers. Either one
+/// missing is a 503 — a node still reclaiming job rows is as unfit to receive
+/// traffic as one that can't reach its database.
+fn readiness_status(startup_finished: bool, db_healthy: bool) -> StatusCode {
+    if startup_finished && db_healthy {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -901,6 +913,29 @@ use super::mcp_handler::{mcp_delete_session_handler, mcp_http_handler};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A healthy database is not enough while startup recovery is still
+    /// rewriting the job rows a previous process left `running` — reporting
+    /// ready there lets an orchestrator send traffic to, or advance a rolling
+    /// deploy past, a node whose view of the queue is still wrong.
+    #[test]
+    fn readiness_needs_both_startup_and_the_database() {
+        assert_eq!(readiness_status(true, true), StatusCode::OK);
+
+        assert_eq!(
+            readiness_status(false, true),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "startup recovery still running must not report ready"
+        );
+        assert_eq!(
+            readiness_status(true, false),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            readiness_status(false, false),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 
     #[test]
     fn extract_cookie_single() {

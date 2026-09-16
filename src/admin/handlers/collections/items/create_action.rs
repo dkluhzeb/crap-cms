@@ -7,16 +7,13 @@ use axum::{
     response::Response,
 };
 use tokio::task;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         handlers::{
-            collections::shared::{
-                UploadParams, UploadResult, WriteErrorParams, handle_collection_write_error,
-                process_collection_upload,
-            },
+            collections::shared::{SubmittedMeta, WriteErrorParams, handle_collection_write_error},
             forms::{FormData, parse_form},
             shared::{
                 get_user_doc, htmx_inline_created, htmx_redirect_with_created,
@@ -24,38 +21,14 @@ use crate::{
             },
         },
     },
-    core::{AuthUser, CollectionDefinition, Document, upload},
+    core::{AuthUser, CollectionDefinition, Document, SharedStorage, upload::UploadedFile},
     db::LocaleContext,
     service::{
-        self, AppInfra, ServiceError,
+        self, AppInfra, ServiceContext, ServiceError,
         op::{Create, CreateArgs, Operation},
+        upload::{CreateUploadInput, create_upload},
     },
 };
-
-/// Handle post-create success: commit upload and enqueue conversions.
-fn handle_create_success(
-    state: &AdminState,
-    slug: &str,
-    doc: &Document,
-    upload_result: Option<UploadResult>,
-) {
-    if let Some(mut ur) = upload_result {
-        ur.guard.commit();
-
-        if !ur.queued_conversions.is_empty()
-            && let Ok(conn) = state.infra.pool.get()
-            && let Err(e) = upload::enqueue_conversions(
-                &conn,
-                slug,
-                &doc.id,
-                &ur.queued_conversions,
-                state.config.jobs.system_image_max_attempts(),
-            )
-        {
-            warn!("Failed to enqueue image conversions: {}", e);
-        }
-    }
-}
 
 /// Extract and validate the password field for auth collections.
 /// Returns `Ok(None)` for non-auth collections.
@@ -86,11 +59,14 @@ fn extract_and_validate_password(
 /// Prepared form data for creating a document.
 struct CreateInput {
     form: FormData,
+    /// The multipart file, if the submission carried one. Stored by the upload
+    /// service inside the blocking task — never out here, where a dropped
+    /// handler future would leave the bytes behind a row the blocking task
+    /// went on to commit.
+    file: Option<UploadedFile>,
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
-    /// A file was processed and server-derived metadata injected into `form`.
-    trusted_upload: bool,
 }
 
 /// Owned bundle for the spawn-blocking create body. Process-stable dependencies
@@ -101,29 +77,79 @@ struct CreateBlockingInput {
     def: CollectionDefinition,
     user_doc: Option<Document>,
     ui_locale: Option<String>,
+    max_file_size: u64,
+    image_max_attempts: u32,
     input: CreateInput,
 }
 
-/// Synchronous body of [`spawn_create`]. Builds the service context and runs
-/// the shared [`Create`] operation body with the merged form + join-table
-/// data.
-fn create_document_blocking(
-    args: CreateBlockingInput,
+/// Everything [`run_write`] needs to perform the create itself. All fields are
+/// required and it is built in exactly one place.
+struct WriteArgs<'a> {
+    storage: &'a SharedStorage,
+    ui_locale: Option<String>,
+    max_file_size: u64,
+    image_max_attempts: u32,
+    input: CreateInput,
+}
+
+/// The create itself: an upload write when the submission carries a file, a
+/// plain create otherwise.
+///
+/// A file goes through `service::upload`, the one entry that owns the file
+/// lifecycle (store, metadata, queued conversions) for every surface.
+fn run_write(
+    ctx: &ServiceContext<'_>,
+    args: WriteArgs<'_>,
 ) -> Result<service::WriteResult, ServiceError> {
-    let ctx = service::ServiceContext::collection(&args.slug, &args.def)
-        .infra(&args.infra)
-        .user(args.user_doc.as_ref())
-        .ui_locale(args.ui_locale)
-        .build();
+    if let Some(file) = args.input.file {
+        let result = create_upload(
+            ctx,
+            CreateUploadInput {
+                storage: args.storage,
+                file: &file,
+                form: args.input.form,
+                locale_ctx: args.input.locale_ctx.as_ref(),
+                password: args.input.password,
+                ui_locale: args.ui_locale,
+                draft: args.input.draft,
+                upload_max_file_size: args.max_file_size,
+                image_max_attempts: args.image_max_attempts,
+            },
+        )?;
+
+        return Ok((result.doc, result.req_context));
+    }
 
     let op_args = CreateArgs::builder(args.input.form.into())
         .password(args.input.password)
         .locale_ctx(args.input.locale_ctx)
         .draft(args.input.draft)
-        .trusted_upload_metadata(args.input.trusted_upload)
         .build();
 
-    Create::run(&ctx, op_args)
+    Create::run(ctx, op_args)
+}
+
+/// Synchronous body of [`spawn_create`]. Builds the service context and runs
+/// the create.
+fn create_document_blocking(
+    args: CreateBlockingInput,
+) -> Result<service::WriteResult, ServiceError> {
+    let ctx = ServiceContext::collection(&args.slug, &args.def)
+        .infra(&args.infra)
+        .user(args.user_doc.as_ref())
+        .ui_locale(args.ui_locale.clone())
+        .build();
+
+    run_write(
+        &ctx,
+        WriteArgs {
+            storage: &args.infra.storage,
+            ui_locale: args.ui_locale.clone(),
+            max_file_size: args.max_file_size,
+            image_max_attempts: args.image_max_attempts,
+            input: args.input,
+        },
+    )
 }
 
 /// Clone state and run `service::create_document` in a blocking task.
@@ -142,6 +168,8 @@ async fn spawn_create(
         def: def.clone(),
         user_doc: get_user_doc(auth_user).cloned(),
         ui_locale,
+        max_file_size: state.config.upload.max_file_size,
+        image_max_attempts: state.config.jobs.system_image_max_attempts(),
         input,
     };
 
@@ -182,41 +210,21 @@ pub async fn create_action(
 
     let mut form = FormData::from_raw(form_data, &def.fields);
 
-    // Process upload if file present
-    let mut upload_result = None;
+    // A file only reaches the write when the collection accepts one.
+    let file = file.filter(|_| def.is_upload_collection());
 
-    if let Some(f) = file
-        && def.upload.is_some()
-    {
-        match process_collection_upload(
-            &UploadParams {
-                state: &state,
-                def: &def,
-                slug: &slug,
-                doc_id: None,
-                locale_ctx: None,
-                auth_user: auth_user.as_ref(),
-            },
-            form.raw_mut(),
-            f,
-        )
-        .await
-        {
-            Ok(ur) => upload_result = Some(ur),
-            Err(resp) => return resp,
-        }
-    }
-
-    // Field write access is now checked inside service::create_document_in_conn.
-
+    // Field and collection write access are checked inside the service write.
     let password = match extract_and_validate_password(&state, &def, form.raw_mut()) {
         Ok(pw) => pw,
         Err(resp) => return *resp,
     };
 
     let draft = form.take_action() == "save_draft";
-    let locale_ctx = match parse_request_locale(form.take_locale().as_deref(), &state.config.locale)
-    {
+
+    // Kept past the write: an error re-render has to put `_locale` back into
+    // the form, or the corrected save lands in the default locale.
+    let submitted_locale = form.take_locale();
+    let locale_ctx = match parse_request_locale(submitted_locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return toast_only_error(&msg),
     };
@@ -230,18 +238,16 @@ pub async fn create_action(
         auth_user.as_ref(),
         CreateInput {
             form,
+            file,
             password,
             locale_ctx,
             draft,
-            trusted_upload: upload_result.is_some(),
         },
     )
     .await;
 
     match result {
         Ok(Ok((doc, _req_context))) => {
-            handle_create_success(&state, &slug, &doc, upload_result);
-
             let label = def
                 .title_field()
                 .and_then(|f| doc.fields.get(f))
@@ -262,6 +268,7 @@ pub async fn create_action(
                 err: e,
                 doc_id: None,
                 auth_user: auth_user.as_ref(),
+                meta: SubmittedMeta::new(submitted_locale.as_deref(), None),
             })
             .await
         }

@@ -189,6 +189,42 @@ const SHAPE_READ_DOCUMENT: Chokepoint = Chokepoint {
     )],
 };
 
+/// `service::upload::{create_upload, update_upload}` is the one entry an upload
+/// write goes through, and `service::write::settle_upload_write` — inside the
+/// write transaction — is the one place that decides what happens to the file
+/// the row stops referencing and to the conversions still queued for it. A
+/// surface that spells the lifecycle out again gets one of the parts wrong: the
+/// admin's copy deleted the published file on a *draft* save (every live page
+/// 404s, and no version brings it back), never cancelled the replaced file's
+/// conversions, which then overwrote the new file's derivative URLs, and held
+/// the stored file's `CleanupGuard` in the async handler — a dropped handler
+/// future deleted the bytes of a row the blocking task had already committed.
+const UPLOAD_WRITE_LIFECYCLE: Chokepoint = Chokepoint {
+    name: "service::upload::{create_upload, update_upload} / settle_upload_write",
+    scan_root: "src",
+    home: Some("src/core/upload"),
+    copy_pattern: r"delete_upload_files\(|enqueue_conversions\(|process_upload\(|\bCleanupGuard\b",
+    fix: "Write uploads through `service::upload::create_upload` / \
+          `update_upload`. It stores the file and commits its cleanup guard in \
+          one synchronous body, and what happens to the previous file and its \
+          queued conversions is settled inside the write transaction by \
+          `service::write::settle_upload_write`, which keys the deletion on \
+          the files the row stopped referencing — not on whether the request \
+          carried one.",
+    allowlist: &[
+        (
+            "src/service/upload.rs",
+            "The chokepoint itself: the only place a file is stored, and the only scope its \
+             cleanup guard lives in — a synchronous body, never an async handler that can be \
+             dropped mid-await while the write commits",
+        ),
+        (
+            "src/service/write/upload_files.rs",
+            "The chokepoint itself: the in-transaction file/job settlement",
+        ),
+    ],
+};
+
 /// Every chokepoint, for the allowlist-staleness companion test.
 const CHOKEPOINTS: &[&Chokepoint] = &[
     &LOCALE_CONTEXT,
@@ -198,6 +234,7 @@ const CHOKEPOINTS: &[&Chokepoint] = &[
     &EDITOR_LOCALE_CTX,
     &COMPANION_SUFFIX,
     &SHAPE_READ_DOCUMENT,
+    &UPLOAD_WRITE_LIFECYCLE,
 ];
 
 // ── the shared scan ──────────────────────────────────────────────────────────
@@ -426,6 +463,11 @@ fn companion_suffixes_are_spelled_once() {
 #[test]
 fn upload_documents_take_their_read_shape_in_one_place() {
     SHAPE_READ_DOCUMENT.assert_no_copies();
+}
+
+#[test]
+fn upload_writes_settle_their_files_and_jobs_in_one_place() {
+    UPLOAD_WRITE_LIFECYCLE.assert_no_copies();
 }
 
 #[test]

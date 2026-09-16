@@ -19,6 +19,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
+use crap_cms::db::query::cursor::{CursorData, SortDirection, SortValue};
 use crap_cms::db::{DbConnection, migrate, ops, pool, query};
 use serde_json::json;
 
@@ -308,6 +309,95 @@ fn filter_on_localized_field() {
         ops::find_documents(&pool, "localized_pages", &def, &q, Some(&en_ctx)).expect("Find");
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("title"), Some("Hello World"));
+}
+
+/// Under `fallback = true` the listed value of a localized field can come from
+/// the default locale. Filtering, sorting and paginating must agree with what
+/// the listing shows: they used to compare the bare `title__de`, so a document
+/// listed with its English title was missed by a filter on that title, sorted
+/// as NULL, and skipped when paging past it.
+#[test]
+fn fallback_values_agree_across_filter_sort_and_pagination() {
+    let (_tmp, pool, def, locale_config) = setup_localized();
+
+    let ctx_for = |locale: &str| query::LocaleContext {
+        mode: query::LocaleMode::Single(locale.to_string()),
+        config: locale_config.clone(),
+    };
+
+    // "Zebra" exists only in English; "Alpha" only in German. Read in German
+    // with fallback on, the pair is ("Alpha", "Zebra") — the reverse of the
+    // order the bare German column (NULL, "Alpha") would produce.
+    for (locale, title, slug) in &[("en", "Zebra", "zebra"), ("de", "Alpha", "alpha")] {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("slug_field".to_string(), json!(slug));
+        let mut conn = pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        query::create(&tx, "localized_pages", &def, &data, Some(&ctx_for(locale))).expect("Create");
+        tx.commit().expect("Commit");
+    }
+
+    let de = ctx_for("de");
+    let sorted = query::FindQuery::builder()
+        .order_by(Some("title".to_string()))
+        .build();
+
+    let listed = ops::find_documents(&pool, "localized_pages", &def, &sorted, Some(&de))
+        .expect("Find sorted");
+    let titles: Vec<&str> = listed.iter().filter_map(|d| d.get_str("title")).collect();
+    assert_eq!(
+        titles,
+        vec!["Alpha", "Zebra"],
+        "the sort must order by the values the read returns"
+    );
+
+    // The fallback value is matchable by a filter.
+    let filtered = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Equals("Zebra".to_string()),
+        })])
+        .build();
+    let matched = ops::find_documents(&pool, "localized_pages", &def, &filtered, Some(&de))
+        .expect("Find filtered");
+    assert_eq!(
+        matched.len(),
+        1,
+        "a document listed under its fallback title must match a filter on it"
+    );
+    assert_eq!(matched[0].get_str("title"), Some("Zebra"));
+
+    // Paging one row at a time visits both, in the listed order.
+    let page_one = query::FindQuery::builder()
+        .order_by(Some("title".to_string()))
+        .limit(Some(1))
+        .build();
+    let first = ops::find_documents(&pool, "localized_pages", &def, &page_one, Some(&de))
+        .expect("Find page 1");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].get_str("title"), Some("Alpha"));
+
+    let cursor = CursorData {
+        sort_col: "title".to_string(),
+        sort_dir: SortDirection::Asc,
+        sort_val: SortValue::Text("Alpha".to_string()),
+        id: first[0].id.to_string(),
+        status_val: None,
+    };
+    let page_two = query::FindQuery::builder()
+        .order_by(Some("title".to_string()))
+        .limit(Some(1))
+        .after_cursor(Some(cursor))
+        .build();
+    let second = ops::find_documents(&pool, "localized_pages", &def, &page_two, Some(&de))
+        .expect("Find page 2");
+    assert_eq!(
+        second.len(),
+        1,
+        "the keyset must carry over to the fallback-valued row"
+    );
+    assert_eq!(second[0].get_str("title"), Some("Zebra"));
 }
 
 // ── Locale-Aware Join Table Tests ────────────────────────────────────────────

@@ -1,4 +1,11 @@
 {{#> partials/field variant="fieldset"}}
+  {{#if readonly}}
+    <input
+      type="hidden"
+      name="{{name}}"
+      value="{{value}}"
+    />
+  {{/if}}
   {{#each options}}
     <label class="form__radio-label">
       <input
@@ -6,9 +13,10 @@
         name="{{../name}}"
         value="{{this.value}}"
         {{#if this.selected}}checked{{/if}}
+        {{#if this.unlisted}}data-unlisted{{/if}}
         {{#if ../readonly}}disabled{{/if}}
       />
-      <span>{{this.label}}</span>
+      <span>{{> partials/option-label}}</span>
     </label>
   {{/each}}
 {{/partials/field}}

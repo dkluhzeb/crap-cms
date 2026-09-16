@@ -118,6 +118,11 @@ fn create_many_pooled(
                 // A failure here returns via `?`; the envelope rolls back
                 // every document created so far.
                 let (doc, _after_ctx) = create_document_in_conn(inner, input)?;
+
+                // Inside the transaction with the account itself — see the
+                // single-document create.
+                inner.maybe_send_verification(&doc)?;
+
                 documents.push(doc);
                 created += 1;
             }
@@ -130,10 +135,9 @@ fn create_many_pooled(
         },
         |ctx, result| {
             // Per-doc events are gated by `ctx.emit_events` (bulk defaults to
-            // off). Verification emails always send.
+            // off). Verification emails went in with the transaction body.
             for doc in &result.documents {
                 ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
-                ctx.maybe_send_verification(doc);
             }
         },
     )
@@ -164,7 +168,7 @@ fn create_many_on_conn(
 
         // Gated by `ctx.emit_events`; verification emails always send.
         ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
-        ctx.maybe_send_verification(&doc);
+        ctx.maybe_send_verification(&doc)?;
         documents.push(doc);
         created += 1;
     }

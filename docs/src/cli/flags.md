@@ -56,7 +56,7 @@ crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|grpc
 | Flag | Description |
 |------|-------------|
 | `-d`, `--detach` | Run in the background (prints PID and exits) |
-| `--stop` | Stop a running detached instance (SIGTERM, then SIGKILL after 10s) |
+| `--stop` | Stop a running detached instance (SIGTERM; running jobs are drained up to the longest configured `[jobs.queues.<name>] timeout` plus five minutes, then SIGKILL; a Lua job's own `timeout` is not part of that deadline — raise the matching queue timeout for long Lua jobs) |
 | `--restart` | Restart a running detached instance (stop + start) |
 | `--status` | Show whether a detached instance is running (PID, uptime) |
 | `--json` | Output logs as structured JSON (for log aggregation; forwarded to the detached child) |
@@ -698,9 +698,9 @@ crap-cms db cleanup [--confirm]
 
 | Flag | Description |
 |------|-------------|
-| `--confirm` | Actually drop orphan columns (default: dry-run report only) |
+| `--confirm` | Apply the changes: drop orphan columns and delete stale-locale junction rows (default: dry-run report only) |
 
-Detects columns in collection tables that don't correspond to any field in the current Lua definitions. System columns (`_`-prefixed like `_password_hash`, `_locked`) are always kept. Plugin columns are safe because plugins run during schema loading — their fields are part of the live definitions.
+Detects columns in collection and global tables that don't correspond to any field in the current Lua definitions, and rows in array, blocks and relationship junction tables whose `_locale` is no longer configured. System columns (`_`-prefixed like `_password_hash`, `_locked`) are always kept. Plugin columns are safe because plugins run during schema loading — their fields are part of the live definitions.
 
 ```bash
 # Dry run — show orphans without removing them
@@ -833,7 +833,7 @@ crap-cms backup [-o <DIR>] [-i]
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--output` | `-o` | Output directory (default: `<config>/backups/`) |
-| `--include-uploads` | `-i` | Also compress the uploads directory |
+| `--include-uploads` | `-i` | Also compress the uploads directory (the command fails if `tar` is missing or fails) |
 
 ```bash
 crap-cms backup
@@ -852,7 +852,7 @@ crap-cms restore <BACKUP> [-i] [-y]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--include-uploads` | `-i` | Also restore uploads from `uploads.tar.gz` if present |
+| `--include-uploads` | `-i` | Also restore uploads from `uploads.tar.gz` if present (skipped with a note when `[upload] storage` is not `local`, as with `backup`) |
 | `--confirm` | `-y` | Required — confirms the destructive operation |
 
 Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files. Refuses while a `serve`, `work` or stdio `mcp` process or any other CLI command uses the project (they hold `data/crap.lock`), and keeps them from starting until the restore finishes. A backed-up auth secret is written back to `data/.jwt_secret`; a different secret already there is kept as `data/.jwt_secret.pre-restore-<timestamp>`, so repeated restores never overwrite an earlier one — unless the restore's own config load generated it, when it holds nothing worth keeping. When `crap.toml` sets `[auth] secret`, that secret takes precedence and the restore warns that the backup's secret isn't used.

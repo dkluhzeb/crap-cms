@@ -8,10 +8,17 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+#[cfg(unix)]
+use std::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, bail};
 use tracing::{info, warn};
 
+#[cfg(unix)]
+use crate::config::JobsConfig;
 use crate::{
     config::CrapConfig,
     core::{
@@ -264,6 +271,83 @@ pub fn is_process_running(pid: u32) -> bool {
     send_signal(pid, 0).is_ok()
 }
 
+// ── Graceful-stop helpers ────────────────────────────────────────────────
+
+/// How often a stop checks whether the process it signalled has exited.
+#[cfg(unix)]
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How long the kernel is given to reap a force-killed process before its PID
+/// file is removed.
+#[cfg(unix)]
+const SIGKILL_SETTLE: Duration = Duration::from_millis(500);
+
+/// Names where the stop deadline comes from, for the log line that announces
+/// how long the stop will wait.
+#[cfg(unix)]
+pub const STOP_DEADLINE_SOURCE: &str = "longest configured job timeout plus drain grace";
+
+/// How long a `--stop` waits for a detached crap-cms process to drain before
+/// it escalates to `SIGKILL`.
+///
+/// Every crap-cms process drains on `SIGTERM`: it stops taking new work and
+/// waits for what it already holds — the job runs it claimed, and for a server
+/// the requests in flight. Killing it before those can finish is the very
+/// crash the drain exists to avoid, so the deadline comes from the same
+/// configured job timeouts the process itself drains by. A config that won't
+/// load falls back to the framework defaults — never to a number below them.
+#[cfg(unix)]
+pub fn stop_deadline(config_dir: &Path) -> Duration {
+    let secs = load_and_validate_config(config_dir).map_or_else(
+        |e| {
+            warn!("Could not read job timeouts for the stop deadline ({e:#}) — using defaults");
+
+            JobsConfig::default().drain_deadline_secs()
+        },
+        |cfg| cfg.jobs.drain_deadline_secs(),
+    );
+
+    Duration::from_secs(secs)
+}
+
+/// Poll `predicate` until it returns `false` or the timeout elapses.
+///
+/// Returns `true` iff the predicate transitioned to `false` before the
+/// deadline, `false` iff the timeout elapsed first. The predicate is called
+/// once immediately, then at each `poll_interval` until the deadline.
+#[cfg(unix)]
+fn wait_until_false<F>(timeout: Duration, poll_interval: Duration, mut predicate: F) -> bool
+where
+    F: FnMut() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        if !predicate() {
+            return true;
+        }
+
+        sleep(poll_interval);
+    }
+
+    !predicate()
+}
+
+/// Wait up to `grace` for `pid` to exit. `true` iff it exited in time.
+#[cfg(unix)]
+pub fn wait_for_exit(pid: u32, grace: Duration) -> bool {
+    wait_until_false(grace, STOP_POLL_INTERVAL, || is_process_running(pid))
+}
+
+/// Force-kill a process that outlasted its stop deadline, then give the kernel
+/// a moment to reap it so the caller's PID-file cleanup is not racing it.
+#[cfg(unix)]
+pub fn force_kill(pid: u32) {
+    let _ = send_signal(pid, libc::SIGKILL);
+
+    sleep(SIGKILL_SETTLE);
+}
+
 /// The server's PID file name (written by `serve`, read by `serve --stop` and
 /// the status checks).
 pub const SERVER_PID_FILENAME: &str = "crap.pid";
@@ -375,8 +459,69 @@ pub fn check_existing_pid(config_dir: &Path, filename: &str) {
 mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[cfg(unix)]
+    use crate::config::JOB_DRAIN_GRACE_SECS;
 
     use super::*;
+
+    /// The escalation to `SIGKILL` must never come before the longest job a
+    /// process in this deployment is allowed to run.
+    #[cfg(unix)]
+    #[test]
+    fn the_stop_deadline_tracks_the_configured_job_timeouts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[jobs.queues.reports]\ntimeout = \"3h\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            stop_deadline(tmp.path()),
+            Duration::from_secs(3 * 3600 + JOB_DRAIN_GRACE_SECS)
+        );
+    }
+
+    /// A config that can't be read must not silently shrink the deadline to
+    /// something below the framework's own job timeouts.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_config_falls_back_to_the_framework_deadline() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("crap.toml"), "[jobs]\nnot_a_field = 1\n").unwrap();
+
+        assert_eq!(
+            stop_deadline(tmp.path()),
+            Duration::from_secs(JobsConfig::default().drain_deadline_secs())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_until_false_returns_true_when_predicate_flips() {
+        let counter = AtomicU32::new(0);
+        let exited = wait_until_false(Duration::from_secs(5), Duration::from_millis(10), || {
+            counter.fetch_add(1, Ordering::SeqCst) < 3
+        });
+        assert!(exited, "predicate flipped false, should return true");
+    }
+
+    /// A process that never responds to `SIGTERM` must let the deadline
+    /// elapse, so the caller escalates to `SIGKILL`. The test uses a short
+    /// timeout so it runs quickly.
+    #[cfg(unix)]
+    #[test]
+    fn wait_until_false_returns_false_when_predicate_stays_true() {
+        let exited = wait_until_false(
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+            || true,
+        );
+        assert!(!exited, "predicate never flipped, should return false");
+    }
 
     /// Regression: CLI commands opened the database without the instance lock,
     /// so a restore could replace the database while one wrote to it.

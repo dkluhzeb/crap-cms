@@ -111,8 +111,8 @@ of the tables.
 | `label` | string \| table | `nil` | UI label (defaults to title-cased field name). Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `placeholder` | string \| table | `nil` | Input placeholder text. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
-| `hidden` | boolean | `false` | Hide from the admin edit form. The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it. For full API stripping, use the top-level `hidden` field property instead. |
-| `readonly` | boolean | `false` | Display but don't allow editing |
+| `hidden` | boolean | `false` | Hide from the admin edit form (collections and globals, at every nesting depth). The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it, and an admin save never overwrites it — a hidden checkbox or multi-value list keeps its stored value. For full API stripping, use the top-level `hidden` field property instead. |
+| `readonly` | boolean | `false` | Display but don't allow editing. Honoured by every editable field type, including checkbox, select, radio and a timezone date's zone picker, which render disabled with a hidden input carrying the stored value (a password input is never rendered readonly). Enforced by the form only: an API write is not restricted by it. |
 | `width` | string | `nil` | Field width: `"full"` (default), `"half"`, `"third"`, or any CSS width string (`"50%"`, `"200px"`) |
 | `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |
 | `condition` | string | `nil` | Lua function ref for conditional visibility (see [Conditions](../hooks/conditions.md)) |

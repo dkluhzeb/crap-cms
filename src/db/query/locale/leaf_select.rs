@@ -84,18 +84,12 @@ fn add_locale_columns(
         return Ok(());
     };
 
-    let column = quote_ident(&locale_column(field_name, read.locale)?);
+    // The one read expression — shared with the filter, the sort and the
+    // keyset, so a value the SELECT shows is the value they compare against.
+    let value = read.column_expr(field_name)?;
     let alias = quote_ident(field_name);
 
-    let expr = match read.fallback {
-        Some(fallback) => format!(
-            "COALESCE({column}, {}) AS {alias}",
-            quote_ident(&locale_column(field_name, fallback)?)
-        ),
-        None => format!("{column} AS {alias}"),
-    };
-
-    select_exprs.push(expr);
+    select_exprs.push(format!("{value} AS {alias}"));
     result_names.push(field_name.to_string());
 
     Ok(())
@@ -109,7 +103,7 @@ mod tests {
         db::{
             LocaleMode,
             query::{
-                get_locale_select_columns,
+                column_read_expr, get_locale_select_columns,
                 locale::test_support::localized_code_lang_field,
                 test_helpers::{
                     make_field, make_group_field, make_locale_config, make_localized_field,
@@ -118,6 +112,30 @@ mod tests {
             },
         },
     };
+
+    /// The SELECT's source expression for a localized column IS the expression
+    /// the filter, the sort and the keyset read it through. If the two ever
+    /// drift, a listed fallback value stops matching its own filter and the
+    /// page boundaries stop lining up with the rows.
+    #[test]
+    fn the_select_reads_a_localized_column_through_the_shared_expression() {
+        let fields = vec![make_localized_field("title", FieldType::Text)];
+
+        for mode in [LocaleMode::Default, LocaleMode::Single("de".to_string())] {
+            let ctx = LocaleContext {
+                mode,
+                config: make_locale_config(),
+            };
+
+            let (exprs, _) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+            let shared = column_read_expr("title", &fields, Some(&ctx)).unwrap();
+
+            assert!(
+                exprs.contains(&format!("{shared} AS \"title\"")),
+                "select must read `title` through `{shared}`, got: {exprs:?}"
+            );
+        }
+    }
 
     #[test]
     fn get_locale_select_columns_tabs_with_group() {

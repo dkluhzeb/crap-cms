@@ -174,7 +174,7 @@ field definitions.
 
 | Field | Type | Required | Surfaces | Description |
 |-------|------|----------|----------|-------------|
-| `locale` | locale (string) |  | gRPC, MCP, Lua | Locale code (e.g. 'en', 'de') for localized fields |
+| `locale` | locale (string) |  | gRPC, MCP, Lua | Locale code (e.g. 'en', 'de') or 'all' for all locales |
 | `draft` | boolean |  | gRPC, MCP, Lua | Read unpublished (draft) content (default: false) |
 
 ### `update_global`

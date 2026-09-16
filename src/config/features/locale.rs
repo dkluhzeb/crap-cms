@@ -1,7 +1,11 @@
 //! Locale / i18n configuration.
 
+use std::collections::HashMap;
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::db::query::sanitize_locale;
 
 /// Internationalization / locale configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, crap_cms_macros::ConfigKeys)]
@@ -32,6 +36,36 @@ impl LocaleConfig {
         !self.locales.is_empty()
     }
 
+    /// A stable fingerprint of the parts of the configuration the stored
+    /// columns depend on: the default locale and the SET of locales.
+    ///
+    /// Versioned one-time migrations store it alongside their version so a
+    /// locale added or removed — which changes which columns exist and which
+    /// ones a computation walks — makes the gated work run again instead of
+    /// leaving a stale result behind forever.
+    ///
+    /// The codes are sorted, because the order they are listed in changes no
+    /// column and no walk: reordering `locales` would otherwise reopen every
+    /// gate and recompute a whole database's worth of work for nothing. The
+    /// default locale leads the value — it decides which column a bare read
+    /// takes — so [`Self::default_locale_of_fingerprint`] can still read it
+    /// back.
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        let mut codes: Vec<&str> = self.locales.iter().map(String::as_str).collect();
+        codes.sort_unstable();
+
+        format!("{}|{}", self.default_locale, codes.join(","))
+    }
+
+    /// The default locale recorded in a [`Self::fingerprint`] value, or `None`
+    /// when the value has no fingerprint shape. Locale codes contain no `|`,
+    /// so the split is unambiguous.
+    #[must_use]
+    pub fn default_locale_of_fingerprint(fingerprint: &str) -> Option<&str> {
+        fingerprint.split_once('|').map(|(default, _)| default)
+    }
+
     /// Validate that all locale codes are safe identifiers (alphanumeric, hyphens,
     /// underscores only). This prevents SQL injection via locale strings that are
     /// interpolated into DDL during migrations.
@@ -46,13 +80,7 @@ impl LocaleConfig {
             Self::validate_locale_code(locale)?;
         }
 
-        // Duplicate locales would generate the same `field__<locale>` column
-        // twice, crashing migration with a confusing "duplicate column" error.
-        for (i, locale) in self.locales.iter().enumerate() {
-            if self.locales[..i].contains(locale) {
-                bail!("Duplicate locale '{locale}' in the locales list");
-            }
-        }
+        self.reject_colliding_locales()?;
 
         // When locales are enabled, the default locale must be in the list
         if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
@@ -60,6 +88,36 @@ impl LocaleConfig {
                 "default_locale '{}' must be included in the locales list {:?}",
                 self.default_locale,
                 self.locales
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Reject two locales that would share a column.
+    ///
+    /// Columns are named after the locale's SANITIZED form, so `pt-BR` and
+    /// `pt_BR` both store into `title__pt_BR`: the migration either fails with
+    /// a confusing duplicate-column error or, where the column already exists,
+    /// two locales silently overwrite each other's content. Comparing the raw
+    /// codes missed that entirely.
+    fn reject_colliding_locales(&self) -> Result<()> {
+        let mut by_column: HashMap<String, &str> = HashMap::new();
+
+        for locale in &self.locales {
+            let column_form = sanitize_locale(locale)?;
+
+            let Some(previous) = by_column.insert(column_form.clone(), locale) else {
+                continue;
+            };
+
+            if previous == locale {
+                bail!("Duplicate locale '{locale}' in the locales list");
+            }
+
+            bail!(
+                "Locales '{previous}' and '{locale}' both store their values in \
+                 '__{column_form}' columns — locale codes must differ by more than a separator"
             );
         }
 
@@ -119,6 +177,81 @@ mod tests {
         };
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("Duplicate locale 'en'"), "unexpected: {err}");
+    }
+
+    /// Column names use the locale's sanitized form, so `pt-BR` and `pt_BR`
+    /// are the same column. Validating the raw codes let the pair through and
+    /// the migration failed (or two locales shared one column's content).
+    #[test]
+    fn locale_validation_rejects_codes_that_share_a_column() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "pt-BR".to_string(), "pt_BR".to_string()],
+            fallback: true,
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+
+        assert!(err.contains("'pt-BR' and 'pt_BR'"), "unexpected: {err}");
+        assert!(err.contains("__pt_BR"), "unexpected: {err}");
+    }
+
+    /// The fingerprint follows the default locale and the set of locales —
+    /// what the stored columns and the computations over them depend on.
+    #[test]
+    fn the_fingerprint_tracks_the_default_locale_and_the_locale_list() {
+        let en_de = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        assert_eq!(en_de.fingerprint(), "en|de,en");
+        assert_eq!(
+            LocaleConfig::default_locale_of_fingerprint(&en_de.fingerprint()),
+            Some("en")
+        );
+
+        let dropped = LocaleConfig {
+            locales: vec!["en".to_string()],
+            ..en_de.clone()
+        };
+        let moved_default = LocaleConfig {
+            default_locale: "de".to_string(),
+            ..en_de.clone()
+        };
+
+        for other in [dropped, moved_default] {
+            assert_ne!(en_de.fingerprint(), other.fingerprint());
+        }
+
+        assert_eq!(
+            LocaleConfig::default_locale_of_fingerprint("no-separator"),
+            None
+        );
+    }
+
+    /// Listing the same locales in another order changes no column and no
+    /// walk, so the fingerprint must not move — a gate keyed on it would
+    /// otherwise recompute a whole database's worth of work for nothing.
+    #[test]
+    fn reordering_the_locales_leaves_the_fingerprint_alone() {
+        let en_de = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let reordered = LocaleConfig {
+            locales: vec!["de".to_string(), "en".to_string()],
+            ..en_de.clone()
+        };
+
+        assert_eq!(en_de.fingerprint(), reordered.fingerprint());
+        assert_eq!(
+            LocaleConfig::default_locale_of_fingerprint(&reordered.fingerprint()),
+            Some("en"),
+            "the default locale still leads the value"
+        );
     }
 
     #[test]

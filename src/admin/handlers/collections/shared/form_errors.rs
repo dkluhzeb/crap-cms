@@ -11,22 +11,25 @@ use crate::{
         AdminState,
         context::{
             BasePageContext, CollectionContext, CollectionPermissions, DocumentRef, PageMeta,
-            PageType, page::collections::CollectionFormErrorPage,
+            PageType, field::FieldContext, page::collections::CollectionFormErrorPage,
         },
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts, editor_locale_ctx,
-                enrich_field_contexts, forbidden, get_user_doc, page_with_toast, paths,
-                redirect_response, split_sidebar_fields, toast_only_error,
+                EnrichOptions, apply_display_conditions, build_field_contexts, editor_read_ctx,
+                enrich_field_contexts, forbidden, get_user_doc, is_non_default_locale,
+                page_with_toast, paths, redirect_response, split_sidebar_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
     },
     core::{AuthUser, CollectionDefinition, FieldDefinition, ValidationError},
+    db::LocaleContext,
     hooks::ConditionContext,
     service::ServiceError,
 };
+
+use super::{locked_field, password_field};
 
 /// Decide the toast message for a write error that fell through the form's typed
 /// `AccessDenied` / `Validation` arms. A Lua hook abort reaches the admin path as
@@ -49,7 +52,16 @@ pub(in crate::admin::handlers::collections) fn write_error_toast(
     "Something went wrong while saving. Please try again.".to_string()
 }
 
-/// Collect hidden upload field values from form data for re-rendering after validation errors.
+/// The hidden field values the submitted form actually carried, so the error
+/// re-render can put them back as hidden inputs.
+///
+/// On an upload collection that is the focal point (`focal_x` / `focal_y`): the
+/// edit page renders those inside the file-preview block, which the slim error
+/// page does not carry, so without this round-trip a failed save resets the
+/// focal point the user just moved. The server-derived columns (`url`,
+/// `{size}_url`, `filesize`, …) are hidden fields too, but no form renders them
+/// as inputs and every write strips them from user data, so they are simply
+/// absent from `form_data` and nothing is collected for them.
 pub(in crate::admin::handlers::collections) fn collect_upload_hidden_fields(
     fields: &[FieldDefinition],
     form_data: &HashMap<String, String>,
@@ -67,6 +79,27 @@ pub(in crate::admin::handlers::collections) fn collect_upload_hidden_fields(
     json!(hidden_fields)
 }
 
+/// The meta inputs a write handler takes out of the raw form before the write.
+///
+/// They are not document data, so they never reach the write's `DocumentFields`
+/// — but the form did render them, and an error re-render has to put them back:
+/// without `_locale` the corrected save writes a translation into the default
+/// locale's columns, and without `_locked` the update reads the missing box as
+/// an explicit unlock.
+#[derive(Debug, Clone, Copy, Default)]
+pub(in crate::admin::handlers::collections) struct SubmittedMeta<'a> {
+    /// The content locale the form was submitted in (`_locale`).
+    pub locale: Option<&'a str>,
+    /// The lock box as the user left it — auth collections, edit only.
+    pub locked: Option<bool>,
+}
+
+impl<'a> SubmittedMeta<'a> {
+    pub fn new(locale: Option<&'a str>, locked: Option<bool>) -> Self {
+        Self { locale, locked }
+    }
+}
+
 /// Parameters for re-rendering a form with errors.
 pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     pub state: &'a AdminState,
@@ -76,25 +109,58 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     pub doc_id: Option<&'a str>,
     pub auth_user: Option<&'a Extension<AuthUser>>,
     pub toast_msg: &'a str,
+    pub meta: SubmittedMeta<'a>,
 }
 
-/// Build and render the form with an error toast. Handles both create (`doc_id = None`)
-/// and edit (`doc_id = Some(id)`) modes, including upload hidden field preservation.
-pub(in crate::admin::handlers::collections) async fn render_form_with_error(
-    p: &FormErrorParams<'_>,
-) -> Response {
-    let mut fields = build_field_contexts(&p.def.fields, p.form.raw(), p.error_map, true, false);
+/// Re-add the auth-collection inputs the write handler took out of the form.
+/// They come from the same constructors the create and edit forms use, so the
+/// re-rendered form offers exactly the inputs the user submitted from.
+fn append_auth_fields(fields: &mut Vec<FieldContext>, editing: bool, meta: SubmittedMeta<'_>) {
+    fields.push(password_field(!editing));
 
-    // The locale the form was submitted in, for the relationship labels.
-    let locale_ctx = editor_locale_ctx(
-        &p.state.config.locale,
-        p.form.raw().get("_locale").map(String::as_str),
+    if editing {
+        fields.push(locked_field(meta.locked.unwrap_or(false)));
+    }
+}
+
+/// The submitted values as the display-condition evaluator sees them. Only an
+/// edit has a document to condition against; a create conditions on nothing,
+/// exactly as the create form does.
+fn condition_form_json(p: &FormErrorParams<'_>) -> Value {
+    if p.doc_id.is_none() {
+        return json!({});
+    }
+
+    json!(
+        p.form
+            .raw()
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect::<Map<String, Value>>()
+    )
+}
+
+/// Build, enrich, condition and split the field contexts for the re-render,
+/// in the locale the form was submitted in.
+fn prepare_error_fields(
+    p: &FormErrorParams<'_>,
+    locale_ctx: Option<&LocaleContext>,
+    non_default_locale: bool,
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
+    let mut fields = build_field_contexts(
+        &p.def.fields,
+        p.form.raw(),
+        p.error_map,
+        true,
+        non_default_locale,
     );
+
     let enrich_opts = EnrichOptions::builder(p.error_map)
         .filter_hidden(true)
+        .non_default_locale(non_default_locale)
         .doc_id(p.doc_id)
         .user(get_user_doc(p.auth_user))
-        .locale_ctx(locale_ctx.as_ref());
+        .locale_ctx(locale_ctx);
 
     enrich_field_contexts(
         &mut fields,
@@ -103,18 +169,6 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         p.state,
         &enrich_opts.build(),
     );
-
-    let form_json = if p.doc_id.is_some() {
-        json!(
-            p.form
-                .raw()
-                .iter()
-                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                .collect::<Map<String, Value>>()
-        )
-    } else {
-        json!({})
-    };
 
     let cond_ctx = ConditionContext {
         collection: &p.def.slug,
@@ -125,20 +179,41 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         },
         user: get_user_doc(p.auth_user),
         ui_locale: p.auth_user.map(|Extension(au)| au.ui_locale.as_str()),
-        locale: None,
+        locale: p.meta.locale,
         options: None,
     };
 
     apply_display_conditions(
         &mut fields,
         &p.def.fields,
-        &form_json,
+        &condition_form_json(p),
         &p.state.infra.hook_runner,
         true,
         &cond_ctx,
     );
 
-    let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
+    if p.def.is_auth_collection() {
+        append_auth_fields(&mut fields, p.doc_id.is_some(), p.meta);
+    }
+
+    split_sidebar_fields(fields)
+}
+
+/// Build and render the form with an error toast. Handles both create (`doc_id = None`)
+/// and edit (`doc_id = Some(id)`) modes, including upload hidden field preservation.
+pub(in crate::admin::handlers::collections) async fn render_form_with_error(
+    p: &FormErrorParams<'_>,
+) -> Response {
+    // The re-render stays in the locale the form was submitted in: the read
+    // context for relationship labels comes from the same call the success-path
+    // forms make, `with_editor_locale` below re-renders the picker in that same
+    // locale, and `non_default_locale` re-locks the shared fields the editor may
+    // not change from a translation.
+    let locale_ctx = editor_read_ctx(p.state, p.meta.locale);
+    let non_default_locale = is_non_default_locale(p.state, p.meta.locale);
+
+    let (main_fields, sidebar_fields) =
+        prepare_error_fields(p, locale_ctx.as_ref(), non_default_locale);
 
     let editing = p.doc_id.is_some();
     let (page_type, page_key) = if editing {
@@ -152,9 +227,16 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         None,
         p.auth_user,
         PageMeta::new(page_type, page_key).with_title_name(p.def.singular_name()),
-    );
+    )
+    .with_editor_locale(p.meta.locale, p.state);
 
-    let upload_hidden_fields = (editing && p.def.is_upload_collection()).then(|| {
+    // The file is stored inside the write's own blocking task, working on its
+    // own copy of the form, so a failed write leaves no injected metadata here
+    // — the user re-picks the file either way. What this preserves is the
+    // hidden inputs the submitted form rendered, i.e. the edit page's focal
+    // point. Not gated on `editing` because a create carries none of them: the
+    // collection is empty rather than wrong.
+    let upload_hidden_fields = p.def.is_upload_collection().then(|| {
         let value = collect_upload_hidden_fields(&p.def.fields, p.form.raw());
         match value {
             Value::Array(arr) => arr,
@@ -179,73 +261,50 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
     page_with_toast(p.state, p.auth_user, "collections/edit", &ctx, p.toast_msg).await
 }
 
-/// Render the upload error page (create mode).
-pub(in crate::admin::handlers::collections) async fn render_upload_error(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    form_data: &HashMap<String, String>,
-    auth_user: Option<&Extension<AuthUser>>,
-    err_msg: &str,
-) -> Response {
-    let form = FormData::raw_only(form_data.clone());
-
-    render_form_with_error(&FormErrorParams {
-        state,
-        def,
-        form: &form,
-        error_map: &HashMap::new(),
-        doc_id: None,
-        auth_user,
-        toast_msg: err_msg,
-    })
-    .await
+/// The rejected file's own message, when the write failed on the file rather
+/// than on a form field.
+///
+/// The upload service reports a rejected file (wrong type, too large,
+/// undecodable image) as a `_file` validation error. `_file` is the multipart
+/// part name, not a field the form renders, so its message has nowhere to
+/// appear inline — it becomes the toast, which is what the user needs to read.
+fn file_error_message(ve: &ValidationError) -> Option<&str> {
+    ve.errors
+        .iter()
+        .find(|e| e.field == "_file")
+        .map(|e| e.message.as_str())
 }
 
-/// Render the upload error page (edit mode).
-pub(in crate::admin::handlers::collections) async fn render_edit_upload_error(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    form_data: &HashMap<String, String>,
-    id: &str,
-    auth_user: Option<&Extension<AuthUser>>,
-    err_msg: &str,
-) -> Response {
-    let form = FormData::raw_only(form_data.clone());
-
-    render_form_with_error(&FormErrorParams {
-        state,
-        def,
-        form: &form,
-        error_map: &HashMap::new(),
-        doc_id: Some(id),
-        auth_user,
-        toast_msg: err_msg,
-    })
-    .await
+/// What the validation re-render needs beyond the errors themselves.
+struct ValidationRender<'a> {
+    state: &'a AdminState,
+    def: &'a CollectionDefinition,
+    form: &'a FormData,
+    doc_id: Option<&'a str>,
+    auth_user: Option<&'a Extension<AuthUser>>,
+    meta: SubmittedMeta<'a>,
 }
 
 /// Re-render the form with validation errors (works for both create and edit).
-pub(in crate::admin::handlers::collections) async fn render_form_validation_errors(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    doc_id: Option<&str>,
-    form: &FormData,
-    ve: &ValidationError,
-    auth_user: Option<&Extension<AuthUser>>,
-) -> Response {
-    let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
+async fn render_form_validation_errors(p: &ValidationRender<'_>, ve: &ValidationError) -> Response {
+    let locale = p
+        .auth_user
+        .map_or("en", |Extension(au)| au.ui_locale.as_str());
 
-    let error_map = translate_validation_errors(ve, &state.translations, locale);
-    let toast_msg = state.translations.get(locale, "validation.error_summary");
+    let error_map = translate_validation_errors(ve, &p.state.translations, locale);
+
+    let toast_msg = file_error_message(ve)
+        .unwrap_or_else(|| p.state.translations.get(locale, "validation.error_summary"));
 
     render_form_with_error(&FormErrorParams {
-        state,
-        def,
-        form,
+        state: p.state,
+        def: p.def,
+        form: p.form,
         error_map: &error_map,
-        doc_id,
-        auth_user,
+        doc_id: p.doc_id,
+        auth_user: p.auth_user,
         toast_msg,
+        meta: p.meta,
     })
     .await
 }
@@ -258,6 +317,8 @@ pub(in crate::admin::handlers::collections) struct WriteErrorParams<'a> {
     pub err: ServiceError,
     pub doc_id: Option<&'a str>,
     pub auth_user: Option<&'a Extension<AuthUser>>,
+    /// The meta inputs the handler took out of the form — see [`SubmittedMeta`].
+    pub meta: SubmittedMeta<'a>,
 }
 
 /// Which form response a collection write error maps to. Split out from the
@@ -325,15 +386,16 @@ pub(in crate::admin::handlers::collections) async fn handle_collection_write_err
         }
         WriteErrorResponse::Validation => {
             if let ServiceError::Validation(ref ve) = p.err {
-                return render_form_validation_errors(
-                    p.state,
-                    p.def,
-                    p.doc_id,
-                    p.form,
-                    ve,
-                    p.auth_user,
-                )
-                .await;
+                let render = ValidationRender {
+                    state: p.state,
+                    def: p.def,
+                    form: p.form,
+                    doc_id: p.doc_id,
+                    auth_user: p.auth_user,
+                    meta: p.meta,
+                };
+
+                return render_form_validation_errors(&render, ve).await;
             }
 
             toast_only_error(&write_error_toast(
@@ -354,7 +416,10 @@ pub(in crate::admin::handlers::collections) async fn handle_collection_write_err
 mod tests {
     use anyhow::anyhow;
 
-    use crate::core::field::{FieldAdmin, FieldType};
+    use crate::core::{
+        FieldError,
+        field::{FieldAdmin, FieldType},
+    };
 
     use super::*;
 
@@ -443,6 +508,31 @@ mod tests {
         assert_ne!(access_denied_msg(false), access_denied_msg(true));
     }
 
+    /// A rejected file has no form field to render its message against, so it
+    /// becomes the toast — the same message the dedicated upload-error page
+    /// used to show before the file lifecycle moved into the write.
+    #[test]
+    fn a_rejected_file_becomes_the_toast() {
+        let ve = ValidationError::new(vec![FieldError::new(
+            "_file",
+            "File type 'application/zip' is not allowed",
+        )]);
+
+        assert_eq!(
+            file_error_message(&ve),
+            Some("File type 'application/zip' is not allowed")
+        );
+    }
+
+    /// An ordinary field error renders inline, so the toast stays the generic
+    /// validation summary.
+    #[test]
+    fn a_field_error_leaves_the_toast_alone() {
+        let ve = ValidationError::new(vec![FieldError::new("title", "required")]);
+
+        assert_eq!(file_error_message(&ve), None);
+    }
+
     fn hidden_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .admin(FieldAdmin::builder().hidden(true).build())
@@ -467,6 +557,85 @@ mod tests {
         let out = collect_upload_hidden_fields(&fields, &form_data);
 
         assert_eq!(out, json!([{ "name": "upload_id", "value": "u-123" }]));
+    }
+
+    /// Regression: the auth inputs are not field definitions, so the error
+    /// re-render used to drop them. Without the password box the user cannot
+    /// set one, and without `_locked` the corrected save posts no lock box —
+    /// which the update path reads as an explicit unlock.
+    #[test]
+    fn the_error_form_re_adds_the_auth_inputs() {
+        let mut fields = Vec::new();
+        append_auth_fields(
+            &mut fields,
+            true,
+            SubmittedMeta::new(Some("de"), Some(true)),
+        );
+
+        let names: Vec<&str> = fields.iter().map(|f| f.base().name.as_str()).collect();
+        assert_eq!(names, vec!["password", "_locked"]);
+
+        let FieldContext::Checkbox(locked) = &fields[1] else {
+            panic!("expected the lock checkbox")
+        };
+        assert!(
+            locked.checked,
+            "the lock box comes back as the user left it"
+        );
+    }
+
+    /// On create there is no lock box — the create form has none either.
+    #[test]
+    fn the_create_error_form_adds_only_the_password_box() {
+        let mut fields = Vec::new();
+        append_auth_fields(&mut fields, false, SubmittedMeta::default());
+
+        let names: Vec<&str> = fields.iter().map(|f| f.base().name.as_str()).collect();
+        assert_eq!(names, vec!["password"]);
+        assert!(fields[0].base().required, "a create needs a password");
+    }
+
+    /// An unchecked lock box submits nothing, so the handler passes `false` —
+    /// and an absent flag must never come back as locked.
+    #[test]
+    fn an_unsubmitted_lock_box_comes_back_unchecked() {
+        for locked in [None, Some(false)] {
+            let mut fields = Vec::new();
+            append_auth_fields(&mut fields, true, SubmittedMeta::new(None, locked));
+
+            let FieldContext::Checkbox(box_) = &fields[1] else {
+                panic!("expected the lock checkbox")
+            };
+            assert!(!box_.checked, "{locked:?}");
+        }
+    }
+
+    /// What an upload EDIT re-render actually preserves: the focal point, the
+    /// only hidden upload input a form renders. The server-derived columns are
+    /// hidden fields too, but no form renders them and every write strips them
+    /// from user data, so they never reach the submitted form.
+    #[test]
+    fn an_upload_edit_preserves_the_focal_point() {
+        let fields = vec![
+            hidden_field("url"),
+            hidden_field("filesize"),
+            hidden_field("focal_x"),
+            hidden_field("focal_y"),
+        ];
+
+        let mut form_data = HashMap::new();
+        form_data.insert("focal_x".to_string(), "0.25".to_string());
+        form_data.insert("focal_y".to_string(), "0.75".to_string());
+
+        let out = collect_upload_hidden_fields(&fields, &form_data);
+
+        assert_eq!(
+            out,
+            json!([
+                { "name": "focal_x", "value": "0.25" },
+                { "name": "focal_y", "value": "0.75" },
+            ])
+        );
     }
 
     #[test]

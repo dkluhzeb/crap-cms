@@ -44,11 +44,10 @@
 //!
 //! # Visibility convention
 //!
-//! Per-subcommand helper fns are `pub(super)` (visible only
-//! within their own subcommand subdir) — the audit pass demoted
-//! everything that grep showed had no external callers, so adding
-//! a new helper that's only used inside one subdir should default
-//! to `pub(super)` from the start.
+//! Per-subcommand helper fns are `pub(super)` — visible only
+//! within their own subcommand subdir. A new helper used inside
+//! one subdir only defaults to `pub(super)`; widen it only when a
+//! caller outside that subdir appears.
 
 pub mod bench;
 pub mod db;
@@ -83,9 +82,9 @@ pub use update::UpdateCmd;
 
 // User-management library entry points + their `*Params` structs.
 // Reached from integration tests in `tests/` and from `init.rs`'s
-// first-user prompt. Per axis 7 (top-level re-export consistency),
-// items reached externally ≥2 times live at `commands::*` rather
-// than `commands::user::*` so callers don't repeat the deep path.
+// first-user prompt. Items reached externally ≥2 times live at
+// `commands::*` rather than `commands::user::*` so callers don't
+// repeat the deep path.
 pub use user::{
     UserChangePasswordParams, UserCreateParams, UserDeleteParams, UserLookup, user_change_password,
     user_create, user_delete, user_list, user_lock, user_unlock,

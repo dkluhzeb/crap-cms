@@ -3,14 +3,17 @@
 
 use std::collections::HashSet;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::{
     config::LocaleConfig,
     core::FieldDefinition,
-    db::query::{
-        helpers::{locale_column, prefixed_name, walk_leaf_fields},
-        localized_join_keys,
+    db::{
+        LocaleContext,
+        query::{
+            helpers::{locale_column, prefixed_name, sql_ident, walk_leaf_fields},
+            is_valid_identifier, localized_join_keys,
+        },
     },
 };
 
@@ -36,6 +39,43 @@ pub(crate) fn column_is_localized(name: &str, fields: &[FieldDefinition]) -> Opt
     });
 
     result
+}
+
+/// The SQL expression every read of the parent-table column `column` goes
+/// through: [`ReadLocale::column_expr`] when the column is localized and
+/// localization is on, the quoted column itself otherwise.
+///
+/// The SELECT, the WHERE comparand, the ORDER BY key and the keyset cursor's
+/// comparand all take their expression from here, so a fallback value the
+/// listing shows is the same value a filter matches, a sort orders by, and a
+/// page boundary compares against.
+///
+/// An all-locales read has no single column to compare — it takes the default
+/// locale's, as the write column and the join-row locale do.
+///
+/// [`ReadLocale::column_expr`]: crate::db::query::ReadLocale::column_expr
+///
+/// # Errors
+///
+/// Returns an error if `column` is not a plain identifier, or if a configured
+/// locale code has no column form.
+pub(crate) fn column_read_expr(
+    column: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<String> {
+    if !is_valid_identifier(column) {
+        bail!("Invalid field name '{column}': must be alphanumeric/underscore");
+    }
+
+    let localized = locale_ctx
+        .filter(|ctx| ctx.config.is_enabled() && column_is_localized(column, fields) == Some(true));
+
+    let Some(ctx) = localized else {
+        return Ok(sql_ident(column).into_owned());
+    };
+
+    ctx.rows_read_locale().column_expr(column)
 }
 
 /// The stored columns of the leaf column `name`: one per configured locale when
@@ -102,9 +142,80 @@ pub(crate) fn per_locale_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::query::{
-        locale::test_support::localized_code_lang_field, test_helpers::make_locale_config,
+    use crate::{
+        core::FieldType,
+        db::{
+            LocaleMode,
+            query::{
+                locale::test_support::localized_code_lang_field,
+                test_helpers::{make_field, make_locale_config, make_localized_field},
+            },
+        },
     };
+
+    fn ctx(mode: LocaleMode) -> LocaleContext {
+        LocaleContext {
+            mode,
+            config: make_locale_config(),
+        }
+    }
+
+    fn title_fields() -> Vec<FieldDefinition> {
+        vec![
+            make_localized_field("title", FieldType::Text),
+            make_field("slug", FieldType::Text),
+        ]
+    }
+
+    /// A localized column is read through the same fallback `COALESCE` the
+    /// SELECT emits — a filter, sort or keyset comparing the bare locale column
+    /// disagreed with the values the listing showed.
+    #[test]
+    fn a_localized_column_reads_through_the_fallback_expression() {
+        let de = ctx(LocaleMode::Single("de".into()));
+
+        let expr = column_read_expr("title", &title_fields(), Some(&de)).unwrap();
+
+        assert_eq!(expr, "COALESCE(\"title__de\", \"title__en\")");
+    }
+
+    /// The default locale has nothing to fall back to, and a shared column has
+    /// no locale at all.
+    #[test]
+    fn the_default_locale_and_shared_columns_read_a_plain_column() {
+        let fields = title_fields();
+        let default_ctx = ctx(LocaleMode::Default);
+
+        assert_eq!(
+            column_read_expr("title", &fields, Some(&default_ctx)).unwrap(),
+            "\"title__en\""
+        );
+        assert_eq!(
+            column_read_expr("slug", &fields, Some(&default_ctx)).unwrap(),
+            "slug"
+        );
+        assert_eq!(column_read_expr("title", &fields, None).unwrap(), "title");
+    }
+
+    /// An all-locales read has no single column to compare against, so it
+    /// takes the default locale's — the same column its writes target.
+    #[test]
+    fn an_all_locales_read_compares_the_default_locale_column() {
+        let all = ctx(LocaleMode::All);
+
+        let expr = column_read_expr("title", &title_fields(), Some(&all)).unwrap();
+
+        assert_eq!(expr, "\"title__en\"");
+    }
+
+    /// The expression is interpolated into SQL, so a column name that is not a
+    /// plain identifier is refused rather than quoted and passed through.
+    #[test]
+    fn a_column_name_that_is_not_an_identifier_is_refused() {
+        let err = column_read_expr("title; DROP TABLE posts", &title_fields(), None).unwrap_err();
+
+        assert!(err.to_string().contains("Invalid field name"), "{err}");
+    }
 
     #[test]
     fn column_is_localized_knows_a_code_language_companion() {

@@ -11,11 +11,13 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::{AdminState, handlers::shared::response::on_blocking_section, parse_multipart_form},
+    admin::{
+        AdminState, FormData, handlers::shared::response::on_blocking_section, parse_multipart_form,
+    },
     core::{CollectionDefinition, Document, upload::UploadedFile},
     service::{
         AppInfra, ServiceContext, ServiceError,
-        upload::{self, UploadCreateResult},
+        upload::{CreateUploadInput, UploadCreateResult, create_upload as create_upload_document},
     },
 };
 
@@ -52,14 +54,23 @@ fn create_upload_blocking(
     // a generic 500.
     let db_kind = input.infra.pool.kind();
 
-    upload::create_upload(
+    let mut form = FormData::from_raw(input.form_data, &input.def.fields);
+    let draft = form.take_action() == "save_draft";
+    let password = form.take_password(&input.def);
+
+    create_upload_document(
         &ctx,
-        &input.infra.storage,
-        &input.file,
-        input.form_data,
-        input.ui_locale,
-        input.max_file_size,
-        input.image_max_attempts,
+        CreateUploadInput {
+            storage: &input.infra.storage,
+            file: &input.file,
+            form,
+            locale_ctx: None,
+            password,
+            ui_locale: input.ui_locale,
+            draft,
+            upload_max_file_size: input.max_file_size,
+            image_max_attempts: input.image_max_attempts,
+        },
     )
     .map_err(|e| e.reclassify(db_kind))
 }

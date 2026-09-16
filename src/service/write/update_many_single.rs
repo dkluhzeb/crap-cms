@@ -1,6 +1,7 @@
 //! Core per-document update for bulk operations (partial update, no password).
 //! Honors `draft` the same way the single-document update does: a draft save
-//! is routed to the version table and leaves the published main row untouched.
+//! is routed to the version table and leaves the published main row untouched,
+//! and a publish takes the document's pending draft as its base.
 
 use crate::{
     config::LocaleConfig,
@@ -16,7 +17,9 @@ use super::ServiceError;
 use super::update::reject_locale_locked_fields;
 use super::validate::canonicalize_write_input;
 use crate::service::helpers::{hydrate_reported, strip_reported};
-use crate::service::write::{check_update_access, stored_fields_for_update_rules};
+use crate::service::write::{
+    adopt_pending_draft, check_update_access, stored_fields_for_update_rules,
+};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -39,6 +42,12 @@ pub(crate) fn update_many_single_in_conn(
     // Canonicalize + strip server-derived upload columns (the same chokepoint
     // single create/update use) — bulk update must not be a forgery hole.
     canonicalize_write_input(&mut input, def);
+
+    // Publishing means the same thing here as on the single-document update: a
+    // bulk write with `draft = false` takes each document's pending draft as
+    // its base and lets the request's fields win over it. Without this a bulk
+    // publish would discard exactly the drafts a single publish carries over.
+    adopt_pending_draft(ctx, def, id, &mut input)?;
 
     reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
 
@@ -266,5 +275,48 @@ mod tests {
             versions[0].snapshot.get("title").and_then(|v| v.as_str()),
             Some("Edited")
         );
+    }
+
+    /// Publishing means the same thing in bulk as on a single document: the
+    /// pending draft is the base and the request's fields win over it. The bulk
+    /// path wrote only what the request carried, so a bulk publish discarded
+    /// exactly the drafted content a single publish carries over.
+    #[test]
+    fn bulk_publish_takes_the_pending_draft_as_its_base() {
+        let (conn, def) = versioned_collection();
+        let wh = NoopWriteHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+
+        let mut drafted = DocumentFields::new();
+        drafted.insert("title".into(), json!("Drafted"));
+        update_many_single_in_conn(
+            &ctx,
+            "p1",
+            WriteInput::builder(drafted).draft(true).build(),
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+
+        // The publish carries no title of its own.
+        update_many_single_in_conn(
+            &ctx,
+            "p1",
+            WriteInput::builder(DocumentFields::new()).build(),
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+
+        let row = DbConnection::query_one(
+            &conn,
+            "SELECT title, _status FROM posts WHERE id = 'p1'",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(row.get_string("title").unwrap(), "Drafted");
+        assert_eq!(row.get_string("_status").unwrap(), "published");
     }
 }

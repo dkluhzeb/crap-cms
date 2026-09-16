@@ -15,8 +15,8 @@ use crate::{
         },
         handlers::shared::{
             HxNav, PageRequest, check_access_or_forbid, extract_editor_locale, forbidden,
-            global_base, load_version_with_missing_relations, paths, redirect_response,
-            render_page, require_global, server_error,
+            global_base, load_version_with_restore_gaps, paths, redirect_response, render_page,
+            require_global, server_error,
         },
     },
     core::{
@@ -24,23 +24,25 @@ use crate::{
         auth::{AuthUser, Claims},
         document::VersionSnapshot,
     },
-    db::query::{AccessResult, MissingRelation},
-    service::{self, RunnerReadHooks},
+    db::query::AccessResult,
+    service::{self, RunnerReadHooks, VersionGaps},
 };
 
-/// Load the global version being restored plus the relations it can no
-/// longer resolve.
+/// Load the global version being restored plus what it can no longer resolve.
 ///
 /// Scoped to its own function so the pooled connection and the read hooks
 /// borrowing it — neither of which is `Send` — are dropped before the
 /// handler awaits the page render.
+///
+/// A global is never an upload collection, so the file half of the report is
+/// always empty here; the relation half is the whole check.
 fn load_restore_data(
     state: &AdminState,
     slug: &str,
     def: &GlobalDefinition,
     version_id: &str,
     user_doc: Option<&Document>,
-) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+) -> Result<(VersionSnapshot, VersionGaps), &'static str> {
     let Ok(conn) = state.infra.pool.get() else {
         return Err("Database error");
     };
@@ -56,7 +58,7 @@ fn load_restore_data(
         .locale_config(Some(&state.infra.locale_config))
         .build();
 
-    load_version_with_missing_relations(&ctx, &state.infra.registry, version_id)
+    load_version_with_restore_gaps(&ctx, &state.infra.registry, version_id)
 }
 
 /// GET /`admin/globals/{slug}/versions/{version_id}/restore` — confirmation page
@@ -95,7 +97,7 @@ pub async fn restore_confirm(
 
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
 
-    let (version, missing) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
+    let (version, gaps) = match load_restore_data(&state, &slug, &def, &version_id, user_doc) {
         Ok(data) => data,
         Err(msg) => return server_error(&state, msg),
     };
@@ -122,7 +124,8 @@ pub async fn restore_confirm(
         base,
         global: GlobalContext::from_def(&def),
         version_number: json!(version.version),
-        missing_relations: missing.into_iter().map(|m| json!(m)).collect(),
+        missing_relations: gaps.relations.into_iter().map(|m| json!(m)).collect(),
+        missing_files: gaps.files,
         restore_url,
         back_url,
     };

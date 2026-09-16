@@ -38,7 +38,6 @@ use crate::admin::context::{
         TabPanel, TabsField, TextField, TextareaField, TimezoneOption, UploadField,
         ValidationAttrs,
     },
-    locale_template::LocaleTemplateOption,
     nav::{NavCollection, NavGlobal},
     page::{
         auth::{
@@ -320,7 +319,6 @@ fn definitions() -> Vec<(&'static str, Schema)> {
         ("NavGlobal", schema_for!(NavGlobal)),
         ("UserContext", schema_for!(UserContext)),
         ("EditorLocaleOption", schema_for!(EditorLocaleOption)),
-        ("LocaleTemplateOption", schema_for!(LocaleTemplateOption)),
         ("Breadcrumb", schema_for!(Breadcrumb)),
         ("CollectionContext", schema_for!(CollectionContext)),
         ("CollectionPermissions", schema_for!(CollectionPermissions)),

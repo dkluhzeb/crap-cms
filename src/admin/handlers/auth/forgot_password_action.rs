@@ -5,10 +5,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use tokio::task;
-use tracing::error;
 
-use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -16,29 +13,9 @@ use crate::{
             ForgotPasswordForm, client_ip, get_auth_collections, render_forgot_success,
         },
     },
-    config::{EmailConfig, LocaleConfig},
-    core::{
-        CollectionDefinition, email,
-        email::{EmailRenderer, PasswordResetEmailContext},
-        normalize_email,
-    },
-    db::DbPool,
-    service::{ServiceContext, auth::generate_reset_token},
+    core::{CollectionDefinition, collection::Auth, normalize_email},
+    service::ResetTarget,
 };
-
-/// Everything needed to look up a user and send the password-reset email.
-struct ResetEmailParams {
-    pool: DbPool,
-    slug: String,
-    def: Arc<CollectionDefinition>,
-    user_email: String,
-    email_config: EmailConfig,
-    email_renderer: Arc<EmailRenderer>,
-    base_url: String,
-    reset_expiry: u64,
-    email_max_attempts: u32,
-    locale_config: LocaleConfig,
-}
 
 /// Check whether the collection supports forgot-password.
 fn forgot_password_collection(
@@ -54,65 +31,6 @@ fn forgot_password_collection(
         Some(def.clone())
     } else {
         None
-    }
-}
-
-/// Look up the user, generate a reset token, and queue the reset email.
-///
-/// Runs inside `spawn_blocking`. Silently returns on any failure — the
-/// handler always shows "success" to avoid leaking whether the email exists.
-fn send_reset_email(params: &ResetEmailParams) {
-    let conn = match params.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("DB connection for forgot password: {}", e);
-            return;
-        }
-    };
-
-    let ctx = ServiceContext::collection(&params.slug, &params.def)
-        .conn(&conn)
-        .locale_config(Some(&params.locale_config))
-        .build();
-
-    let token_result = match generate_reset_token(&ctx, &params.user_email, params.reset_expiry) {
-        Ok(Some(r)) => r,
-        Ok(None) => return,
-        Err(e) => {
-            error!("Forgot password error: {}", e);
-            return;
-        }
-    };
-    let token = &token_result.token;
-
-    let reset_url = format!("{}/admin/reset-password?token={}", params.base_url, token);
-
-    let html = match params.email_renderer.render(
-        "password_reset",
-        &PasswordResetEmailContext {
-            reset_url: &reset_url,
-            expiry_minutes: params.reset_expiry / 60,
-            from_name: &params.email_config.from_name,
-        },
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            error!("Failed to render reset email: {}", e);
-            return;
-        }
-    };
-
-    if let Err(e) = email::queue_email(
-        &conn,
-        &email::EmailJobData {
-            to: params.user_email.clone(),
-            subject: "Reset your password".to_string(),
-            html,
-            text: None,
-        },
-        params.email_max_attempts,
-    ) {
-        error!("Failed to queue reset email: {}", e);
     }
 }
 
@@ -145,21 +63,24 @@ pub async fn forgot_password_action(
         return render_forgot_success(&state, &auth_collections);
     }
 
-    if let Some(def) = forgot_password_collection(&state, &form.collection) {
-        let params = ResetEmailParams {
-            pool: state.infra.pool.clone(),
-            slug: form.collection.clone(),
-            def,
-            user_email: form.email.clone(),
-            email_config: state.config.email.clone(),
-            email_renderer: state.infra.email.email_renderer.clone(),
-            base_url: state.config.server.base_url(),
-            reset_expiry: state.config.auth.reset_token_expiry,
-            email_max_attempts: state.config.jobs.system_email_max_attempts(),
-            locale_config: state.config.locale.clone(),
-        };
+    // Resolved before the form is consumed below.
+    let target_def = forgot_password_collection(&state, &form.collection);
 
-        task::spawn_blocking(move || send_reset_email(&params));
+    if let Some(def) = target_def {
+        // The token and the email job are minted together in one transaction
+        // inside the spawned task, so a crash can never leave a live reset
+        // token whose link was never queued for delivery.
+        state.infra.email.send_reset(
+            ResetTarget::builder(
+                state.infra.pool.clone(),
+                state.config.locale.clone(),
+                form.collection,
+                def,
+                form.email,
+                state.config.auth.reset_token_expiry,
+            )
+            .build(),
+        );
     }
 
     render_forgot_success(&state, &auth_collections)

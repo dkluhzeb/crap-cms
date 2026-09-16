@@ -868,3 +868,55 @@ fn lua_update_with_locale() {
 
     assert_eq!(result, "Hallo:Deutscher Text|Hello:English body");
 }
+
+/// `locale = "all"` is a READ shape — a per-locale map. A write accepted it
+/// and then silently wrote the DEFAULT locale under another name, skipping the
+/// shared-field lock a non-default-locale write obeys. It is refused now, on
+/// every surface, the way an unconfigured locale code is.
+#[test]
+fn lua_write_rejects_the_all_locales_mode() {
+    let (_tmp, pool, _reg, runner) = setup_custom_db(
+        &[(
+            "posts",
+            r#"
+            crap.collections.define("posts", {
+                labels = { singular = "Post", plural = "Posts" },
+                fields = {
+                    { name = "title", type = "text", required = true, localized = true },
+                },
+            })
+            "#,
+        )],
+        &[],
+        Some(vec!["en", "de"]),
+    );
+
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local doc = crap.collections.create("posts", { title = "Hello" }, { locale = "en" })
+
+        local ok, err = pcall(function()
+            crap.collections.update("posts", doc.id, { title = "Hallo" }, { locale = "all" })
+        end)
+
+        local created_ok = pcall(function()
+            crap.collections.create("posts", { title = "Nope" }, { locale = "all" })
+        end)
+
+        -- The rejected update changed nothing.
+        local en = crap.collections.find_by_id("posts", doc.id, { locale = "en" })
+
+        return tostring(ok) .. "|" .. tostring(created_ok) .. "|" .. en.title
+            .. "|" .. tostring(err)
+        "#,
+    );
+
+    let (outcome, message) = result.split_once("|Hello|").expect("update left the value");
+    assert_eq!(outcome, "false|false", "both writes must be refused");
+    assert!(
+        message.contains("locale"),
+        "the error must name the locale field: {message}"
+    );
+}

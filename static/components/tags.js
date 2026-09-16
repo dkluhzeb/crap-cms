@@ -17,9 +17,13 @@
  * @attr data-readonly        Boolean — disables editing.
  * @attr data-error           Server-rendered marker for the error class.
  *
+ * The hidden input carries the list as a JSON array, so an element containing
+ * a comma stays one element. A plain comma-separated value is still accepted on
+ * read — that is what hand-typed input produces.
+ *
  * @example
  * <crap-tags data-field-type="text">
- *   <input type="hidden" name="tags" value="a,b,c" />
+ *   <input type="hidden" name="tags" value='["a","b,c"]' />
  * </crap-tags>
  *
  * @module tags
@@ -108,6 +112,36 @@ const sheet = css`
   .chip + .tags__input { margin-left: var(--space-xs, 0.25rem); }
 `;
 
+/**
+ * `raw` parsed as a JSON array of tag strings, or `null` when it is not one.
+ *
+ * @param {string} raw
+ * @returns {string[]|null}
+ */
+function parseJsonList(raw) {
+  if (!raw.trimStart().startsWith('[')) return null;
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.map(String).filter(Boolean) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The tags a hidden-input value holds. The server writes a JSON array so an
+ * element containing a comma survives the round trip; a plain string is split
+ * on commas, which is the shape hand-typed input produces.
+ *
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function parseListValue(raw) {
+  if (!raw) return [];
+
+  return parseJsonList(raw) ?? raw.split(',').filter(Boolean);
+}
+
 class CrapTags extends HTMLElement {
   constructor() {
     super();
@@ -147,9 +181,7 @@ class CrapTags extends HTMLElement {
     this._hidden = /** @type {HTMLInputElement|null} */ (
       this.querySelector('input[type="hidden"]')
     );
-    if (this._hidden?.value) {
-      this._values = this._hidden.value.split(',').filter(Boolean);
-    }
+    this._values = parseListValue(this._hidden?.value ?? '');
   }
 
   _buildShadow() {
@@ -168,7 +200,7 @@ class CrapTags extends HTMLElement {
       max: isNumber ? this.dataset.max : undefined,
     });
 
-    const hasError = !!this.querySelector('.form__tags--error');
+    const hasError = this.dataset.error !== undefined;
     this._container = h(
       'div',
       {
@@ -277,10 +309,13 @@ class CrapTags extends HTMLElement {
     this._renderChips();
   }
 
-  /** Push the joined values back to the form-bound hidden input. */
+  /**
+   * Push the values back to the form-bound hidden input, as a JSON array so a
+   * value containing a comma reaches the server as one element.
+   */
   _sync() {
     if (!this._hidden) return;
-    this._hidden.value = this._values.join(',');
+    this._hidden.value = JSON.stringify(this._values);
     this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
   }
 }

@@ -98,8 +98,9 @@ pub fn persist_update(
 
     if new_email.is_some() {
         query::mark_unverified(conn, slug, &doc.id)?;
-        // Queued like a create's: the mail goes out only if the write commits.
-        ctx.maybe_send_verification(&doc);
+        // On this connection like a create's: the token and the queued mail
+        // land with the address change or not at all.
+        ctx.maybe_send_verification(&doc)?;
     }
 
     if def.has_versions() {

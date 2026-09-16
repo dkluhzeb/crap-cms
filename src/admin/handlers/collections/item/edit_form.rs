@@ -16,20 +16,20 @@ use crate::{
         AdminState,
         context::{
             BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, DocumentRef,
-            LocaleTemplateData, PageMeta, PageType,
-            field::{
-                BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField,
-                ValidationAttrs,
-            },
+            PageMeta, PageType,
+            field::FieldContext,
             page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
         },
-        handlers::shared::{
-            EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, collection_base, compute_denied_read_fields,
-            editor_locale_ctx, enrich_field_contexts, extract_doc_status, extract_editor_locale,
-            fetch_version_sidebar_data, flatten_document_values, get_user_doc,
-            is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
-            require_collection, service_error_to_admin_response, split_sidebar_fields,
+        handlers::{
+            collections::shared::{locked_field, password_field},
+            shared::{
+                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+                collection_base, compute_denied_read_fields, editor_locale_ctx, editor_read_ctx,
+                enrich_field_contexts, extract_doc_status, extract_editor_locale,
+                fetch_version_sidebar_data, flatten_document_values, get_user_doc,
+                is_non_default_locale, lookup_ref_count, not_found, paths, render_page,
+                require_collection, service_error_to_admin_response, split_sidebar_fields,
+            },
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
@@ -42,29 +42,10 @@ use crate::{
     },
 };
 
-/// Build a synthetic [`BaseFieldData`] for an auth-only injected field.
-fn auth_field_base(name: &str, label: &str, description: Option<&str>) -> BaseFieldData {
-    BaseFieldData {
-        name: name.to_string(),
-        field_name: name.to_string(),
-        label: label.to_string(),
-        required: false,
-        value: Value::String(String::new()),
-        placeholder: None,
-        description: description.map(str::to_string),
-        readonly: false,
-        localized: false,
-        locale_locked: false,
-        position: None,
-        template: None,
-        extra: serde_json::Map::new(),
-        error: None,
-        validation: ValidationAttrs::default(),
-        condition: ConditionData::default(),
-    }
-}
-
 /// Append auth-specific fields (password, locked checkbox) to the field list.
+///
+/// The inputs themselves come from the shared constructors every auth-
+/// collection form uses; only the stored lock state is read here.
 ///
 /// Fails closed: the update form treats an unchecked lock box as an explicit
 /// unlock, so when the lock state cannot be read the render must error
@@ -75,11 +56,7 @@ fn append_auth_fields(
     slug: &str,
     id: &str,
 ) -> Result<(), ServiceError> {
-    fields.push(FieldContext::Password(TextField {
-        base: auth_field_base("password", "password", Some("leave_blank_keep_password")),
-        has_many: None,
-        tags: None,
-    }));
+    fields.push(password_field(false));
 
     let conn = pool
         .get()
@@ -90,10 +67,7 @@ fn append_auth_fields(
     let locked = is_locked(&ctx, id)
         .inspect_err(|e| warn!("Failed to read lock status for user {id}: {e}"))?;
 
-    fields.push(FieldContext::Checkbox(CheckboxField {
-        base: auth_field_base("_locked", "account_locked", Some("prevent_login")),
-        checked: locked,
-    }));
+    fields.push(locked_field(locked));
 
     Ok(())
 }
@@ -190,28 +164,19 @@ impl<'a> UploadMeta<'a> {
             url: document.fields.get("url").and_then(|v| v.as_str()),
             mime_type: document.fields.get("mime_type").and_then(|v| v.as_str()),
             filename: document.fields.get("filename").and_then(|v| v.as_str()),
-            filesize: document
-                .fields
-                .get("filesize")
-                .and_then(serde_json::Value::as_u64),
+            filesize: document.fields.get("filesize").and_then(Value::as_u64),
             width: document
                 .fields
                 .get("width")
-                .and_then(serde_json::Value::as_u64)
+                .and_then(Value::as_u64)
                 .and_then(|v| u32::try_from(v).ok()),
             height: document
                 .fields
                 .get("height")
-                .and_then(serde_json::Value::as_u64)
+                .and_then(Value::as_u64)
                 .and_then(|v| u32::try_from(v).ok()),
-            focal_x: document
-                .fields
-                .get("focal_x")
-                .and_then(serde_json::Value::as_f64),
-            focal_y: document
-                .fields
-                .get("focal_y")
-                .and_then(serde_json::Value::as_f64),
+            focal_x: document.fields.get("focal_x").and_then(Value::as_f64),
+            focal_y: document.fields.get("focal_y").and_then(Value::as_f64),
         }
     }
 }
@@ -287,7 +252,7 @@ pub async fn edit_form(
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
-    let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
+    let locale_ctx = editor_read_ctx(&state, editor_locale.as_deref());
 
     let document = match load_document(&state, &slug, &id, locale_ctx, auth_user.as_ref()).await {
         Ok(doc) => doc,
@@ -336,7 +301,6 @@ pub async fn edit_form(
         claims: claims.as_ref(),
         auth_user: auth_user.as_ref(),
         editor_locale: editor_locale.as_deref(),
-        locale_data,
         main_fields,
         sidebar_fields,
     });
@@ -430,7 +394,6 @@ struct EditPageContextInput<'a> {
     claims: Option<&'a Extension<Claims>>,
     auth_user: Option<&'a Extension<AuthUser>>,
     editor_locale: Option<&'a str>,
-    locale_data: Option<LocaleTemplateData>,
     main_fields: Vec<FieldContext>,
     sidebar_fields: Vec<FieldContext>,
 }
@@ -498,7 +461,6 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
         versions_url: paths::collection_item_versions(input.slug, input.id),
         document_title: doc_title,
         ref_count: lookup_ref_count(&input.state.infra.pool, input.slug, input.id),
-        locale_data: input.locale_data,
         upload,
     }
 }

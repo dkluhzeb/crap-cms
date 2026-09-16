@@ -1,0 +1,15 @@
+{{!-- partials/option-label
+     A select/radio option's text: its label, plus a marker when the field no
+     longer declares the value.
+
+     A stored value outside `options` is kept as a selected option so re-saving
+     the form doesn't drop it — the marker is what tells the editor that the
+     value is on its way out and that picking another one is one-way. `<option>`
+     text carries no markup, so the marker is plain text; the `data-unlisted`
+     attribute on the element carries the same fact for styling.
+
+     Context: one entry of a field's `options` (used inside `{{#each options}}`). --}}
+{{label}}
+{{#if unlisted}}
+  {{t "option_no_longer_offered"}}
+{{/if}}

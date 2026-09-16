@@ -251,6 +251,35 @@ pub fn list_versions(
         .collect()
 }
 
+/// Every version snapshot stored for one document — the snapshot JSON only,
+/// without the surrounding version metadata.
+///
+/// This is what answers "does anything still reference this file": a stored
+/// upload file outlives the published row dropping it for as long as a draft or
+/// version snapshot of the same document names it. The keys are derived from
+/// each snapshot with the same `upload_file_entries` rule the live row goes
+/// through, rather than matched as text, so the two sides cannot disagree about
+/// what counts as a file reference.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or a snapshot fails to parse.
+pub fn list_snapshots(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<Vec<Value>> {
+    let table = version_table(slug);
+    let p1 = conn.placeholder(1);
+
+    conn.query_all(
+        &format!("SELECT snapshot FROM {table} WHERE _parent = {p1}"),
+        &[DbValue::Text(parent_id.to_string())],
+    )?
+    .iter()
+    .map(|row| {
+        serde_json::from_str(&row.get_string("snapshot")?)
+            .context("Failed to parse version snapshot JSON")
+    })
+    .collect()
+}
+
 /// Find a specific version by its ID.
 ///
 /// # Errors
@@ -522,6 +551,51 @@ mod tests {
         let neg_offset = list_versions(&conn, "posts", "p1", false, Some(2), Some(-3)).unwrap();
         assert_eq!(neg_offset.len(), 2, "negative offset must floor to 0");
         assert_eq!(neg_offset[0].version, 3);
+    }
+
+    /// Every snapshot of the named document comes back, and another
+    /// document's snapshots stay out of it — file references are per-document.
+    #[test]
+    fn list_snapshots_returns_every_snapshot_of_one_document() {
+        let (_dir, conn) = setup_versions_db();
+        create_version(
+            &conn,
+            "posts",
+            "p1",
+            "published",
+            &json!({"url": "/uploads/a.png"}),
+        )
+        .unwrap();
+        create_version(
+            &conn,
+            "posts",
+            "p1",
+            "draft",
+            &json!({"url": "/uploads/b.png"}),
+        )
+        .unwrap();
+        create_version(
+            &conn,
+            "posts",
+            "p2",
+            "draft",
+            &json!({"url": "/uploads/c.png"}),
+        )
+        .unwrap();
+
+        let mut urls: Vec<String> = list_snapshots(&conn, "posts", "p1")
+            .unwrap()
+            .iter()
+            .map(|s| s["url"].as_str().unwrap().to_string())
+            .collect();
+        urls.sort();
+
+        assert_eq!(urls, vec!["/uploads/a.png", "/uploads/b.png"]);
+        assert!(
+            list_snapshots(&conn, "posts", "missing")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -9,10 +9,15 @@ use tracing::warn;
 use crate::core::cache::SharedCache;
 
 /// Cadence of the periodic full clear, or `None` when it is disabled
-/// (`max_age_secs = 0`), has nothing to clear (the `none` backend), or is
-/// already covered: `redis` entries expire after `max_age_secs` on their own,
-/// and wiping a store every node shares once per node would cut entry lifetime
-/// by the node count.
+/// (`max_age_secs = 0` — write-through invalidation only), has nothing to
+/// clear (the `none` backend), or is already covered.
+///
+/// `redis` is always "already covered": every key it writes carries a TTL —
+/// `max_age_secs` when set, a ceiling when it is `0` (see
+/// [`redis_entry_ttl_secs`](super::redis_entry_ttl_secs)) — so entries expire
+/// on their own. It must be skipped rather than merely redundant: the store is
+/// shared, and wiping it once per node would cut entry lifetime by the node
+/// count.
 #[must_use]
 pub fn periodic_clear_interval(cache: &SharedCache, max_age_secs: u64) -> Option<Duration> {
     let needs_clear = !matches!(cache.kind(), "none" | "redis");
@@ -54,7 +59,7 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
-    use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
+    use crate::core::cache::{CacheBackend, MemoryCache, NoneCache, redis_entry_ttl_secs};
 
     /// A backend that only reports a kind, for the interval decision.
     struct KindOnly(&'static str);
@@ -102,6 +107,22 @@ mod tests {
             periodic_clear_interval(&memory, 90),
             Some(Duration::from_secs(90))
         );
+    }
+
+    /// The redis skip is justified by entries expiring on their own, so the
+    /// TTL the backend writes must never be `0` — including at the default
+    /// `max_age_secs = 0`, where no periodic clear runs for any backend.
+    #[test]
+    fn skipping_redis_is_backed_by_an_always_positive_entry_ttl() {
+        let redis: SharedCache = Arc::new(KindOnly("redis"));
+
+        for max_age in [0, 1, 60, 86_400] {
+            assert_eq!(periodic_clear_interval(&redis, max_age), None);
+            assert!(
+                redis_entry_ttl_secs(max_age) > 0,
+                "redis is skipped on the promise that its entries expire"
+            );
+        }
     }
 
     #[tokio::test]

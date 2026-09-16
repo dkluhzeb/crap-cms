@@ -77,13 +77,13 @@ pub use app_infra::{AppInfra, AppInfraBuilder, StandaloneInfra};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
-pub(crate) use types::ResendTarget;
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
     FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, OpDeadline,
-    PaginatedResult, PersistOptions, SearchDocumentsInput, VerificationQueue, WriteInput,
-    WriteResult, values_from_strings,
+    PaginatedResult, PersistOptions, SearchDocumentsInput, UploadConversions, VerificationQueue,
+    WriteInput, WriteResult, values_from_strings,
 };
+pub(crate) use types::{ResendTarget, ResetTarget};
 pub(crate) use types::{
     flush_deferred_effects, flush_queue, flush_verification_queue, invalidate_user_streams_if_auth,
 };
@@ -93,9 +93,10 @@ pub use collections::{
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
     delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
-pub(crate) use document_info::version_missing_relations;
+pub(crate) use document_info::{VersionGaps, version_restore_gaps};
 pub(crate) use email::{
-    ResendVerificationInput, VerificationEmailInput, VerificationMailer, resend_verification_email,
+    ResendVerificationInput, ResetEmailInput, ResetMailer, VerificationEmailInput,
+    VerificationMailer, VerificationRecipient, resend_verification_email, send_reset_email,
     send_verification_email,
 };
 pub(crate) use events::{EventAccessInput, EventAccessMap, EventGate, event_op_str};
@@ -120,8 +121,9 @@ pub use versions::{
 };
 pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 pub(crate) use write::{
-    check_create_access, check_update_access, delete_document_in_conn, purge_document,
-    stored_fields_for_update_rules, update_document_in_conn, update_many_single_in_conn,
+    check_create_access, check_update_access, delete_document_in_conn, owned_file_keys,
+    purge_document, stored_fields_for_update_rules, update_document_in_conn,
+    update_many_single_in_conn, warn_orphaned_files,
 };
 
 #[cfg(all(test, feature = "sqlite"))]

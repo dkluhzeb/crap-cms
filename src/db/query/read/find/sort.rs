@@ -13,9 +13,8 @@ use anyhow::{Result, bail};
 
 use crate::core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children};
 use crate::db::query::cursor::SortDirection;
-use crate::db::query::filter::resolve_filter_column;
-use crate::db::query::helpers::{prefixed_name, sql_ident};
-use crate::db::query::{self, resolve_sort as resolve_order};
+use crate::db::query::helpers::prefixed_name;
+use crate::db::query::{self, column_read_expr, resolve_sort as resolve_order};
 use crate::db::{FindQuery, LocaleContext};
 
 /// Resolve sort column, direction, and cursor mode from query.
@@ -79,8 +78,10 @@ pub(super) fn apply_order_by(
     } else {
         sort_dir
     };
-    let column = resolve_filter_column(sort_col, def, locale_ctx)?;
-    let resolved = sql_ident(&column);
+    // The sort key is the SAME expression the SELECT returns the value
+    // through: sorting a localized column by its bare locale column ordered
+    // every fallback value as NULL.
+    let resolved = column_read_expr(sort_col, &def.fields, locale_ctx)?;
 
     let prepend_status = query::cursor::cursor_status_active(def.has_drafts(), sort_col);
     let status_dir = if using_before {
@@ -159,12 +160,57 @@ mod tests {
     use crate::config::LocaleConfig;
     use crate::core::CollectionDefinition;
     use crate::core::field::*;
+    use crate::db::query::column_read_expr;
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
     use crate::db::{FindQuery, LocaleMode};
 
-    /// A sort on a column whose locale code has capitals quotes it, so
-    /// Postgres doesn't fold it to a column that doesn't exist.
+    /// A sort on a localized column orders by the value the read returns —
+    /// the fallback `COALESCE`, not the bare locale column, which ordered
+    /// every row shown with a fallback value as NULL. The locale code's
+    /// capitals stay quoted so Postgres doesn't fold them away.
+    #[test]
+    fn a_localized_sort_orders_by_the_value_the_read_returns() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de-DE".into()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de-DE".to_string()],
+                fallback: true,
+            },
+        };
+
+        let mut sql = String::new();
+        apply_order_by(
+            "title",
+            SortDirection::Asc,
+            false,
+            &def,
+            Some(&ctx),
+            &mut sql,
+        )
+        .unwrap();
+
+        assert!(
+            sql.contains("COALESCE(\"title__de_DE\", \"title__en\") ASC NULLS FIRST"),
+            "{sql}"
+        );
+        assert_eq!(
+            column_read_expr("title", &def.fields, Some(&ctx)).unwrap(),
+            "COALESCE(\"title__de_DE\", \"title__en\")",
+            "the sort key must be the shared read expression"
+        );
+    }
+
+    /// Without a fallback the sort is the bare locale column — still quoted,
+    /// so Postgres doesn't fold a locale code's capitals to a column that
+    /// doesn't exist.
     #[test]
     fn uppercase_locale_sort_column_is_quoted() {
         let mut def = CollectionDefinition::new("posts");
@@ -178,7 +224,7 @@ mod tests {
             config: LocaleConfig {
                 default_locale: "en".to_string(),
                 locales: vec!["en".to_string(), "de-DE".to_string()],
-                fallback: true,
+                fallback: false,
             },
         };
 

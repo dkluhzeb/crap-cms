@@ -283,6 +283,7 @@ fn make_localized_pages_def() -> CollectionDefinition {
         FieldDefinition::builder("title", FieldType::Text)
             .required(true)
             .localized(true)
+            .max_length(40)
             .build(),
         FieldDefinition::builder("body", FieldType::Textarea)
             .localized(true)
@@ -1013,6 +1014,74 @@ async fn update_action_with_locale() {
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
         "Update with locale should succeed, got {status}"
+    );
+}
+
+// ── Validation error re-render keeps the submitted locale ─────────────────
+
+/// The `_locale` input the error re-render must carry, with the value that
+/// follows it in the stacked attribute list.
+fn locale_input_value(body: &str) -> Option<String> {
+    let after = body.split("name=\"_locale\"").nth(1)?;
+
+    Some(after.chars().take(60).collect())
+}
+
+/// Regression: after a validation error the re-rendered form carried no
+/// `_locale` input. The corrected save then parsed no locale at all, so the
+/// German text was written into the English columns and the shared fields were
+/// overwritten — the publish-time strip is a no-op without a locale context.
+#[tokio::test]
+async fn validation_error_re_render_keeps_the_submitted_locale() {
+    let app = setup_localized_app();
+    let user_id = create_test_user(&app, "verrloc@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "verrloc@test.com");
+
+    // A document exists in the default locale; the editor then translates it
+    // and trips a field rule, so the form comes back with errors.
+    let doc_id = {
+        let def = app.registry.get_collection("pages").unwrap().clone();
+        let locale_ctx = query::LocaleContext {
+            mode: query::LocaleMode::Single("en".to_string()),
+            config: make_locale_config(),
+        };
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Re-render locale test"));
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
+        tx.commit().unwrap();
+        doc.id
+    };
+
+    let too_long = "x".repeat(60);
+    let resp = app
+        .router
+        .oneshot(
+            Request::post(format!("/admin/collections/pages/{doc_id}"))
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("title={too_long}&_locale=de")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a field validation error re-renders the form"
+    );
+
+    let body = body_string(resp.into_body()).await;
+    let locale_input = locale_input_value(&body).unwrap_or_else(|| {
+        panic!("the re-rendered form must carry the _locale input, got: {body}")
+    });
+
+    assert!(
+        locale_input.contains("value=\"de\""),
+        "the form must come back in the locale it was submitted in, got: {locale_input}"
     );
 }
 

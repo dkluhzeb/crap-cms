@@ -14,7 +14,7 @@ pub use bulk::{
     purge_old_jobs_for_slug,
 };
 pub use claim::claim_pending_jobs;
-pub use cron::try_claim_cron_window;
+pub use cron::{cron_fired_at, try_claim_cron_window};
 pub use lifecycle::{
     InsertJobOpts, InsertedJob, complete_job, complete_job_repairing, fail_job, insert_job,
     insert_job_with, mark_stale, set_job_data, update_heartbeat,

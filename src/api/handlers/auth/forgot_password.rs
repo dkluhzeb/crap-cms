@@ -1,16 +1,11 @@
 //! Forgot password handler — generate reset token and queue email.
 
-use std::sync::Arc;
-
-use tokio::task;
 use tonic::{Request, Response};
-use tracing::error;
 
-use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::{CollectionDefinition, email, email::PasswordResetEmailContext, normalize_email},
-    service::{AppInfra, ServiceContext, auth::generate_reset_token},
+    core::{collection::Auth, normalize_email},
+    service::ResetTarget,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -56,93 +51,21 @@ impl ContentService {
             return ok_response;
         }
 
-        let infra = Arc::clone(&self.infra);
-        let slug = req.collection.clone();
-        let user_email = req.email.clone();
-        let def_owned = def;
-        let reset_expiry = self.reset_token_expiry;
+        // The token and the email job are minted together in one transaction
+        // inside the spawned task, so a crash can never leave a live reset
+        // token whose link was never queued for delivery.
+        self.infra.email.send_reset(
+            ResetTarget::builder(
+                self.infra.pool.clone(),
+                self.infra.locale_config.clone(),
+                req.collection,
+                def,
+                req.email,
+                self.reset_token_expiry,
+            )
+            .build(),
+        );
 
-        task::spawn_blocking(move || {
-            send_reset_email(&ResetEmailCtx {
-                infra: &infra,
-                slug: &slug,
-                def: &def_owned,
-                user_email: &user_email,
-                reset_expiry,
-            });
-        });
-
-        Response::new(content::ForgotPasswordResponse {})
-    }
-}
-
-/// Context for sending a password reset email. Process-stable dependencies
-/// (pool + email config/renderer/server config) come from the shared
-/// [`AppInfra`]; `reset_expiry` and the target collection are per-call.
-struct ResetEmailCtx<'a> {
-    infra: &'a AppInfra,
-    slug: &'a str,
-    def: &'a CollectionDefinition,
-    user_email: &'a str,
-    reset_expiry: u64,
-}
-
-/// Generate a reset token, store it, and queue the reset email.
-fn send_reset_email(ctx: &ResetEmailCtx) {
-    let conn = match ctx.infra.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("DB connection for forgot password: {}", e);
-            return;
-        }
-    };
-
-    let svc_ctx = ServiceContext::collection(ctx.slug, ctx.def)
-        .conn(&conn)
-        .locale_config(Some(&ctx.infra.locale_config))
-        .build();
-
-    let token_result = match generate_reset_token(&svc_ctx, ctx.user_email, ctx.reset_expiry) {
-        Ok(Some(r)) => r,
-        Ok(None) => return,
-        Err(e) => {
-            error!("Forgot password error: {}", e);
-            return;
-        }
-    };
-    let token = &token_result.token;
-
-    // Use the shared `base_url()` so a configured `public_url` with a trailing
-    // slash is trimmed — the hand-rolled form produced `…com//admin/…`.
-    let base_url = ctx.infra.email.server_config.base_url();
-
-    let reset_url = format!("{base_url}/admin/reset-password?token={token}");
-
-    let html = match ctx.infra.email.email_renderer.render(
-        "password_reset",
-        &PasswordResetEmailContext {
-            reset_url: &reset_url,
-            expiry_minutes: ctx.reset_expiry / 60,
-            from_name: &ctx.infra.email.email_config.from_name,
-        },
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            error!("Failed to render reset email: {}", e);
-            return;
-        }
-    };
-
-    if let Err(e) = email::queue_email(
-        &conn,
-        &email::EmailJobData {
-            to: ctx.user_email.to_string(),
-            subject: "Reset your password".to_string(),
-            html,
-            text: None,
-        },
-        ctx.infra.email.email_max_attempts,
-    ) {
-        error!("Failed to queue reset email: {}", e);
+        ok_response
     }
 }

@@ -409,24 +409,56 @@ pub(crate) fn walk_leaf_fields<'a, F>(
 where
     F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
 {
+    walk_leaf_fields_where(
+        fields,
+        prefix,
+        inherited_localized,
+        &|_: &FieldDefinition| true,
+        visit,
+    )
+}
+
+/// [`walk_leaf_fields`] restricted to the subtree `keep` accepts: a field `keep`
+/// rejects is neither visited nor descended into, so a leaf under a rejected
+/// container is never reached.
+///
+/// # Errors
+///
+/// Propagates any error the visitor returns.
+pub(crate) fn walk_leaf_fields_where<'a, F, K>(
+    fields: &'a [FieldDefinition],
+    prefix: &str,
+    inherited_localized: bool,
+    keep: &K,
+    visit: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
+    K: Fn(&FieldDefinition) -> bool,
+{
     for field in fields {
+        if !keep(field) {
+            continue;
+        }
+
         match field_children(field) {
             FieldChildren::Group(subs) => {
                 let new_prefix = prefixed_name(prefix, &field.name);
 
-                walk_leaf_fields(
+                walk_leaf_fields_where(
                     subs,
                     &new_prefix,
                     inherited_localized || field.localized,
+                    keep,
                     visit,
                 )?;
             }
             FieldChildren::Wrapper(subs) => {
-                walk_leaf_fields(subs, prefix, inherited_localized, visit)?;
+                walk_leaf_fields_where(subs, prefix, inherited_localized, keep, visit)?;
             }
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    walk_leaf_fields(&tab.fields, prefix, inherited_localized, visit)?;
+                    walk_leaf_fields_where(&tab.fields, prefix, inherited_localized, keep, visit)?;
                 }
             }
             // Array/Blocks are leaf columns here (their sub-fields live in join

@@ -1337,6 +1337,27 @@ mod tests {
         );
     }
 
+    /// `dayAndTime` is the only appearance that carries a zone, so `monthOnly`
+    /// drops it like the other three. Every display path relies on this: a
+    /// month-only value is a UTC calendar value the list and the form both show
+    /// as stored, and a `_tz` companion would make them disagree.
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_month_only() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "billing_period").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "monthOnly").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for monthOnly"
+        );
+    }
+
     #[test]
     fn test_parse_fields_timezone_ignored_for_time_only() {
         let lua = Lua::new();

@@ -8,10 +8,133 @@ use cron::Schedule;
 use tracing::{debug, info, warn};
 
 use crate::{
-    core::Registry,
-    db::{DbPool, query::jobs as job_query},
+    core::{JobDefinition, Registry},
+    db::{DbConnection, DbPool, query::jobs as job_query},
     scheduler::runner::cron_expr::normalize_cron,
 };
+
+/// One schedule's slot in a single cron tick.
+struct CronTick<'a> {
+    slug: &'a str,
+    def: &'a JobDefinition,
+    /// When this process last evaluated cron. Only used for a slug that has
+    /// never fired — everything else resumes from the persisted window.
+    last_check: DateTime<Utc>,
+    now: DateTime<Utc>,
+    queue_retries: &'a HashMap<String, u32>,
+}
+
+/// Parse the definition's cron expression, or `None` when there is none or it
+/// is unusable.
+///
+/// The cron crate expects 6-7 fields with seconds; standard 5-field
+/// expressions are normalized by prepending `0` for seconds.
+fn parse_schedule(tick: &CronTick<'_>) -> Option<Schedule> {
+    let schedule_str = tick.def.schedule.as_ref()?;
+
+    Schedule::from_str(&normalize_cron(schedule_str))
+        .inspect_err(|e| {
+            warn!(
+                "Invalid cron expression '{}' for job '{}': {}",
+                schedule_str, tick.slug, e
+            );
+        })
+        .ok()
+}
+
+/// Where this slug's window starts: the persisted last fire when there is
+/// one, the process's own last check only when the slug has never fired.
+///
+/// Anchoring on the persisted value is what lets a schedule that came due
+/// while the process was down still fire — a process-local start is seeded at
+/// boot, so the whole downtime falls outside every window that follows.
+///
+/// The stored string is handed back untouched. The claim compares it against
+/// `fired_at` as text, and the boundary case where the two are equal is
+/// load-bearing, so re-rendering it here could shift the comparison.
+fn window_start(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<(DateTime<Utc>, String)> {
+    let Some(stored) = job_query::cron_fired_at(conn, tick.slug)? else {
+        return Ok((tick.last_check, tick.last_check.to_rfc3339()));
+    };
+
+    let Ok(parsed) = DateTime::parse_from_rfc3339(&stored) else {
+        warn!(
+            "Unreadable last fire time '{}' for job '{}' — using this process's window instead",
+            stored, tick.slug
+        );
+
+        return Ok((tick.last_check, tick.last_check.to_rfc3339()));
+    };
+
+    Ok((parsed.with_timezone(&Utc), stored))
+}
+
+/// Insert the pending run.
+///
+/// `effective_max_attempts` resolves `JobDefinition.retries` first, falling
+/// back to `[jobs.queues.<queue>] retries` when the definition didn't set it.
+fn insert_cron_run(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<()> {
+    let def = tick.def;
+
+    let job = job_query::insert_job(
+        conn,
+        tick.slug,
+        "{}",
+        "cron",
+        def.effective_max_attempts(tick.queue_retries.get(&def.queue).copied()),
+        &def.queue,
+        def.priority,
+    )?;
+
+    info!("Cron scheduled job '{}' (run {})", tick.slug, job.id);
+
+    Ok(())
+}
+
+/// Queue one schedule's run if it came due in this window and this instance
+/// wins the window.
+fn fire_if_due(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<()> {
+    let Some(schedule) = parse_schedule(tick) else {
+        return Ok(());
+    };
+
+    let (start, start_text) = window_start(conn, tick)?;
+
+    // One run however long the gap: taking only the first due time caps a
+    // long downtime to a single catch-up rather than a burst of missed runs.
+    let should_fire = schedule
+        .after(&start)
+        .take_while(|t| *t <= tick.now)
+        .next()
+        .is_some();
+
+    if !should_fire {
+        return Ok(());
+    }
+
+    // Atomic cron dedup: only one instance wins each cron window.
+    // Uses _crap_cron_fired table to prevent double-fire in multi-server.
+    let fired_at = tick.now.to_rfc3339();
+
+    if !job_query::try_claim_cron_window(conn, tick.slug, &fired_at, &start_text)? {
+        debug!(
+            "Cron job '{}' already fired by another instance in this window",
+            tick.slug
+        );
+
+        return Ok(());
+    }
+
+    // skip_if_running is atomic with the insert inside the same IMMEDIATE
+    // transaction.
+    if tick.def.skip_if_running && job_query::count_running(conn, Some(tick.slug))? > 0 {
+        debug!("Skipping cron job '{}' — still running", tick.slug);
+
+        return Ok(());
+    }
+
+    insert_cron_run(conn, tick)
+}
 
 /// Check cron schedules and insert pending jobs for due ones.
 ///
@@ -25,82 +148,24 @@ pub fn check_cron_schedules(
     now: DateTime<Utc>,
     queue_retries: &HashMap<String, u32>,
 ) -> Result<()> {
-    let mut conn = pool.get().context("Failed to get DB connection for cron")?;
+    let mut conn = pool
+        .write()
+        .context("Failed to get DB connection for cron")?;
     let tx = conn
         .transaction_immediate()
         .context("Failed to start cron check transaction")?;
 
     for (slug, def) in &registry.jobs {
-        let Some(schedule_str) = &def.schedule else {
-            continue;
-        };
-
-        // Parse cron expression (the cron crate expects 6-7 fields with seconds;
-        // normalize standard 5-field expressions by prepending "0" for seconds)
-        let normalized = normalize_cron(schedule_str);
-        let schedule = match Schedule::from_str(&normalized) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(
-                    "Invalid cron expression '{}' for job '{}': {}",
-                    schedule_str, slug, e
-                );
-
-                continue;
-            }
-        };
-
-        // Check if the schedule should have fired between last_check and now
-        let should_fire = schedule
-            .after(&last_check)
-            .take_while(|t| *t <= now)
-            .next()
-            .is_some();
-
-        if !should_fire {
-            continue;
-        }
-
-        // Atomic cron dedup: only one instance wins each cron window.
-        // Uses _crap_cron_fired table to prevent double-fire in multi-server.
-        let fired_at = now.to_rfc3339();
-        let window_start = last_check.to_rfc3339();
-
-        if !job_query::try_claim_cron_window(&tx, slug, &fired_at, &window_start)? {
-            debug!(
-                "Cron job '{}' already fired by another instance in this window",
-                slug
-            );
-
-            continue;
-        }
-
-        // Check skip_if_running (atomic with insert inside the same IMMEDIATE transaction)
-        if def.skip_if_running {
-            let running = job_query::count_running(&tx, Some(slug))?;
-
-            if running > 0 {
-                debug!("Skipping cron job '{}' — still running", slug);
-
-                continue;
-            }
-        }
-
-        // Insert a pending job. `effective_max_attempts` resolves
-        // `JobDefinition.retries` first, falling back to
-        // `[jobs.queues.<queue>] retries` when the definition didn't
-        // set it.
-        let job = job_query::insert_job(
+        fire_if_due(
             &tx,
-            slug,
-            "{}",
-            "cron",
-            def.effective_max_attempts(queue_retries.get(&def.queue).copied()),
-            &def.queue,
-            def.priority,
+            &CronTick {
+                slug,
+                def,
+                last_check,
+                now,
+                queue_retries,
+            },
         )?;
-
-        info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
 
     tx.commit()
@@ -116,9 +181,132 @@ mod tests {
     use super::*;
     use crate::{
         core::{JobDefinition, job::JobStatus},
-        db::DbConnection,
+        db::{DbConnection, DbValue},
         scheduler::runner::test_support::{make_registry_with_jobs, make_test_pool},
     };
+
+    /// Persist a last-fire time for `slug`, standing in for a run that
+    /// happened before this process started.
+    fn record_fire(pool: &DbPool, slug: &str, at: DateTime<Utc>) {
+        let conn = pool.get().unwrap();
+
+        conn.execute(
+            "INSERT INTO _crap_cron_fired (slug, fired_at) VALUES (?1, ?2)",
+            &[
+                DbValue::Text(slug.to_string()),
+                DbValue::Text(at.to_rfc3339()),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Pending + finished runs recorded for `slug`.
+    fn runs_for(pool: &DbPool, slug: &str) -> usize {
+        let conn = pool.get().unwrap();
+
+        job_query::list_job_runs(&conn, Some(slug), None, 100, 0)
+            .unwrap()
+            .len()
+    }
+
+    /// Regression: the scheduler seeds its in-process window at start, so a
+    /// schedule that came due while the process was down fell outside every
+    /// window that followed and never fired at all. The persisted fire time
+    /// is the anchor now, so the first tick after a restart catches it up —
+    /// once, however long the gap.
+    #[test]
+    fn a_schedule_due_during_downtime_fires_once_after_the_restart() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("downtime_job", "some.handler")
+                .schedule("* * * * *")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let now = Utc::now();
+        record_fire(&pool, "downtime_job", now - Duration::hours(2));
+
+        // A freshly started process: its own window is empty.
+        check_cron_schedules(&pool, &registry, now, now, &HashMap::new()).unwrap();
+        assert_eq!(
+            runs_for(&pool, "downtime_job"),
+            1,
+            "a window missed during downtime must be caught up"
+        );
+
+        // The catch-up recorded its own fire, so the next tick is quiet —
+        // two hours of missed minutes do not become two hours of runs.
+        check_cron_schedules(&pool, &registry, now, now, &HashMap::new()).unwrap();
+        assert_eq!(
+            runs_for(&pool, "downtime_job"),
+            1,
+            "the catch-up must fire exactly once"
+        );
+    }
+
+    /// The persisted fire time also wins in the other direction: a job that
+    /// already fired inside the current window must not fire again just
+    /// because this process's own last check is hours old.
+    #[test]
+    fn a_recent_recorded_fire_beats_a_stale_process_window() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("hourly_job", "some.handler")
+                .schedule("0 * * * *") // every hour at :00
+                .build(),
+        ]);
+
+        // :30:30, with the last fire one second earlier — no hour boundary
+        // in between, so nothing is due.
+        let now = Utc::now().with_minute(30).unwrap().with_second(30).unwrap();
+        record_fire(&pool, "hourly_job", now - Duration::seconds(1));
+
+        check_cron_schedules(
+            &pool,
+            &registry,
+            now - Duration::hours(2),
+            now,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            runs_for(&pool, "hourly_job"),
+            0,
+            "a stale process window must not re-fire a schedule that just fired"
+        );
+    }
+
+    /// With nothing recorded there is no durable window to resume from, so
+    /// the process's own last check is the anchor.
+    #[test]
+    fn a_never_fired_slug_falls_back_to_the_process_window() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("fresh_job", "some.handler")
+                .schedule("* * * * *")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let now = Utc::now();
+
+        // Empty process window, nothing recorded: nothing to fire.
+        check_cron_schedules(&pool, &registry, now, now, &HashMap::new()).unwrap();
+        assert_eq!(runs_for(&pool, "fresh_job"), 0);
+
+        // A window that spans a due minute fires it.
+        check_cron_schedules(
+            &pool,
+            &registry,
+            now - Duration::minutes(2),
+            now,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(runs_for(&pool, "fresh_job"), 1);
+    }
 
     #[test]
     fn check_cron_schedules_fires_due_job() {

@@ -5,13 +5,14 @@
 
 use crate::{
     admin::handlers::shared::{
-        ListUrlContext, auto_label_from_name, is_column_eligible, is_sortable_column, url_decode,
+        ListUrlContext, auto_label_from_name, date_picker_values, is_column_eligible,
+        is_sortable_column, tag_values_of, url_decode,
     },
     core::{
         FieldDefinition, FieldType, collection::CollectionDefinition, document::Document,
         field::PickerAppearance, json_truthy,
     },
-    db::query::{FilterClause, FilterOp},
+    db::query::{FilterClause, FilterOp, helpers::tz_column},
 };
 
 use serde_json::{Value, json};
@@ -107,6 +108,59 @@ pub(super) fn resolve_columns(
         .collect()
 }
 
+/// The value a date cell shows. A field that stores a zone shows its date in
+/// that zone — the same conversion the edit form makes — so the list and the
+/// editor never disagree about which day a timezone date falls on. Without a
+/// stored zone the cell keeps the stored value and `<crap-time>` renders it in
+/// the viewer's zone.
+fn date_cell_value(field: &FieldDefinition, doc: &Document, stored: &str, format: &str) -> String {
+    if !field.has_tz_companion() {
+        return stored.to_string();
+    }
+
+    let Some(tz) = doc
+        .fields
+        .get(&tz_column(&field.name))
+        .and_then(Value::as_str)
+        .filter(|tz| !tz.is_empty())
+    else {
+        return stored.to_string();
+    };
+
+    let (date_only, datetime_local) = date_picker_values(stored, tz, format);
+
+    date_only
+        .or(datetime_local)
+        .unwrap_or_else(|| stored.to_string())
+}
+
+/// The text a Select/Radio cell shows: each stored value's declared label, or
+/// the value itself when the field no longer declares it. A `has_many` field
+/// shows its whole list — the same values the form shows as tags, which a plain
+/// `as_str` on the stored array could not read at all.
+fn choice_cell_value(field: &FieldDefinition, raw: &Value) -> String {
+    let label_for = |value: &str| {
+        field
+            .options
+            .iter()
+            .find(|opt| opt.value == value)
+            .map_or_else(
+                || value.to_string(),
+                |opt| opt.label.resolve_default().to_string(),
+            )
+    };
+
+    if field.has_many {
+        return tag_values_of(raw)
+            .iter()
+            .map(|value| label_for(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+
+    label_for(raw.as_str().unwrap_or(""))
+}
+
 /// Pre-compute cell values for a document row, parallel to the columns array.
 pub(super) fn compute_cells(
     doc: &Document,
@@ -143,7 +197,7 @@ pub(super) fn compute_cells(
                                 json!({ "value": json_truthy(&raw), "is_bool": true })
                             }
                             FieldType::Date => {
-                                let val = raw.as_str().unwrap_or("");
+                                let stored = raw.as_str().unwrap_or("");
                                 // The cell tells `<crap-time>` how the value was
                                 // stored so a day-only date renders as a calendar
                                 // date (in UTC), not a local timestamp.
@@ -151,18 +205,12 @@ pub(super) fn compute_cells(
                                     .picker_appearance
                                     .as_ref()
                                     .map_or("dayOnly", PickerAppearance::as_str);
+                                let val = date_cell_value(f, doc, stored, format);
 
                                 json!({ "value": val, "is_date": true, "format": format })
                             }
                             FieldType::Select | FieldType::Radio => {
-                                let raw_val = raw.as_str().unwrap_or("");
-                                let label =
-                                    f.options.iter().find(|o| o.value == raw_val).map_or_else(
-                                        || raw_val.to_string(),
-                                        |o| o.label.resolve_default().to_string(),
-                                    );
-
-                                json!({ "value": label })
+                                json!({ "value": choice_cell_value(f, &raw) })
                             }
                             FieldType::Textarea => {
                                 let text = raw.as_str().unwrap_or("");
@@ -191,6 +239,13 @@ pub(super) fn compute_cells(
                                 };
 
                                 json!({ "value": value })
+                            }
+                            // A multi-value Text/Number column shows its
+                            // elements, the same list the form shows as tags —
+                            // printing the raw JSON leaked brackets and quotes
+                            // into the table.
+                            _ if f.has_many => {
+                                json!({ "value": tag_values_of(&raw).join(", ") })
                             }
                             _ => {
                                 let val = match &raw {
@@ -682,6 +737,101 @@ mod tests {
             cells[2]["format"], "dayOnly",
             "the parser default is day-only"
         );
+    }
+
+    /// Regression: a `has_many` Select cell read the stored array with
+    /// `as_str` and always came out empty. It shows every stored value's
+    /// label, and a value the field no longer declares shows as itself.
+    #[test]
+    fn compute_cells_has_many_choice_shows_every_label() {
+        let mut def = test_collection();
+        def.fields.push(
+            FieldDefinition::builder("skills", FieldType::Select)
+                .has_many(true)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Design".into()), "design"),
+                    SelectOption::new(LocalizedString::Plain("Motion".into()), "motion"),
+                ])
+                .build(),
+        );
+        let mut doc = DocumentBuilder::new("1").build();
+        doc.fields
+            .insert("skills".into(), json!(["design", "motion", "retired"]));
+
+        let columns = vec![json!({"key": "skills"})];
+        let cells = compute_cells(&doc, &columns, &def);
+
+        assert_eq!(cells[0]["value"], "Design, Motion, retired");
+    }
+
+    /// Regression: a `has_many` Text/Number cell printed the raw JSON, so the
+    /// table showed `["a","b"]` where the form showed two tags.
+    #[test]
+    fn compute_cells_has_many_scalar_shows_its_elements() {
+        let mut def = test_collection();
+        def.fields.push(
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build(),
+        );
+        def.fields.push(
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .build(),
+        );
+        let mut doc = DocumentBuilder::new("1").build();
+        doc.fields.insert("tags".into(), json!(["rust", "cms"]));
+        doc.fields.insert("scores".into(), json!([1, 2]));
+
+        let columns = vec![json!({"key": "tags"}), json!({"key": "scores"})];
+        let cells = compute_cells(&doc, &columns, &def);
+
+        assert_eq!(cells[0]["value"], "rust, cms");
+        assert_eq!(cells[1]["value"], "1, 2");
+    }
+
+    /// Regression: a timezone date's cell ignored the stored `_tz`, so the
+    /// list rendered it in the viewer's zone while the form showed it in the
+    /// stored one — the same instant on two different days.
+    #[test]
+    fn compute_cells_date_shows_a_stored_zone() {
+        let mut def = test_collection();
+        def.fields.push(
+            FieldDefinition::builder("starts_at", FieldType::Date)
+                .timezone(true)
+                .picker_appearance(PickerAppearance::DayOnly)
+                .build(),
+        );
+        let mut doc = DocumentBuilder::new("1").build();
+        doc.fields
+            .insert("starts_at".into(), json!("2026-01-15T20:00:00.000Z"));
+        doc.fields
+            .insert("starts_at_tz".into(), json!("Asia/Tokyo"));
+
+        let columns = vec![json!({"key": "starts_at"})];
+        let cells = compute_cells(&doc, &columns, &def);
+
+        assert_eq!(
+            cells[0]["value"], "2026-01-16",
+            "the stored zone puts the instant on the next day"
+        );
+    }
+
+    /// A date field without a stored zone keeps the stored value — the client
+    /// formats it in the viewer's zone, as before.
+    #[test]
+    fn compute_cells_date_without_a_zone_is_unchanged() {
+        let mut def = test_collection();
+        def.fields
+            .push(FieldDefinition::builder("plain_at", FieldType::Date).build());
+        let mut doc = DocumentBuilder::new("1").build();
+        doc.fields
+            .insert("plain_at".into(), json!("2026-01-15T20:00:00.000Z"));
+
+        let columns = vec![json!({"key": "plain_at"})];
+        let cells = compute_cells(&doc, &columns, &def);
+
+        assert_eq!(cells[0]["value"], "2026-01-15T20:00:00.000Z");
     }
 
     #[test]

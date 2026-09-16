@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, find_field};
 use crate::db::query::helpers::join_table;
-use crate::db::query::is_valid_identifier;
+use crate::db::query::{column_read_expr, is_valid_identifier};
 use crate::db::{DbConnection, LocaleContext};
 
 use super::blocks::walk_block_fields;
@@ -14,7 +14,9 @@ use super::types::{ResolvedFilter, SubqueryCondition};
 
 /// Resolve a dot-notation filter field to its SQL representation.
 ///
-/// Non-dot fields return [`ResolvedFilter::Column`]. Dot fields are routed
+/// Non-dot fields return [`ResolvedFilter::Column`] carrying the column's read
+/// expression — the fallback `COALESCE` for a localized column, so the filter
+/// compares what the SELECT returns. Dot fields are routed
 /// based on the root field type:
 /// - **Array** → subquery with typed column on join table
 /// - **Blocks** → subquery with `json_extract` (and `json_each` for nesting)
@@ -35,8 +37,12 @@ pub(in crate::db::query::filter) fn resolve_filter(
 ) -> Result<ResolvedFilter> {
     if !field.contains('.') {
         let field_type = lookup_column_field_type(field, fields);
+
+        // Localized columns resolve HERE, at the single point the parent-table
+        // comparand is built — the SELECT, the sort and the keyset take the
+        // same expression, so a filter matches the values the read returns.
         return Ok(ResolvedFilter::Column {
-            col: field.to_string(),
+            expr: column_read_expr(field, fields, locale_ctx)?,
             field_type,
         });
     }
@@ -246,7 +252,9 @@ fn resolve_relationship_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> 
 )]
 mod tests {
     use super::*;
+    use crate::config::LocaleConfig;
     use crate::core::RelationshipConfig;
+    use crate::db::LocaleMode;
     use crate::db::query::filter::resolve::test_helpers::*;
 
     #[test]
@@ -254,9 +262,34 @@ mod tests {
         let (_dir, conn) = test_conn();
         let resolved = resolve_filter(&conn, "status", "posts", &[], None).unwrap();
         match resolved {
-            ResolvedFilter::Column { col, field_type } => {
-                assert_eq!(col, "status");
+            ResolvedFilter::Column { expr, field_type } => {
+                assert_eq!(expr, "status");
                 assert_eq!(field_type, None);
+            }
+            other => panic!("Expected Column, got {other:?}"),
+        }
+    }
+
+    /// A localized column resolves to the same fallback expression the SELECT
+    /// reads it through, so a filter matches the value the listing shows.
+    #[test]
+    fn resolve_filter_reads_a_localized_column_with_its_fallback() {
+        let (_dir, conn) = test_conn();
+        let fields = vec![make_field("title", FieldType::Text, true)];
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: true,
+            },
+        };
+
+        let resolved = resolve_filter(&conn, "title", "posts", &fields, Some(&ctx)).unwrap();
+
+        match resolved {
+            ResolvedFilter::Column { expr, .. } => {
+                assert_eq!(expr, "COALESCE(\"title__de\", \"title__en\")");
             }
             other => panic!("Expected Column, got {other:?}"),
         }
