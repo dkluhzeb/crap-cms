@@ -1,5 +1,7 @@
 //! Core update operation for collections.
 
+use serde_json::Value;
+
 use crate::core::validate::{FieldError, ValidationError};
 use crate::core::{CollectionDefinition, DocumentFields, FieldDefinition, flatten_group_fields};
 use crate::db::LocaleMode;
@@ -12,12 +14,11 @@ use crate::{
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
-        write::{UploadSettle, adopt_pending_draft, document_file_keys, settle_upload_write},
+        write::{UploadSettle, admit::admit_update, document_file_keys, settle_upload_write},
     },
 };
 
 use super::ServiceError;
-use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
     EmptyPassword, enforce_access_constraints, hydrate_reported, strip_reported,
     validate_password_policy,
@@ -189,47 +190,12 @@ pub(crate) fn update_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Canonicalize incoming data to nested groups up front (idempotent); the
-    // whole pipeline sees one shape, the DB edge flattens to columns.
-    canonicalize_write_input(&mut input, def);
-
-    // Publishing takes the pending draft as the write's base and lets the
-    // request's own fields win over it — the file that draft stored included,
-    // whose server-derived columns come from the snapshot, read here after the
-    // strip so they are the server's own values and not something a caller
-    // sent. Everything the draft contributes then passes the locale lock, the
-    // access gates and validation exactly like a field the caller sent.
-    adopt_pending_draft(ctx, def, id, &mut input)?;
-
-    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
-
-    check_update_access(
-        ctx,
-        write_hooks,
-        def,
-        id,
-        &input.data,
-        input.locale_ctx.map(LocaleContext::access_locale),
-        input.ui_locale.as_deref(),
-    )?;
+    let publishing_draft = admit_update(ctx, conn, id, &mut input)?;
 
     check_update_password(ctx, def, input.password)?;
 
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
-
-    // Strip write-denied fields before hook processing (data-aware: each
-    // `access.update` rule sees `ctx.data` = its level and `ctx.document` = the
-    // stored document, never the patch it is judging).
-    let stored = stored_fields_for_update_rules(conn, ctx.slug, def, id, input.locale_ctx)?;
-    write_hooks.strip_write_access_update(
-        &def.fields,
-        &mut input.data,
-        &stored,
-        ctx.slug,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
 
     let hook_data = input.data.clone();
 
@@ -290,6 +256,7 @@ pub(crate) fn update_document_in_conn(
             .password(input.password)
             .locale_ctx(input.locale_ctx)
             .locale_config(input.locale_ctx.map(|c| &c.config))
+            .pending_draft(publishing_draft.as_ref().and_then(Value::as_object))
             .build();
 
         let mut doc = persist_update(ctx, id, &final_ctx.to_value_map(), &opts)?;

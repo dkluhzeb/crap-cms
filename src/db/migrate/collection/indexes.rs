@@ -11,7 +11,7 @@ use crate::{
         DbConnection,
         migrate::helpers::collect_column_specs,
         query::{
-            helpers::{locale_column, quote_ident, sql_ident},
+            helpers::{locale_column, quote_ident},
             is_valid_identifier,
         },
     },
@@ -79,8 +79,8 @@ fn collect_field_indexes(
                 let idx_name = index_name(slug, &[&col]);
                 let sql = format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {slug} ({})",
-                    sql_ident(&idx_name),
-                    sql_ident(&col)
+                    quote_ident(&idx_name),
+                    quote_ident(&col)
                 );
 
                 add_index(desired, stmts, idx_name, sql)?;
@@ -89,9 +89,9 @@ fn collect_field_indexes(
             let idx_name = index_name(slug, &[&spec.col_name]);
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
-                sql_ident(&idx_name),
+                quote_ident(&idx_name),
                 slug,
-                sql_ident(&spec.col_name)
+                quote_ident(&spec.col_name)
             );
 
             add_index(desired, stmts, idx_name, sql)?;
@@ -124,8 +124,8 @@ fn collect_soft_delete_unique_indexes(
                 let idx_name = index_name(slug, &[&col, "active_unique"]);
                 let sql = format!(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {slug} ({}) WHERE _deleted_at IS NULL",
-                    sql_ident(&idx_name),
-                    sql_ident(&col)
+                    quote_ident(&idx_name),
+                    quote_ident(&col)
                 );
 
                 add_index(desired, stmts, idx_name, sql)?;
@@ -134,9 +134,9 @@ fn collect_soft_delete_unique_indexes(
             let idx_name = index_name(slug, &[&spec.col_name, "active_unique"]);
             let sql = format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                sql_ident(&idx_name),
+                quote_ident(&idx_name),
                 slug,
-                sql_ident(&spec.col_name)
+                quote_ident(&spec.col_name)
             );
 
             add_index(desired, stmts, idx_name, sql)?;
@@ -194,7 +194,7 @@ fn collect_compound_indexes(
 
         let col_list = expanded_cols
             .iter()
-            .map(|col| sql_ident(col))
+            .map(|col| quote_ident(col))
             .collect::<Vec<_>>()
             .join(", ");
         let field_parts: Vec<&str> = index_def.fields.iter().map(String::as_str).collect();
@@ -202,7 +202,7 @@ fn collect_compound_indexes(
         let unique = if index_def.unique { "UNIQUE " } else { "" };
         let sql = format!(
             "CREATE {unique}INDEX IF NOT EXISTS {} ON {slug} ({col_list})",
-            sql_ident(&idx_name)
+            quote_ident(&idx_name)
         );
 
         add_index(desired, stmts, idx_name, sql)?;
@@ -269,8 +269,8 @@ fn collect_auth_token_indexes(
         let idx_name = index_name(slug, &[col]);
         let sql = format!(
             "CREATE INDEX IF NOT EXISTS {} ON {slug} ({})",
-            sql_ident(&idx_name),
-            sql_ident(col)
+            quote_ident(&idx_name),
+            quote_ident(col)
         );
 
         add_index(desired, stmts, idx_name, sql)?;

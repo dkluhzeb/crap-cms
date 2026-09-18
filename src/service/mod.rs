@@ -105,7 +105,7 @@ pub use globals::{unpublish_global_document, update_global_document, update_glob
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
     FieldReadStrip, LuaReadHooks, LuaWriteHooks, ReadHooks, ReadStripArgs, RunnerReadHooks,
-    RunnerWriteHooks, WriteHooks,
+    RunnerWriteHooks, SnapshotLocales, WriteHooks,
 };
 pub(crate) use orchestrate::run_pool_write;
 pub(crate) use persist::persist_bulk_update;

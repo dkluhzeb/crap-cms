@@ -9,7 +9,9 @@
 //! - `image_convert.rs` -- the `_system_image_convert` job: encode, URL
 //!   write, completion, and the change report.
 //! - `cron_schedule.rs` -- `check_cron_schedules`.
-//! - `cron_expr.rs` -- 5-field cron normalization.
+//! - `cron_expr.rs` -- crontab-syntax normalization and the single
+//!   `parse_cron` entry point shared by the boot-time schedule validator
+//!   and the per-tick scheduler.
 //! - `stale.rs` -- `recover_stale_jobs`.
 //! - `retention.rs` -- soft-delete retention purge and its tick claim.
 
@@ -28,6 +30,8 @@ pub use cron_schedule::check_cron_schedules;
 pub use execute::{ExecuteJobParams, execute_job};
 pub use retention::purge_soft_deleted;
 pub use stale::recover_stale_jobs;
+
+pub(crate) use cron_expr::parse_cron;
 
 pub(super) use failure::record_permanent_job_failure;
 pub(super) use retention::claim_retention_purge_tick;

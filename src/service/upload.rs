@@ -99,7 +99,7 @@ fn store_file(
         )]))
     })?;
 
-    inject_upload_metadata(form.raw_mut(), &processed);
+    inject_upload_metadata(form.raw_mut(), &processed, &upload_config);
 
     Ok((guard, processed.queued_conversions))
 }
@@ -293,8 +293,11 @@ mod tests {
                 key_from_served_url,
             },
         },
-        db::{LocaleMode, query},
-        service::{AppInfra, delete_document},
+        db::{LocaleContext, LocaleMode, query},
+        service::{
+            AppInfra, OpDeadline, UpdateManyOptions, delete_document, unpublish_document,
+            update_many,
+        },
     };
 
     const MAX_FILE_SIZE: u64 = 1024 * 1024;
@@ -465,6 +468,17 @@ mod tests {
         f: Option<UploadedFile>,
         draft: bool,
     ) -> Document {
+        update_in_locale(infra, def, id, f, draft, None)
+    }
+
+    fn update_in_locale(
+        infra: &Arc<AppInfra>,
+        def: &CollectionDefinition,
+        id: &str,
+        f: Option<UploadedFile>,
+        draft: bool,
+        locale_ctx: Option<&LocaleContext>,
+    ) -> Document {
         let ctx = ServiceContext::collection("media", def)
             .infra(infra)
             .build();
@@ -476,7 +490,7 @@ mod tests {
                 storage: &infra.storage,
                 file: f,
                 form: empty_form(def),
-                locale_ctx: None,
+                locale_ctx,
                 password: None,
                 ui_locale: None,
                 draft,
@@ -897,6 +911,172 @@ mod tests {
         assert!(
             payloads[0].contains(&thumbnail_source(&published)),
             "the published file's conversion is untouched: {payloads:?}"
+        );
+    }
+
+    /// `media_with_queued_webp` capped at one version, so a publish's own
+    /// snapshot prunes every earlier one.
+    fn media_with_queued_webp_capped() -> CollectionDefinition {
+        let mut def = media_with_queued_webp();
+        def.versions = Some(VersionsConfig::new(true, 1));
+
+        def
+    }
+
+    /// Run a bulk publish over every published document of the collection.
+    fn bulk_publish(infra: &Arc<AppInfra>, def: &CollectionDefinition) {
+        let ctx = ServiceContext::collection("media", def)
+            .infra(infra)
+            .build();
+
+        update_many(
+            &ctx,
+            &[],
+            &DocumentFields::new(),
+            &LocaleConfig::default(),
+            &UpdateManyOptions {
+                locale_ctx: None,
+                run_hooks: false,
+                draft: false,
+                ui_locale: None,
+                max_documents: 0,
+                deadline: OpDeadline::none(),
+            },
+        )
+        .expect("bulk publish");
+    }
+
+    /// Regression: a bulk publish adopted the drafted file but settled nothing,
+    /// so the drafted file's conversions were never queued, the previous file's
+    /// were never cancelled, and the previous file was never released — and no
+    /// later write could still see it, so those bytes stayed forever.
+    #[test]
+    fn a_bulk_publish_settles_the_drafted_file() {
+        let (_tmp, infra, def) = infra_for(media_with_queued_webp_capped());
+
+        let published = create(&infra, &def, &image_file("first.png", 40));
+        let published_key = stored_key(&published);
+
+        let drafted = update(
+            &infra,
+            &def,
+            &published.id,
+            Some(image_file("second.png", 40)),
+            true,
+        );
+        let drafted_url = drafted.get_str("url").expect("a url").to_string();
+
+        bulk_publish(&infra, &def);
+
+        assert_eq!(
+            live_url(&infra, &def, &published.id),
+            drafted_url,
+            "the bulk publish carries the drafted file over to the row"
+        );
+
+        let payloads = queued_conversion_payloads(&infra);
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert!(
+            payloads[0].contains(&thumbnail_source(&drafted)),
+            "the drafted file's conversion is queued: {payloads:?}"
+        );
+        assert!(
+            !payloads[0].contains(&thumbnail_source(&published)),
+            "the previous file's conversion is cancelled: {payloads:?}"
+        );
+        assert!(
+            !infra.storage.exists(&published_key).expect("exists"),
+            "nothing references {published_key} once the cap pruned its snapshots"
+        );
+    }
+
+    /// A publish issued in a non-default locale makes the drafted file live
+    /// through the snapshot write-back. It used to skip the file adoption
+    /// entirely, so the row pointed at the drafted file while its conversions
+    /// were never queued and the previous file's never cancelled — a queued
+    /// job for the released file later wrote a derivative of deleted bytes.
+    #[test]
+    fn a_translation_publish_settles_the_drafted_file() {
+        let (_tmp, infra, def) = infra_for(media_with_queued_webp_capped());
+        let locales = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locales,
+        };
+
+        let published = create(&infra, &def, &image_file("first.png", 40));
+        let published_key = stored_key(&published);
+        let drafted = update(
+            &infra,
+            &def,
+            &published.id,
+            Some(image_file("second.png", 40)),
+            true,
+        );
+        let drafted_url = drafted.get_str("url").expect("a url").to_string();
+
+        update_in_locale(&infra, &def, &published.id, None, false, Some(&de));
+
+        assert_eq!(
+            live_url(&infra, &def, &published.id),
+            drafted_url,
+            "the German publish carries the drafted file over to the row"
+        );
+
+        let payloads = queued_conversion_payloads(&infra);
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert!(
+            payloads[0].contains(&thumbnail_source(&drafted)),
+            "the drafted file's conversion is queued: {payloads:?}"
+        );
+        assert!(
+            !payloads[0].contains(&thumbnail_source(&published)),
+            "the previous file's conversion is cancelled: {payloads:?}"
+        );
+        assert!(
+            !infra.storage.exists(&published_key).expect("exists"),
+            "nothing references {published_key} once the cap pruned its snapshots"
+        );
+    }
+
+    /// Regression: unpublishing writes a version like every other lifecycle
+    /// step, so it prunes like one — and pruning a snapshot can drop a stored
+    /// file's last reference. Unpublish released nothing, so those bytes were
+    /// orphaned with no later write able to see them.
+    #[test]
+    fn unpublishing_releases_a_file_its_pruning_orphaned() {
+        let mut capped = media_with_drafts();
+        capped.versions = Some(VersionsConfig::new(true, 2));
+        let (_tmp, infra, def) = infra_for(capped);
+
+        let published = create(&infra, &def, &file("first.txt", b"first"));
+        let first_key = stored_key(&published);
+
+        update(
+            &infra,
+            &def,
+            &published.id,
+            Some(file("second.txt", b"second")),
+            false,
+        );
+
+        assert!(
+            infra.storage.exists(&first_key).expect("exists"),
+            "the version created on upload still references {first_key}"
+        );
+
+        let ctx = ServiceContext::collection("media", &def)
+            .infra(&infra)
+            .build();
+        unpublish_document(&ctx, &published.id).expect("unpublish");
+
+        assert!(
+            !infra.storage.exists(&first_key).expect("exists"),
+            "the snapshot the unpublish pruned was the last reference to {first_key}"
         );
     }
 

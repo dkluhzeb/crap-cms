@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::{
     api::content::{self, DataMap, FieldList, FieldValue, field_value::Kind},
     core::Document,
-    hooks::lua_api::max_nesting_depth,
+    core::max_nesting_depth,
 };
 
 /// Convert a core `Document` to a protobuf `Document`, mapping all fields to a

@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 
-use crate::db::{DbConnection, DbValue};
+use crate::db::{DbConnection, DbValue, UpsertSpec};
 
 /// The last recorded fire time for `slug`, or `None` if it has never fired.
 ///
@@ -30,59 +30,46 @@ pub fn cron_fired_at(conn: &dyn DbConnection, slug: &str) -> Result<Option<Strin
 /// instance won the window (and should fire the job), `false` if another
 /// instance already fired it.
 ///
-/// Uses an atomic upsert: inserts or updates `_crap_cron_fired` only if
-/// the stored `fired_at` is before `window_start`. If the row was
-/// already updated (by another instance in this window), the WHERE clause
-/// prevents the update and `affected == 0`.
+/// One guarded upsert: it inserts the row when the slug has never fired, and
+/// otherwise updates it only while the stored `fired_at` is at or before this
+/// window's start. The loser of either race changes nothing and reads `false`
+/// off the affected-row count.
 ///
-/// Must be called inside an IMMEDIATE/serializable transaction.
+/// Spelled as INSERT-if-absent followed by UPDATE-if-stale, the very first fire
+/// of a slug was a race: two workers both find the row absent, and the loser's
+/// INSERT fails on the primary key — a failed tick instead of a clean back-off.
+/// An IMMEDIATE transaction does not close it, because on Postgres that is a
+/// plain `BEGIN` at READ COMMITTED.
+///
+/// `<=` (not `<`) is load-bearing: the loop advances `last_cron_check` to each
+/// tick's `now` and records `fired_at = now`, so the NEXT window's
+/// `window_start` equals the PREVIOUS window's stored `fired_at` (the same
+/// instant). The window is half-open `(window_start, now]`, so a fire recorded
+/// AT `window_start` belongs to the previous window and this window's fire is
+/// genuinely new — with strict `<` it was skipped, making a frequent cron (an
+/// every-minute one at a 60s interval) fire only every other window. Cross-node
+/// dedup still holds: a peer whose window started strictly before another
+/// node's recorded fire sees `fired_at > window_start` and correctly backs off.
 ///
 /// # Errors
 ///
-/// Returns a backend error if the INSERT or UPDATE fails.
+/// Returns a backend error if the statement fails.
 pub fn try_claim_cron_window(
     conn: &dyn DbConnection,
     slug: &str,
     fired_at: &str,
     window_start: &str,
 ) -> Result<bool> {
-    let p1 = conn.placeholder(1);
-    let p2 = conn.placeholder(2);
-    let p3 = conn.placeholder(3);
+    let values = format!("{}, {}", conn.placeholder(1), conn.placeholder(2));
+    let guard = format!("_crap_cron_fired.fired_at <= {}", conn.placeholder(3));
 
-    // Try INSERT first (new slug, never fired before)
-    let inserted = conn.execute(
-        &format!(
-            "INSERT INTO _crap_cron_fired (slug, fired_at)
-             SELECT {p1}, {p2}
-             WHERE NOT EXISTS (SELECT 1 FROM _crap_cron_fired WHERE slug = {p1})"
-        ),
-        &[
-            DbValue::Text(slug.to_string()),
-            DbValue::Text(fired_at.to_string()),
-        ],
-    )?;
+    let spec = UpsertSpec::builder("_crap_cron_fired", "slug")
+        .columns(&["slug", "fired_at"], &values)
+        .guard(&guard)
+        .build();
 
-    if inserted > 0 {
-        return Ok(true);
-    }
-
-    // Row exists — claim only if the last recorded fire is at or before this
-    // window's start. `<=` (not `<`) is load-bearing: the loop advances
-    // `last_cron_check` to each tick's `now` and records `fired_at = now`, so
-    // the NEXT window's `window_start` equals the PREVIOUS window's stored
-    // `fired_at` (the same instant). The window is half-open `(window_start,
-    // now]`, so a fire recorded AT `window_start` belongs to the previous
-    // window and this window's fire is genuinely new — with strict `<` it was
-    // skipped, making a frequent cron (e.g. every-minute at a 60s interval)
-    // fire only every other window. Cross-node dedup still holds: a peer whose
-    // window started strictly before another node's recorded fire sees
-    // `fired_at > window_start` and correctly backs off.
-    let updated = conn.execute(
-        &format!(
-            "UPDATE _crap_cron_fired SET fired_at = {p2}
-             WHERE slug = {p1} AND fired_at <= {p3}"
-        ),
+    let affected = conn.execute(
+        &conn.build_upsert(&spec),
         &[
             DbValue::Text(slug.to_string()),
             DbValue::Text(fired_at.to_string()),
@@ -90,13 +77,13 @@ pub fn try_claim_cron_window(
         ],
     )?;
 
-    Ok(updated > 0)
+    Ok(affected > 0)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::db::InMemoryConn;
+    use crate::db::{InMemoryConn, query::test_helpers::CountingConn};
 
     fn conn() -> InMemoryConn {
         let c = InMemoryConn::open();
@@ -136,6 +123,69 @@ mod tests {
     fn first_claim_for_a_new_slug_wins() {
         let c = conn();
         assert!(claim(&c, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"));
+    }
+
+    /// The loser of the *first* claim backs off instead of failing.
+    ///
+    /// Two workers racing a slug that has never fired both see no row. With an
+    /// insert-then-update pair the loser's INSERT hits the primary key and the
+    /// whole tick errors; the guarded upsert turns that collision into a plain
+    /// `false` — which is what a second claim inside one window looks like here,
+    /// the row having just been created by the winner.
+    #[test]
+    fn a_second_first_claim_backs_off_instead_of_failing_on_the_primary_key() {
+        let c = conn();
+
+        assert!(claim(&c, "2026-01-01T00:05:00Z", "2026-01-01T00:00:00Z"));
+
+        let loser = try_claim_cron_window(
+            &c,
+            "cleanup",
+            "2026-01-01T00:05:01Z",
+            "2026-01-01T00:00:00Z",
+        );
+
+        assert!(
+            matches!(loser, Ok(false)),
+            "the loser of a first-fire race must report `false`, not error: {loser:?}"
+        );
+        assert_eq!(
+            cron_fired_at(&c, "cleanup").unwrap().as_deref(),
+            Some("2026-01-01T00:05:00Z"),
+            "the loser must not overwrite the winner's recorded fire"
+        );
+    }
+
+    /// The race the sequential tests cannot reproduce is closed by the shape
+    /// of the claim: one statement, conflict-aware, guarded. A claim split
+    /// back into a read and a write reopens it.
+    #[test]
+    fn the_claim_is_one_guarded_upsert() {
+        let c = conn();
+        let spy = CountingConn::new(&c);
+
+        assert!(
+            try_claim_cron_window(
+                &spy,
+                "cleanup",
+                "2026-01-01T00:05:00Z",
+                "2026-01-01T00:00:00Z"
+            )
+            .unwrap()
+        );
+
+        let executed = spy.executed();
+        assert_eq!(
+            executed.len(),
+            1,
+            "the claim must be one statement: {executed:?}"
+        );
+        assert_eq!(spy.reads(), 0, "the claim must not read first");
+        let sql = &executed[0];
+        assert!(
+            sql.contains("ON CONFLICT") && sql.contains("DO UPDATE") && sql.contains("WHERE"),
+            "{sql}"
+        );
     }
 
     #[test]

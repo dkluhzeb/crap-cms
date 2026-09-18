@@ -27,6 +27,17 @@ impl VersionsConfig {
             max_versions,
         }
     }
+
+    /// The prune cap a definition's optional versions config sets.
+    ///
+    /// No config at all — a collection without versioning — and an explicit
+    /// `0` both mean unlimited, so every lifecycle step that writes a version
+    /// derives the cap the same way instead of re-deciding what a missing
+    /// config means.
+    #[must_use]
+    pub fn cap(versions: Option<&Self>) -> u32 {
+        versions.map_or(0, |v| v.max_versions)
+    }
 }
 
 #[cfg(test)]
@@ -39,6 +50,15 @@ mod tests {
         let c = VersionsConfig::new(true, 5);
         assert!(c.drafts);
         assert_eq!(c.max_versions, 5);
+    }
+
+    /// A collection without versioning and one with an explicit `0` both mean
+    /// "keep everything", so no prune caller has to special-case either.
+    #[test]
+    fn cap_treats_no_config_and_zero_alike() {
+        assert_eq!(VersionsConfig::cap(None), 0);
+        assert_eq!(VersionsConfig::cap(Some(&VersionsConfig::new(true, 0))), 0);
+        assert_eq!(VersionsConfig::cap(Some(&VersionsConfig::new(true, 7))), 7);
     }
 
     #[test]

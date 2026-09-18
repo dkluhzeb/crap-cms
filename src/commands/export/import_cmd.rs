@@ -19,7 +19,7 @@ use crate::{
     config::{CrapConfig, LocaleConfig},
     core::{Registry, auth::open_totp_secret},
     db::{
-        DbConnection, LocaleContext, LocaleMode,
+        DbConnection, LocaleContext, LocaleMode, UpsertSpec,
         query::{self, ref_count::OutgoingRef},
     },
 };
@@ -78,8 +78,12 @@ fn upsert_row(tx: &dyn DbConnection, slug: &str, id: &str, row: &ImportRow<'_>) 
         .map(|i| tx.placeholder(i + 1))
         .collect();
     let col_refs: Vec<&str> = row.parent_cols.iter().map(String::as_str).collect();
+    let values = placeholders.join(", ");
 
-    let sql = tx.build_upsert(slug, &col_refs, &placeholders.join(", "), "id");
+    let spec = UpsertSpec::builder(slug, "id")
+        .columns(&col_refs, &values)
+        .build();
+    let sql = tx.build_upsert(&spec);
 
     tx.execute(&sql, &row.parent_vals)
         .with_context(|| format!("Failed to insert document {id} into '{slug}'"))?;

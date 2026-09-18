@@ -41,6 +41,20 @@ pub const SYSTEM_BULK_QUEUE: &str = "bulk";
 pub const SYSTEM_JOB_SLUGS: &[&str] =
     &[SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB, SYSTEM_BULK_JOB];
 
+/// The prefix every system-job slug carries. A user-defined job slug can
+/// never start with `_` (slug validation rejects it), so the prefix alone
+/// marks a slug as reserved for the framework.
+pub const SYSTEM_JOB_PREFIX: &str = "_system_";
+
+/// Whether `slug` names a framework-internal job: one of
+/// [`SYSTEM_JOB_SLUGS`] or any other [`SYSTEM_JOB_PREFIX`]-prefixed slug.
+/// System jobs are queued only by the subsystem that owns each one, never
+/// by slug from a caller-facing surface.
+#[must_use]
+pub fn is_system_job_slug(slug: &str) -> bool {
+    slug.starts_with(SYSTEM_JOB_PREFIX)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -51,10 +65,17 @@ mod tests {
     fn system_slugs_are_underscore_prefixed() {
         for slug in SYSTEM_JOB_SLUGS {
             assert!(
-                slug.starts_with("_system_"),
-                "system job slug '{slug}' must start with '_system_' to avoid clashing with user-defined slugs"
+                is_system_job_slug(slug),
+                "system job slug '{slug}' must start with '{SYSTEM_JOB_PREFIX}' to avoid clashing with user-defined slugs"
             );
         }
+    }
+
+    #[test]
+    fn user_slugs_are_not_system_slugs() {
+        assert!(!is_system_job_slug("cleanup"));
+        assert!(!is_system_job_slug("system_report"));
+        assert!(!is_system_job_slug("bulk"));
     }
 
     #[test]

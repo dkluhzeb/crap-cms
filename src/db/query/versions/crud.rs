@@ -5,7 +5,7 @@ use nanoid::nanoid;
 use serde_json::Value;
 
 use crate::{
-    core::document::VersionSnapshot,
+    core::{Builder, document::VersionSnapshot},
     db::{
         DbConnection, DbRow, DbValue,
         query::helpers::{
@@ -108,6 +108,65 @@ pub fn create_version(
         .latest(true)
         .snapshot(snapshot.clone())
         .build())
+}
+
+/// One version row a lifecycle step writes, together with the cap the
+/// document's history is pruned to once it lands.
+#[derive(Builder)]
+pub struct VersionWrite<'a> {
+    /// The parent's table: a collection slug, or a global's table name.
+    #[builder(required)]
+    pub slug: &'a str,
+    #[builder(required)]
+    pub parent_id: &'a str,
+    /// The status this version is stamped with — `"published"` or `"draft"`.
+    #[builder(required)]
+    pub status: &'a str,
+    #[builder(required)]
+    pub snapshot: &'a Value,
+    /// `0` keeps every version (see [`crate::core::VersionsConfig::cap`]).
+    pub max_versions: u32,
+}
+
+/// Write one version row and prune the document's history to its cap.
+///
+/// The ONE step every lifecycle that records a version goes through — create,
+/// update, draft save, unpublish, restore — so none of them can record history
+/// without also honoring `max_versions`. Restore used to create a version and
+/// never prune, so repeated restores grew the table without bound.
+///
+/// The parent row is locked first. `_version` is `MAX(_version) + 1` read on an
+/// unlocked SELECT, so two concurrent writers on one document would otherwise
+/// compute the same number and the loser would fail the version table's unique
+/// index with a raw backend error. `SQLite` serializes writers already, which is
+/// exactly what makes [`DbConnection::lock_row`] a no-op there.
+///
+/// Pruning can remove the last snapshot that referenced a stored upload file.
+/// Which bytes that releases is decided by difference over the whole document
+/// (`service::write::settle_upload_write`), which needs the live row as well as
+/// the snapshots — so every lifecycle step that reaches here runs inside that
+/// bracket instead of deleting files from this layer.
+///
+/// # Errors
+///
+/// Returns a backend error if the row lock, the insert or the prune fails.
+pub fn create_version_and_prune(
+    conn: &dyn DbConnection,
+    write: &VersionWrite<'_>,
+) -> Result<VersionSnapshot> {
+    conn.lock_row(write.slug, write.parent_id)?;
+
+    let version = create_version(
+        conn,
+        write.slug,
+        write.parent_id,
+        write.status,
+        write.snapshot,
+    )?;
+
+    prune_versions(conn, write.slug, write.parent_id, write.max_versions)?;
+
+    Ok(version)
 }
 
 /// Find the latest version for a parent document.
@@ -415,7 +474,7 @@ mod tests {
 
     use super::*;
     use crate::config::CrapConfig;
-    use crate::db::{BoxedConnection, pool};
+    use crate::db::{BoxedConnection, pool, query::test_helpers::CountingConn};
     use tempfile::TempDir;
 
     fn setup_versions_db() -> (TempDir, BoxedConnection) {
@@ -678,6 +737,52 @@ mod tests {
         let remaining = list_versions(&conn, "posts", "p1", false, None, None).unwrap();
         assert_eq!(remaining[0].version, 5);
         assert_eq!(remaining[2].version, 3);
+    }
+
+    /// The chokepoint every lifecycle step records history through prunes in
+    /// the same breath, so no caller can grow the table past its cap. Restore
+    /// created a version and never pruned.
+    #[test]
+    fn create_version_and_prune_caps_the_history_it_writes() {
+        let (_dir, conn) = setup_versions_db();
+
+        for i in 0..5 {
+            create_version_and_prune(
+                &conn,
+                &VersionWrite::builder("posts", "p1", "draft", &json!({ "v": i }))
+                    .max_versions(2)
+                    .build(),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 2);
+
+        let remaining = list_versions(&conn, "posts", "p1", false, None, None).unwrap();
+        assert_eq!(remaining[0].version, 5);
+        assert_eq!(remaining[1].version, 4);
+    }
+
+    /// The next `_version` is `MAX(_version) + 1` read on an unlocked SELECT,
+    /// so the parent row is locked first: two concurrent draft saves on one
+    /// document would otherwise compute the same number and the loser would
+    /// fail the version table's unique index with a raw backend error.
+    #[test]
+    fn create_version_and_prune_locks_the_parent_row_first() {
+        let (_dir, conn) = setup_versions_db();
+        let spy = CountingConn::new(&conn);
+
+        create_version_and_prune(
+            &spy,
+            &VersionWrite::builder("posts", "p1", "draft", &json!({})).build(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            spy.locks(),
+            vec![("posts".to_string(), "p1".to_string())],
+            "the parent row is locked before the version number is computed"
+        );
     }
 
     /// A version table created with the legacy `datetime('now')` default still

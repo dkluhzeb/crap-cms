@@ -47,6 +47,7 @@ pub(super) fn register_env(lua: &Lua) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::env_lock;
     use mlua::{Function, Table};
 
     fn setup_lua() -> Lua {
@@ -66,35 +67,50 @@ mod tests {
 
     #[test]
     fn allows_crap_prefixed_var() {
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::set_var("CRAP_TEST_VAR", "hello") };
+        let _guard = env_lock();
+
+        // SAFETY: the environment lock is held, so no other test thread reads
+        // or writes the environment meanwhile.
+        unsafe { env::set_var("CRAP_TEST_VAR", "hello") };
+
         let lua = setup_lua();
         let val: Option<String> = env_get_fn(&lua).call("CRAP_TEST_VAR").unwrap();
         assert_eq!(val, Some("hello".to_string()));
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::remove_var("CRAP_TEST_VAR") };
+
+        // SAFETY: as above — the environment lock is still held.
+        unsafe { env::remove_var("CRAP_TEST_VAR") };
     }
 
     #[test]
     fn allows_lua_prefixed_var() {
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::set_var("LUA_TEST_VAR", "world") };
+        let _guard = env_lock();
+
+        // SAFETY: the environment lock is held, so no other test thread reads
+        // or writes the environment meanwhile.
+        unsafe { env::set_var("LUA_TEST_VAR", "world") };
+
         let lua = setup_lua();
         let val: Option<String> = env_get_fn(&lua).call("LUA_TEST_VAR").unwrap();
         assert_eq!(val, Some("world".to_string()));
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::remove_var("LUA_TEST_VAR") };
+
+        // SAFETY: as above — the environment lock is still held.
+        unsafe { env::remove_var("LUA_TEST_VAR") };
     }
 
     #[test]
     fn blocks_unprefixed_var() {
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::set_var("HOME_TEST", "/tmp") };
+        let _guard = env_lock();
+
+        // SAFETY: the environment lock is held, so no other test thread reads
+        // or writes the environment meanwhile.
+        unsafe { env::set_var("HOME_TEST", "/tmp") };
+
         let lua = setup_lua();
         let val: Option<String> = env_get_fn(&lua).call("HOME_TEST").unwrap();
         assert_eq!(val, None);
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::remove_var("HOME_TEST") };
+
+        // SAFETY: as above — the environment lock is still held.
+        unsafe { env::remove_var("HOME_TEST") };
     }
 
     #[test]
@@ -115,8 +131,12 @@ mod tests {
         }
     }
 
+    /// An allowed prefix reaches the real `env::var` lookup, so this reads the
+    /// process environment and takes the lock like the writers do.
     #[test]
     fn returns_none_for_nonexistent_allowed_var() {
+        let _guard = env_lock();
+
         let lua = setup_lua();
         let val: Option<String> = env_get_fn(&lua).call("CRAP_NONEXISTENT_VAR_12345").unwrap();
         assert_eq!(val, None);
@@ -127,12 +147,17 @@ mod tests {
     /// than return the value.
     #[test]
     fn blocks_crap_secret_prefix_with_error() {
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::set_var("CRAP_SECRET_TOKEN", "s3cr3t") };
+        let _guard = env_lock();
+
+        // SAFETY: the environment lock is held, so no other test thread reads
+        // or writes the environment meanwhile.
+        unsafe { env::set_var("CRAP_SECRET_TOKEN", "s3cr3t") };
+
         let lua = setup_lua();
         let result: LuaResult<Option<String>> = env_get_fn(&lua).call("CRAP_SECRET_TOKEN");
-        // SAFETY: Test is single-threaded; no concurrent env access.
-        unsafe { std::env::remove_var("CRAP_SECRET_TOKEN") };
+
+        // SAFETY: as above — the environment lock is still held.
+        unsafe { env::remove_var("CRAP_SECRET_TOKEN") };
 
         let err = result.expect_err("CRAP_SECRET_* must be hidden from hooks");
         assert!(

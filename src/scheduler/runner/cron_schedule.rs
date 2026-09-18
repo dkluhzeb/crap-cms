@@ -1,6 +1,6 @@
 //! Cron schedule evaluation: insert pending jobs for due schedules.
 
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use crate::{
     core::{JobDefinition, Registry},
     db::{DbConnection, DbPool, query::jobs as job_query},
-    scheduler::runner::cron_expr::normalize_cron,
+    scheduler::runner::cron_expr::parse_cron,
 };
 
 /// One schedule's slot in a single cron tick.
@@ -27,12 +27,12 @@ struct CronTick<'a> {
 /// Parse the definition's cron expression, or `None` when there is none or it
 /// is unusable.
 ///
-/// The cron crate expects 6-7 fields with seconds; standard 5-field
-/// expressions are normalized by prepending `0` for seconds.
+/// Every schedule is parsed at startup too, so an unusable expression here
+/// means the definition changed under a running process.
 fn parse_schedule(tick: &CronTick<'_>) -> Option<Schedule> {
     let schedule_str = tick.def.schedule.as_ref()?;
 
-    Schedule::from_str(&normalize_cron(schedule_str))
+    parse_cron(schedule_str)
         .inspect_err(|e| {
             warn!(
                 "Invalid cron expression '{}' for job '{}': {}",

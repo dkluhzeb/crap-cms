@@ -111,7 +111,7 @@ most).
 | F11 | Check/strip ordering leaks data or budget (probe before auth, hook before strip) | per-site tests; convention | PARTIAL |
 | F12 | Fail-open under backpressure — lag/close swallowed or warned-instead-of-dropped on revocation and live-event buses | fail-closed drop (revocation), drop-lagged-subscriber (live); convention | PARTIAL |
 | F13 | Undecidable credential downgraded to anonymous instead of rejected | `Resolution::Invalid(Unaccepted)` variant in the one evaluator | GUARDED |
-| F14 | Untrusted value interpolated into an interpreter/protocol sink without the sink's escaper | `tests/sink_escaping.rs`: the reviewed sink→escaper inventory (10 sinks: HTML text/attr, JSON-in-markup, SQL idents, email CRLF, Lua source, fs paths ×2, DOM `h()`) with per-anchor liveness pins + CRLF/NUL behavior pin + positive control | GUARDED |
+| F14 | Untrusted value interpolated into an interpreter/protocol sink without the sink's escaper | `tests/sink_escaping.rs`: the reviewed sink→escaper inventory (14 rows over 12 anchors: HTML text/attr, JSON-in-markup, SQL idents, email CRLF, Lua source, fs paths, DOM `h()`) with a row floor, per-anchor liveness pins on the real escaping calls + CRLF/NUL behavior pin + positive control | GUARDED |
 | F15 | Untrusted content interpreted as markup/code (39 `innerHTML` writes, HTML-payload uploads served as text/html, SVG entity expansion) | `h()` DOM builder (one annotated parse site left), MIME/extension cross-check + SVG `<!DOCTYPE>`/`<!ENTITY>` rejection at upload, nonce CSP without `unsafe-inline` | GUARDED |
 | F16 | Sandbox capability denylist incomplete — removing A and B but not sibling C (`load` after `loadfile`; **`io.popen` after `os.execute`** — found live by building this guard) | `sandbox_globals_match_reviewed_allowlist` pins the complete surviving global + `os`/`io`/`string` capability sets; per-capability regression tests; sandbox contract recorded in frozen-contracts.md | GUARDED |
 | F17 | Sensitive/internal detail escapes via a secondary channel — error bodies, `Debug`, logs, serialization, timing | redacting newtypes (`JwtSecret`, `S3SecretKey`, `SmtpPassword`, `McpApiKey`, + new `RedisUrl`, `WebhookHeaders` — the partition test found all three missing ones on its first run), sentinel partition test `tests/secret_redaction.rs` over Debug AND Serialize, scrubbed responders, constant-time compares | GUARDED |
@@ -125,7 +125,7 @@ most).
 | P2 | Sibling missing a fix its twins got — sibling axes: API surface, entity kind, delete-path set, browser-side restatement of server rules | `wire_parity` (fields), `surface_behavior_parity` Phase 2 (gRPC ↔ Lua ↔ **MCP through the real JSON-RPC dispatch**: totals, filters, validation, uniqueness); admin covered by browser e2e + the routing guard pinning it to the same op bodies; entity-kind parity rests on shared DDL/column-spec chokepoints | GUARDED |
 | P3 | Capability/policy gate lives in a per-surface codec instead of the service op | op bodies own gates; `surface_parity.rs` routing guard blocks reaching past the service layer | GUARDED |
 | P4 | Limit/depth/offset clamp missing on one surface | `apply_pagination_limits`, `clamp_depth`, `floor_optional_limit`, `PaginationCtx::resolve_limit`; frozen read-surface invariant | GUARDED |
-| P5 | A path bypasses service invariants — CLI raw SQL, an admin handler calling a deep helper, or re-admitted stored data skipping validation | `cli_commands_write_only_through_reviewed_paths` (surface_parity): write primitives in `src/commands` confined to a reviewed, staleness-checked allowlist documenting the invariants each site hand-maintains; `WriteHooks::validate_fields` on restore. Working the guard found + fixed two live instances: CLI `user create` skipped `ref_count::after_create`+`fts_upsert`, `user delete` skipped `fts_delete` | GUARDED |
+| P5 | A path bypasses service invariants — CLI raw SQL, an admin handler calling a deep helper, or re-admitted stored data skipping validation | `cli_commands_write_only_through_reviewed_paths` (surface_parity): write primitives in `src/commands` — credential writes included, in qualified and bare-imported form — confined to a reviewed, staleness-checked allowlist documenting the invariants each site hand-maintains; `WriteHooks::validate_fields` on restore. Working the guard found + fixed two live instances: CLI `user create` skipped `ref_count::after_create`+`fts_upsert`, `user delete` skipped `fts_delete` | GUARDED |
 | P6 | Literal/predicate/selector re-spelled at N sites drifts — incl. template partials, JS selector/attr lists (`__INDEX__` set), cookie regexes, i18n/theme literals bypassing `t()`/CSS vars | named consts + per-literal pins, shared partials (`partials/field.hbs`), `static/components/util/*`; discovery is manual | PARTIAL |
 | P7 | Context/param bundle rebuilt by hand, silently dropping a field | `inherit_write_infra`, `ServiceContextBuilder::infra`; inputs carry only per-call data | GUARDED |
 | P8 | One concept spelled differently per surface (op names, casing, result keys) | `FilterOp::op_name`/`scalar_from_name`, snake_case decision, wire model option keys | GUARDED |
@@ -138,7 +138,7 @@ most).
 
 | ID | Class | Guard | Status |
 |----|-------|-------|--------|
-| M1 | Tree walker doesn't descend a nested composite / layout wrapper | `core::walk::field_children` classifier (exhaustive over `FieldType`) is the sole composite-dispatch source — every field-tree walker routes through it, so a new composite is a compile error; **source-scan pin `tests/field_tree_dispatch.rs`** inventories every production `match …field_type` and fails on a new hand-rolled dispatch outside the reviewed allowlist | GUARDED |
+| M1 | Tree walker doesn't descend a nested composite / layout wrapper | `core::walk::field_children` classifier (exhaustive over `FieldType`) is the sole composite-dispatch source — every field-tree walker routes through it, so a new composite is a compile error; **source-scan pin `tests/field_tree_dispatch.rs`** inventories every production `match …field_type` per file with dispatch counts (24 files / 27 sites, test modules stripped) and fails on a new hand-rolled dispatch outside the reviewed allowlist | GUARDED |
 | M2 | Nested instance gets degraded handling vs top level (validation, normalization, hydration) | shared helpers per case (`check_date_field`, `canonical_json_array`); no meta-guard | PARTIAL |
 | M3 | Status/lifecycle view filter missing on one read path (draft/trash/published, soft-deleted populate targets leaking raw IDs) | `resolve_draft` family, `published_only` + `JoinAccessCheck` in populate, frozen access-model contract | PARTIAL |
 | M4 | Locale/variant companion column missed (`_tz`, `_lang`, `__locale`) — also blinds checkers into false orphan warnings | suffix consts, locale scope resolved like migration DDL, `ServiceContext` `locale_config` attachment; per-site fixes | PARTIAL |
@@ -1108,6 +1108,88 @@ memories; the load-bearing ones:
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-16 (27) — **CONVERGENCE ROUND 17** (5 fresh lenses: the new
+  draft/publish/file state machine, dependency error modes and defaults,
+  guard-the-guards / test quality, Postgres-only behaviour since R11, the
+  non-CRUD permission matrix). **~35 confirmed — 6 HIGH, ~18 MED, ~10 LOW —
+  NOT a quiet round; no new class.** Density is well below R16 and two lenses
+  (permissions, dependencies outside the DB crates) came back mostly clean.
+  - **D10/F1 — dependency defaults (the R16 S3 pattern, generalized):** the
+    deadpool pool had no timeouts or runtime, so `pool.get()` blocked a tokio
+    worker forever on exhaustion; `recycle` returned `Ok` unconditionally, so a
+    PG restart left dead connections in the pool for good; the PG statement
+    cache was never invalidated, so a concurrent `ALTER TABLE` (another node's
+    schema sync) turned every cached statement into a permanent 500; constraint
+    and transient errors were classified by message text only (locale-dependent
+    on PG; an FK violation reported as `ALREADY_EXISTS`); the `cron` crate
+    numbers Sunday as 1 and nothing translated — the documented "Mondays"
+    example fired on Sunday and the standard Sunday spelling never ran; every
+    `image/*` upload went through the image decoder, which has no SVG decoder,
+    so the SVG sanitising path was unreachable; `crap.http` honoured proxy env
+    vars around its SSRF pin; the email renderer ran non-strict over operator
+    templates. Fixed at the crate seams with pins.
+  - **P2/L7 — the R16 lifecycle code:** globals never got the publish-adopts-
+    draft step; `update_many` adopted the drafted file but never settled it
+    (orphaned files, dropped conversions); unpublish snapshotted the live row
+    and pruned without releasing files; restore never pruned; a one-locale
+    publish dropped the draft's other locales; a file-bearing publish still
+    adopted the draft's derived columns. Fixed as ONE shared "finish a write"
+    step and ONE "create version and prune (and release files)" step.
+  - **D4 — the guards themselves:** the S3 and Redis test modules have never
+    run in CI (no job enables the feature AND runs tests; the CI pin only
+    checked a string); the chokepoint scan truncated a file at the first
+    `#[cfg(test)]` attribute, hiding ~4,500 production lines (the whole
+    `PgConnection` impl) from every copy pattern; five surface-parity forbidden
+    calls named functions nobody calls that way; several guards had no
+    inventory floor or matched comments. Fixed with positive controls.
+  - **P9/P10 — Postgres:** nested dot-path filters a hard error
+    (`jsonb_array_elements_text(text)`); the new read-expression chokepoint
+    inherited quoting-only-capitals, so a field named `user` compared the
+    session user; the cron claim wasn't atomic outside SQLite; the soft-delete
+    rebuild copied columns unquoted and dropped a referenced table.
+  - **F6/P2 — permissions:** a custom route's `access` rule returning a filter
+    table counted as allow-all (the pages twin was fixed in R15); global draft
+    events were routed to a view the gate declared absent; MCP `list_jobs`
+    ignored job `access` while gRPC filtered. The CRUD, restore, unlock, upload
+    serve and MCP trust-model rows verified CLEAN.
+  - Lessons: (1) a dependency's *domain convention* (cron weekday numbering,
+    `image`'s decoder set vs `image/*`, reqwest's ambient proxy) is a D10
+    instance even when nothing was "misconfigured" — audit conventions, not
+    only options; (2) a feature-gated test module needs a CI row that enables
+    the feature AND runs tests, pinned structurally; (3) a source-scanning
+    guard must pin how much of each file it actually scanned.
+    Post-fix review of this round's diff (3 lenses over the ~120 changed
+    files): 2 HIGH, 6 MED, ~12 LOW — all fixed. The two HIGHs were blind-edit
+    regressions of the round's own fixes: the Postgres soft-delete transition
+    bound its table name as `$1::regclass`, which the driver cannot bind a
+    string to (every PG transition would have failed at boot — caught only by
+    reading, since the PG harness needs a live server); and a non-default-
+    locale publish now made the drafted file live through the snapshot
+    write-back while skipping the settle half (conversions never queued, the
+    old file's jobs never cancelled). The MEDs: the statement cache's
+    "promote on commit" map was built on a false premise (a rollback discards
+    portals, not statements) and its in-transaction retry could only report
+    25P02, hiding the cause; `PoolError::Backend` classified a rejected
+    password as transient; the snapshot strip judged localized fields with
+    `ctx.locale = nil`; a stripped write-denied checkbox was written as `0`
+    by the full row update (pre-existing, on the single update path too — the
+    strip now puts the stored value back); the chokepoint-copy scan and four
+    sibling guards now share `tests/common::production_code`, which blanks
+    each test-gated ITEM (not the rest of the file) and evaluates `cfg`
+    predicates instead of token-matching `test`. Two pins of the round were
+    vacuous (`apply` installed a value equal to the fallback; the `.no_proxy`
+    scan matched a commented-out call) and were made falsifiable. Lesson:
+    an agent that cannot run the backend it edits (PG) needs a reader who
+    traces the driver's bind rules — the harness test it writes proves
+    nothing until someone runs it.
+    Gates after the post-fix fixes (2026-09-18): clippy `--all-targets
+    --all-features -D warnings` clean; unit 5,838 + integration 1,772 +
+    macros/xtask + doctests green; e2e 322 green; `gen-lua-types`,
+    `gen-proto`, `gen-wire-doc`, `gen-doc-tables --check` and `fmt --check`
+    clean. The Postgres harness tests were NOT run (no `TEST_DATABASE_URL`).
+    Four files the round grew past the cap were split (`collection/
+    soft_delete.rs`, `postgres/stmt_cache.rs`, `pending_draft/file.rs`,
+    `pg_test/*`). Streak: 0 quiet rounds.
 - 2026-09-15 (26) — **CONVERGENCE ROUND 16** (5 fresh lenses: admin form
   round-trip matrix, stored-file lifecycle across storage backends, process
   death/restart/shutdown, locale configuration as a variable, alpha.9→alpha.10

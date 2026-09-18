@@ -444,9 +444,15 @@ fn is_private_ip(ip: IpAddr) -> bool {
 }
 
 /// Build a reqwest blocking client with optional DNS pinning.
+///
+/// `no_proxy` is not optional: the pin below is the whole SSRF control, and
+/// reqwest otherwise picks up `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` from
+/// the environment and hands the *hostname* to the proxy, which resolves it
+/// itself — routing straight past the address this build vetted.
 fn build_client(pin: Option<(&str, SocketAddr)>, timeout: Duration) -> StdResult<Client, String> {
     let mut builder = Client::builder()
         .timeout(timeout)
+        .no_proxy()
         .redirect(redirect::Policy::none());
 
     if let Some((host, addr)) = pin {
@@ -461,6 +467,36 @@ fn build_client(pin: Option<(&str, SocketAddr)>, timeout: Duration) -> StdResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guard: the vetted-address pin is only a control while the client
+    /// refuses the environment's proxy — a proxied request sends the
+    /// *hostname* and lets the proxy resolve it, landing wherever DNS says
+    /// rather than at the address this build checked. A built `reqwest`
+    /// client exposes nothing about its proxy configuration, so the builder
+    /// chain is pinned in source.
+    #[test]
+    fn build_client_disables_environment_proxies() {
+        let source: String = include_str!("http.rs")
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let chain = source
+            .split_once("fn build_client(")
+            .expect("build_client exists")
+            .1
+            .split_once("Client::builder()")
+            .expect("build_client builds a client")
+            .1
+            .split_once(';')
+            .expect("the builder chain ends in a statement")
+            .0;
+
+        assert!(
+            chain.contains(".no_proxy()"),
+            "build_client must call .no_proxy(); chain was: {chain}"
+        );
+    }
 
     #[test]
     fn http_request_rejects_unknown_key() {

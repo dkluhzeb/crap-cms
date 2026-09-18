@@ -54,6 +54,7 @@ pub mod hook_ref;
 pub mod job;
 pub mod lifecycle;
 pub mod lua_lease;
+pub mod nesting_depth;
 pub mod parse;
 pub mod rate_limit;
 pub mod registry;
@@ -96,6 +97,7 @@ pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lifecycle::{Readiness, SERVER_DRAIN_SECS, drain_with_deadline};
 pub use lua_lease::{LocalLease, LuaVmLease};
+pub use nesting_depth::{NESTING_DEPTH, NestingDepth, max_nesting_depth, set_max_nesting_depth};
 pub use parse::{
     checkbox_value, json_truthy, parse_bool, parse_number, parse_truthy, value_truthy,
 };

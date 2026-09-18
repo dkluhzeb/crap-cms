@@ -1,13 +1,13 @@
 //! Shared test helpers for `db::query` module tests.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
 
 use crate::core::{FieldDefinition, FieldTab, FieldType, collection::CollectionDefinition};
-use crate::db::{DbConnection, DbRow, DbValue};
+use crate::db::{DbConnection, DbRow, DbValue, UpsertSpec};
 
 pub(crate) fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, field_type).build()
@@ -68,9 +68,16 @@ pub(crate) fn make_tabs_field(name: &str, tabs: Vec<FieldTab>) -> FieldDefinitio
 /// Delegating [`DbConnection`] wrapper that counts read queries — the proof
 /// harness for batching regressions: assert the query count stays constant
 /// as the document count grows.
+///
+/// It also records every [`DbConnection::lock_row`] call. The row lock is a
+/// no-op on `SQLite` (its `IMMEDIATE` transaction serializes writers already),
+/// so a test on the default backend can only prove the seam is reached — which
+/// is what keeps the Postgres serialization from being dropped by accident.
 pub(crate) struct CountingConn<'a> {
     inner: &'a dyn DbConnection,
     pub(crate) reads: Cell<usize>,
+    locks: RefCell<Vec<(String, String)>>,
+    executed: RefCell<Vec<String>>,
 }
 
 impl<'a> CountingConn<'a> {
@@ -78,16 +85,29 @@ impl<'a> CountingConn<'a> {
         Self {
             inner,
             reads: Cell::new(0),
+            locks: RefCell::new(Vec::new()),
+            executed: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The SQL of every `execute` call, in order.
+    pub(crate) fn executed(&self) -> Vec<String> {
+        self.executed.borrow().clone()
     }
 
     pub(crate) fn reads(&self) -> usize {
         self.reads.get()
     }
+
+    /// The `(table, id)` pairs this connection was asked to row-lock, in order.
+    pub(crate) fn locks(&self) -> Vec<(String, String)> {
+        self.locks.borrow().clone()
+    }
 }
 
 impl DbConnection for CountingConn<'_> {
     fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+        self.executed.borrow_mut().push(sql.to_string());
         self.inner.execute(sql, params)
     }
 
@@ -103,6 +123,14 @@ impl DbConnection for CountingConn<'_> {
     fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
         self.reads.set(self.reads.get() + 1);
         self.inner.query_one(sql, params)
+    }
+
+    fn lock_row(&self, table: &str, id: &str) -> Result<()> {
+        self.locks
+            .borrow_mut()
+            .push((table.to_string(), id.to_string()));
+
+        self.inner.lock_row(table, id)
     }
 
     fn placeholder(&self, n: usize) -> String {
@@ -165,8 +193,8 @@ impl DbConnection for CountingConn<'_> {
         self.inner.build_insert_ignore(table, columns, values)
     }
 
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        self.inner.build_upsert(table, columns, values, key_col)
+    fn build_upsert(&self, spec: &UpsertSpec<'_>) -> String {
+        self.inner.build_upsert(spec)
     }
 
     fn supports_fts(&self) -> bool {

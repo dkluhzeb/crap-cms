@@ -190,6 +190,39 @@ fn access_gate_allows_and_denies() {
     assert!(!denied);
 }
 
+/// Regression: a route access gate returning a table — the filter-table idiom
+/// collection rules use — counted as truthy, i.e. an allow. A route has no
+/// rows for a filter to narrow, so it is a configuration error naming the fix.
+#[test]
+fn access_gate_rejects_a_filter_table() {
+    let (_tmp, db_pool, runner) = setup(&[
+        (
+            "init.lua",
+            r#"crap.routes.register({ path = "/t", method = "GET", handler = "routes.t", access = "access.filter" })"#,
+        ),
+        (
+            "routes/t.lua",
+            "return function(ctx) return { json = {} } end",
+        ),
+        (
+            "access/filter.lua",
+            "return function(ctx) return { id = 1 } end",
+        ),
+    ]);
+
+    let err = runner
+        .run_route_access(
+            &HookRef::new("access.filter"),
+            &input("GET", None),
+            &db_pool,
+        )
+        .expect_err("a filter table must be an error, never an allow");
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("custom route"), "{msg}");
+    assert!(msg.contains("true or false"), "{msg}");
+}
+
 #[test]
 fn nil_return_is_404() {
     let (_tmp, db_pool, runner) = setup(&[

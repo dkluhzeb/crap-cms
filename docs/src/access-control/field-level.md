@@ -60,7 +60,9 @@ Field-access functions receive the **document data**, not just the user — the 
 | `ctx.user` | The requesting user (or `nil` when anonymous). |
 | `ctx.collection` | The collection (or global) slug the field belongs to — lets a field-access function shared across collections branch on which one it is running for. |
 | `ctx.operation` | `"read"`, `"create"`, or `"update"`. |
-| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; version snapshots, restore, unpublish, undelete and the user document returned by Login and Me use the default locale; live events leave it `nil`. Treat it as an optional hint — don't make a security decision depend on it being present. |
+| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; unpublish, undelete and the user document returned by Login and Me use the default locale; live events leave it `nil`. When a pending draft is published or a version restored, the snapshot's shared fields are judged once at that write's locale and each **localized** field once per configured locale, with `ctx.locale` set to the locale under judgment — a rule that denies one locale keeps only that locale's column at its stored value. Treat it as an optional hint — don't make a security decision depend on it being present. |
+
+A field the rule denies is left exactly as stored — for a checkbox too, which the row write would otherwise read as "absent = unchecked".
 
 This makes rules like these possible:
 

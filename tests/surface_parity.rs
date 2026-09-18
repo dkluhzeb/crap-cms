@@ -19,28 +19,54 @@
 //!
 //! **Scope & limits of these guards.** The scans are textual (per-line
 //! substring / whole-file `contains`), not AST-based, so they catch the common
-//! case but not every evasion: a forbidden call split across lines, reached via
-//! an aliased import (`use ... as foo; foo(...)`), or constructed through a
-//! re-export under a different name will not match. They also only scan
+//! case but not every evasion. The bypass scan matches a primitive in both
+//! shapes it can appear in — module-qualified (`query::find(`) and, because the
+//! house style imports names directly, as a bare call in a file whose `use`
+//! statements bind that name from the bypass module (`use crate::db::ops::{a,
+//! b};` then `a(...)`). What still slips past: a call split across lines, an
+//! aliased import (`use ... as foo; foo(...)`), a glob (`use ...::*`), and a
+//! re-export under a different name. The scans also only cover
 //! [`SURFACE_ROOTS`] — request-handling surfaces — so background workers (the
 //! scheduler, cron tasks) that legitimately call `query::*` directly are out of
 //! scope by design. Treat these as a high-signal tripwire for the obvious
 //! regression, not a proof of total coverage.
 
-use std::fs;
-use std::path::Path;
+use std::{
+    fs,
+    mem::take,
+    path::{Path, PathBuf},
+};
 
-/// Surface roots whose handlers must delegate document CRUD to the service layer.
-const SURFACE_ROOTS: &[&str] = &[
-    "src/admin/handlers",
-    "src/api/handlers",
-    "src/api/upload",
-    "src/mcp/tools",
-    "src/hooks/lua_api/crud",
+mod common;
+
+use common::production_code;
+
+/// Surface roots whose handlers must delegate document CRUD to the service
+/// layer, each paired with the minimum number of `.rs` files the scan must find
+/// under it. Without that floor, renaming or moving a root leaves the scans
+/// walking an empty directory and every guard over that surface passes
+/// vacuously. The floors sit well below the real counts so ordinary refactors
+/// don't trip them.
+const SURFACE_ROOTS: &[(&str, usize)] = &[
+    ("src/admin/handlers", 60),
+    ("src/api/handlers", 30),
+    ("src/api/upload", 3),
+    ("src/mcp/tools", 20),
+    ("src/hooks/lua_api/crud", 20),
 ];
 
-/// Service-bypass call forms. Reads skip the read lifecycle
-/// (access/draft/stripping/hooks); writes skip validation/hooks/ref-counting.
+/// Inventory floor for `src/commands`, for the same reason.
+const CLI_FILE_FLOOR: usize = 40;
+
+/// Service-bypass call forms, spelled `module::fn_name(`. Reads skip the read
+/// lifecycle (access/draft/stripping/hooks); writes skip
+/// validation/hooks/ref-counting.
+///
+/// The spelling is the entry's identity — [`ALLOWLIST`] and
+/// [`CLI_WRITE_ALLOWLIST`] key off it — but matching normalizes each entry to
+/// its `(module, fn name)` pair so both the qualified call and the imported
+/// bare-name call resolve to the same entry, and one allowlist row suppresses
+/// either shape.
 const FORBIDDEN_CALLS: &[&str] = &[
     // Pool-based raw reads — these exist *only* as a service bypass.
     "ops::find_documents(",
@@ -66,7 +92,7 @@ const FORBIDDEN_CALLS: &[&str] = &[
     // view-scope/access path entirely and exist only inside `service::read`.
     // A surface calling them would bypass draft/trash/versions gating.
     "ops::find_by_id_full(",
-    "ops::document_from_snapshot(",
+    "ops::snapshot_read_document(",
 ];
 
 /// Reviewed, intentional exceptions: `(path suffix, call form)`. Every entry is
@@ -97,7 +123,7 @@ fn is_allowlisted(rel_path: &str, call: &str) -> bool {
 }
 
 /// Collect `.rs` files under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -111,35 +137,251 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// The `.rs` files under one surface root, with the root's inventory floor
+/// enforced so a moved or renamed directory fails loudly instead of quietly
+/// scanning nothing.
+fn surface_files(root: &Path, surface: &str, floor: usize) -> Vec<PathBuf> {
+    let dir = root.join(surface);
+    let mut files = Vec::new();
+    rust_files(&dir, &mut files);
+
+    assert!(
+        files.len() >= floor,
+        "surface root `{surface}` yielded {} .rs file(s), below the floor of \
+         {floor} — the directory was moved, renamed, or emptied, and every scan \
+         over it is now vacuous. Point SURFACE_ROOTS at the new location (and \
+         re-check the floor).",
+        files.len()
+    );
+
+    files
+}
+
+/// Path of `file` relative to the crate root, with forward slashes.
+fn relative_path(root: &Path, file: &Path) -> String {
+    file.strip_prefix(root)
+        .unwrap_or(file)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Split a `module::fn_name(` entry into its module and bare fn name — the
+/// normalized key both match forms and both allowlists agree on.
+fn split_call(entry: &str) -> (&str, &str) {
+    let body = entry.trim_end_matches('(');
+    body.split_once("::").unwrap_or(("", body))
+}
+
+/// Every occurrence of `entries` in `contents`, as `(1-based line, entry)`.
+///
+/// A primitive counts as reached either module-qualified (`query::find(`) or by
+/// bare name, when the file's `use` statements bind that name from the bypass
+/// module — the shape the short-import house style produces.
+fn hits_for<'a>(contents: &str, entries: &[&'a str]) -> Vec<(usize, &'a str)> {
+    // Comments and test code are scrubbed line for line, so a doc line naming
+    // a primitive is not a call to it and reported lines stay real.
+    let code_only = production_code(contents);
+    let bare = bare_visible(&code_only, entries);
+    let mut hits = Vec::new();
+
+    for (idx, code) in code_only.lines().enumerate() {
+        for entry in entries {
+            let (_, name) = split_call(entry);
+            let reached = code.contains(entry) || (bare.contains(entry) && calls_bare(code, name));
+
+            if reached {
+                hits.push((idx + 1, *entry));
+            }
+        }
+    }
+
+    hits
+}
+
+/// The entries a file can reach by bare name, because it imports them from the
+/// bypass module they belong to.
+fn bare_visible<'a>(contents: &str, entries: &[&'a str]) -> Vec<&'a str> {
+    let statements = use_statements(contents);
+
+    entries
+        .iter()
+        .copied()
+        .filter(|entry| {
+            let (module, name) = split_call(entry);
+            statements
+                .iter()
+                .any(|stmt| binds_from_module(stmt, module, name))
+        })
+        .collect()
+}
+
+/// Every `use` statement in `contents`, whitespace removed, so a tree-style
+/// import spanning many lines becomes one flat path expression.
+fn use_statements(contents: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut in_use = false;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+
+        if !in_use {
+            if !strip_visibility(trimmed).starts_with("use ") {
+                continue;
+            }
+            in_use = true;
+        }
+
+        current.extend(trimmed.chars().filter(|c| !c.is_whitespace()));
+
+        if trimmed.ends_with(';') {
+            statements.push(take(&mut current));
+            in_use = false;
+        }
+    }
+
+    statements
+}
+
+/// Strip a leading `pub` / `pub(crate)` / `pub(in path)` visibility modifier.
+fn strip_visibility(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("pub") else {
+        return text;
+    };
+
+    let rest = rest.strip_prefix('(').map_or(rest, |inner| {
+        inner.split_once(')').map_or(rest, |(_, after)| after)
+    });
+
+    rest.trim_start()
+}
+
+/// Whether one whitespace-stripped `use` statement binds `name` as a bare
+/// identifier coming from `module`.
+fn binds_from_module(stmt: &str, module: &str, name: &str) -> bool {
+    let anchor = format!("{module}::");
+    let mut rest = stmt;
+
+    while let Some(pos) = rest.find(&anchor) {
+        // The anchor must be a whole path segment: `sub_ops::` is not `ops::`.
+        let is_segment = rest[..pos]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        let after = &rest[pos + anchor.len()..];
+
+        if is_segment && binds_name(after, name) {
+            return true;
+        }
+
+        rest = after;
+    }
+
+    false
+}
+
+/// Whether the path tail right after `module::` binds `name` — directly, or as
+/// a top-level item of a `{…}` group.
+fn binds_name(after: &str, name: &str) -> bool {
+    let Some(inner) = brace_group(after) else {
+        return leading_ident(after) == name;
+    };
+
+    split_top_level(inner)
+        .iter()
+        .any(|item| leading_ident(item) == name)
+}
+
+/// The contents of the balanced `{…}` group `text` opens with, if it opens one.
+fn brace_group(text: &str) -> Option<&str> {
+    let body = text.strip_prefix('{')?;
+    let mut depth = 1usize;
+
+    for (idx, ch) in body.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&body[..idx]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+/// Split a brace group's contents on its top-level commas.
+fn split_top_level(inner: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+
+    for (idx, ch) in inner.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&inner[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&inner[start..]);
+
+    parts
+}
+
+/// The leading identifier of `text`.
+fn leading_ident(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+/// Whether `code` calls the bare identifier `name` — a standalone `name(`, not
+/// a method call (`.name(`) or a differently-qualified path (`other::name(`).
+fn calls_bare(code: &str, name: &str) -> bool {
+    let needle = format!("{name}(");
+    let mut from = 0usize;
+
+    while let Some(pos) = code[from..].find(&needle) {
+        let at = from + pos;
+        let preceded_by_path = code[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == ':');
+
+        if !preceded_by_path {
+            return true;
+        }
+
+        from = at + needle.len();
+    }
+
+    false
+}
+
 #[test]
 fn surfaces_do_not_bypass_the_service_layer() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut violations: Vec<String> = Vec::new();
 
-    for surface in SURFACE_ROOTS {
-        let mut files = Vec::new();
-        rust_files(&root.join(surface), &mut files);
-
-        for file in files {
+    for (surface, floor) in SURFACE_ROOTS {
+        for file in surface_files(root, surface, *floor) {
             let contents = fs::read_to_string(&file).unwrap_or_default();
-            let rel = file
-                .strip_prefix(root)
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel = relative_path(root, &file);
 
-            for (lineno, line) in contents.lines().enumerate() {
-                // Skip line comments — references in prose/docs aren't calls.
-                if line.trim_start().starts_with("//") {
-                    continue;
-                }
-
-                for call in FORBIDDEN_CALLS {
-                    if line.contains(call) && !is_allowlisted(&rel, call) {
-                        violations.push(format!("  {}:{}  {}", rel, lineno + 1, call));
-                    }
-                }
-            }
+            violations.extend(
+                hits_for(&contents, FORBIDDEN_CALLS)
+                    .into_iter()
+                    .filter(|(_, call)| !is_allowlisted(&rel, call))
+                    .map(|(lineno, call)| format!("  {rel}:{lineno}  {call}")),
+            );
         }
     }
 
@@ -204,20 +446,12 @@ fn write_surfaces_attach_invalidation_transport() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut offenders: Vec<String> = Vec::new();
 
-    for surface in SURFACE_ROOTS {
-        let mut files = Vec::new();
-        rust_files(&root.join(surface), &mut files);
-
-        for file in files {
+    for (surface, floor) in SURFACE_ROOTS {
+        for file in surface_files(root, surface, *floor) {
             let contents = fs::read_to_string(&file).unwrap_or_default();
 
             if misses_invalidation_transport(&contents) {
-                let rel = file
-                    .strip_prefix(root)
-                    .unwrap_or(&file)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                offenders.push(format!("  {rel}"));
+                offenders.push(format!("  {}", relative_path(root, &file)));
             }
         }
     }
@@ -408,34 +642,33 @@ const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
 /// the decision through review.
 #[test]
 fn cli_commands_write_only_through_reviewed_paths() {
-    let root = env!("CARGO_MANIFEST_DIR");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&Path::new(root).join("src/commands"), &mut files);
-    assert!(!files.is_empty(), "src/commands must exist");
+    rust_files(&root.join("src/commands"), &mut files);
+
+    assert!(
+        files.len() >= CLI_FILE_FLOOR,
+        "src/commands yielded {} .rs file(s), below the floor of {CLI_FILE_FLOOR} \
+         — the directory was moved or emptied and this scan is now vacuous",
+        files.len()
+    );
 
     let mut violations = Vec::new();
     for file in &files {
         let contents = fs::read_to_string(file).unwrap_or_default();
-        let rel = file
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = relative_path(root, file);
 
-        for call in FORBIDDEN_CALLS.iter().filter(|c| is_write_primitive(c)) {
-            for (lineno, line) in contents.lines().enumerate() {
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("//") || !line.contains(call) {
-                    continue;
-                }
-                let allowed = CLI_WRITE_ALLOWLIST
-                    .iter()
-                    .any(|(suffix, c)| rel.ends_with(suffix) && c == call);
-                if !allowed {
-                    violations.push(format!("{rel}:{} → {call}", lineno + 1));
-                }
-            }
-        }
+        // Scans WRITE_PRIMITIVES rather than the write subset of
+        // FORBIDDEN_CALLS: the credential writes (`update_password`,
+        // `reset_totp`) have no surface-bypass entry, so intersecting the two
+        // lists left them unscanned here — exactly the writes the list was
+        // extended to see.
+        violations.extend(
+            hits_for(&contents, WRITE_PRIMITIVES)
+                .into_iter()
+                .filter(|(_, call)| !is_cli_allowlisted(&rel, call))
+                .map(|(lineno, call)| format!("{rel}:{lineno} → {call}")),
+        );
     }
 
     assert!(
@@ -453,14 +686,27 @@ fn cli_commands_write_only_through_reviewed_paths() {
 /// matcher once did.
 #[test]
 fn cli_write_scan_fires_on_synthetic_violation() {
-    let synthetic = "    query::delete(&tx, slug, id)?;\n";
-    let hit = FORBIDDEN_CALLS
-        .iter()
-        .filter(|c| is_write_primitive(c))
-        .any(|call| synthetic.contains(call));
+    let qualified = "    query::delete(&tx, slug, id)?;\n";
     assert!(
-        hit,
-        "the write-primitive list must match a plain query::delete call"
+        hits_for(qualified, WRITE_PRIMITIVES)
+            .iter()
+            .any(|(_, call)| *call == "query::delete("),
+        "the write-primitive scan must match a module-qualified query::delete call"
+    );
+
+    // Same call reached through the short-import house style.
+    let bare = "\
+use crate::db::query::delete;
+
+fn purge(tx: &Tx) {
+    delete(tx, slug, id)?;
+}
+";
+    assert!(
+        hits_for(bare, WRITE_PRIMITIVES)
+            .iter()
+            .any(|(_, call)| *call == "query::delete("),
+        "the write-primitive scan must match an imported bare-name delete call"
     );
 }
 
@@ -483,9 +729,16 @@ fn cli_write_allowlist_has_no_stale_entries() {
     }
 }
 
-/// Write-primitive subset of [`FORBIDDEN_CALLS`].
+/// Whether `call` is a write primitive — one an allowlist may never permit.
 fn is_write_primitive(call: &str) -> bool {
     WRITE_PRIMITIVES.contains(&call)
+}
+
+/// Whether `rel_path` is a reviewed offline-admin site for `call`.
+fn is_cli_allowlisted(rel_path: &str, call: &str) -> bool {
+    CLI_WRITE_ALLOWLIST
+        .iter()
+        .any(|(suffix, allowed_call)| rel_path.ends_with(suffix) && *allowed_call == call)
 }
 
 /// Document + credential write primitives the CLI scan looks for.
@@ -505,6 +758,59 @@ const WRITE_PRIMITIVES: &[&str] = &[
     "query::reset_totp(",
 ];
 
+/// Whether `src` defines `name` as a callable `pub` / `pub(crate)` fn. A
+/// private fn is unreachable from a surface, so naming one in a scan list
+/// guards nothing.
+fn defines_public_fn(src: &str, name: &str) -> bool {
+    src.lines().any(|line| {
+        let code = line.trim_start();
+        if !code.starts_with("pub") {
+            return false;
+        }
+
+        let rest = strip_visibility(code);
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+
+        rest.starts_with(&format!("fn {name}(")) || rest.starts_with(&format!("fn {name}<"))
+    })
+}
+
+/// The module source a scan entry's `module::` prefix names.
+fn module_source<'a>(entry: &str, ops: &'a str, query: &'a str) -> &'a str {
+    match split_call(entry).0 {
+        "ops" => ops,
+        "query" => query,
+        other => panic!("scan entry `{entry}` names unknown bypass module `{other}`"),
+    }
+}
+
+/// Anti-rot pin for the bypass vocabulary: every [`FORBIDDEN_CALLS`] entry must
+/// still name a public fn in the module it claims. An entry whose fn was
+/// renamed, made private, or deleted matches nothing and silently stops
+/// guarding its primitive, while still reading like coverage.
+#[test]
+fn every_forbidden_call_still_names_a_live_fn() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ops = fs::read_to_string(root.join("src/db/ops.rs")).expect("src/db/ops.rs must exist");
+    let query = concat_sources(root, "src/db/query");
+
+    let dead: Vec<&&str> = FORBIDDEN_CALLS
+        .iter()
+        .filter(|entry| {
+            let (_, name) = split_call(entry);
+            !defines_public_fn(module_source(entry, &ops, &query), name)
+        })
+        .collect();
+
+    assert!(
+        dead.is_empty(),
+        "FORBIDDEN_CALLS entries with no public `fn` of that name in their \
+         module (src/db/ops.rs or src/db/query/**) — the bypass scan is \
+         vacuous for them. Point the entry at the primitive that replaced it, \
+         or drop it: {dead:?}"
+    );
+}
+
 /// Vocabulary-liveness pin: every write-primitive
 /// name must still exist in the query layer — a renamed primitive would
 /// otherwise leave this scan matching nothing for that operation, the
@@ -512,24 +818,16 @@ const WRITE_PRIMITIVES: &[&str] = &[
 #[test]
 fn write_primitive_vocabulary_is_live() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut sources = String::new();
-    let mut files = Vec::new();
-    rust_files(&root.join("src/db/query"), &mut files);
-    for f in files {
-        sources.push_str(&fs::read_to_string(f).unwrap_or_default());
-    }
+    let query = concat_sources(root, "src/db/query");
 
     let stale: Vec<&&str> = WRITE_PRIMITIVES
         .iter()
-        .filter(|call| {
-            let fn_name = call.trim_start_matches("query::").trim_end_matches('(');
-            !sources.contains(&format!("fn {fn_name}"))
-        })
+        .filter(|call| !defines_public_fn(&query, split_call(call).1))
         .collect();
 
     assert!(
         stale.is_empty(),
-        "WRITE_PRIMITIVES entries with no matching `fn` in src/db/query — \
+        "WRITE_PRIMITIVES entries with no public `fn` in src/db/query — \
          the CLI scan is going vacuous for them: {stale:?}"
     );
 }
@@ -567,24 +865,51 @@ fn allowlist_has_no_stale_entries() {
 #[test]
 fn allowlist_contains_no_write_primitives() {
     // Writes must always go through the service layer; an allowlist entry for a
-    // write would defeat validation / hooks / ref-counting.
-    let write_calls = [
-        "query::create(",
-        "query::update",
-        "query::delete(",
-        "query::soft_delete(",
-        "query::restore(",
-        "query::create_version(",
-    ];
+    // write would defeat validation / hooks / ref-counting. Checked against the
+    // one write-primitive list the CLI scan uses, so a primitive added there is
+    // automatically barred from the surface allowlist too.
     for (path, call) in ALLOWLIST {
-        for w in write_calls {
-            assert!(
-                !call.contains(w),
-                "ALLOWLIST entry for {path} permits a write primitive ({call}); \
-                 writes must never bypass the service layer"
-            );
-        }
+        assert!(
+            !is_write_primitive(call),
+            "ALLOWLIST entry for {path} permits a write primitive ({call}); \
+             writes must never bypass the service layer"
+        );
     }
+}
+
+/// Positive control for the bypass scan's bare-name arm: the short-import house
+/// style (`use crate::db::ops::{…};` then a bare call) is the shape a bypass
+/// actually takes in this codebase, and the qualified-only matcher never saw
+/// it. The negative case is the one that makes the arm safe — the service layer
+/// exports fns of the *same names*, so a bare call is only a bypass when the
+/// file imported the name from the bypass module.
+#[test]
+fn bypass_scan_fires_on_the_bare_name_import_form() {
+    let bypass = "\
+use crate::db::{DbPool, ops::{count_documents, find_documents}};
+
+fn list(pool: &DbPool) {
+    let docs = find_documents(pool, \"posts\", def, &q, None).unwrap();
+}
+";
+    assert!(
+        hits_for(bypass, FORBIDDEN_CALLS)
+            .iter()
+            .any(|(_, call)| *call == "ops::find_documents("),
+        "a bare call to a name imported from `db::ops` must be flagged"
+    );
+
+    let service = "\
+use crate::service::{FindDocumentsInput, find_documents};
+
+fn list(ctx: &ServiceContext) {
+    let docs = find_documents(ctx, &input).unwrap();
+}
+";
+    assert!(
+        hits_for(service, FORBIDDEN_CALLS).is_empty(),
+        "the service fn of the same name is the compliant path and must not be flagged"
+    );
 }
 
 // ── Capability parity ───────────────────────────────────────────────────────
@@ -787,17 +1112,10 @@ fn surface_access_checks_are_frozen_to_reviewed_touchpoints() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut violations: Vec<String> = Vec::new();
 
-    for surface in SURFACE_ROOTS {
-        let mut files = Vec::new();
-        rust_files(&root.join(surface), &mut files);
-
-        for file in files {
+    for (surface, floor) in SURFACE_ROOTS {
+        for file in surface_files(root, surface, *floor) {
             let contents = fs::read_to_string(&file).unwrap_or_default();
-            let rel = file
-                .strip_prefix(root)
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel = relative_path(root, &file);
 
             let touches_access = contents
                 .lines()

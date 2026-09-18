@@ -23,7 +23,7 @@ use crate::config::{
     routes::RoutesConfig,
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
-use crate::core::JwtSecret;
+use crate::core::{JwtSecret, NESTING_DEPTH, NestingDepth};
 
 /// Enumerate a config struct's serde keys — implemented by
 /// `#[derive(ConfigKeys)]` (`crap-cms-macros`).
@@ -207,6 +207,38 @@ impl CrapConfig {
         }
     }
 
+    /// Put a loaded configuration into service: validate it, then install the
+    /// limits it carries that live outside the struct.
+    ///
+    /// The one chokepoint between "a config exists" and "the process runs on
+    /// it": server and worker startup, every CLI command that opens a project,
+    /// the stdio MCP server, and [`test_default`](Self::test_default) go
+    /// through here, so a behaviour the server performs is never one a test
+    /// config or a secondary entry point skips.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for any fatal misconfiguration surfaced by
+    /// [`validate`](Self::validate).
+    pub fn apply(&self) -> Result<()> {
+        self.apply_to(&NESTING_DEPTH)
+    }
+
+    /// [`apply`](Self::apply) against an explicit limit store — the process
+    /// store is write-once, so only a fresh store can show what an install
+    /// does.
+    fn apply_to(&self, depth: &NestingDepth) -> Result<()> {
+        self.validate()?;
+
+        // The JSON data-nesting limit is process-wide: the Lua↔JSON converter
+        // and the gRPC↔JSON converter both read one value, so it is installed
+        // from the config rather than passed down. It is fixed for the process
+        // lifetime — the first config to reach this point wins.
+        depth.install(self.depth.max_nesting_depth);
+
+        Ok(())
+    }
+
     /// Create a configuration with permissive defaults for testing.
     ///
     /// Same as `Default` but with `access.default_deny = false` so tests that don't
@@ -215,12 +247,27 @@ impl CrapConfig {
     /// when unset), so an empty secret is not a state the server ever runs in
     /// and the secret-derived features (crypto, TOTP sealing, signed URLs)
     /// would refuse to work.
+    ///
+    /// Goes through [`apply`](Self::apply), like startup does, so tests run
+    /// against the same validated config and the same process-wide limits the
+    /// server installs. The signature stays infallible — hundreds of call
+    /// sites use it as a value — so an invalid built-in default panics: a
+    /// default the server would refuse to start on is a bug in the defaults.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the built-in defaults fail validation.
     #[must_use]
     pub fn test_default() -> Self {
         let mut config = Self::default();
         config.access.default_deny = false;
         config.auth.secret = JwtSecret::new("test-secret-0123456789abcdef0123456789");
         config.jobs.apply_queue_defaults();
+
+        config
+            .apply()
+            .expect("built-in test defaults must be a valid configuration");
+
         config
     }
 
@@ -321,7 +368,85 @@ mod tests {
     use super::*;
     use super::{is_world_accessible_mode, should_warn_loose_permissions};
     use crate::config::PaginationMode;
+    use crate::core::max_nesting_depth;
+    use crate::hooks::lua_api::lua_to_json;
+    use mlua::{Lua, Table, Value};
     use std::os::unix::fs::PermissionsExt;
+
+    /// A chain of `levels` nested tables with a string leaf inside the
+    /// innermost one. `lua_to_json` counts the root table as depth 0, so the
+    /// leaf sits at depth `levels`.
+    fn nested_table(lua: &Lua, levels: usize) -> Value {
+        let mut tbl: Table = lua.create_table().expect("table");
+        tbl.set("leaf", "value").expect("set leaf");
+
+        for _ in 1..levels {
+            let outer = lua.create_table().expect("table");
+            outer.set("nested", tbl).expect("set nested");
+            tbl = outer;
+        }
+
+        Value::Table(tbl)
+    }
+
+    /// `apply` is the chokepoint between a config and the process running on
+    /// it, so a config it accepts is one validation accepted — whether it came
+    /// from startup or from a test.
+    #[test]
+    fn apply_refuses_a_config_that_validation_rejects() {
+        let mut config = CrapConfig::test_default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies.clear();
+
+        let err = config
+            .apply()
+            .expect_err("trust_proxy without an allowlist must be refused");
+
+        assert!(
+            err.to_string().contains("trusted_proxies"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `depth.max_nesting_depth` is not merely stored: `apply` installs it as
+    /// the limit. Checked against a fresh store with a non-default value —
+    /// the process store already holds the default, so it cannot show whether
+    /// the install happened.
+    #[test]
+    fn apply_installs_the_configured_nesting_limit() {
+        let mut config = CrapConfig::test_default();
+        config.depth.max_nesting_depth = 11;
+        let store = NestingDepth::new();
+
+        config.apply_to(&store).expect("a valid config applies");
+
+        assert_eq!(store.get(), 11, "apply must install the config's limit");
+    }
+
+    /// The converter every data-ingestion path shares enforces exactly the
+    /// process-wide number.
+    #[test]
+    fn the_configured_nesting_limit_is_the_one_the_converter_enforces() {
+        let config = CrapConfig::test_default();
+        let limit = config.depth.max_nesting_depth;
+
+        assert_eq!(
+            max_nesting_depth(),
+            limit,
+            "the process limit must be the one the config carries"
+        );
+
+        let lua = Lua::new();
+        lua_to_json(&nested_table(&lua, limit)).expect("data at the limit must convert");
+
+        let err = lua_to_json(&nested_table(&lua, limit + 1))
+            .expect_err("data one level past the limit must be rejected");
+
+        assert!(
+            err.to_string().contains("nesting exceeds maximum depth"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[test]
     fn default_config_values() {

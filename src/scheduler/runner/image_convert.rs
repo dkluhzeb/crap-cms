@@ -77,7 +77,7 @@ pub(super) fn execute_system_image_convert(
     match encode_result {
         Ok(()) => {
             let mut conn = pool
-                .get()
+                .write()
                 .context("Failed to get DB connection for image-convert completion")?;
 
             // One IMMEDIATE tx wraps the URL write + completion mark so the

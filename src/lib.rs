@@ -23,3 +23,6 @@ pub mod service;
 pub mod typegen;
 
 pub mod docgen;
+
+#[cfg(test)]
+mod test_support;

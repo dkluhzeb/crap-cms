@@ -1,6 +1,7 @@
 //! Top-level schema sync: creates system tables and syncs all collections/globals.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
+use tracing::error;
 
 use crate::{
     config::LocaleConfig,
@@ -12,14 +13,15 @@ use crate::{
         },
     },
     db::{
-        DbConnection, DbPool,
+        BoxedConnection, DbConnection, DbPool,
         query::{helpers::global_table, jobs as job_query},
     },
 };
 
 use super::{
-    backfill_ref_counts, canonical_text, checkbox_columns, collection, global, identifier_check,
-    legacy_timestamps, locale_change, meta, nested_values,
+    backfill_ref_counts, canonical_text, checkbox_columns, collection, global,
+    helpers::{get_table_columns, table_exists},
+    identifier_check, legacy_timestamps, locale_change, meta, nested_values,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -35,6 +37,118 @@ use super::{
 /// per-collection/global schema-sync steps fails.
 pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
     let mut conn = pool.write().context("Failed to get DB connection")?;
+
+    // A collection turning on `soft_delete` rebuilds its table on SQLite, and a
+    // rebuild only keeps the children's rows and their foreign keys with
+    // enforcement off (see `collection::alter`). `PRAGMA foreign_keys` is
+    // ignored inside a transaction, so the window has to be opened here, and
+    // only when a rebuild is actually pending — an ordinary boot syncs with
+    // enforcement on, as always.
+    let rebuilt = pending_rebuilds(&conn, registry, locale_config)?;
+
+    if !rebuilt.is_empty() {
+        set_foreign_keys(&conn, false)?;
+    }
+
+    let result = run_sync(&mut conn, registry, locale_config, &rebuilt);
+
+    if rebuilt.is_empty() {
+        return result;
+    }
+
+    // Restored whether or not the sync succeeded: a failed sync rolled its
+    // transaction back, and the connection goes back to the pool either way.
+    // The pool applies its pragmas when a connection is created, not on every
+    // checkout, so a connection left with enforcement off would serve that
+    // way for its lifetime — a restore that fails has to fail the boot.
+    match (result, set_foreign_keys(&conn, true)) {
+        (Err(sync), Err(restore)) => {
+            error!("Failed to re-enable foreign keys after the failed schema sync: {restore:#}");
+            Err(sync)
+        }
+        (Ok(()), Err(restore)) => Err(restore.context(
+            "Foreign-key enforcement could not be restored after the schema sync; \
+             refusing to serve with it off",
+        )),
+        (result, Ok(())) => result,
+    }
+}
+
+/// The collections whose table still has a pending `soft_delete` transition
+/// that a rebuild has to carry out. `SQLite` only: Postgres drops the
+/// constraints in place and never rebuilds, so it needs no window.
+fn pending_rebuilds(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Result<Vec<String>> {
+    if !conn.is_sqlite() {
+        return Ok(Vec::new());
+    }
+
+    let mut rebuilt = Vec::new();
+
+    for (slug, def) in &registry.collections {
+        if !table_exists(conn, slug)? {
+            continue;
+        }
+
+        let existing = get_table_columns(conn, slug)?;
+
+        if collection::soft_delete_transition_pending(def, &existing, locale_config) {
+            rebuilt.push(slug.to_string());
+        }
+    }
+
+    Ok(rebuilt)
+}
+
+/// Turn `SQLite`'s foreign-key enforcement on or off for this connection.
+fn set_foreign_keys(conn: &dyn DbConnection, on: bool) -> Result<()> {
+    let state = if on { "ON" } else { "OFF" };
+
+    conn.execute_batch(&format!("PRAGMA foreign_keys = {state}"))
+        .with_context(|| format!("Failed to set foreign_keys = {state}"))
+}
+
+/// Fail the sync rather than commit a table rebuild that left a child row
+/// pointing at nothing. Only run when enforcement was off for a rebuild. The
+/// check scans the whole database, so only rows whose parent is a rebuilt
+/// table count — an orphan that predates this boot in an unrelated table is
+/// not the sync's doing and must not block it.
+fn assert_no_dangling_references(conn: &dyn DbConnection, rebuilt: &[String]) -> Result<()> {
+    let rows = conn
+        .query_all("PRAGMA foreign_key_check", &[])
+        .context("Failed to verify foreign keys after the schema sync")?;
+
+    let mut dangling: Vec<String> = rows
+        .iter()
+        .filter(|row| {
+            row.get_string("parent")
+                .is_ok_and(|parent| rebuilt.contains(&parent))
+        })
+        .filter_map(|row| row.get_string("table").ok())
+        .collect();
+    dangling.sort();
+    dangling.dedup();
+
+    if !dangling.is_empty() {
+        bail!(
+            "Schema sync left rows in {} pointing at a rebuilt table; rolling back",
+            dangling.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+/// The schema sync proper, inside one transaction.
+fn run_sync(
+    conn: &mut BoxedConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+    rebuilt: &[String],
+) -> Result<()> {
     let tx = conn
         .transaction_immediate()
         .context("Failed to start migration transaction")?;
@@ -80,6 +194,10 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     nested_values::convert_if_needed(&tx, registry)?;
     canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
     locale_change::warn_on_default_locale_change(&tx, registry, locale_config)?;
+
+    if !rebuilt.is_empty() {
+        assert_no_dangling_references(&tx, rebuilt)?;
+    }
 
     tx.commit()
         .context("Failed to commit migration transaction")?;
@@ -336,7 +454,29 @@ fn drain_legacy_image_queue(conn: &dyn DbConnection) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::CrapConfig;
-    use crate::db::{DbValue, pool};
+    use crate::db::{DbValue, InMemoryConn, pool};
+
+    /// Only an orphan pointing at a rebuilt table is the sync's doing; one in
+    /// an unrelated table predates the boot and must not block it.
+    #[test]
+    fn the_dangling_reference_check_is_scoped_to_the_rebuilt_tables() {
+        let c = InMemoryConn::open();
+        // Enforcement off to plant the orphan; `foreign_key_check` reports it
+        // regardless of the pragma.
+        c.setup(
+            "PRAGMA foreign_keys = OFF; \
+             CREATE TABLE p (id TEXT PRIMARY KEY); \
+             CREATE TABLE p_tags (id TEXT, p_id TEXT REFERENCES p(id)); \
+             INSERT INTO p_tags VALUES ('x', 'missing');",
+        );
+
+        assert_no_dangling_references(&c, &["other".to_string()])
+            .expect("an orphan under a table that was not rebuilt is ignored");
+
+        let err = assert_no_dangling_references(&c, &["p".to_string()])
+            .expect_err("an orphan under the rebuilt table fails the sync");
+        assert!(err.to_string().contains("p_tags"), "{err}");
+    }
 
     /// Regression: an alpha.8 `_crap_jobs` table (without `priority` or
     /// `unique_key` columns) must upgrade cleanly via `create_jobs_table`.

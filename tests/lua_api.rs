@@ -13,6 +13,7 @@
 )]
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Registry;
@@ -20,6 +21,13 @@ use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use std::sync::Arc;
+
+/// Tests in this binary that mutate the process environment serialize here.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn env_lock() -> MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -185,7 +193,7 @@ fn config_get_missing_returns_nil() {
 
 #[test]
 fn env_get_existing_var() {
-    // Set a test env var
+    let _guard = env_lock();
     unsafe { std::env::set_var("CRAP_TEST_VAR", "hello_from_env") };
     let runner = setup_lua();
     let result = eval_lua(

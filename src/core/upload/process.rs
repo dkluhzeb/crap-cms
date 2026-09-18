@@ -6,7 +6,7 @@ use tracing::warn;
 use super::{
     exif::apply_exif_orientation,
     resize::process_image_sizes,
-    validate::{check_image_dimensions, sanitize_filename, validate_upload},
+    validate::{check_image_dimensions, decodable_image, sanitize_filename, validate_upload},
 };
 use crate::core::upload::{
     CollectionUpload, ProcessedUpload, SharedStorage, UploadedFile, served_url,
@@ -116,13 +116,16 @@ pub fn process_upload(
     let mut guard = CleanupGuard::new(storage.clone());
     let (unique_filename, url) = save_original(file, storage, collection_slug, &mut guard)?;
 
-    let is_image = file.content_type.starts_with("image/");
+    // Only a type this build can decode enters the pixel pipeline. An
+    // `image/*` type without a decoder (SVG, and AVIF unless `image` is built
+    // with `avif-native`) is stored exactly as uploaded, with no dimensions
+    // and no resized or converted variants.
     let mut width = None;
     let mut height = None;
     let mut sizes = HashMap::new();
     let mut queued_conversions = Vec::new();
 
-    if is_image {
+    if decodable_image(&file.content_type) {
         check_image_dimensions(&file.data)?;
 
         let img = image::load_from_memory(&file.data).context("Failed to decode image")?;
@@ -411,6 +414,102 @@ mod tests {
         assert!(
             storage.exists(&key).unwrap(),
             "File should exist in storage"
+        );
+    }
+
+    /// A clean SVG is a valid upload: it has no raster decoder, so it skips
+    /// the pixel pipeline and is stored byte-for-byte. Regression — every SVG
+    /// used to be rejected with "Failed to detect image format", which made
+    /// the XXE-sanitising path (and the documented "only clean SVGs reach
+    /// storage" promise) unreachable.
+    #[test]
+    fn process_upload_stores_a_clean_svg_verbatim() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect width="10" height="10" fill="red"/>
+        </svg>"#;
+        let file = UploadedFile {
+            filename: "logo.svg".to_string(),
+            content_type: "image/svg+xml".to_string(),
+            data: svg.to_vec(),
+        };
+        let config = CollectionUpload {
+            enabled: true,
+            mime_types: vec!["image/*".into()],
+            image_sizes: vec![
+                ImageSizeBuilder::new("thumb")
+                    .width(50)
+                    .height(50)
+                    .fit(ImageFit::Cover)
+                    .build(),
+            ],
+            ..Default::default()
+        };
+
+        let (result, _guard) =
+            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+
+        assert_eq!(result.mime_type, "image/svg+xml");
+        assert!(result.width.is_none(), "no decoder, so no dimensions");
+        assert!(result.height.is_none());
+        assert!(result.sizes.is_empty(), "an SVG is not resized");
+        assert!(result.queued_conversions.is_empty());
+
+        let key = format!("media/{}", result.filename);
+        assert_eq!(
+            storage.get(&key).expect("stored SVG"),
+            svg.to_vec(),
+            "the SVG must be stored exactly as uploaded"
+        );
+    }
+
+    /// The sanitising path is what makes storing SVGs safe, so it has to run
+    /// on the way in: a scripted SVG never reaches storage.
+    #[test]
+    fn process_upload_rejects_a_scripted_svg() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
+        let file = UploadedFile {
+            filename: "evil.svg".to_string(),
+            content_type: "image/svg+xml".to_string(),
+            data: svg.to_vec(),
+        };
+        let config = CollectionUpload {
+            enabled: true,
+            mime_types: vec!["image/*".into()],
+            ..Default::default()
+        };
+
+        let err = process_upload(&file, &config, &storage, "media", DEFAULT_MAX)
+            .expect_err("a scripted SVG must be rejected")
+            .to_string();
+        assert!(err.contains("<script>"), "unexpected error: {err}");
+    }
+
+    /// An XXE payload is rejected on the same path.
+    #[test]
+    fn process_upload_rejects_an_svg_with_a_doctype() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
+        let svg = br#"<?xml version="1.0"?>
+<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>"#;
+        let file = UploadedFile {
+            filename: "xxe.svg".to_string(),
+            content_type: "image/svg+xml".to_string(),
+            data: svg.to_vec(),
+        };
+        let config = CollectionUpload {
+            enabled: true,
+            mime_types: vec!["image/*".into()],
+            ..Default::default()
+        };
+
+        assert!(
+            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).is_err(),
+            "an SVG carrying a DOCTYPE must not reach storage"
         );
     }
 

@@ -27,7 +27,11 @@ hits the cache and the top-level `define` does **not** re-run.
   collection and global slugs.
 - `config` (table) — Job configuration:
   - `handler` (string, required) — Lua function ref (e.g., `"jobs.cleanup.run"`)
-  - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`)
+  - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`).
+    Five fields, or six/seven with a leading seconds field. The day-of-week
+    field uses crontab numbering — `0` (or `7`) is Sunday through `6` for
+    Saturday; names such as `MON-FRI` work too. Every schedule is parsed at
+    startup and an invalid one fails the boot with the offending job named.
   - `queue` (string, default: `"default"`) — Queue name
   - `retries` (integer, optional) — Max retry attempts. When omitted, inherits `[jobs.queues.<queue>] retries` from `crap.toml`; if the queue has no entry either, defaults to `0` (one attempt). Set explicitly (including `retries = 0`) to override the queue default.
   - `timeout` (integer, default: 60) — Seconds before timeout
@@ -289,7 +293,9 @@ if `[jobs.queues]` references a queue name that no defined job uses
 `[jobs.queues.<name>]` also carries two non-concurrency knobs that
 apply to **system jobs** (`_system_image_convert`, `_system_email`,
 `_system_bulk`)
-which lack their own `JobDefinition`:
+which lack their own `JobDefinition` and cannot be queued by slug from any
+surface — `crap.jobs.trigger`, gRPC, MCP and the CLI all refuse a `_system_*`
+slug as an unknown job:
 
 | Field | What it sets |
 |---|---|

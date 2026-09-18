@@ -1,7 +1,8 @@
-use std::{io::Cursor, str};
+use std::{io::Cursor, str, sync::LazyLock};
 
 use anyhow::{Context as _, Result, bail};
-use image::ImageReader;
+use image::{ImageFormat, ImageReader};
+use regex::{Captures, Regex};
 
 use crate::core::upload::{CollectionUpload, UploadedFile};
 
@@ -113,6 +114,28 @@ fn validate_filename_extension_matches(filename: &str, effective_mime: &str) -> 
     );
 }
 
+/// Whether this build can actually decode `content_type` — the condition for
+/// running the pixel pipeline (bomb check, dimensions, resize, format
+/// variants) over a file.
+///
+/// "Starts with `image/`" is not that condition. SVG has no raster decoder at
+/// all, and AVIF decoding needs `image`'s `avif-native` feature (dav1d) while
+/// the enabled `avif` feature only builds the *encoder* — so
+/// `ImageFormat::reading_enabled` reports AVIF readable when it is not.
+/// A content type that lands here as undecodable is stored verbatim instead
+/// of being rejected for a decode that was never going to run.
+pub(super) fn decodable_image(content_type: &str) -> bool {
+    let Some(format) = ImageFormat::from_mime_type(content_type) else {
+        return false;
+    };
+
+    if format == ImageFormat::Avif {
+        return false;
+    }
+
+    format.reading_enabled()
+}
+
 /// Check image dimensions against the decompression bomb limit.
 ///
 /// Two guards run:
@@ -183,14 +206,123 @@ fn is_svg(effective_mime: &str, data: &[u8]) -> bool {
     lower.starts_with("<?xml") && lower.contains("<svg") || lower.starts_with("<svg")
 }
 
-/// Reject SVGs that carry the classic XXE indicators: a DOCTYPE
+/// Reject SVGs that carry the classic XXE indicators — a DOCTYPE
 /// declaration (gateway to external/general entity abuse) or an explicit
-/// ENTITY declaration. Case-insensitive because XML is
-/// case-sensitive-but-tags-are-conventionally-lowercase and the attack
-/// strings are well-known ASCII tokens.
+/// ENTITY declaration — or an embedded `<script>` element. Case-insensitive
+/// because XML is case-sensitive-but-tags-are-conventionally-lowercase and
+/// the attack strings are well-known ASCII tokens.
+/// Every quoted `href` / `xlink:href` attribute value (group 1), and every
+/// `url(…)` argument in a style or paint attribute (group 2) — the two places
+/// an SVG names something for the renderer to fetch.
+static REFERENCE_VALUES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(?:(?:xlink:)?href\s*=\s*["']([^"']*)["'])|(?:url\(\s*["']?([^"')]*))"#)
+        .expect("static regex")
+});
+
+/// A value that starts with a URL scheme or a protocol-relative `//`; group 1
+/// is the scheme. `data:` is the only scheme an uploaded asset legitimately
+/// embeds.
+static LEADING_SCHEME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?://|([a-z][a-z0-9+.\-]*):)").expect("static regex"));
+
+/// An inline event handler (`onload=`, `onclick=`, …) runs script without a
+/// `<script>` element.
+/// Numeric character references plus the named ones that can spell a scheme.
+static CHARACTER_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)&(?:#x([0-9a-f]+)|#([0-9]+)|(colon|sol|tab|newline));").expect("static regex")
+});
+
+static EVENT_HANDLER_ATTRIBUTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)[\s"'/]on[a-z]+\s*="#).expect("static regex"));
+
+/// The value as a renderer reads it: numeric and the scheme-relevant named
+/// character references decoded, ASCII controls and whitespace removed —
+/// browsers strip those inside a URL, so `java&#9;script:` is `javascript:`.
+fn normalized_reference(raw: &str) -> String {
+    let decoded = CHARACTER_REFERENCE.replace_all(raw, |caps: &Captures<'_>| {
+        let code = caps
+            .get(1)
+            .and_then(|m| u32::from_str_radix(m.as_str(), 16).ok())
+            .or_else(|| caps.get(2).and_then(|m| m.as_str().parse().ok()))
+            .or_else(
+                || match caps.get(3).map(|m| m.as_str().to_ascii_lowercase()) {
+                    Some(name) if name == "colon" => Some(u32::from(':')),
+                    Some(name) if name == "sol" => Some(u32::from('/')),
+                    Some(_) => Some(u32::from(' ')),
+                    None => None,
+                },
+            );
+
+        code.and_then(char::from_u32)
+            .map(String::from)
+            .unwrap_or_default()
+    });
+
+    decoded
+        .chars()
+        .filter(|c| !c.is_ascii_control() && !c.is_whitespace())
+        .collect()
+}
+
+/// A reference that makes a renderer fetch (or execute) something outside the
+/// file: any scheme except `data:`, or a protocol-relative URL. Fragments,
+/// relative paths and `data:` URIs stay inside the file.
+fn external_reference(text: &str) -> Option<String> {
+    REFERENCE_VALUES.captures_iter(text).find_map(|caps| {
+        let raw = caps
+            .get(1)
+            .or_else(|| caps.get(2))
+            .map_or("", |m| m.as_str());
+        let value = normalized_reference(raw).to_ascii_lowercase();
+        let scheme = LEADING_SCHEME.captures(&value)?;
+        let is_data = scheme.get(1).is_some_and(|m| m.as_str() == "data");
+
+        (!is_data).then(|| raw.chars().take(60).collect())
+    })
+}
+
 fn validate_svg_content(data: &[u8]) -> Result<()> {
     let text = str::from_utf8(data).context("SVG is not valid UTF-8")?;
     let lower = text.to_ascii_lowercase();
+
+    // A remote reference turns every render into a request the uploader chose:
+    // a tracking beacon at best, `javascript:` at worst. Fragments, relative
+    // paths and `data:` URIs stay inside the file and are allowed; `mailto:`
+    // and `tel:` links are refused with the rest — an uploaded image is a
+    // static asset, not a document with links.
+    if let Some(reference) = external_reference(text) {
+        bail!(
+            "SVG references an external resource ({reference}…). Remove it — \
+             uploaded images must not load or execute anything outside the file \
+             (only fragments, relative paths and data: URIs are allowed)."
+        );
+    }
+
+    if EVENT_HANDLER_ATTRIBUTE.is_match(text) {
+        bail!(
+            "SVG contains an inline event handler (on…= attribute). Remove it — \
+             uploaded images are static assets and must not run script."
+        );
+    }
+
+    if lower.contains("@import") {
+        bail!(
+            "SVG contains a CSS @import. Remove it — uploaded images must not \
+             load anything outside the file."
+        );
+    }
+
+    // An SVG is served as a download under a sandbox CSP, so a script inside
+    // one cannot run from the serve route. It would still run if the file is
+    // ever opened directly from disk or re-served by a consumer that does not
+    // reproduce those headers, and no legitimate uploaded asset needs one.
+    if lower.contains("<script") {
+        bail!(
+            "SVG contains a <script> element. Remove it — uploaded images are \
+             static assets, and a scripted SVG is a stored-XSS vector for any \
+             consumer that renders it inline."
+        );
+    }
 
     if lower.contains("<!doctype") {
         bail!(
@@ -569,6 +701,99 @@ mod tests {
             <rect width="10" height="10" fill="red"/>
         </svg>"#;
         assert!(validate_svg_content(svg).is_ok());
+    }
+
+    /// Regression: `image/*` was taken to mean "decodable", so an SVG (no
+    /// raster decoder) and an AVIF (encode-only build) were rejected with
+    /// "Failed to detect image format" instead of being stored.
+    #[test]
+    fn decodable_image_covers_only_types_with_an_enabled_decoder() {
+        assert!(decodable_image("image/png"));
+        assert!(decodable_image("image/jpeg"));
+        assert!(decodable_image("image/gif"));
+        assert!(decodable_image("image/webp"));
+
+        assert!(!decodable_image("image/svg+xml"), "SVG has no decoder");
+        assert!(!decodable_image("image/avif"), "avif encodes only");
+        assert!(!decodable_image("image/bmp"), "BMP is not enabled");
+        assert!(!decodable_image("application/pdf"));
+        assert!(!decodable_image("text/plain"));
+        assert!(!decodable_image(""));
+    }
+
+    /// Entity-encoded or whitespace-split schemes are what a renderer sees
+    /// after decoding, so the scan judges the decoded value.
+    #[test]
+    fn svg_scan_decodes_the_reference_before_judging_it() {
+        for href in [
+            "&#x6a;avascript:alert(1)",
+            "&#104;ttps://evil.example/x.png",
+            "java&#9;script:alert(1)",
+            "javascript&colon;alert(1)",
+            " \n https://evil.example/x.png",
+        ] {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"><a href="{href}"><text>x</text></a></svg>"#
+            );
+            assert!(
+                validate_svg_content(svg.as_bytes()).is_err(),
+                "{href} must be rejected"
+            );
+        }
+    }
+
+    /// Script runs from an event-handler attribute without any `<script>`
+    /// element, and a stylesheet import or a `url(…)` paint reference fetches
+    /// from outside the file.
+    #[test]
+    fn svg_scan_rejects_event_handlers_and_style_fetches() {
+        let handler = br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#;
+        assert!(validate_svg_content(handler).is_err());
+
+        let import = br#"<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://evil.example/a.css);</style></svg>"#;
+        assert!(validate_svg_content(import).is_err());
+
+        let paint = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://evil.example/p.svg#g)"/></svg>"#;
+        assert!(validate_svg_content(paint).is_err());
+
+        let local_paint = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#grad)" font-family="Onyx"/></svg>"#;
+        assert!(validate_svg_content(local_paint).is_ok());
+    }
+
+    #[test]
+    fn svg_scan_rejects_external_href() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="https://evil.example/pixel.png"/></svg>"#;
+        let err = validate_svg_content(svg).expect_err("remote image must be rejected");
+        assert!(err.to_string().contains("external resource"), "{err}");
+
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><text>x</text></a></svg>"#;
+        assert!(validate_svg_content(svg).is_err());
+
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><image href = '//cdn.example/x.png'/></svg>"#;
+        assert!(validate_svg_content(svg).is_err());
+    }
+
+    /// The `xmlns:xlink` declaration, fragment references and embedded
+    /// `data:` images are the legitimate shapes and must keep passing.
+    #[test]
+    fn svg_scan_accepts_internal_and_data_hrefs() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><circle id="c" r="1"/></defs><use xlink:href="#c"/><use href="#c"/><image href="data:image/png;base64,iVBORw0KGgo="/><image href="logo.png"/></svg>"##;
+        assert!(validate_svg_content(svg).is_ok());
+    }
+
+    #[test]
+    fn svg_scan_rejects_script_element() {
+        let payload = br#"<svg xmlns="http://www.w3.org/2000/svg">
+            <script>alert(document.domain)</script>
+        </svg>"#;
+        let err = validate_svg_content(payload).unwrap_err().to_string();
+        assert!(err.contains("<script>"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn svg_scan_rejects_script_element_in_any_case() {
+        let payload = b"<svg><SCRIPT type=\"text/javascript\">x()</SCRIPT></svg>";
+        assert!(validate_svg_content(payload).is_err());
     }
 
     #[test]

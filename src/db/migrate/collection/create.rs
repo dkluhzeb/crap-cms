@@ -52,9 +52,16 @@ fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstrai
     col
 }
 
+/// Create the table a collection's documents live in.
+///
+/// `table` is the name to create it under. That is the collection's slug
+/// everywhere but the soft-delete rebuild, which assembles the replacement
+/// under a temporary name and renames it into place afterwards. No indexes are
+/// created here — `sync_indexes` owns those, and a rebuild depends on the
+/// temporary table carrying none that would collide with the managed names.
 pub(crate) fn create_collection_table(
     conn: &dyn DbConnection,
-    slug: &str,
+    table: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
@@ -63,13 +70,13 @@ pub(crate) fn create_collection_table(
     collect_field_columns(&mut columns, conn, def, locale_config)?;
     collect_system_columns(&mut columns, conn, def);
 
-    let sql = format!("CREATE TABLE \"{}\" ({})", slug, columns.join(", "));
+    let sql = format!("CREATE TABLE \"{}\" ({})", table, columns.join(", "));
 
-    info!("Creating collection table: {}", slug);
+    info!("Creating collection table: {}", table);
     debug!("SQL: {}", sql);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {slug}"))?;
+        .with_context(|| format!("Failed to create table {table}"))?;
 
     Ok(())
 }

@@ -185,3 +185,17 @@ All read queries automatically append `AND _deleted_at IS NULL` to exclude trash
 - Upload files are kept on disk until the document is permanently purged
 - Version history is preserved through soft-delete and restore
 - Back-reference warnings still appear on the delete confirmation for upload/media collections
+
+## Enabling soft deletes on an existing collection
+
+Turning `soft_delete` on for a collection that already has a table and a
+`unique` field migrates the table on the next boot: the inline `UNIQUE`
+constraints become partial unique indexes that ignore trashed rows, so a
+trashed document no longer blocks a new one with the same value. On Postgres
+the constraints are dropped in place. On SQLite the table is rebuilt —
+built under a temporary name, filled, then swapped in — with foreign-key
+enforcement off for that one sync and `PRAGMA foreign_key_check` run before
+the commit; a dangling reference rolls the whole sync back. Junction rows,
+version snapshots and their foreign keys survive the transition. Back up the
+database before the first boot after the change, as before any schema
+migration.

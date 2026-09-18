@@ -17,8 +17,8 @@ use crate::{
     hooks::{
         HookRunner,
         lifecycle::{
-            LuaCrudInfra, RouteHandlerInput, execution::resolve_hook_function,
-            types::TxContextGuard,
+            LuaCrudInfra, RouteHandlerInput, access::boolean_verdict,
+            execution::resolve_hook_function, types::TxContextGuard,
         },
         lua_api,
         lua_api::parse::deny_unknown_keys,
@@ -116,11 +116,14 @@ impl HookRunner {
 
     /// Evaluate a custom route's `access` gate. The gate function receives the
     /// same [`RouteContext`](crate::hooks::lifecycle::RouteContext) as the
-    /// handler and returns truthy to allow. Runs in pool-mode so the gate may
+    /// handler and returns `true` to allow, `false`/`nil` to deny. A route has
+    /// no rows, so a filter table (the collection-access idiom) is a
+    /// configuration error, not an allow. Runs in pool-mode so the gate may
     /// read via `crap.collections.*`.
     ///
     /// # Errors
-    /// Returns an error if VM acquisition, gate resolution, or the call fails.
+    /// Returns an error if VM acquisition, gate resolution, or the call fails,
+    /// or if the gate returned a table.
     pub fn run_route_access(
         &self,
         access: &HookRef,
@@ -140,7 +143,7 @@ impl HookRunner {
         let func = resolve_hook_function(&lua, access.reference())?;
         let ret: Value = func.call(ctx_value)?;
 
-        Ok(!matches!(ret, Value::Nil | Value::Boolean(false)))
+        boolean_verdict(&ret, "custom route")
     }
 }
 

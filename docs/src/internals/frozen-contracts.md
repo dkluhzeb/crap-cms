@@ -70,12 +70,21 @@ freeze is unconditional.
   Reference is decided by the same rule that derives keys from a row
   (`upload_file_entries`) applied to the live row and to every snapshot of the
   document; there is no stored counter. Pruning a snapshot releases the files
-  it was the last reference to; purge deletes them all.
+  it was the last reference to — the release point is the settle step of the
+  write that pruned; purge deletes them all.
 - **Publishing takes the latest draft as its base.** An update with
   `draft = false` while a draft is pending merges the latest draft snapshot
   under the request's fields at the service write chokepoint, so every
   surface publishes the same thing; the request wins per field, the write
-  access strip still applies to adopted values.
+  access strip still applies to adopted values. The pending draft is one unit:
+  a publish in one locale publishes every locale's drafted values and the
+  draft's shared (non-localized) values. Unpublishing keeps the pending draft
+  as the pending draft (no new snapshot); without one it snapshots the live
+  row. Globals follow the same rule.
+- **Every version write goes through one path** (`create_version_and_prune`):
+  it locks the parent row, inserts the snapshot and prunes to `max_versions` —
+  publish, draft save, unpublish and restore alike. There is no second way to
+  write or prune a version.
 - **Timestamp write format is one ISO-8601 `…Z` shape on every backend.** Both
   the app-side clock (`utc_now()`, bound as a parameter) and the SQL "current
   time" expression (`DbConnection::now_expr()`, plus `date_offset_expr()` for job
@@ -287,6 +296,21 @@ changing a representation is a breaking change to every consumer.
   value or an out-of-`i64` integer uses `double_value`. This is the frozen shape
   for every `data` / `fields` field — do not revert it to `Struct` (that would
   re-introduce the >2^53 rounding this replaced).
+- **The soft-delete table rebuild is build-copy-drop-rename, never
+  rename-first.** With SQLite foreign keys on, renaming the live table
+  rewrites every child's `REFERENCES` clause and dropping it afterwards
+  cascades into the children. The replacement is created under
+  `_rebuild_{slug}` (`create_collection_table` takes the target *table*
+  name), filled, then the original is dropped and the replacement renamed,
+  with enforcement off for that sync and `PRAGMA foreign_key_check` before
+  commit. Postgres drops the `UNIQUE` constraints in place and never
+  rebuilds.
+- **A driver error is classified in one place, by type.** `db::constraint_kind`
+  and `db::is_transient` downcast to the driver's error (SQLite extended
+  result codes, Postgres SQLSTATE) — never to its message text, which is
+  locale-dependent on Postgres. A unique violation maps to `ALREADY_EXISTS`
+  / HTTP 409, a foreign-key violation to `FAILED_PRECONDITION` / 409, a
+  transient failure to `UNAVAILABLE` / 503, on every surface.
 - **JSON-string escape hatches are intentional and permanent** — do NOT promote
   them to typed messages: `FindRequest.where` (a JSON filter string, so new
   operators need no wire change), `FieldInfo.type` (field-type name as a free
@@ -899,9 +923,11 @@ changing a representation is a breaking change to every consumer.
   idempotent.** `max_attempts = retries + 1`.
 - **Retry backoff curve** `min(2^(attempt-1) × 5, 300)` seconds — 5,10,20,…,300 —
   hardcoded, no config knob.
-- **Cron** is UTC-only, does **not** catch up after downtime (missed runs are
+- **Cron** is UTC-only and catches up at most once after downtime — a schedule that came due while the process was down fires once on the next check, anchored on its stored last fire, never once per missed slot (missed runs beyond that are
   dropped), and coalesces multiple missed occurrences to one fire. Accepts 5-field
-  (seconds prepended) or 6/7-field (leading field = seconds) expressions.
+  (seconds prepended) or 6/7-field (leading field = seconds) expressions; weekdays
+  are crontab-numbered (`0`/`7` Sunday … `6` Saturday) and translated to the
+  scheduler library's numbering in one place; every schedule is parsed at startup.
 - **`[jobs]` / `[jobs.queues.<name>]` config keys** and the `Option<T>` tri-state
   (`None` = inherit default, `Some(0)` = operator-chosen unlimited/none) are
   frozen; `deny_unknown_fields` rejects typos. `auto_purge` defaults to 30 days;

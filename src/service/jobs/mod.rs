@@ -19,4 +19,4 @@ pub use access::readable_job_slugs;
 pub use cancel::{cancel_job_run, cancel_pending_jobs};
 pub use get_run::get_job_run;
 pub use list_runs::{ListJobRunsInput, list_job_runs};
-pub use queue::{QueueJobInput, queue_job};
+pub use queue::{QueueJobInput, conceal_denied_trigger, job_not_found, queue_job};

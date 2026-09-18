@@ -3,23 +3,22 @@
 //! is routed to the version table and leaves the published main row untouched,
 //! and a publish takes the document's pending draft as its base.
 
+use serde_json::Value;
+
 use crate::{
     config::LocaleConfig,
     db::LocaleContext,
     hooks::{HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, ServiceContext, WriteInput, WriteResult, persist_bulk_update,
-        persist_draft_version, run_after_change_hooks,
+        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
+        persist_bulk_update, persist_draft_version, run_after_change_hooks,
     },
 };
 
 use super::ServiceError;
-use super::update::reject_locale_locked_fields;
-use super::validate::canonicalize_write_input;
+use super::admit::admit_update;
 use crate::service::helpers::{hydrate_reported, strip_reported};
-use crate::service::write::{
-    adopt_pending_draft, check_update_access, stored_fields_for_update_rules,
-};
+use crate::service::write::{UploadSettle, document_file_keys, settle_upload_write};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -39,42 +38,13 @@ pub(crate) fn update_many_single_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Canonicalize + strip server-derived upload columns (the same chokepoint
-    // single create/update use) — bulk update must not be a forgery hole.
-    canonicalize_write_input(&mut input, def);
-
-    // Publishing means the same thing here as on the single-document update: a
-    // bulk write with `draft = false` takes each document's pending draft as
-    // its base and lets the request's fields win over it. Without this a bulk
-    // publish would discard exactly the drafts a single publish carries over.
-    adopt_pending_draft(ctx, def, id, &mut input)?;
-
-    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
-
-    // The one shared `update` gate (also used by single update and the
-    // update-mode dry-run) — Denied + Constrained row enforcement.
-    check_update_access(
-        ctx,
-        write_hooks,
-        def,
-        id,
-        &input.data,
-        input.locale_ctx.map(LocaleContext::access_locale),
-        input.ui_locale.as_deref(),
-    )?;
+    // The same admission as the single-document update: canonicalize, adopt
+    // the pending draft, locale lock, `update` access, write strip — a bulk
+    // publish must not be a forgery hole nor discard the drafts a single
+    // publish carries over.
+    let publishing_draft = admit_update(ctx, conn, id, &mut input)?;
 
     let is_draft = input.draft && def.has_drafts();
-
-    // Data-aware write strip (per-row `ctx.data`, stored-doc `ctx.document`).
-    let stored = stored_fields_for_update_rules(conn, ctx.slug, def, id, input.locale_ctx)?;
-    write_hooks.strip_write_access_update(
-        &def.fields,
-        &mut input.data,
-        &stored,
-        ctx.slug,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
 
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
@@ -101,14 +71,54 @@ pub(crate) fn update_many_single_in_conn(
     // A draft bulk update routes to the version table (main row untouched),
     // exactly like the single-document update path — otherwise `draft = true`
     // would silently publish the change by writing the main row.
+    let snapshot_only = is_draft && def.has_versions();
+
+    // The files the document references going in — the published row's and
+    // every version snapshot's — so the ones nothing references any more can be
+    // dropped once the write has landed. Read last, so a before-hook that
+    // rewrote the row through its own CRUD is accounted for.
+    let before_files = document_file_keys(ctx, def, id, input.locale_ctx)?;
+
     // A draft save reports its snapshot with its own rows; a published write
     // reports the stored row, hydrated BEFORE after-change hooks so they see
     // nested data.
-    let mut doc = if is_draft && def.has_versions() {
-        persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
+    let mut doc = if snapshot_only {
+        let doc = persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?;
+
+        // What can still go is a file whose last reference was a snapshot this
+        // save's pruning removed; the published row and its files are untouched.
+        settle_upload_write(
+            ctx,
+            &UploadSettle::builder(def, id)
+                .before(Some(&before_files))
+                .build(),
+        )?;
+
+        doc
     } else {
         let final_data = final_ctx.to_value_map();
-        let mut doc = persist_bulk_update(ctx, id, &final_data, input.locale_ctx, locale_config)?;
+        let opts = PersistOptions::builder()
+            .locale_ctx(input.locale_ctx)
+            .locale_config(Some(locale_config))
+            .pending_draft(publishing_draft.as_ref().and_then(Value::as_object))
+            .build();
+
+        let mut doc = persist_bulk_update(ctx, id, &final_data, &opts)?;
+
+        // The same settle the single-document update runs. A bulk publish
+        // adopted the drafted file but settled nothing, so its conversions were
+        // never queued, the previous file's were never cancelled, and the
+        // previous file was never released — and no later write could still see
+        // it, so those bytes stayed in storage forever.
+        settle_upload_write(
+            ctx,
+            &UploadSettle::builder(def, id)
+                .before(Some(&before_files))
+                .updated_row(Some(&doc.fields))
+                .conversions(input.upload_conversions.as_ref())
+                .build(),
+        )?;
+
         hydrate_reported(ctx, &mut doc, input.locale_ctx)?;
         doc
     };

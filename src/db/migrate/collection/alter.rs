@@ -1,8 +1,8 @@
 //! ALTER TABLE operations for existing collection tables.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
-use tracing::{error, info, warn};
+use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
@@ -12,7 +12,7 @@ use crate::{
         migrate::{
             helpers::{
                 ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-                get_table_columns, reconcile_scalar_list_column,
+                reconcile_scalar_list_column,
             },
             locale_change::{LocaleShape, column_plans},
         },
@@ -20,7 +20,8 @@ use crate::{
     },
 };
 
-use super::create::{append_default_value_for, create_collection_table};
+use super::create::append_default_value_for;
+use super::soft_delete::{drop_inline_unique_constraints, soft_delete_transition_pending};
 use super::system_columns::{
     AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
     VERIFY_EMAIL_COLUMNS,
@@ -254,7 +255,7 @@ fn collect_expected_column_names(
 }
 
 /// System columns that are always valid (not flagged as orphans).
-const SYSTEM_COLUMNS: &[&str] = &[
+pub(super) const SYSTEM_COLUMNS: &[&str] = &[
     "id",
     "created_at",
     "updated_at",
@@ -286,15 +287,7 @@ pub(super) fn alter_collection_table(
     let column_types = get_table_column_types(conn, slug)?;
     let existing: HashSet<String> = column_types.keys().cloned().collect();
 
-    // Detect transition: soft_delete just enabled on a table with unique fields.
-    // Walk the flattened column specs (like the create + partial-index paths) so
-    // a unique field nested in a group/row/tabs wrapper is detected — otherwise
-    // its stale inline UNIQUE survives the rebuild and blocks re-inserting a
-    // value after its row is soft-deleted.
-    let has_unique_column = collect_column_specs(&def.fields, locale_config)
-        .iter()
-        .any(|spec| spec.field.unique && !spec.companion_text);
-    let needs_rebuild = def.soft_delete && !existing.contains("_deleted_at") && has_unique_column;
+    let transition = soft_delete_transition_pending(def, &existing, locale_config);
 
     let ctx = AlterCtx {
         conn,
@@ -320,83 +313,9 @@ pub(super) fn alter_collection_table(
         }
     }
 
-    if needs_rebuild {
-        rebuild_without_inline_unique(conn, slug, def, locale_config)?;
+    if transition {
+        drop_inline_unique_constraints(conn, slug, def, locale_config)?;
     }
-
-    Ok(())
-}
-
-/// Rebuild a table to remove inline UNIQUE constraints, replacing them with
-/// partial unique indexes managed by `sync_indexes`.
-///
-/// Uses the standard `SQLite` table rebuild pattern:
-/// 1. Get column list from old table
-/// 2. Rename old table to a temp name
-/// 3. Create new table via `create_collection_table` (no inline UNIQUE for soft-delete)
-/// 4. Copy data from temp to new table
-/// 5. Drop temp table
-fn rebuild_without_inline_unique(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    info!(
-        "Rebuilding table '{}' to remove inline UNIQUE constraints (soft_delete transition)",
-        slug
-    );
-
-    let old_cols = get_table_columns(conn, slug)?;
-    let temp = format!("_rebuild_{slug}");
-
-    conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" RENAME TO \"{temp}\""))?;
-
-    create_collection_table(conn, slug, def, locale_config)?;
-
-    // Re-add orphan columns (data from previously-removed fields) to the new
-    // table before copying: the normal alter path preserves them (warns, never
-    // drops), so the rebuild must not silently destroy their data either. Their
-    // original type is unused (no field references them), so TEXT is fine.
-    let fresh_cols = get_table_columns(conn, slug)?;
-    let system: HashSet<&str> = SYSTEM_COLUMNS.iter().copied().collect();
-    for col in old_cols.difference(&fresh_cols) {
-        if system.contains(col.as_str()) {
-            continue;
-        }
-        conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" ADD COLUMN \"{col}\" TEXT"))?;
-    }
-
-    let new_cols = get_table_columns(conn, slug)?;
-
-    // Copy only columns that exist in both tables
-    let common: Vec<&String> = old_cols.intersection(&new_cols).collect();
-    let col_list = common
-        .iter()
-        .map(|c| c.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let copy_result = conn.execute(
-        &format!("INSERT INTO \"{slug}\" ({col_list}) SELECT {col_list} FROM \"{temp}\""),
-        &[],
-    );
-
-    if let Err(e) = copy_result {
-        // Recovery: drop the empty new table and restore the old one
-        error!(
-            "Failed to copy data during rebuild of '{}', attempting recovery: {}",
-            slug, e
-        );
-        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{slug}\""));
-        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{temp}\" RENAME TO \"{slug}\""));
-
-        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{slug}'"));
-    }
-
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{temp}\""))?;
-
-    info!("Table '{}' rebuilt successfully", slug);
 
     Ok(())
 }
@@ -407,6 +326,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::DbValue;
+    use crate::db::migrate::collection::create::create_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
     use crate::db::query::helpers::column_value;
@@ -913,193 +833,6 @@ mod tests {
     }
 
     #[test]
-    fn alter_rebuilds_table_to_remove_inline_unique_on_soft_delete_transition() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        // Create collection WITHOUT soft_delete — unique fields get inline UNIQUE
-        let def1 = simple_collection(
-            "posts",
-            vec![
-                FieldDefinition::builder("slug", FieldType::Text)
-                    .unique(true)
-                    .build(),
-                text_field("title"),
-            ],
-        );
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
-
-        // Insert a row to verify data survives rebuild
-        conn.execute(
-            "INSERT INTO posts (id, slug, title) VALUES ('a', 'hello', 'Hello World')",
-            &[],
-        )
-        .unwrap();
-
-        // Enable soft_delete — should rebuild the table to remove inline UNIQUE
-        let mut def2 = simple_collection(
-            "posts",
-            vec![
-                FieldDefinition::builder("slug", FieldType::Text)
-                    .unique(true)
-                    .build(),
-                text_field("title"),
-            ],
-        );
-        def2.soft_delete = true;
-        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
-
-        // Verify data survived
-        let row = conn
-            .query_one(
-                "SELECT title FROM posts WHERE id = ?1",
-                &[DbValue::Text("a".into())],
-            )
-            .unwrap();
-        assert!(row.is_some(), "Data should survive table rebuild");
-
-        // Verify inline UNIQUE is gone: soft-delete a row, then insert duplicate slug
-        conn.execute(
-            "UPDATE posts SET _deleted_at = '2025-01-01' WHERE id = 'a'",
-            &[],
-        )
-        .unwrap();
-
-        let result = conn.execute(
-            "INSERT INTO posts (id, slug, title) VALUES ('b', 'hello', 'Hello Again')",
-            &[],
-        );
-        assert!(
-            result.is_ok(),
-            "Inline UNIQUE should be removed — duplicate slug allowed when one row is soft-deleted"
-        );
-    }
-
-    /// Regression: a unique field NESTED in a group (column `seo__slug`) also
-    /// gets an inline UNIQUE at create time, but the soft-delete rebuild trigger
-    /// only inspected top-level `def.fields` — the group wrapper is not itself
-    /// `unique`, so the rebuild was skipped and the stale inline UNIQUE survived,
-    /// blocking re-insert after soft-delete. The trigger now walks the flattened
-    /// column specs.
-    #[test]
-    fn alter_rebuilds_for_unique_field_nested_in_group_on_soft_delete_transition() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        let group = || {
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("slug", FieldType::Text)
-                        .unique(true)
-                        .build(),
-                ])
-                .build()
-        };
-
-        let def1 = simple_collection("posts", vec![group(), text_field("title")]);
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
-
-        conn.execute(
-            "INSERT INTO posts (id, seo__slug, title) VALUES ('a', 'hello', 'Hello')",
-            &[],
-        )
-        .unwrap();
-
-        let mut def2 = simple_collection("posts", vec![group(), text_field("title")]);
-        def2.soft_delete = true;
-        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
-
-        // Soft-delete the row, then re-insert the same nested-unique value.
-        conn.execute(
-            "UPDATE posts SET _deleted_at = '2025-01-01' WHERE id = 'a'",
-            &[],
-        )
-        .unwrap();
-
-        let result = conn.execute(
-            "INSERT INTO posts (id, seo__slug, title) VALUES ('b', 'hello', 'Again')",
-            &[],
-        );
-        assert!(
-            result.is_ok(),
-            "inline UNIQUE on the nested `seo__slug` must be removed on the soft-delete transition"
-        );
-    }
-
-    /// Regression: the soft-delete rebuild copied only the intersection of old
-    /// and new columns, silently dropping orphan-column data (from a
-    /// previously-removed field) — while the normal alter path preserves orphan
-    /// columns (warns, never drops). The rebuild now re-adds orphan columns
-    /// before copying so their data survives.
-    #[test]
-    fn rebuild_preserves_orphan_column_data() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        // Table with a unique field (so the rebuild fires) plus a field that
-        // will be removed from the definition (becoming an orphan column).
-        let def1 = simple_collection(
-            "posts",
-            vec![
-                FieldDefinition::builder("slug", FieldType::Text)
-                    .unique(true)
-                    .build(),
-                text_field("legacy_note"),
-            ],
-        );
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
-        conn.execute(
-            "INSERT INTO posts (id, slug, legacy_note) VALUES ('a', 's', 'keep me')",
-            &[],
-        )
-        .unwrap();
-
-        // Remove `legacy_note` from the def AND enable soft_delete → rebuild.
-        let mut def2 = simple_collection(
-            "posts",
-            vec![
-                FieldDefinition::builder("slug", FieldType::Text)
-                    .unique(true)
-                    .build(),
-            ],
-        );
-        def2.soft_delete = true;
-        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
-
-        // The orphan column and its data must survive the rebuild.
-        let row = conn
-            .query_one(
-                "SELECT legacy_note FROM posts WHERE id = ?1",
-                &[DbValue::Text("a".into())],
-            )
-            .unwrap()
-            .expect("row survives rebuild");
-        assert_eq!(
-            row.get_opt_string("legacy_note").unwrap().as_deref(),
-            Some("keep me"),
-            "orphan-column data must not be dropped by the soft-delete rebuild"
-        );
-    }
-
-    #[test]
-    fn alter_does_not_rebuild_without_unique_fields() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        // Create collection without unique fields
-        let def1 = simple_collection("posts", vec![text_field("title")]);
-        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
-
-        // Enable soft_delete — no rebuild needed (no unique fields)
-        let mut def2 = simple_collection("posts", vec![text_field("title")]);
-        def2.soft_delete = true;
-        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("_deleted_at"));
-    }
-
-    #[test]
     fn alter_does_not_add_deleted_at_without_soft_delete() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
@@ -1138,58 +871,6 @@ mod tests {
             cols.contains("starts_at_tz"),
             "should add companion timezone column"
         );
-    }
-
-    /// Regression: `rebuild_without_inline_unique` must restore the original table
-    /// when the INSERT-SELECT copy step fails, not leave the database with an
-    /// empty new table and orphaned temp table.
-    #[test]
-    fn rebuild_recovers_original_table_on_copy_failure() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-
-        // Create a table with a unique constraint (simulates pre-soft_delete state)
-        conn.execute(
-            "CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT UNIQUE, created_at TEXT, updated_at TEXT, _ref_count INTEGER DEFAULT 0)",
-            &[],
-        )
-        .unwrap();
-
-        // Insert some data
-        conn.execute(
-            "INSERT INTO items (id, title) VALUES ('1', 'Hello'), ('2', 'World')",
-            &[],
-        )
-        .unwrap();
-
-        // Build a def that would produce a table with an incompatible column type
-        // (NOT NULL without default) to make the INSERT-SELECT fail
-        let mut def = simple_collection("items", vec![text_field("title")]);
-        def.soft_delete = true;
-
-        // Manually trigger the rebuild with a scenario that fails during copy:
-        // rename items → _rebuild_items, create new "items" with extra required column,
-        // then copy fails because columns don't match.
-        //
-        // We can't easily force a copy failure through the public API because
-        // create_collection_table produces compatible schemas. Instead, verify that
-        // the function succeeds when given a valid def and data is preserved.
-        rebuild_without_inline_unique(&conn, "items", &def, &no_locale()).unwrap();
-
-        // Verify data was preserved through the rebuild
-        let rows = conn
-            .query_all("SELECT id, title FROM items ORDER BY id", &[])
-            .unwrap();
-        assert_eq!(rows.len(), 2, "both rows should survive rebuild");
-
-        // Verify the temp table was cleaned up
-        let temp_exists = conn
-            .query_one(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='_rebuild_items'",
-                &[],
-            )
-            .unwrap();
-        assert!(temp_exists.is_none(), "temp table should be dropped");
     }
 
     /// Regression: locale-suffixed columns (e.g., `title__en`) must be recognized

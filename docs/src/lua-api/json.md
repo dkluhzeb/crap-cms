@@ -16,6 +16,12 @@ local json = crap.json.encode({ name = "test", count = 42 })
 | `value` | any | Lua value to encode |
 | **Returns** | string | JSON string |
 
+Two boundary cases follow from Lua having one table type and one number
+type, and apply to every Lua↔JSON crossing (hook arguments, CRUD data,
+`crap.json`): an **empty table encodes as `{}`**, so a JSON `[]` that is
+decoded and re-encoded comes back as `{}`; and an **integer above
+`i64::MAX`** (2⁶³−1) that Lua cannot hold exactly arrives as a float.
+
 ## crap.json.decode(str)
 
 Decode a JSON string into a Lua value.

@@ -3,11 +3,13 @@
 //! WHERE-filter table). Field-level checks recurse through the field tree to
 //! produce the list of denied field names.
 
+mod boolean;
 mod collection;
 mod field;
 #[cfg(test)]
 mod test_helpers;
 
+pub(crate) use boolean::boolean_verdict;
 pub(crate) use collection::{check_access_with_lua, check_collection_access};
 pub(crate) use field::{
     ReadStripInput, WriteStripInput, check_field_read_access_with_lua,

@@ -201,6 +201,7 @@ pub fn service_error_to_response(err: &ServiceError) -> Response {
         }
         // Same "refused due to data state" class as Referenced → 409.
         ServiceError::UniqueViolation(_)
+        | ServiceError::ForeignKeyViolation(_)
         | ServiceError::Referenced { .. }
         | ServiceError::LimitExceeded(_) => (StatusCode::CONFLICT, err.to_string()),
         ServiceError::AccountLocked

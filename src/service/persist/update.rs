@@ -3,7 +3,6 @@
 use anyhow::Result;
 
 use crate::{
-    config::LocaleConfig,
     core::{CollectionDefinition, Document, DocumentFields, collection::Auth},
     db::{DbConnection, LocaleContext, query},
     service::{PersistOptions, ServiceContext, versions, write::reject_locale_locked_fields},
@@ -58,10 +57,22 @@ pub fn persist_update(
     reject_locale_locked_fields(&def.fields, data, opts.locale_ctx)?;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
-    let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
+
+    // A publish makes the WHOLE pending draft live. `data` already carries the
+    // draft's values for the locale this write targets; what only a per-locale
+    // write-back can put on the row is the draft's OTHER translations and the
+    // shared values a default-locale draft save recorded. Without localization
+    // there are no other locales and no shared/localized split, so the merged
+    // data IS the whole draft and the write-back is skipped.
+    let publish_draft = opts.pending_draft.filter(|_| locale_cfg.is_enabled());
 
     // Only snapshot + adjust ref counts when the write data actually changes
-    // relationship fields. Skipping saves ~10 queries for non-ref updates.
+    // relationship fields. Skipping saves ~10 queries for non-ref updates. A
+    // draft write-back always counts: it moves relationships of its own, and
+    // must land inside the same bracket or its delta is never applied.
+    let touches_refs =
+        publish_draft.is_some() || query::ref_count::data_touches_refs(&def.fields, data, "");
+
     let old_refs = if touches_refs {
         // Lock the document row BEFORE the (unlocked) outgoing-ref snapshot so a
         // concurrent update to the same document can't read a stale `old_refs`
@@ -84,8 +95,13 @@ pub fn persist_update(
         None
     };
 
-    // Detected BEFORE the UPDATE — afterwards the stored address is the new one.
+    // Detected BEFORE anything writes the row — afterwards the stored address
+    // is the new one, including when the draft write-back below carries it.
     let new_email = changed_email(conn, def, slug, id, data, opts.locale_ctx);
+
+    if let Some(pending) = publish_draft {
+        query::write_snapshot_base(conn, slug, def, id, pending, &locale_cfg)?;
+    }
 
     let doc = query::update(conn, slug, def, id, data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
@@ -129,20 +145,36 @@ pub fn persist_update(
 ///
 /// Handles: partial update -> join data -> ref count adjustment -> FTS sync -> version snapshot.
 /// Used by both gRPC `UpdateMany` and Lua `update_many` to avoid duplicating per-doc persistence logic.
+///
+/// Takes the same [`PersistOptions`] as the single-document path, so a
+/// publishing bulk write makes the pending draft live the same way — including
+/// the locales the request does not target.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table writes, or version
+/// snapshot creation fails.
 pub(crate) fn persist_bulk_update(
     ctx: &ServiceContext,
     id: &str,
     data: &DocumentFields,
-    locale_ctx: Option<&LocaleContext>,
-    locale_config: &LocaleConfig,
+    opts: &PersistOptions<'_>,
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    reject_locale_locked_fields(&def.fields, data, locale_ctx)?;
+    reject_locale_locked_fields(&def.fields, data, opts.locale_ctx)?;
 
-    let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
+    let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
+
+    // See `persist_update`: a publish makes the whole pending draft live, and
+    // the write-back that carries its other locales has to sit inside the
+    // ref-count bracket below.
+    let publish_draft = opts.pending_draft.filter(|_| locale_cfg.is_enabled());
+
+    let touches_refs =
+        publish_draft.is_some() || query::ref_count::data_touches_refs(&def.fields, data, "");
 
     let old_refs = if touches_refs {
         // Same row lock as the single-document path: the outgoing-ref snapshot
@@ -150,22 +182,26 @@ pub(crate) fn persist_bulk_update(
         // would otherwise both read the stale `old_refs` and double-apply.
         conn.lock_row(ctx.slug, id)?;
 
-        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, locale_config)?;
+        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
 
         Some(query::ref_count::snapshot_outgoing_refs(
             conn,
             ctx.slug,
             id,
             &def.fields,
-            locale_config,
+            &locale_cfg,
         )?)
     } else {
         None
     };
 
-    let updated = query::update_partial(conn, ctx.slug, def, id, data, locale_ctx)?;
+    if let Some(pending) = publish_draft {
+        query::write_snapshot_base(conn, ctx.slug, def, id, pending, &locale_cfg)?;
+    }
 
-    query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, locale_ctx)?;
+    let updated = query::update_partial(conn, ctx.slug, def, id, data, opts.locale_ctx)?;
+
+    query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, opts.locale_ctx)?;
 
     if def.has_versions() {
         // The locale config is what makes the snapshot record EVERY locale's
@@ -176,18 +212,18 @@ pub(crate) fn persist_bulk_update(
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
-            .locale_config(Some(locale_config))
+            .locale_config(Some(&locale_cfg))
             .build();
         versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)?;
     }
 
     if conn.supports_fts() {
-        query::fts::fts_upsert(conn, ctx.slug, id, def, locale_config)?;
+        query::fts::fts_upsert(conn, ctx.slug, id, def, &locale_cfg)?;
     }
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
     if let Some(old_refs) = old_refs {
-        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, &old_refs)?;
+        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, &locale_cfg, &old_refs)?;
     }
 
     Ok(updated)

@@ -11,7 +11,7 @@ use crate::{
     db::{
         LocaleContext,
         query::{
-            helpers::{locale_column, prefixed_name, sql_ident, walk_leaf_fields},
+            helpers::{locale_column, prefixed_name, quote_ident, walk_leaf_fields},
             is_valid_identifier, localized_join_keys,
         },
     },
@@ -72,7 +72,7 @@ pub(crate) fn column_read_expr(
         .filter(|ctx| ctx.config.is_enabled() && column_is_localized(column, fields) == Some(true));
 
     let Some(ctx) = localized else {
-        return Ok(sql_ident(column).into_owned());
+        return Ok(quote_ident(column));
     };
 
     ctx.rows_read_locale().column_expr(column)
@@ -180,9 +180,11 @@ mod tests {
     }
 
     /// The default locale has nothing to fall back to, and a shared column has
-    /// no locale at all.
+    /// no locale at all — but every form is quoted, so a field named after a
+    /// SQL keyword compares against the column rather than against whatever
+    /// Postgres makes of the bare word.
     #[test]
-    fn the_default_locale_and_shared_columns_read_a_plain_column() {
+    fn the_default_locale_and_shared_columns_read_a_single_quoted_column() {
         let fields = title_fields();
         let default_ctx = ctx(LocaleMode::Default);
 
@@ -192,9 +194,12 @@ mod tests {
         );
         assert_eq!(
             column_read_expr("slug", &fields, Some(&default_ctx)).unwrap(),
-            "slug"
+            "\"slug\""
         );
-        assert_eq!(column_read_expr("title", &fields, None).unwrap(), "title");
+        assert_eq!(
+            column_read_expr("title", &fields, None).unwrap(),
+            "\"title\""
+        );
     }
 
     /// An all-locales read has no single column to compare against, so it

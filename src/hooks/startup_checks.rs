@@ -14,6 +14,11 @@
 //! `[admin] access` config gate. Only dynamic registrations (via
 //! `crap.hooks.register`, which passes a live function rather than a
 //! string ref) have nothing to validate here.
+//!
+//! The module also hosts the other whole-registry boot gates that fail the
+//! server rather than strand a definition at runtime — locale/field-name
+//! collisions, table-name collisions, auth-method shape, and job cron
+//! schedules.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -34,6 +39,7 @@ use crate::db::query::helpers::{
 };
 use crate::hooks::lifecycle::resolve_hook_function;
 use crate::hooks::lua_api::routes::ROUTES_KEY;
+use crate::scheduler::parse_cron;
 use crate::service::op::wire::{self, WireSurfaces};
 
 /// Validate every statically-known hook and access reference in the registry.
@@ -256,6 +262,42 @@ fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// Validate every job's cron `schedule`.
+///
+/// An unparseable expression is a boot failure, not a runtime warning: the
+/// scheduler can only skip such a job, which looks identical to a job that
+/// simply has not come due yet, so the typo would hide for as long as the
+/// deployment runs.
+///
+/// # Errors
+///
+/// Returns an aggregated error naming every job whose schedule does not parse.
+pub fn validate_job_schedules(registry: &Registry) -> Result<()> {
+    let mut errors: Vec<String> = Vec::new();
+
+    for (slug, def) in &registry.jobs {
+        let Some(schedule) = def.schedule.as_deref() else {
+            continue;
+        };
+
+        if let Err(e) = parse_cron(schedule) {
+            errors.push(format!("job '{slug}': schedule '{schedule}': {e}"));
+        }
+    }
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "Invalid cron schedule(s):\n  - {}\n\n\
+         Schedules use standard crontab syntax: 5 fields (minute hour day-of-month \
+         month day-of-week), or 6 with a leading seconds field. Day-of-week is 0-6 \
+         with Sunday = 0 (7 also means Sunday); names such as MON-FRI also work.",
+        errors.join("\n  - ")
+    );
 }
 
 /// Validate per-collection `auth.methods` configurations.
@@ -1082,6 +1124,46 @@ mod tests {
         assert!(msg.contains("job 'cleanup'"), "expected job slug: {msg}");
         assert!(msg.contains("handler"), "expected kind: {msg}");
         assert!(msg.contains("jobs.cleanup.runn"), "expected ref: {msg}");
+    }
+
+    /// Regression: an unparseable `schedule` used to be a per-tick `warn!`
+    /// only — the job silently never ran for the life of the deployment.
+    #[test]
+    fn validate_job_schedules_rejects_an_unparseable_expression() {
+        let registry = Registry::shared();
+        registry.write().unwrap().register_job(
+            JobDefinition::builder("digest", "jobs.digest.run")
+                .schedule("every monday")
+                .build(),
+        );
+
+        let err = validate_job_schedules(&registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("job 'digest'"), "expected job slug: {msg}");
+        assert!(msg.contains("every monday"), "expected expression: {msg}");
+    }
+
+    /// Crontab spellings the raw `cron` crate rejects — Sunday as `0` — must
+    /// pass the boot gate, and a job without a schedule is never checked.
+    #[test]
+    fn validate_job_schedules_accepts_crontab_syntax() {
+        let registry = Registry::shared();
+        {
+            let mut w = registry.write().unwrap();
+            w.register_job(
+                JobDefinition::builder("weekly", "jobs.weekly.run")
+                    .schedule("0 3 * * 0")
+                    .build(),
+            );
+            w.register_job(
+                JobDefinition::builder("workdays", "jobs.workdays.run")
+                    .schedule("0 8 * * MON-FRI")
+                    .build(),
+            );
+            w.register_job(JobDefinition::builder("manual", "jobs.manual.run").build());
+        }
+
+        validate_job_schedules(&registry.read().unwrap()).expect("crontab schedules must parse");
     }
 
     /// A job access ref that does not resolve is reported too.

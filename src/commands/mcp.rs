@@ -36,6 +36,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Use stderr for logging since stdout is the MCP transport
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    cfg.apply()?;
     let _instance_lock = hold_instance_lock(&config_dir)?;
 
     if let Some(warning) = cfg.check_version() {

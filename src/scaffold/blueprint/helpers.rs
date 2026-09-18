@@ -1,11 +1,16 @@
 //! Shared helpers for blueprint operations -- filesystem, validation, paths.
 
+#[cfg(test)]
+use std::env;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, anyhow, bail};
+
+#[cfg(test)]
+use crate::test_support::env_lock;
 
 /// Files and directories to skip when saving a blueprint (runtime artifacts).
 pub(super) const BLUEPRINT_SKIP: &[&str] = &["data", "uploads", "types"];
@@ -78,28 +83,32 @@ pub(super) fn validate_blueprint_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Mutex to serialize tests that mutate `XDG_CONFIG_HOME`.
-#[cfg(test)]
-pub(super) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Run a closure with `XDG_CONFIG_HOME` set to a temp path, then restore the original value.
+/// Run a closure with `XDG_CONFIG_HOME` set to a temp path, then restore the
+/// original value.
+///
+/// The crate-wide environment lock is held for the whole call: the variable is
+/// process-wide state, and a concurrent set/read from another test thread is a
+/// data race.
 #[cfg(test)]
 pub(super) fn with_temp_config_dir<F>(f: F)
 where
     F: FnOnce(&Path),
 {
-    let _guard = ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let orig = std::env::var("XDG_CONFIG_HOME").ok();
+    let _guard = env_lock();
 
-    unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let orig = env::var("XDG_CONFIG_HOME").ok();
+
+    // SAFETY: the environment lock is held for the whole body, so no other
+    // test thread reads or writes the environment meanwhile.
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
     f(tmp.path());
 
     match orig {
-        Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-        None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        // SAFETY: as above — the environment lock is still held.
+        Some(v) => unsafe { env::set_var("XDG_CONFIG_HOME", v) },
+        None => unsafe { env::remove_var("XDG_CONFIG_HOME") },
     }
 }
 

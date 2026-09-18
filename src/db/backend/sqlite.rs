@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{
     core::FieldType,
     db::{
-        DbConnection, DbRow, DbValue,
+        DbConnection, DbRow, DbValue, UpsertSpec,
         connection::{ConnectionInner, TransactionInner},
         query::is_valid_identifier,
     },
@@ -160,7 +160,15 @@ fn sqlite_build_insert_ignore(table: &str, columns: &str, values: &str) -> Strin
     format!("INSERT OR IGNORE INTO \"{table}\" ({columns}) VALUES ({values})")
 }
 
-fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
+fn sqlite_build_upsert(spec: &UpsertSpec<'_>) -> String {
+    let UpsertSpec {
+        table,
+        columns,
+        values,
+        key_col,
+        guard,
+    } = *spec;
+
     let cols = columns
         .iter()
         .map(|c| format!("\"{c}\""))
@@ -189,9 +197,11 @@ fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &st
         );
     }
 
+    let guard = guard.map_or_else(String::new, |g| format!(" WHERE {g}"));
+
     format!(
         "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
-         ON CONFLICT(\"{key_col}\") DO UPDATE SET {updates}"
+         ON CONFLICT(\"{key_col}\") DO UPDATE SET {updates}{guard}"
     )
 }
 
@@ -270,14 +280,8 @@ macro_rules! sqlite_shared_methods {
             sqlite_build_insert_ignore(table, columns, values)
         }
 
-        fn build_upsert(
-            &self,
-            table: &str,
-            columns: &[&str],
-            values: &str,
-            key_col: &str,
-        ) -> String {
-            sqlite_build_upsert(table, columns, values, key_col)
+        fn build_upsert(&self, spec: &UpsertSpec<'_>) -> String {
+            sqlite_build_upsert(spec)
         }
 
         fn supports_fts(&self) -> bool {
@@ -324,7 +328,16 @@ macro_rules! sqlite_ufcs_query_methods {
             let refs: Vec<&dyn rusqlite::types::ToSql> =
                 rusqlite_params.iter().map(|b| b.as_ref()).collect();
 
-            let count = rusqlite::Connection::execute(inner, sql, refs.as_slice())
+            // `prepare_cached`, like the read methods: `Connection::execute`
+            // prepares from scratch every call, and re-running
+            // `sqlite3_prepare_v2` takes SQLite's globally-locked allocator —
+            // the contention the `stmt_cache_capacity` knob exists to avoid.
+            // A statement that returns rows is rejected by `Statement::execute`
+            // on either path, so no read reaches here (`RETURNING` goes through
+            // `query_one`).
+            let count = rusqlite::Connection::prepare_cached(inner, sql)
+                .with_context(|| format!("prepare failed: {sql}"))?
+                .execute(refs.as_slice())
                 .with_context(|| format!("execute failed: {sql}"))?;
 
             Ok(count)
@@ -462,89 +475,7 @@ impl ConnectionInner for SqliteConnection {
 }
 
 impl DbConnection for SqliteConnection {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-        let count = self
-            .inner
-            .execute(sql, refs.as_slice())
-            .with_context(|| format!("execute failed: {sql}"))?;
-
-        Ok(count)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        self.inner
-            .execute_batch(sql)
-            .with_context(|| format!("execute_batch failed: {sql}"))?;
-
-        Ok(())
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-
-        let mut stmt = self
-            .inner
-            .prepare_cached(sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        let mut result = Vec::new();
-
-        for row in rows {
-            result.push(row.context("failed to read row")?);
-        }
-
-        Ok(result)
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-
-        let mut stmt = self
-            .inner
-            .prepare_cached(sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let mut rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        match rows.next() {
-            Some(row) => Ok(Some(row.context("failed to read row")?)),
-            None => Ok(None),
-        }
-    }
-
+    sqlite_ufcs_query_methods!(|s| &*s.inner);
     sqlite_shared_methods!();
 }
 
@@ -725,6 +656,56 @@ mod tests {
         assert_eq!(rows[0].get_i64("n").unwrap(), 42);
     }
 
+    /// `execute` runs through the prepared-statement cache, so the same SQL
+    /// string is re-bound rather than re-prepared. A cached statement must
+    /// reset between calls: each run has to see its own parameters and report
+    /// its own affected-row count, and it has to survive a schema change to the
+    /// table it touches (an `ALTER TABLE` between two runs of one statement).
+    #[test]
+    fn cached_execute_rebinds_params_and_survives_a_schema_change() {
+        let (_dir, conn) = temp_conn();
+        conn.execute_batch(
+            "CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER);
+             INSERT INTO t (id, n) VALUES ('a', 1), ('b', 1), ('c', 1);",
+        )
+        .unwrap();
+
+        const UPDATE: &str = "UPDATE t SET n = ?2 WHERE id = ?1";
+
+        for (id, n) in [("a", 10), ("b", 20)] {
+            let affected = conn
+                .execute(
+                    UPDATE,
+                    &[DbValue::Text(id.into()), DbValue::Integer(i64::from(n))],
+                )
+                .unwrap();
+            assert_eq!(affected, 1, "each run of the cached statement hits one row");
+        }
+
+        let affected = conn
+            .execute(
+                UPDATE,
+                &[DbValue::Text("missing".into()), DbValue::Integer(0)],
+            )
+            .unwrap();
+        assert_eq!(affected, 0, "a non-matching run must report zero, not one");
+
+        // A cached statement whose table changed shape must re-prepare rather
+        // than fail or write against the old column layout.
+        conn.execute_ddl("ALTER TABLE t ADD COLUMN extra TEXT", &[])
+            .unwrap();
+        let affected = conn
+            .execute(UPDATE, &[DbValue::Text("c".into()), DbValue::Integer(30)])
+            .unwrap();
+        assert_eq!(affected, 1, "the statement must survive the ALTER TABLE");
+
+        let rows = conn
+            .query_all("SELECT id, n FROM t ORDER BY id", &[])
+            .unwrap();
+        let values: Vec<i64> = rows.iter().map(|r| r.get_i64("n").unwrap()).collect();
+        assert_eq!(values, vec![10, 20, 30]);
+    }
+
     #[test]
     fn query_one_returns_none_for_empty() {
         let (_dir, conn) = temp_conn();
@@ -886,11 +867,60 @@ mod tests {
         // a re-import). `ON CONFLICT … DO UPDATE SET` for the non-key columns
         // preserves unlisted columns, matching Postgres.
         let (_dir, conn) = temp_conn();
+        let spec = UpsertSpec::builder("t", "id")
+            .columns(&["id", "name"], "?1, ?2")
+            .build();
+
         assert_eq!(
-            conn.build_upsert("t", &["id", "name"], "?1, ?2", "id"),
+            conn.build_upsert(&spec),
             "INSERT INTO \"t\" (\"id\", \"name\") VALUES (?1, ?2) \
              ON CONFLICT(\"id\") DO UPDATE SET \"name\" = excluded.\"name\""
         );
+    }
+
+    /// A guarded upsert is a claim: it inserts when the row is absent and
+    /// overwrites only where the stored row still satisfies the predicate.
+    /// Running it proves `SQLite` accepts the table-qualified guard and reports
+    /// the affected-row count the caller reads the outcome from.
+    #[test]
+    fn a_guarded_upsert_claims_once_per_window() {
+        let (_dir, conn) = temp_conn();
+        conn.execute_batch("CREATE TABLE t (slug TEXT PRIMARY KEY, fired_at TEXT)")
+            .unwrap();
+
+        let spec = UpsertSpec::builder("t", "slug")
+            .columns(&["slug", "fired_at"], "?1, ?2")
+            .guard("t.fired_at <= ?3")
+            .build();
+        let sql = conn.build_upsert(&spec);
+
+        let claim = |fired_at: &str, window_start: &str| {
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text("cleanup".into()),
+                    DbValue::Text(fired_at.to_string()),
+                    DbValue::Text(window_start.to_string()),
+                ],
+            )
+            .unwrap()
+        };
+
+        assert_eq!(claim("00:05", "00:00"), 1, "the absent row is inserted");
+        assert_eq!(
+            claim("00:06", "00:00"),
+            0,
+            "a stored fire after the window start blocks the update half"
+        );
+        assert_eq!(claim("00:15", "00:10"), 1, "a later window claims again");
+
+        let stored = conn
+            .query_one("SELECT fired_at FROM t WHERE slug = 'cleanup'", &[])
+            .unwrap()
+            .unwrap()
+            .get_string("fired_at")
+            .unwrap();
+        assert_eq!(stored, "00:15");
     }
 
     #[test]

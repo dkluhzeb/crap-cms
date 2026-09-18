@@ -546,7 +546,7 @@ crap-cms make job [SLUG] [-s <SCHEDULE>] [-q <QUEUE>] [-r <RETRIES>] [-t <TIMEOU
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--schedule` | `-s` | — | Cron expression (e.g., `"0 3 * * *"`) |
+| `--schedule` | `-s` | — | Cron expression (e.g., `"0 3 * * *"`); day-of-week is crontab-numbered (`0`/`7` Sunday … `6` Saturday) |
 | `--queue` | `-q` | `default` | Queue name |
 | `--retries` | `-r` | *(queue default)* | Max retry attempts. Omit to let the job inherit `[jobs.queues.<queue>] retries` at runtime; pass an explicit value (including `0`) to write a fixed `retries` into the generated Lua |
 | `--timeout` | `-t` | 60 | Timeout in seconds |

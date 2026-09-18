@@ -35,6 +35,13 @@ fn make_def() -> CollectionDefinition {
                 ..Default::default()
             })
             .build(),
+        FieldDefinition::builder("approved", FieldType::Checkbox)
+            .access(FieldAccess {
+                update: Some(HookRef::new("access.owner_only")),
+                ..Default::default()
+            })
+            .build(),
+        FieldDefinition::builder("note", FieldType::Text).build(),
     ];
     def
 }
@@ -81,7 +88,11 @@ fn fields(pairs: &[(&str, Value)]) -> DocumentFields {
 
 fn seed(h: &Harness, owner: &str, salary: i64) -> String {
     let conn = h.pool.get().unwrap();
-    let data = fields(&[("owner", json!(owner)), ("salary", json!(salary))]);
+    let data = fields(&[
+        ("owner", json!(owner)),
+        ("salary", json!(salary)),
+        ("approved", json!(true)),
+    ]);
 
     query::create(&conn, "payroll", &h.def, &data, None)
         .expect("seed")
@@ -95,6 +106,32 @@ fn salary(h: &Harness, id: &str) -> Option<f64> {
     query::find_by_id(&conn, "payroll", &h.def, id, None)
         .unwrap()
         .and_then(|d| d.fields.get("salary").and_then(Value::as_f64))
+}
+
+fn approved(h: &Harness, id: &str) -> Option<bool> {
+    let conn = h.pool.get().unwrap();
+
+    query::find_by_id(&conn, "payroll", &h.def, id, None)
+        .unwrap()
+        .and_then(|d| d.fields.get("approved").and_then(Value::as_i64))
+        .map(|stored| stored == 1)
+}
+
+/// A checkbox absent from an update is stored as unchecked, so stripping a
+/// write-denied checkbox used to flip it to `false` — the denied caller
+/// changed the field after all. The strip puts the stored value back.
+#[test]
+fn a_write_denied_checkbox_keeps_its_stored_value() {
+    let h = setup();
+    let id = seed(&h, "alice", 100);
+
+    update_as(&h, &user("bob"), &id, &[("note", json!("bob was here"))]);
+
+    assert_eq!(
+        approved(&h, &id),
+        Some(true),
+        "bob may not write `approved`"
+    );
 }
 
 fn update_as(h: &Harness, who: &Document, id: &str, pairs: &[(&str, Value)]) {

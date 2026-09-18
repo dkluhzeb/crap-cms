@@ -11,6 +11,6 @@ mod write_base;
 #[cfg(test)]
 mod test_support;
 
-pub use collection::restore_version;
-pub use global::restore_global_version;
+pub use collection::{restore_version, write_snapshot_base};
+pub use global::{restore_global_version, write_global_snapshot_base};
 pub use write_base::snapshot_write_fields;

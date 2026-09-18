@@ -25,6 +25,6 @@ The following string values are treated as `true`: `"on"`, `"true"`, `"1"`, `"ye
 
 ## Special Behavior
 
-- Absent checkboxes are always treated as `false` (not as a missing/required field)
+- Absent checkboxes are always treated as `false` (not as a missing/required field). A checkbox the caller may not write (`access.update` denies it) is the exception: it keeps its stored value instead of being read as unchecked
 - The `required` property is effectively ignored for checkboxes — an unchecked checkbox is always valid
 - Default value is `0` at the database level

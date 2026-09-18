@@ -1389,6 +1389,32 @@ value, or relax `[auth.password_policy]` for that environment.
 (`crap-cms import --include-credentials` carries password *hashes*, not
 plaintext, so imports are unaffected.)
 
+### 47b. Route authors: a custom route's `access` rule must return a boolean
+
+A rule that returned a row-filter table (what collection access rules return)
+was treated as "allow" for every caller. It is now a hook error, as it already
+was for custom pages and version gates.
+
+Any other non-boolean return (`1`, a string) used to allow too; it now denies
+with a warning.
+
+**Action:** return `true`/`false` from a route `access` rule; use the request
+context to decide, not a filter table.
+
+### 47a. Job authors: cron schedules count days of the week the crontab way
+
+The scheduler's cron library numbers Sunday as 1 and Monday as 2, and nothing
+translated, so a numeric weekday fired a day early and the standard Sunday
+spelling `0` never parsed. Schedules now use crontab numbering: `0` (or `7`)
+is Sunday, `1` Monday … `6` Saturday, in single values, lists, ranges and
+steps; names (`MON-FRI`) are unchanged. Every job schedule is parsed at
+startup, and an invalid one stops the server instead of silently never
+running.
+
+**Action:** a schedule written against the old numbering (`2` meaning Monday)
+now runs one day later — subtract one from each numeric weekday. Check the
+startup log for schedule errors after upgrading.
+
 ### 48a. Write clients: publishing means "the latest draft plus this request"
 
 An update with `draft = false` while a draft is pending now takes the latest
@@ -2192,6 +2218,26 @@ if you use versions on a localized collection.
   matching gRPC and admin. (Soft-deletes still keep the files.)
 
 ## Behavior changes (likely no action)
+
+- **The `_system_*` job slugs are reserved at the queue.** `queue_job` (gRPC
+  `TriggerJob`, MCP `trigger_job`, `crap.jobs.trigger`) and `crap-cms jobs
+  trigger` answer a `_system_email` / `_system_image_convert` / `_system_bulk`
+  slug as an unknown job; only the owning subsystem queues them. **Action:**
+  none unless a client queued a system job by slug — it must use the feature
+  that owns the job (send an email, queue a bulk op).
+- **Unpublishing keeps the pending draft.** With a draft pending, unpublish
+  only sets `_status = 'draft'` and writes no version; the author's pending
+  edits stay the latest draft. Without a pending draft the live row is
+  snapshotted as before. **Action:** a client that unpublished to "freeze"
+  the live content as a version while a draft was pending should save a draft
+  from the live content first.
+- **A localized field's write rule is judged per locale when a draft is
+  published** (or a version restored): the snapshot carries one column per
+  locale, so `access.update` runs once per configured locale with `ctx.locale`
+  set to that locale, and only a denied locale's column keeps its stored
+  value. A rule that used to see `ctx.locale = nil` there now sees the locale
+  under judgment. **Action:** a field rule that reads `ctx.locale` and expects
+  `nil` to mean "publish" must decide per locale instead.
 
 - **Login and Me run the auth collection's read hooks.** `before_read` and
   `after_read` now run on the user document Login and Me return, as on a

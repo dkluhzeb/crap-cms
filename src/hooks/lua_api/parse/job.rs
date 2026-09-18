@@ -1,15 +1,13 @@
 //! Parsing functions for job definitions from Lua tables.
 
-use std::str::FromStr;
-
 use anyhow::{Result, anyhow, bail};
-use cron::Schedule;
 use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Value};
 use serde::Deserialize;
 
 use crate::core::job::JobDefinitionBuilder;
 use crate::core::{HookRef, JobDefinition, JobLabels};
 use crate::db::query;
+use crate::scheduler::parse_cron;
 use crate::typegen::lua::LuaAnnotation;
 
 /// Typed `config` table passed to `crap.jobs.define(slug, config)`.
@@ -79,16 +77,13 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
         .handler
         .ok_or_else(|| anyhow!("Job '{slug}' missing required 'handler' field"))?;
 
-    if let Some(ref expr) = config.schedule {
-        let normalized = if expr.split_whitespace().count() == 5 {
-            format!("0 {expr}")
-        } else {
-            expr.clone()
-        };
-
-        if Schedule::from_str(&normalized).is_err() {
-            bail!("Job '{slug}' has invalid cron expression '{expr}'");
-        }
+    // Parsed through the scheduler's own entry point, so a schedule accepted
+    // here is exactly a schedule the scheduler will later fire on — including
+    // the crontab day-of-week numbering it translates.
+    if let Some(expr) = config.schedule.as_deref()
+        && let Err(e) = parse_cron(expr)
+    {
+        bail!("Job '{slug}' has invalid cron expression '{expr}': {e}");
     }
 
     // Apply each field only when the operator set it, letting the builder's
@@ -227,6 +222,27 @@ mod tests {
                 .to_string()
                 .contains("invalid cron expression")
         );
+    }
+
+    /// Regression: define-time validation used to prepend the seconds field
+    /// and hand the rest straight to the `cron` crate, whose day-of-week
+    /// numbering starts at Sunday = 1. The standard crontab spelling of
+    /// Sunday (`0`) was therefore rejected outright at definition time.
+    #[test]
+    fn parse_job_definition_accepts_crontab_day_of_week() {
+        let lua = Lua::new();
+
+        for schedule in ["0 3 * * 0", "0 3 * * 7", "0 8 * * 1-5", "0 8 * * MON-FRI"] {
+            let cfg = from_lua_table(
+                &lua,
+                &format!(r#"return {{ handler = "jobs.x.run", schedule = "{schedule}" }}"#),
+            );
+
+            assert!(
+                parse_job_definition("weekly", cfg).is_ok(),
+                "crontab schedule '{schedule}' must be accepted"
+            );
+        }
     }
 
     #[test]

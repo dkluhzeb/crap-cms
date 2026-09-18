@@ -5,7 +5,14 @@ use std::fmt;
 use anyhow::anyhow;
 use tracing::error;
 
-use crate::core::ValidationError;
+use crate::{
+    core::ValidationError,
+    db::{
+        ConstraintKind::{ForeignKey, Unique},
+        constraint_kind, is_transient,
+        query::DocumentNotFound,
+    },
+};
 
 /// Typed service-layer errors that callers can match on for surface-specific handling.
 #[derive(Debug)]
@@ -25,6 +32,11 @@ pub enum ServiceError {
     HookError(String),
     /// Unique constraint violation with the offending field name.
     UniqueViolation(String),
+    /// Foreign-key constraint violation: the write points at a row that does
+    /// not exist, or removes a row another table still references. Distinct
+    /// from [`Self::UniqueViolation`] — nothing is "already there", so a client
+    /// told to pick another value would be told the wrong thing.
+    ForeignKeyViolation(String),
     /// Account is locked — authentication or token consumption denied.
     AccountLocked,
     /// Email not verified — login denied.
@@ -55,8 +67,17 @@ impl fmt::Display for ServiceError {
                 write!(f, "Cannot delete '{id}': referenced by {count} document(s)")
             }
             Self::Validation(ve) => write!(f, "{ve}"),
+            Self::UniqueViolation(field) if field.is_empty() => {
+                write!(f, "Unique constraint violated")
+            }
             Self::UniqueViolation(field) => {
                 write!(f, "Unique constraint violated for field '{field}'")
+            }
+            Self::ForeignKeyViolation(constraint) if constraint.is_empty() => {
+                write!(f, "Foreign key constraint violated")
+            }
+            Self::ForeignKeyViolation(constraint) => {
+                write!(f, "Foreign key constraint violated: '{constraint}'")
             }
             Self::AccountLocked => write!(f, "Account is locked"),
             Self::EmailNotVerified => write!(f, "Email not verified"),
@@ -89,20 +110,30 @@ impl From<anyhow::Error> for ServiceError {
             Err(e) => e,
         };
 
-        // Preserve structured validation errors rather than wrapping as Internal.
-        if let Some(ve) = e.downcast_ref::<ValidationError>() {
-            return Self::Validation(ve.clone());
+        if let Some(typed) = downcast_typed(&e) {
+            return typed;
         }
-        // Preserve typed `DocumentNotFound` raised by `query::update` /
-        // `query::update_partial` when the UPDATE matched zero rows.
-        // Without this branch, Update / UpdateMany on a missing id would
-        // come back as `Internal` over gRPC — which production clients
-        // retry on, masking the underlying bug.
-        if let Some(dnf) = e.downcast_ref::<crate::db::query::DocumentNotFound>() {
-            return Self::NotFound(dnf.to_string());
-        }
+
         Self::Internal(e)
     }
+}
+
+/// The variants recoverable from an `anyhow` chain by downcast alone — no
+/// message matching, no backend knowledge.
+///
+/// Both [`From<anyhow::Error>`] and [`ServiceError::classify`] start here, so a
+/// surface that classifies directly cannot report a structured validation
+/// failure or a missing document as an internal fault. `DocumentNotFound` is
+/// raised by `query::update` / `query::update_partial` when the UPDATE matched
+/// zero rows; without this, Update / `UpdateMany` on a missing id comes back as
+/// `Internal` over gRPC — which production clients retry on, masking the bug.
+fn downcast_typed(e: &anyhow::Error) -> Option<ServiceError> {
+    if let Some(ve) = e.downcast_ref::<ValidationError>() {
+        return Some(ServiceError::Validation(ve.clone()));
+    }
+
+    e.downcast_ref::<DocumentNotFound>()
+        .map(|dnf| ServiceError::NotFound(dnf.to_string()))
 }
 
 impl From<ValidationError> for ServiceError {
@@ -114,16 +145,18 @@ impl From<ValidationError> for ServiceError {
 impl ServiceError {
     /// Classify an anyhow error into the appropriate `ServiceError` variant.
     ///
-    /// Checks for known error types (`ValidationError`) and string patterns
-    /// (transient DB errors, hook errors, unique constraint violations).
-    /// `db_kind` selects backend-specific patterns (`"sqlite"`, `"postgres"`).
+    /// The typed driver cause decides first — [`crate::db::constraint_kind`]
+    /// and [`crate::db::is_transient`] read the error's SQLSTATE / `SQLite`
+    /// result code, which no server locale translates. String matching is the
+    /// fallback for causes that arrive with the typed error already erased (a
+    /// hook re-wrapping a failure as a message, r2d2's opaque pool error).
+    /// `db_kind` selects the backend-specific fallback patterns (`"sqlite"`,
+    /// `"postgres"`).
     #[must_use]
     pub fn classify(e: anyhow::Error, db_kind: &str) -> Self {
-        const UNIQUE_PREFIX: &str = "UNIQUE constraint failed: ";
-
-        // Structured validation errors — preserve the typed variant.
-        if let Some(ve) = e.downcast_ref::<ValidationError>() {
-            return Self::Validation(ve.clone());
+        // Structured validation errors and a typed not-found — preserve them.
+        if let Some(typed) = downcast_typed(&e) {
+            return typed;
         }
 
         // Match against the FULL cause chain (`{:#}`), not just the top
@@ -134,46 +167,12 @@ impl ServiceError {
         // transient (unavailable/503) on every surface.
         let msg = format!("{e:#}");
 
-        // Transient / retryable DB errors. Both timeout spellings are needed:
-        // r2d2's pool timeout is lowercase ("timed out waiting for
-        // connection"), the capitalized form covers other wait-timeout
-        // sources.
-        let is_transient = msg.contains("Timed out waiting")
-            || msg.contains("timed out waiting for connection")
-            || msg.contains("connection pool")
-            || match db_kind {
-                "sqlite" => {
-                    msg.contains("database is locked")
-                        || msg.contains("database is busy")
-                        || msg.contains("SQLITE_BUSY")
-                        || msg.contains("SQLITE_LOCKED")
-                }
-                "postgres" => {
-                    msg.contains("connection refused")
-                        || msg.contains("too many clients")
-                        || msg.contains("remaining connection slots are reserved")
-                }
-                _ => false,
-            };
-        if is_transient {
+        if is_transient(&e) || transient_message(&msg, db_kind) {
             return Self::Transient(e);
         }
 
-        // Unique constraint violations — extract the field name. `find` (not
-        // `strip_prefix`): the SQLite message may sit behind context layers in
-        // the `{:#}` chain rather than at the start.
-        if let Some(pos) = msg.find(UNIQUE_PREFIX) {
-            let rest = &msg[pos + UNIQUE_PREFIX.len()..];
-            let field = rest
-                .find('.')
-                .map_or_else(|| rest.to_string(), |dot| rest[dot + 1..].to_string());
-            return Self::UniqueViolation(field);
-        }
-        if msg.contains("duplicate key value violates unique constraint") {
-            return Self::UniqueViolation(String::new());
-        }
-        if db_kind == "postgres" && msg.contains("violates foreign key constraint") {
-            return Self::UniqueViolation(String::new());
+        if let Some(violation) = constraint_violation(&e, &msg, db_kind) {
+            return violation;
         }
 
         // A hook that called `crap.validation_error` encoded its field errors
@@ -241,6 +240,79 @@ impl ServiceError {
     }
 }
 
+/// The transient conditions recognizable only from text, for causes that reach
+/// us with the typed driver error erased.
+///
+/// Both timeout spellings are needed: r2d2's pool timeout is lowercase ("timed
+/// out waiting for connection") and exposes no variant to match on, while the
+/// capitalized form covers other wait-timeout sources.
+fn transient_message(msg: &str, db_kind: &str) -> bool {
+    if msg.contains("Timed out waiting")
+        || msg.contains("timed out waiting for connection")
+        || msg.contains("connection pool")
+    {
+        return true;
+    }
+
+    match db_kind {
+        "sqlite" => {
+            msg.contains("database is locked")
+                || msg.contains("database is busy")
+                || msg.contains("SQLITE_BUSY")
+                || msg.contains("SQLITE_LOCKED")
+        }
+        "postgres" => {
+            msg.contains("connection refused")
+                || msg.contains("connection closed")
+                || msg.contains("too many clients")
+                || msg.contains("remaining connection slots are reserved")
+        }
+        _ => false,
+    }
+}
+
+/// The constraint violation `e` reports, if any.
+///
+/// The kind comes from the driver's code; only the *field name* is read from
+/// the message, and only for `SQLite`, whose "UNIQUE constraint failed:
+/// table.column" wording is fixed English emitted by the library itself.
+/// Postgres names the index rather than the field, so its payload stays empty
+/// and the surfaces render the constraint without one.
+fn constraint_violation(e: &anyhow::Error, msg: &str, db_kind: &str) -> Option<ServiceError> {
+    const UNIQUE_PREFIX: &str = "UNIQUE constraint failed: ";
+
+    // `find` (not `strip_prefix`): the SQLite message sits behind context
+    // layers in the `{:#}` chain rather than at the start.
+    let unique_field = || {
+        msg.find(UNIQUE_PREFIX).map_or_else(String::new, |pos| {
+            let rest = &msg[pos + UNIQUE_PREFIX.len()..];
+
+            rest.find('.')
+                .map_or_else(|| rest.to_string(), |dot| rest[dot + 1..].to_string())
+        })
+    };
+
+    match constraint_kind(e) {
+        Some(Unique) => return Some(ServiceError::UniqueViolation(unique_field())),
+        Some(ForeignKey) => return Some(ServiceError::ForeignKeyViolation(String::new())),
+        None => {}
+    }
+
+    // Message fallback, for a cause that lost its typed error on the way here.
+    if msg.contains(UNIQUE_PREFIX) || msg.contains("duplicate key value violates unique constraint")
+    {
+        return Some(ServiceError::UniqueViolation(unique_field()));
+    }
+
+    if msg.contains("FOREIGN KEY constraint failed")
+        || (db_kind == "postgres" && msg.contains("violates foreign key constraint"))
+    {
+        return Some(ServiceError::ForeignKeyViolation(String::new()));
+    }
+
+    None
+}
+
 /// Drop the Lua stack traceback mlua appends to every Lua-originated error.
 ///
 /// The message before it is the user-facing text (`error("…")` in a hook);
@@ -256,7 +328,7 @@ fn strip_lua_traceback(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
+    use anyhow::{Context as _, anyhow};
 
     use super::*;
     use crate::core::{FieldError, ValidationError};
@@ -324,8 +396,6 @@ mod tests {
     /// of `Transient` (unavailable/503) on every surface.
     #[test]
     fn classify_matches_transient_cause_behind_context() {
-        use anyhow::Context as _;
-
         // r2d2's actual (lowercase) pool-timeout wording.
         let e = Err::<(), _>(anyhow!("timed out waiting for connection"))
             .context("Failed to get DB connection")
@@ -348,8 +418,6 @@ mod tests {
     /// message sits behind a context layer in the `{:#}` chain.
     #[test]
     fn classify_unique_violation_behind_context() {
-        use anyhow::Context as _;
-
         let e = Err::<(), _>(anyhow!("UNIQUE constraint failed: users.email"))
             .context("Failed to create document in 'users'")
             .unwrap_err();
@@ -407,6 +475,49 @@ mod tests {
         let e = anyhow!("duplicate key value violates unique constraint");
         let se = ServiceError::classify(e, "postgres");
         assert!(matches!(se, ServiceError::UniqueViolation(_)));
+    }
+
+    /// A foreign-key violation is its own variant on both backends.
+    ///
+    /// Postgres' wording was mapped to `UniqueViolation`, so a write pointing
+    /// at a row that does not exist came back as `ALREADY_EXISTS` / 409-conflict
+    /// — telling the client to pick another value for something *missing*.
+    /// `SQLite`'s wording matched nothing at all and landed as `Internal` (500,
+    /// and retried by clients).
+    #[test]
+    fn classify_foreign_key_violation_on_both_backends() {
+        assert!(matches!(
+            ServiceError::classify(anyhow!("FOREIGN KEY constraint failed"), "sqlite"),
+            ServiceError::ForeignKeyViolation(_)
+        ));
+
+        assert!(matches!(
+            ServiceError::classify(
+                anyhow!("insert violates foreign key constraint \"posts_author_fkey\""),
+                "postgres"
+            ),
+            ServiceError::ForeignKeyViolation(_)
+        ));
+    }
+
+    /// A typed `DocumentNotFound` is recovered by `classify`, not only by
+    /// `From<anyhow::Error>`. The surfaces that classify directly (the gRPC
+    /// content service, the REST upload path, the account and bulk-queue
+    /// handlers) reported an update of a missing id as `Internal` — a 500 that
+    /// production clients retry — instead of not-found.
+    #[test]
+    fn classify_recovers_a_typed_document_not_found() {
+        let e = Err::<(), _>(anyhow::Error::new(DocumentNotFound {
+            slug: "posts".into(),
+            id: "missing".into(),
+        }))
+        .context("Failed to update document")
+        .unwrap_err();
+
+        let ServiceError::NotFound(msg) = ServiceError::classify(e, "sqlite") else {
+            panic!("expected NotFound");
+        };
+        assert!(msg.contains("missing"), "{msg}");
     }
 
     #[test]

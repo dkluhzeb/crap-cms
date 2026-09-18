@@ -228,10 +228,9 @@ impl<'a> ServiceContext<'a> {
     /// - broke user hooks expecting flat keys,
     /// - leaked through broadcast events.
     ///
-    /// The default-locale-resolved shape matches every other write path.
-    /// Snapshot fidelity for non-default locales is the same as regular
-    /// draft saves (lossy for non-default-locale columns) — preserving
-    /// all locales in snapshots is a separate change.
+    /// The default-locale-resolved shape matches every other write path;
+    /// the version snapshot itself records every locale regardless of the
+    /// context's mode, so nothing is lost for non-default locales.
     #[must_use]
     pub fn default_locale_ctx(&self) -> Option<LocaleContext> {
         LocaleContext::default_for(self.locale_config?)

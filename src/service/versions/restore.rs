@@ -17,9 +17,12 @@ use crate::{
     },
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
-        ServiceContext, ServiceError, helpers, hooks::WriteHooks, invalidate_user_streams_if_auth,
-        run_pool_write, stored_fields_for_update_rules, stored_global_fields_for_update_rules,
+        ServiceContext, ServiceError, helpers,
+        hooks::{SnapshotLocales, WriteHooks},
+        invalidate_user_streams_if_auth, run_pool_write, stored_fields_for_update_rules,
+        stored_global_fields_for_update_rules,
         versions::gate::versions_gate_decision,
+        write::{UploadSettle, document_file_keys, settle_upload_write},
     },
 };
 
@@ -330,7 +333,7 @@ pub(crate) fn restore_collection_version_core(
         &stored,
         ctx.slug,
         ctx.user,
-        None,
+        SnapshotLocales::for_write(restore_locale_ctx.as_ref()),
     );
 
     canonicalize_snapshot(&mut snapshot, &def.fields);
@@ -361,6 +364,12 @@ pub(crate) fn restore_collection_version_core(
         .validate_fields(&def.fields, &validation_data, &val_ctx)
         .map_err(ServiceError::Validation)?;
 
+    // Restoring records a version like every other lifecycle step, so it prunes
+    // like one — and pruning a snapshot is what drops a stored file's last
+    // reference. The files the document referenced going in are read here so
+    // the settle below can release exactly the ones nothing names any more.
+    let before_files = document_file_keys(ctx, def, document_id, restore_locale_ctx.as_ref())?;
+
     let mut doc = query::restore_version(
         conn,
         ctx.slug,
@@ -369,6 +378,14 @@ pub(crate) fn restore_collection_version_core(
         &snapshot,
         &restored_status,
         locale_config,
+    )?;
+
+    settle_upload_write(
+        ctx,
+        &UploadSettle::builder(def, document_id)
+            .before(Some(&before_files))
+            .updated_row(Some(&doc.fields))
+            .build(),
     )?;
 
     helpers::hydrate_reported(ctx, &mut doc, restore_locale_ctx.as_ref())?;
@@ -475,7 +492,7 @@ pub(crate) fn restore_global_version_core(
         &stored,
         ctx.slug,
         ctx.user,
-        None,
+        SnapshotLocales::for_write(restore_locale_ctx.as_ref()),
     );
 
     canonicalize_snapshot(&mut snapshot, &def.fields);

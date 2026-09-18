@@ -73,18 +73,28 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CrapConfig;
+    use crate::{config::CrapConfig, test_support::env_lock};
 
+    /// # Safety
+    ///
+    /// The caller must hold the crate-wide environment lock ([`env_lock`]):
+    /// the environment is process-wide state and the test harness runs tests
+    /// on many threads at once.
     unsafe fn set_env(key: &str, val: &str) {
-        unsafe { std::env::set_var(key, val) };
+        unsafe { env::set_var(key, val) };
     }
 
+    /// # Safety
+    ///
+    /// Same contract as [`set_env`] — the caller holds the environment lock.
     unsafe fn remove_env(key: &str) {
-        unsafe { std::env::remove_var(key) };
+        unsafe { env::remove_var(key) };
     }
 
     #[test]
     fn env_subst_simple() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_HOST", "127.0.0.1") };
         let result = substitute_env_vars("host = \"${CRAP_TEST_HOST}\"").unwrap();
         assert_eq!(result, "host = \"127.0.0.1\"");
@@ -93,6 +103,8 @@ mod tests {
 
     #[test]
     fn env_subst_with_default() {
+        let _guard = env_lock();
+
         unsafe { remove_env("CRAP_TEST_MISSING") };
         let result = substitute_env_vars("port = ${CRAP_TEST_MISSING:-3000}").unwrap();
         assert_eq!(result, "port = 3000");
@@ -100,6 +112,8 @@ mod tests {
 
     #[test]
     fn env_subst_default_not_used_when_set() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_PORT", "8080") };
         let result = substitute_env_vars("port = ${CRAP_TEST_PORT:-3000}").unwrap();
         assert_eq!(result, "port = 8080");
@@ -108,6 +122,8 @@ mod tests {
 
     #[test]
     fn env_subst_empty_uses_default() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_EMPTY", "") };
         let result = substitute_env_vars("val = \"${CRAP_TEST_EMPTY:-fallback}\"").unwrap();
         assert_eq!(result, "val = \"fallback\"");
@@ -116,6 +132,8 @@ mod tests {
 
     #[test]
     fn env_subst_missing_no_default_errors() {
+        let _guard = env_lock();
+
         unsafe { remove_env("CRAP_TEST_NOEXIST_XYZ") };
         let result = substitute_env_vars("secret = \"${CRAP_TEST_NOEXIST_XYZ}\"");
         assert!(result.is_err());
@@ -125,6 +143,8 @@ mod tests {
 
     #[test]
     fn env_subst_multiple() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_A", "hello") };
         unsafe { set_env("CRAP_TEST_B", "world") };
         let result = substitute_env_vars("${CRAP_TEST_A} ${CRAP_TEST_B}").unwrap();
@@ -142,6 +162,8 @@ mod tests {
 
     #[test]
     fn env_subst_in_toml_load() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_ADMIN_PORT", "9999") };
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -157,6 +179,8 @@ mod tests {
 
     #[test]
     fn env_subst_ignores_comments() {
+        let _guard = env_lock();
+
         unsafe { remove_env("CRAP_TEST_UNSET_COMMENT_VAR") };
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -171,6 +195,8 @@ mod tests {
 
     #[test]
     fn env_subst_in_string_values_via_load() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_SMTP_HOST", "mail.example.com") };
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -185,6 +211,8 @@ mod tests {
 
     #[test]
     fn substitute_in_value_string() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_SIV", "replaced") };
         let mut val = toml::Value::String("${CRAP_TEST_SIV}".to_string());
         substitute_in_value(&mut val).unwrap();
@@ -194,6 +222,8 @@ mod tests {
 
     #[test]
     fn substitute_in_value_table() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_SIV2", "value2") };
         let mut tbl = toml::map::Map::new();
         tbl.insert(
@@ -210,6 +240,8 @@ mod tests {
 
     #[test]
     fn substitute_in_value_array() {
+        let _guard = env_lock();
+
         unsafe { set_env("CRAP_TEST_SIV3", "item") };
         let mut val = toml::Value::Array(vec![
             toml::Value::String("${CRAP_TEST_SIV3}".to_string()),

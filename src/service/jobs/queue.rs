@@ -5,12 +5,43 @@ use serde_json::{Value, from_str, from_value};
 use crate::{
     core::{
         DocumentFields,
-        job::{JobDefinition, JobRun},
+        job::{JobDefinition, JobRun, is_system_job_slug},
     },
     db::{AccessResult, DbConnection, query},
     hooks::AccessCheckInput,
     service::{ServiceContext, ServiceError},
 };
+
+/// The error a caller gets for a job it may not trigger — the same one an
+/// undefined slug gets, so no trigger surface can be used to discover which
+/// jobs exist.
+#[must_use]
+pub fn job_not_found(slug: &str) -> ServiceError {
+    ServiceError::NotFound(format!("Job '{slug}' not found"))
+}
+
+/// Answer a denied trigger exactly like an undefined slug (see
+/// [`job_not_found`]); every other error passes through unchanged.
+#[must_use]
+pub fn conceal_denied_trigger(err: ServiceError, slug: &str) -> ServiceError {
+    match err {
+        ServiceError::AccessDenied(_) => job_not_found(slug),
+        other => other,
+    }
+}
+
+/// System jobs are queued only by the subsystem that owns each one (bulk,
+/// email, image conversion), each through its own insert with a pinned
+/// contract. A caller-facing surface never queues one by slug: its payload
+/// would run with system privileges. Answered like an undefined job — a
+/// system slug is not a defined job.
+fn reject_system_slug(slug: &str) -> Result<(), ServiceError> {
+    if !is_system_job_slug(slug) {
+        return Ok(());
+    }
+
+    Err(job_not_found(slug))
+}
 
 /// Input for [`queue_job`].
 pub struct QueueJobInput<'a> {
@@ -42,7 +73,8 @@ pub struct QueueJobInput<'a> {
 /// contract: the cron scheduler (definition-driven, no access hook),
 /// `bulk_queue::queue_bulk` (access checked against the *collection* op at
 /// queue time; `max_attempts` hard-pinned to 1 so a committed batch can
-/// never be re-applied), and the email / image-convert queues.
+/// never be re-applied), and the email / image-convert queues. A system slug
+/// is therefore refused here, before anything else is evaluated.
 ///
 /// If `job_def.access` is set, the job's Lua access function decides whether
 /// `ctx.user` may trigger this job, with the queued payload exposed as
@@ -50,11 +82,16 @@ pub struct QueueJobInput<'a> {
 ///
 /// # Errors
 ///
-/// Returns `AccessDenied` when the access hook denies, `HookError` (an
-/// invalid-argument on the wire) when `data` is not valid JSON — or not an
-/// object while a data-gating access rule needs to inspect it — and a
-/// backend error if the access check or INSERT fails.
+/// Returns `NotFound` for a system slug, `AccessDenied` when the access hook
+/// denies, `HookError` (an invalid-argument on the wire) when `data` is not
+/// valid JSON — or not an object while a data-gating access rule needs to
+/// inspect it — and a backend error if the access check or INSERT fails.
 pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, ServiceError> {
+    // Both the stored slug and the definition's: a caller-facing surface must
+    // not be able to smuggle a system slug through either.
+    reject_system_slug(ctx.slug)?;
+    reject_system_slug(input.job_def.slug.as_ref())?;
+
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
 
@@ -159,5 +196,77 @@ fn check_trigger_access(
             "Access hook for job '{}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead.",
             ctx.slug
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::job::{SYSTEM_BULK_JOB, SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB};
+
+    /// Regression: nothing stopped a caller-facing surface from queueing a
+    /// `_system_*` slug through the trigger chokepoint. It must be refused
+    /// before the connection or the access rule is touched, for every
+    /// system slug and for both the stored slug and the definition's.
+    #[test]
+    fn system_slugs_are_refused_at_the_queue_chokepoint() {
+        for slug in [SYSTEM_BULK_JOB, SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB] {
+            let job_def = JobDefinition::builder(slug, "jobs.handler").build();
+            let ctx = ServiceContext::slug_only(slug).build();
+
+            let err = queue_job(
+                &ctx,
+                &QueueJobInput {
+                    job_def: &job_def,
+                    data: None,
+                    scheduled_by: "grpc",
+                    priority: 0,
+                    queue_retries: None,
+                    delay_secs: 0,
+                    unique_key: None,
+                },
+            )
+            .expect_err("a system slug must never queue through the caller path");
+
+            assert!(matches!(err, ServiceError::NotFound(_)), "{slug}: {err}");
+            assert_eq!(err.to_string(), job_not_found(slug).to_string());
+        }
+
+        // A definition carrying a system slug under a harmless stored slug is
+        // refused too.
+        let smuggled = JobDefinition::builder(SYSTEM_BULK_JOB, "jobs.handler").build();
+        let ctx = ServiceContext::slug_only("cleanup").build();
+        let err = queue_job(
+            &ctx,
+            &QueueJobInput {
+                job_def: &smuggled,
+                data: None,
+                scheduled_by: "grpc",
+                priority: 0,
+                queue_retries: None,
+                delay_secs: 0,
+                unique_key: None,
+            },
+        )
+        .expect_err("the definition's slug is checked as well");
+        assert!(matches!(err, ServiceError::NotFound(_)), "{err}");
+    }
+
+    #[test]
+    fn user_slugs_pass_the_reservation_check() {
+        assert!(reject_system_slug("cleanup").is_ok());
+        assert!(reject_system_slug("system_report").is_ok());
+    }
+
+    /// A denied trigger and an undefined slug must be indistinguishable to
+    /// the caller; every other error keeps its identity.
+    #[test]
+    fn denied_trigger_is_concealed_as_not_found() {
+        let concealed = conceal_denied_trigger(ServiceError::AccessDenied("denied".into()), "j");
+        assert!(matches!(concealed, ServiceError::NotFound(_)));
+        assert_eq!(concealed.to_string(), job_not_found("j").to_string());
+
+        let passed = conceal_denied_trigger(ServiceError::HookError("bad data".into()), "j");
+        assert!(matches!(passed, ServiceError::HookError(m) if m == "bad data"));
     }
 }

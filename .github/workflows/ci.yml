@@ -139,11 +139,24 @@ jobs:
           - label: sqlite+postgres
             flags: --features postgres
             test: true
+            test_args: ""
           # postgres only — surfaces accidental sqlite-isms leaking through
           # the DbConnection abstraction.
           - label: postgres-only
             flags: --no-default-features --features postgres
             test: false
+          # s3-storage + redis — the unit tests inside these two modules are
+          # the only coverage the S3 response-status classification and the
+          # Redis window/TTL math have, and they are pure logic: no bucket
+          # and no server is contacted, so they need no service container.
+          # Every other row that enables these features is compile-only, so
+          # without this row the tests are built and never executed.
+          # `--lib` keeps it to the crate's unit tests — the integration
+          # suite is already covered by the `check` job.
+          - label: s3+redis
+            flags: --features s3-storage,redis
+            test: true
+            test_args: --lib
           # all features — catches feature-interaction compile errors
           # across s3-storage, redis, and both DB backends. Compile-only.
           # The e2e crate's `browser-tests` feature is covered by the
@@ -182,7 +195,7 @@ jobs:
 
       - name: Test
         if: matrix.test
-        run: cargo test -p crap-cms ${{ matrix.flags }}
+        run: cargo test -p crap-cms ${{ matrix.flags }} ${{ matrix.test_args }}
 
   # Behavioral Postgres tests. The rest of the suite runs on SQLite (setup_db),
   # so Postgres-specific behavior — NULL sort order, JSON path extraction, MVCC

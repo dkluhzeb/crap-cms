@@ -133,10 +133,22 @@ fn collect_format_urls(
 
 /// Inject upload metadata fields into form data from a processed upload.
 /// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_`webp_url`, etc.)
+///
+/// Every server-derived column the collection defines is cleared first, so the
+/// ones the NEW file does not produce are written as explicit blanks — which the
+/// write edge coerces to NULL. Otherwise a replacement inherited the previous
+/// file's leftovers: storing a `.txt` over an image kept the image's `width`,
+/// `height` and per-size urls, leaving the row describing a thumbnail that no
+/// longer exists (and a publish over a pending image draft adopting them).
 pub fn inject_upload_metadata(
     form_data: &mut HashMap<String, String>,
     processed: &ProcessedUpload,
+    upload: &CollectionUpload,
 ) {
+    for name in upload.derived_field_names() {
+        form_data.insert(name, String::new());
+    }
+
     form_data.insert("filename".into(), processed.filename.clone());
     form_data.insert("mime_type".into(), processed.mime_type.clone());
     form_data.insert("filesize".into(), processed.filesize.to_string());
@@ -558,7 +570,7 @@ mod tests {
             created_files: Vec::new(),
         };
         let mut form_data = HashMap::new();
-        inject_upload_metadata(&mut form_data, &processed);
+        inject_upload_metadata(&mut form_data, &processed, &bare_upload());
 
         assert_eq!(form_data.get("filename").unwrap(), "abc_photo.png");
         assert_eq!(form_data.get("mime_type").unwrap(), "image/png");
@@ -585,11 +597,70 @@ mod tests {
             created_files: Vec::new(),
         };
         let mut form_data = HashMap::new();
-        inject_upload_metadata(&mut form_data, &processed);
+        inject_upload_metadata(&mut form_data, &processed, &bare_upload());
 
-        assert!(!form_data.contains_key("width"));
-        assert!(!form_data.contains_key("height"));
+        // Written as explicit blanks, which the write edge coerces to NULL —
+        // a file with no dimensions must clear any the previous one left.
+        assert_eq!(form_data.get("width").unwrap(), "");
+        assert_eq!(form_data.get("height").unwrap(), "");
         assert_eq!(form_data.get("filename").unwrap(), "doc.pdf");
+    }
+
+    /// Regression: replacing an image with a file that produces no sizes left
+    /// the previous file's per-size urls and dimensions standing, so the row
+    /// described a thumbnail that no longer existed — and publishing such a
+    /// file over a pending image draft adopted the drafted thumbnail columns.
+    #[test]
+    fn inject_upload_metadata_clears_the_derived_columns_a_file_does_not_produce() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(100)
+                .height(100)
+                .build(),
+        ];
+        upload.format_options.webp = Some(FormatQuality::new(80, false));
+
+        let processed = ProcessedUpload {
+            filename: "notes.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            filesize: 12,
+            width: None,
+            height: None,
+            url: "/uploads/media/notes.txt".to_string(),
+            sizes: HashMap::new(),
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
+
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "thumb_url".to_string(),
+            "/uploads/media/old_thumb.png".to_string(),
+        );
+        form_data.insert(
+            "thumb_webp_url".to_string(),
+            "/uploads/media/old_thumb.webp".to_string(),
+        );
+        form_data.insert("width".to_string(), "800".to_string());
+
+        inject_upload_metadata(&mut form_data, &processed, &upload);
+
+        for column in [
+            "width",
+            "height",
+            "thumb_url",
+            "thumb_width",
+            "thumb_webp_url",
+        ] {
+            assert_eq!(
+                form_data.get(column).map(String::as_str),
+                Some(""),
+                "{column} must be cleared, not inherited: {form_data:?}"
+            );
+        }
+        assert_eq!(form_data.get("url").unwrap(), "/uploads/media/notes.txt");
+        assert_eq!(form_data.get("filename").unwrap(), "notes.txt");
     }
 
     #[test]
@@ -619,7 +690,7 @@ mod tests {
             created_files: Vec::new(),
         };
         let mut form_data = HashMap::new();
-        inject_upload_metadata(&mut form_data, &processed);
+        inject_upload_metadata(&mut form_data, &processed, &bare_upload());
 
         assert_eq!(form_data.get("thumb_url").unwrap(), "/uploads/m/t.png");
         assert_eq!(form_data.get("thumb_width").unwrap(), "100");

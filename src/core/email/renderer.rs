@@ -26,7 +26,13 @@ impl EmailRenderer {
     /// register.
     pub fn new(config_dir: &Path) -> Result<Self> {
         let mut hbs = Handlebars::new();
-        hbs.set_strict_mode(false);
+
+        // Strict: an email context is small and fully known, so an unknown
+        // variable is a typo in an overlay template, never missing data. Lax
+        // mode rendered it as the empty string and sent the mail anyway — a
+        // reset mail with no link, after the token was already spent. Failing
+        // the render reports the send as failed instead.
+        hbs.set_strict_mode(true);
 
         // Register compiled-in email templates
         for file in EMAIL_TEMPLATES_DIR.files() {
@@ -179,12 +185,51 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Regression: a context missing the variables the template names used to
+    /// render as empty strings, so a password-reset mail went out with no link
+    /// while the token it carried was already consumed. The render fails now,
+    /// which reports the send as failed.
     #[test]
-    fn renderer_render_empty_data() {
+    fn renderer_render_empty_data_fails() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
-        let result = renderer.render("password_reset", &json!({}));
-        assert!(result.is_ok());
+
+        assert!(
+            renderer.render("password_reset", &json!({})).is_err(),
+            "a context without the template's variables must not render"
+        );
+    }
+
+    /// The same guard through the surface operators actually touch: an
+    /// overlay template that misspells a variable fails the render instead of
+    /// quietly dropping the link.
+    #[test]
+    fn renderer_overlay_with_an_unknown_variable_fails_the_render() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let email_dir = tmp.path().join("templates/email");
+        std::fs::create_dir_all(&email_dir).unwrap();
+        std::fs::write(
+            email_dir.join("password_reset.hbs"),
+            "<p>Reset: {{{reset_urls}}}</p>",
+        )
+        .unwrap();
+
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+        let err = renderer
+            .render(
+                "password_reset",
+                &PasswordResetEmailContext {
+                    reset_url: "http://example.com/reset",
+                    expiry_minutes: 30,
+                    from_name: "Test",
+                },
+            )
+            .expect_err("a misspelled variable must fail the render");
+
+        assert!(
+            format!("{err:#}").contains("password_reset"),
+            "the error should name the template: {err:#}"
+        );
     }
 
     /// Regression: `verify_email.hbs` references `{{from_name}}`, and earlier the

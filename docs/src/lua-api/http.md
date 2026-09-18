@@ -65,3 +65,5 @@ When `hooks.allow_private_networks` is `false` (the default), `crap.http.request
 ### DNS rebinding protection
 
 DNS is resolved once during validation, checked against the SSRF policy, and the validated IP is pinned via `reqwest::ClientBuilder::resolve()`. The HTTP client connects to the exact validated address — no second DNS lookup occurs. Redirects are individually resolved, validated, and pinned before following.
+
+For the same reason the client ignores `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` from the process environment: a proxy resolves the hostname itself, which would bypass both the private-network check and the pin. `crap.http` therefore always connects directly; an egress proxy cannot be put in front of it.

@@ -177,7 +177,7 @@ crap-cms work --restart
 
 The job queue is multi-server safe:
 
-- **Cron dedup** — Cron jobs are deduplicated via the `_crap_cron_fired` table. Only one server fires each cron job per schedule window, regardless of how many instances run the scheduler.
+- **Cron dedup** — Cron jobs are deduplicated via the `_crap_cron_fired` table with a single guarded upsert, so only one server fires each cron job per schedule window regardless of how many instances run the scheduler — including the very first fire of a new job, where two nodes used to race on the row's primary key.
 - **Atomic claiming (Postgres)** — Jobs are claimed using `FOR UPDATE SKIP LOCKED`. Workers never claim the same job, and per-slug concurrency limits are enforced in the database.
 - **Atomic claiming (SQLite)** — Claims run inside IMMEDIATE transactions, serializing concurrent workers.
 
@@ -187,7 +187,7 @@ Multiple workers can safely run `crap-cms work` against the same database.
 
 - All servers and workers share the same `crap.toml` and config directory
 - **Set `[auth] secret` explicitly, to the same value on every node.** Left empty, each node generates its own, so sessions and anything derived from the secret (MFA codes, TOTP secrets, `crap.crypto` values, signed URLs) would not work across nodes. Loading the config fails with an empty secret when a Redis cache, event transport, or rate-limit backend is configured.
-- Schema sync (`migrate up`) only needs to run once — any server that starts first handles it. Nodes starting at the same moment take turns: on Postgres, schema sync holds a database lock.
+- Schema sync (`migrate up`) only needs to run once — any server that starts first handles it. Nodes starting at the same moment take turns: on Postgres, schema sync holds a database lock. Running it against a live cluster is safe for the other nodes' prepared statements: a statement whose plan the schema change invalidated is re-prepared and retried once, transparently, outside a transaction; a transaction caught mid-flight fails once and the next one succeeds.
 - **Use the same `[jobs] heartbeat_interval` on every node that runs the scheduler.** A node treats a running job as dead once its heartbeat is older than three times *that node's own* interval, so a node with a shorter interval reclaims — and runs again — jobs a node with a longer interval is still executing.
 - **Finish a rollout that changes indexes before an older node restarts.** Schema sync removes the crap-managed indexes (`idx_<collection>_…`) that the starting node's definitions do not declare. An old-version node that restarts mid-rollout drops the indexes the new version created; they come back the next time a new-version node starts.
 - `on_init` hooks run on every server/worker startup

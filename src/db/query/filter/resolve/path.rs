@@ -263,7 +263,7 @@ mod tests {
         let resolved = resolve_filter(&conn, "status", "posts", &[], None).unwrap();
         match resolved {
             ResolvedFilter::Column { expr, field_type } => {
-                assert_eq!(expr, "status");
+                assert_eq!(expr, "\"status\"");
                 assert_eq!(field_type, None);
             }
             other => panic!("Expected Column, got {other:?}"),

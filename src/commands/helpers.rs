@@ -60,6 +60,7 @@ pub fn open_project(config_dir: &Path) -> Result<Project> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let config = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    config.apply()?;
     if let Some(warning) = config.check_version() {
         warn!("{}", warning);
     }
@@ -79,14 +80,14 @@ pub fn open_project(config_dir: &Path) -> Result<Project> {
     })
 }
 
-/// Load, validate config, check version, and prune old log files.
-/// Shared by serve and work commands.
+/// Load a config and put it into service, check version, and prune old log
+/// files. Shared by serve and work commands.
 pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
     let cfg = CrapConfig::load(config_dir)?;
-    cfg.validate()?;
 
-    // Apply the configured JSON data-nesting limit process-wide (Lua↔JSON).
-    hooks::lua_api::set_max_nesting_depth(cfg.depth.max_nesting_depth);
+    // Validation plus the process-wide limits the config carries, through the
+    // one chokepoint test configs go through too.
+    cfg.apply()?;
 
     if let Some(warning) = cfg.check_version() {
         warn!("{}", warning);

@@ -53,11 +53,11 @@ fn save_column_preferences(
     collection_slug: &str,
     columns: &[String],
 ) -> Result<(), Error> {
-    // IMMEDIATE tx so the read-modify-write of the whole-blob settings
-    // JSON can't lose a concurrent update from a sibling handler
-    //. The IMMEDIATE lock serializes the read against other
-    // writers.
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    // IMMEDIATE tx so the read-modify-write of the whole-blob settings JSON
+    // can't lose a concurrent update from a sibling handler: the IMMEDIATE
+    // lock serializes the read against other writers. It is taken from the
+    // write pool, so it does not hold a read connection for its duration.
+    let mut conn = pool.write().context("Failed to get DB connection")?;
     let tx = conn
         .transaction_immediate()
         .context("Failed to start settings transaction")?;

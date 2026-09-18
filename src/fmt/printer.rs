@@ -501,21 +501,58 @@ fn emit_start_tag(p: EmitStartTag<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Whether a plain attribute renders as the bare name with its value
+/// dropped. True only for a known boolean attribute whose value is
+/// absent, empty, or echoes the attribute name — i.e. `selected`,
+/// `selected=""`, `selected="selected"`. A meaningful value
+/// (`selected='{{json …}}'`) is kept, because the same attribute name
+/// can carry data on custom elements.
+///
+/// The single place that decides boolean-attribute collapse: both the
+/// printer and the content-preservation property test read the rule
+/// from here so they cannot drift.
+pub(crate) fn renders_as_bare_boolean(name: &str, value: Option<&str>) -> bool {
+    BOOLEAN_ATTRS.contains(&name)
+        && match value {
+            None => true,
+            Some(v) => v.is_empty() || v.eq_ignore_ascii_case(name),
+        }
+}
+
+/// Entity-encode every `"` that sits outside a `{{…}}` region. Quotes inside
+/// mustaches are Handlebars string literals and stay raw; a value without a
+/// bare `"` comes back unchanged, so formatting stays stable across passes.
+fn encode_bare_double_quotes(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut depth = 0i32;
+    let mut rest = v;
+
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("{{") {
+            depth += 1;
+            out.push_str("{{");
+            rest = &rest[2..];
+        } else if depth > 0 && rest.starts_with("}}") {
+            depth -= 1;
+            out.push_str("}}");
+            rest = &rest[2..];
+        } else {
+            if c == '"' && depth == 0 {
+                out.push_str("&quot;");
+            } else {
+                out.push(c);
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+
+    out
+}
+
 fn render_attr(a: &Attr) -> String {
     match a {
         Attr::Plain { name, value } => {
-            // Boolean attributes collapse to bare form ONLY when the
-            // value is absent, empty, or echoes the attribute name —
-            // i.e. `selected`, `selected=""`, `selected="selected"`.
-            // A meaningful value (`selected='{{json …}}'`) is kept,
-            // because the same attribute name can carry data on
-            // custom elements.
-            let collapse_boolean = BOOLEAN_ATTRS.contains(&name.as_str())
-                && match value {
-                    None => true,
-                    Some(v) => v.is_empty() || v.eq_ignore_ascii_case(name),
-                };
-            if collapse_boolean {
+            if renders_as_bare_boolean(name, value.as_deref()) {
                 return name.clone();
             }
             match value {
@@ -529,10 +566,16 @@ fn render_attr(a: &Attr) -> String {
                     // `{{ }}` HTML-escapes `"`, so it stays safely double-quoted.
                     let needs_single = v.contains('"') || v.contains("{{{");
                     if needs_single && !v.contains('\'') {
-                        format!("{name}='{v}'")
-                    } else {
-                        format!("{name}=\"{v}\"")
+                        return format!("{name}='{v}'");
                     }
+
+                    // Double-quoted otherwise. A `"` inside a mustache is a
+                    // Handlebars string literal the tokenizer skips over; only
+                    // a bare one would end the attribute early, and with a `'`
+                    // also present it is entity-encoded instead of switching
+                    // the delimiter.
+                    let v = encode_bare_double_quotes(v);
+                    format!("{name}=\"{v}\"")
                 }
             }
         }
@@ -1057,6 +1100,31 @@ mod tests {
         // single-quoted or it would break the attribute at render time.
         let out = fmt("<x data-y=\"{{{json z}}}\">a</x>\n");
         assert!(out.contains("data-y='{{{json z}}}'"), "got: {out:?}");
+    }
+
+    /// A value holding both `"` and `'` used to be emitted double-quoted
+    /// with the raw `"` inside, which no parser (including this formatter on
+    /// its next pass) could read back.
+    #[test]
+    fn attribute_value_with_both_quote_kinds_stays_parseable() {
+        // A `'` inside the mustache keeps the value out of the single-quoted
+        // form; the bare `"` outside it must not be emitted raw.
+        let out = fmt("<x title='{{t 'k'}} a \" b'>a</x>\n");
+        assert!(
+            out.contains("title=\"{{t 'k'}} a &quot; b\""),
+            "got: {out:?}"
+        );
+        assert_eq!(fmt(&out), out, "formatting must be idempotent");
+    }
+
+    /// A `"` inside a mustache is a Handlebars string literal; with a `'`
+    /// elsewhere in the value the double-quoted form is kept and the mustache
+    /// quotes stay raw.
+    #[test]
+    fn mustache_string_literal_quotes_stay_raw_in_a_double_quoted_value() {
+        let out = fmt("<x title=\"{{t \"k\"}} it's\">a</x>\n");
+        assert!(out.contains("title=\"{{t \"k\"}} it's\""), "got: {out:?}");
+        assert_eq!(fmt(&out), out);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Optional parameters for persist operations.
 
+use serde_json::{Map, Value};
+
 use crate::{config::LocaleConfig, db::LocaleContext};
 
 /// Optional parameters for the `persist_create` / `persist_update` operations.
@@ -9,6 +11,15 @@ pub struct PersistOptions<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
     pub locale_config: Option<&'a LocaleConfig>,
     pub is_draft: bool,
+    /// The pending draft snapshot a publish makes live, once the publisher's
+    /// field-level write access has been applied to it.
+    ///
+    /// Set only by a publishing update on a localized collection: the write's
+    /// own data already carries the draft's values for the locale it targets,
+    /// and this is what carries the draft's OTHER locales and its shared
+    /// values onto the row. The persist step writes it back inside its
+    /// ref-count bracket, because the write-back moves relationships too.
+    pub pending_draft: Option<&'a Map<String, Value>>,
 }
 
 impl<'a> PersistOptions<'a> {
@@ -26,6 +37,7 @@ pub struct PersistOptionsBuilder<'a> {
     pub(in crate::service) locale_ctx: Option<&'a LocaleContext>,
     pub(in crate::service) locale_config: Option<&'a LocaleConfig>,
     pub(in crate::service) is_draft: bool,
+    pub(in crate::service) pending_draft: Option<&'a Map<String, Value>>,
 }
 
 impl<'a> PersistOptionsBuilder<'a> {
@@ -53,12 +65,19 @@ impl<'a> PersistOptionsBuilder<'a> {
         self
     }
 
+    /// Set the pending draft snapshot this publish makes live (see the field).
+    pub fn pending_draft(mut self, pending_draft: Option<&'a Map<String, Value>>) -> Self {
+        self.pending_draft = pending_draft;
+        self
+    }
+
     pub fn build(self) -> PersistOptions<'a> {
         PersistOptions {
             password: self.password,
             locale_ctx: self.locale_ctx,
             locale_config: self.locale_config,
             is_draft: self.is_draft,
+            pending_draft: self.pending_draft,
         }
     }
 }
@@ -74,6 +93,20 @@ mod tests {
         assert!(o.locale_ctx.is_none());
         assert!(o.locale_config.is_none());
         assert!(!o.is_draft);
+        assert!(o.pending_draft.is_none());
+    }
+
+    /// A publish hands the persist step the draft it makes live; every other
+    /// write leaves the slot empty.
+    #[test]
+    fn builder_carries_the_pending_draft_snapshot() {
+        let snapshot = Map::new();
+
+        let o = PersistOptions::builder()
+            .pending_draft(Some(&snapshot))
+            .build();
+
+        assert!(o.pending_draft.is_some());
     }
 
     #[test]

@@ -20,64 +20,62 @@
 //! moment, so a variant job only ever exists for a file the published row
 //! actually references.
 //!
+//! The pending draft is ONE unit, and a publish makes all of it live. The
+//! merge above is locale-scoped — it feeds the write the values for the locale
+//! the request targets — so the draft's other translations and the shared
+//! values a default-locale draft save recorded reach the row through the
+//! snapshot write-back at persist time, written with the same per-locale rule a
+//! restore of that snapshot uses. Publishing in `en` therefore no longer
+//! strands a German draft in history, and a `de` publish still cannot *change*
+//! a shared field: the locale lock judges the request's own fields, while the
+//! draft's shared values simply go live as the draft author saved them.
+//!
 //! Publishing does not widen what the publisher may write. The adopted values
 //! are the draft author's, but they enter `input.data` like any other incoming
 //! field and the field-level write-access strip runs over them afterwards, so a
 //! publisher who may not write a field cannot publish a drafted change to it:
 //! the strip drops it and the published row keeps its own value.
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value};
+
+mod file;
+
+use file::{FilePublish, adopt_drafted_file, drafted_file_target, excluded_columns};
 
 use crate::{
     core::{
-        CollectionDefinition, DocumentFields, flatten_group_fields, nest_group_fields,
-        upload::{CollectionUpload, QueuedConversion, key_from_served_url},
+        CollectionDefinition, FieldDefinition, GlobalDefinition, flatten_group_fields,
+        nest_group_fields,
     },
-    db::{DbConnection, query},
-    service::{ServiceContext, ServiceError, UploadConversions, WriteInput, write::stored_row},
+    db::{DbConnection, query, query::helpers::global_table},
+    service::{ServiceContext, ServiceError, WriteInput},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
+/// The one parent id a global's single row and its version history use.
+const GLOBAL_PARENT: &str = "default";
+
+/// Where a publish reads its pending draft from, and the schema that draft
+/// describes.
+///
+/// A collection names its slug and the document id; a global names its version
+/// table and the single parent every global row shares. Everything else about
+/// publishing a draft is the same for both, which is why the adoption is
+/// written against this rather than against a collection definition.
+struct DraftSource<'a> {
+    table: &'a str,
+    parent_id: &'a str,
+    fields: &'a [FieldDefinition],
+}
+
 /// Whether this write publishes: an update that is not a draft save, on a
-/// collection whose drafts are recorded as version snapshots. Only such a write
-/// has a pending draft to publish.
-fn publishes_pending_draft(def: &CollectionDefinition, input: &WriteInput<'_>) -> bool {
-    def.has_drafts() && def.has_versions() && !input.draft
-}
-
-/// The document whose drafted file a publish is about to make live. Every
-/// field is required and it is built at the one call site, so a plain literal
-/// stands in for a builder.
-#[derive(Clone, Copy)]
-struct FilePublish<'a> {
-    def: &'a CollectionDefinition,
-    id: &'a str,
-    upload: &'a CollectionUpload,
-}
-
-/// The upload configuration whose drafted file this publish makes live, if any.
-///
-/// A write that carries `url` processed a file of its own (the multipart
-/// handlers inject the derived columns before the write): that file is the one
-/// the caller asked for, so it wins and none is adopted. Decided against the
-/// request's own data, before the draft's fields are merged in.
-///
-/// A non-default-locale write is excluded for the same reason it cannot write
-/// any other shared column: the file columns are not localized, so a
-/// translation neither records a file in its draft nor publishes one.
-fn drafted_file_target<'a>(
-    def: &'a CollectionDefinition,
-    input: &WriteInput<'_>,
-) -> Option<&'a CollectionUpload> {
-    if !def.is_upload_collection()
-        || input.data.contains_key("url")
-        || query::is_non_default_single_locale(input.locale_ctx)
-    {
-        return None;
-    }
-
-    def.upload.as_ref()
+/// collection or global whose drafts are recorded as version snapshots. Only
+/// such a write has a pending draft to publish.
+fn publishes_pending_draft(has_drafts: bool, has_versions: bool, input: &WriteInput<'_>) -> bool {
+    has_drafts && has_versions && !input.draft
 }
 
 /// The latest version snapshot, when it is a pending draft.
@@ -89,12 +87,24 @@ fn drafted_file_target<'a>(
 /// the draft save after a publish starts from the published row.
 fn pending_draft(
     conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
+    table: &str,
+    parent_id: &str,
 ) -> Result<Option<Map<String, Value>>> {
-    Ok(query::find_latest_version(conn, slug, id)?
+    Ok(query::find_latest_version(conn, table, parent_id)?
         .filter(|version| version.status == "draft")
         .and_then(|version| version.snapshot.as_object().cloned()))
+}
+
+/// Read the pending draft on a connection resolved for this call alone, so it
+/// is released before any read the caller takes next — a pool-mode context
+/// resolves one connection per call.
+fn pending_draft_snapshot(
+    ctx: &ServiceContext,
+    source: &DraftSource<'_>,
+) -> Result<Option<Map<String, Value>>> {
+    let conn = ctx.resolve_conn()?;
+
+    pending_draft(conn.as_ref(), source.table, source.parent_id)
 }
 
 /// Fill every field the request does not send from the pending draft.
@@ -104,122 +114,37 @@ fn pending_draft(
 /// keeps its value while its siblings come from the draft — and the result is
 /// nested again into the one shape the rest of the pipeline carries.
 ///
-/// Locale-scoped like any other write: the base holds the values the snapshot
-/// carries for the locale being published and, under a non-default locale,
-/// nothing shared (see [`query::snapshot_write_fields`]).
+/// This half is locale-scoped like any other write: the base holds the values
+/// the snapshot carries for the locale being published and, under a non-default
+/// locale, nothing shared (see [`query::snapshot_write_fields`]). The draft's
+/// OTHER locales reach the row through the snapshot write-back at persist time
+/// — a publish makes the pending draft live as one unit.
+///
+/// `excluded` names columns the request's own content owns outright, so the
+/// draft never contributes them.
 ///
 /// # Errors
 ///
 /// Returns an error if a configured locale code has no column form.
 fn adopt_drafted_fields(
-    def: &CollectionDefinition,
+    source: &DraftSource<'_>,
     snapshot: &Map<String, Value>,
+    excluded: &HashSet<String>,
     input: &mut WriteInput<'_>,
 ) -> Result<()> {
-    let drafted = query::snapshot_write_fields(snapshot, &def.fields, input.locale_ctx)?;
+    let drafted = query::snapshot_write_fields(snapshot, source.fields, input.locale_ctx)?;
 
-    let mut flat = flatten_group_fields(&input.data, &def.fields);
+    let mut flat = flatten_group_fields(&input.data, source.fields);
 
     for (column, value) in drafted {
+        if excluded.contains(&column) {
+            continue;
+        }
+
         flat.entry(column).or_insert(value);
     }
 
-    input.data = nest_group_fields(&flat, &def.fields);
-
-    Ok(())
-}
-
-/// The server-derived upload columns `snapshot` carries.
-///
-/// Sorted, so the write applies them in a stable order regardless of how the
-/// derived-name set iterates.
-fn drafted_metadata(snapshot: &Map<String, Value>, upload: &CollectionUpload) -> DocumentFields {
-    let mut names: Vec<String> = upload.derived_field_names().into_iter().collect();
-    names.sort();
-
-    names
-        .into_iter()
-        .filter_map(|name| {
-            let value = snapshot.get(&name)?.clone();
-
-            Some((name, value))
-        })
-        .collect()
-}
-
-/// The conversions the drafted file still owes.
-///
-/// Re-derived from the size columns the metadata carries rather than stored
-/// with the draft: a deferred variant is a function of the stored size file and
-/// the collection's format options, and deriving it here means the publish
-/// queues exactly the jobs the current configuration calls for.
-fn deferred_conversions(
-    metadata: &DocumentFields,
-    upload: &CollectionUpload,
-) -> Vec<QueuedConversion> {
-    let mut queued = Vec::new();
-
-    for size in &upload.image_sizes {
-        let Some(size_key) = metadata
-            .get_str(&format!("{}_url", size.name))
-            .and_then(key_from_served_url)
-        else {
-            continue;
-        };
-
-        for (format, opts) in upload.format_options.deferred() {
-            queued.push(QueuedConversion::for_size(
-                size_key,
-                &size.name,
-                format,
-                opts.quality,
-            ));
-        }
-    }
-
-    queued
-}
-
-/// Carry the pending draft's file over to the published row.
-///
-/// Adds the drafted server-derived columns to `input.data` and attaches the
-/// conversions that file still owes, which makes the write settle them: the
-/// previous file's still-queued variants are cancelled and the new ones queued,
-/// exactly as a write that carried the file itself would.
-///
-/// Nothing happens when the draft did not change the file — re-queueing there
-/// would cancel the conversions still pending for the very file the row keeps.
-///
-/// # Errors
-///
-/// Returns a backend error if the published row cannot be read. It must
-/// propagate: publishing the old file while reporting success is silent data
-/// loss.
-fn adopt_drafted_file(
-    ctx: &ServiceContext,
-    target: &FilePublish<'_>,
-    snapshot: &Map<String, Value>,
-    input: &mut WriteInput<'_>,
-) -> Result<()> {
-    let FilePublish { def, id, upload } = *target;
-
-    let drafted = drafted_metadata(snapshot, upload);
-    let Some(drafted_url) = drafted.get_str("url").map(str::to_string) else {
-        return Ok(());
-    };
-
-    let live_url = stored_row(ctx, def, id, input.locale_ctx)?
-        .and_then(|doc| doc.fields.get_str("url").map(str::to_string));
-
-    if live_url.as_deref() == Some(drafted_url.as_str()) {
-        return Ok(());
-    }
-
-    input.upload_conversions = Some(UploadConversions::new(
-        deferred_conversions(&drafted, upload),
-        ctx.image_max_attempts,
-    ));
-    input.data.extend(drafted);
+    input.data = nest_group_fields(&flat, source.fields);
 
     Ok(())
 }
@@ -232,6 +157,9 @@ fn adopt_drafted_file(
 /// locale lock, the access gates and validation — so everything the draft
 /// contributes is judged exactly like a field the caller sent.
 ///
+/// Returns the pending draft's snapshot when there was one, so the persist step
+/// can write the locales this request does not target back from it.
+///
 /// # Errors
 ///
 /// Returns a backend error if the draft snapshot or the published row cannot be
@@ -242,32 +170,72 @@ pub(crate) fn adopt_pending_draft(
     def: &CollectionDefinition,
     id: &str,
     input: &mut WriteInput<'_>,
-) -> Result<()> {
-    if !publishes_pending_draft(def, input) {
-        return Ok(());
+) -> Result<Option<Map<String, Value>>> {
+    if !publishes_pending_draft(def.has_drafts(), def.has_versions(), input) {
+        return Ok(None);
     }
 
+    // Both are decided against the request's own data, before the draft's
+    // fields are merged into it.
     let file_target = drafted_file_target(def, input);
+    let excluded = excluded_columns(def, input);
 
-    // Scoped so the connection is released before the row read below takes
-    // its own — a pool-mode context resolves one per call.
-    let pending = {
-        let conn = ctx.resolve_conn()?;
-
-        pending_draft(conn.as_ref(), ctx.slug, id)?
+    let source = DraftSource {
+        table: ctx.slug,
+        parent_id: id,
+        fields: &def.fields,
     };
 
-    let Some(snapshot) = pending else {
-        return Ok(());
+    let Some(snapshot) = pending_draft_snapshot(ctx, &source)? else {
+        return Ok(None);
     };
 
-    adopt_drafted_fields(def, &snapshot, input)?;
+    adopt_drafted_fields(&source, &snapshot, &excluded, input)?;
 
     let Some(upload) = file_target else {
-        return Ok(());
+        return Ok(Some(snapshot));
     };
 
-    adopt_drafted_file(ctx, &FilePublish { def, id, upload }, &snapshot, input)
+    adopt_drafted_file(ctx, &FilePublish { def, id, upload }, &snapshot, input)?;
+
+    Ok(Some(snapshot))
+}
+
+/// Publish a global's pending draft — the same rule, against the global's own
+/// version table and its single `default` parent.
+///
+/// A global update used to write only the fields the request carried, so a
+/// partial publish put one drafted field live and discarded the rest of the
+/// draft. Globals are never upload collections (a `GlobalDefinition` has no
+/// upload config at all), so there is no file half here.
+///
+/// # Errors
+///
+/// Returns a backend error if the draft snapshot cannot be read, or if a
+/// configured locale code has no column form.
+pub(crate) fn adopt_pending_global_draft(
+    ctx: &ServiceContext,
+    def: &GlobalDefinition,
+    input: &mut WriteInput<'_>,
+) -> Result<Option<Map<String, Value>>> {
+    if !publishes_pending_draft(def.has_drafts(), def.has_versions(), input) {
+        return Ok(None);
+    }
+
+    let table = global_table(ctx.slug);
+    let source = DraftSource {
+        table: &table,
+        parent_id: GLOBAL_PARENT,
+        fields: &def.fields,
+    };
+
+    let Some(snapshot) = pending_draft_snapshot(ctx, &source)? else {
+        return Ok(None);
+    };
+
+    adopt_drafted_fields(&source, &snapshot, &HashSet::new(), input)?;
+
+    Ok(Some(snapshot))
 }
 
 #[cfg(test)]
@@ -278,8 +246,8 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            FieldDefinition, FieldType, VersionsConfig,
-            upload::{FormatQuality, ImageSizeBuilder},
+            DocumentFields, FieldDefinition, FieldType, VersionsConfig,
+            upload::{CollectionUpload, FormatQuality, ImageSizeBuilder},
         },
         db::{LocaleContext, LocaleMode},
         service::write::reject_locale_locked_fields,
@@ -287,7 +255,7 @@ mod tests {
 
     /// A versioned, draft-enabled upload collection with a `thumbnail` size
     /// whose webp variant is converted on the queue.
-    fn media() -> CollectionDefinition {
+    pub(super) fn media() -> CollectionDefinition {
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumbnail")
@@ -304,7 +272,18 @@ mod tests {
         def
     }
 
-    fn snapshot() -> Map<String, Value> {
+    /// The draft source a collection publish builds. Only `fields` matters to
+    /// the field merge; the table and parent address the version row a
+    /// connected test reads.
+    fn source(def: &CollectionDefinition) -> DraftSource<'_> {
+        DraftSource {
+            table: "posts",
+            parent_id: "doc-1",
+            fields: &def.fields,
+        }
+    }
+
+    pub(super) fn snapshot() -> Map<String, Value> {
         json!({
             "url": "/uploads/media/abc_photo.png",
             "filename": "abc_photo.png",
@@ -317,72 +296,23 @@ mod tests {
         .clone()
     }
 
-    /// Only the server-derived columns are taken from the snapshot; a user
-    /// field it also carries is left to the write's own data.
-    #[test]
-    fn drafted_metadata_takes_only_the_derived_columns() {
-        let def = media();
-        let upload = def.upload.as_ref().expect("upload");
-
-        let drafted = drafted_metadata(&snapshot(), upload);
-
-        assert_eq!(
-            drafted.get("url"),
-            Some(&json!("/uploads/media/abc_photo.png"))
-        );
-        assert_eq!(drafted.get("filename"), Some(&json!("abc_photo.png")));
-        assert_eq!(drafted.get("thumbnail_width"), Some(&json!(300)));
-        assert!(
-            !drafted.contains_key("caption"),
-            "a user field is not server-derived: {drafted:?}"
-        );
-    }
-
-    /// The deferred variant is derived from the stored size file, so the job
-    /// converts the drafted thumbnail — not the published row's.
-    #[test]
-    fn deferred_conversions_target_the_drafted_size_file() {
-        let def = media();
-        let upload = def.upload.as_ref().expect("upload");
-        let drafted = drafted_metadata(&snapshot(), upload);
-
-        let queued = deferred_conversions(&drafted, upload);
-
-        assert_eq!(queued.len(), 1, "{queued:?}");
-        assert_eq!(queued[0].source_path, "media/abc_photo_thumbnail.png");
-        assert_eq!(queued[0].target_path, "media/abc_photo_thumbnail.webp");
-        assert_eq!(queued[0].url_column, "thumbnail_webp_url");
-    }
-
-    /// A format converted during the upload owes the queue nothing — only a
-    /// `queue = true` variant is deferred to the publish.
-    #[test]
-    fn a_synchronously_converted_format_queues_nothing() {
-        let mut def = media();
-        def.upload.as_mut().expect("upload").format_options.webp =
-            Some(FormatQuality::new(80, false));
-
-        let upload = def.upload.as_ref().expect("upload");
-
-        let drafted = drafted_metadata(&snapshot(), upload);
-
-        assert!(deferred_conversions(&drafted, upload).is_empty());
-    }
-
     /// Publishing is the only write with a pending draft to take as its base:
     /// a draft save records content, it does not publish it, and a collection
     /// without draft snapshots has nothing pending.
     #[test]
     fn only_a_publish_takes_the_draft_as_its_base() {
         let def = media();
+        let publishes = |def: &CollectionDefinition, input: &WriteInput<'_>| {
+            publishes_pending_draft(def.has_drafts(), def.has_versions(), input)
+        };
 
-        assert!(publishes_pending_draft(
+        assert!(publishes(
             &def,
             &WriteInput::builder(DocumentFields::new()).build()
         ));
 
         assert!(
-            !publishes_pending_draft(
+            !publishes(
                 &def,
                 &WriteInput::builder(DocumentFields::new())
                     .draft(true)
@@ -394,60 +324,11 @@ mod tests {
         let mut unversioned = media();
         unversioned.versions = None;
         assert!(
-            !publishes_pending_draft(
+            !publishes(
                 &unversioned,
                 &WriteInput::builder(DocumentFields::new()).build()
             ),
             "without versions there is no draft snapshot to adopt from"
-        );
-    }
-
-    /// The file adoption is narrower than the field adoption: a request that
-    /// processed a file of its own wins, a translation never publishes a file,
-    /// and a collection without uploads has no file columns at all.
-    #[test]
-    fn only_a_publish_without_its_own_file_adopts_the_drafted_file() {
-        let def = media();
-
-        assert!(
-            drafted_file_target(&def, &WriteInput::builder(DocumentFields::new()).build())
-                .is_some()
-        );
-
-        let own_file: DocumentFields = [("url".to_string(), json!("/uploads/media/new.png"))]
-            .into_iter()
-            .collect();
-        assert!(
-            drafted_file_target(&def, &WriteInput::builder(own_file).build()).is_none(),
-            "the file the request carried wins"
-        );
-
-        let de = LocaleContext {
-            mode: LocaleMode::Single("de".to_string()),
-            config: LocaleConfig {
-                default_locale: "en".to_string(),
-                locales: vec!["en".to_string(), "de".to_string()],
-                fallback: true,
-            },
-        };
-        assert!(
-            drafted_file_target(
-                &def,
-                &WriteInput::builder(DocumentFields::new())
-                    .locale_ctx(Some(&de))
-                    .build()
-            )
-            .is_none(),
-            "the file columns are shared — a translation cannot publish one"
-        );
-
-        assert!(
-            drafted_file_target(
-                &CollectionDefinition::new("posts"),
-                &WriteInput::builder(DocumentFields::new()).build()
-            )
-            .is_none(),
-            "a collection without uploads has no file columns"
         );
     }
 
@@ -488,7 +369,7 @@ mod tests {
         .collect();
         let mut input = WriteInput::builder(request).build();
 
-        adopt_drafted_fields(&def, &snapshot, &mut input).unwrap();
+        adopt_drafted_fields(&source(&def), &snapshot, &HashSet::new(), &mut input).unwrap();
 
         assert_eq!(input.data.get("title"), Some(&json!("published title")));
         assert_eq!(input.data.get("body"), Some(&json!("drafted body")));
@@ -542,7 +423,7 @@ mod tests {
             .locale_ctx(Some(&de))
             .build();
 
-        adopt_drafted_fields(&def, &snapshot, &mut input).unwrap();
+        adopt_drafted_fields(&source(&def), &snapshot, &HashSet::new(), &mut input).unwrap();
 
         assert_eq!(input.data.get("title"), Some(&json!("Deutsch")));
         assert!(!input.data.contains_key("slug"), "{:?}", input.data);
@@ -559,8 +440,8 @@ mod publish_tests {
     use crate::{
         config::CrapConfig,
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldType, Hooks, Registry,
-            ValidationError, VersionsConfig,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
+            Registry, ValidationError, VersionsConfig,
         },
         db::{AccessResult, DbConnection, DbPool, migrate, pool, query},
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
@@ -893,6 +774,122 @@ mod publish_tests {
             written.get_str("secret"),
             Some("live secret"),
             "the write-denied field keeps the row's value"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod global_draft_tests {
+    use rusqlite::Connection;
+    use serde_json::json;
+
+    use super::*;
+    use crate::core::{DocumentFields, FieldType, VersionsConfig};
+
+    /// A versioned, draft-enabled `settings` global with three scalar fields.
+    fn settings() -> GlobalDefinition {
+        let mut def = GlobalDefinition::new("settings");
+        def.versions = Some(VersionsConfig::new(true, 10));
+        def.fields = vec![
+            FieldDefinition::builder("a", FieldType::Text).build(),
+            FieldDefinition::builder("b", FieldType::Text).build(),
+            FieldDefinition::builder("c", FieldType::Text).build(),
+        ];
+
+        def
+    }
+
+    /// A connection holding the global's version table and one pending draft
+    /// of all three fields.
+    fn drafted_settings() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _versions__global_settings (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT
+            );",
+        )
+        .unwrap();
+
+        query::create_version(
+            &conn,
+            "_global_settings",
+            "default",
+            "draft",
+            &json!({ "a": "drafted a", "b": "drafted b", "c": "drafted c" }),
+        )
+        .unwrap();
+
+        conn
+    }
+
+    /// A partial global publish used to write only the field it carried and
+    /// discard the rest of the draft: the rule collections have always applied
+    /// never reached globals at all.
+    #[test]
+    fn a_partial_global_publish_takes_the_whole_draft_as_its_base() {
+        let conn = drafted_settings();
+        let def = settings();
+        let ctx = ServiceContext::global("settings", &def).conn(&conn).build();
+
+        let request: DocumentFields = [("a".to_string(), json!("published a"))]
+            .into_iter()
+            .collect();
+        let mut input = WriteInput::builder(request).build();
+
+        let adopted = adopt_pending_global_draft(&ctx, &def, &mut input)
+            .unwrap()
+            .expect("the pending draft");
+
+        assert_eq!(input.data.get("a"), Some(&json!("published a")));
+        assert_eq!(input.data.get("b"), Some(&json!("drafted b")));
+        assert_eq!(input.data.get("c"), Some(&json!("drafted c")));
+        assert_eq!(
+            adopted.get("a"),
+            Some(&json!("drafted a")),
+            "the snapshot itself comes back as stored"
+        );
+    }
+
+    /// A draft save records content, it does not publish it — so it adopts
+    /// nothing and leaves the request's data alone.
+    #[test]
+    fn a_global_draft_save_adopts_nothing() {
+        let conn = drafted_settings();
+        let def = settings();
+        let ctx = ServiceContext::global("settings", &def).conn(&conn).build();
+
+        let mut input = WriteInput::builder(DocumentFields::new())
+            .draft(true)
+            .build();
+
+        assert!(
+            adopt_pending_global_draft(&ctx, &def, &mut input)
+                .unwrap()
+                .is_none()
+        );
+        assert!(input.data.get("b").is_none());
+    }
+
+    /// Without versioning there is no draft snapshot to adopt from.
+    #[test]
+    fn an_unversioned_global_adopts_nothing() {
+        let conn = drafted_settings();
+        let mut def = settings();
+        def.versions = None;
+        let ctx = ServiceContext::global("settings", &def).conn(&conn).build();
+
+        let mut input = WriteInput::builder(DocumentFields::new()).build();
+
+        assert!(
+            adopt_pending_global_draft(&ctx, &def, &mut input)
+                .unwrap()
+                .is_none()
         );
     }
 }

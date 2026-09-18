@@ -544,7 +544,10 @@ fn poll_and_execute(
     email_provider: Option<&SharedEmailProvider>,
     system: &TickJobConfig,
 ) -> Result<()> {
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    // The write pool: `claim_pending_jobs` below opens an IMMEDIATE transaction
+    // on this connection, and a write transaction on a read connection starves
+    // concurrent readers.
+    let mut conn = pool.write().context("Failed to get DB connection")?;
 
     let total_running = job_query::count_running(&conn, None)?;
     // Saturate to max_concurrent so a runaway counter still gates new jobs

@@ -32,6 +32,15 @@ impl From<ServiceError> for Status {
                     ))
                 }
             }
+            // Not ALREADY_EXISTS: nothing is already there. The write points at
+            // a row that is missing, or removes one another table still needs —
+            // a precondition on the data, like `Referenced`.
+            ServiceError::ForeignKeyViolation(constraint) if constraint.is_empty() => {
+                Status::failed_precondition("Foreign key constraint violated")
+            }
+            ServiceError::ForeignKeyViolation(constraint) => Status::failed_precondition(format!(
+                "Foreign key constraint violated: '{constraint}'"
+            )),
             ServiceError::AccountLocked => Status::permission_denied("Account is locked"),
             ServiceError::EmailNotVerified => Status::permission_denied("Email not verified"),
             ServiceError::InvalidCredentials => Status::unauthenticated("Invalid credentials"),
@@ -117,6 +126,24 @@ mod tests {
         let status = Status::from(se);
         assert_eq!(status.code(), Code::AlreadyExists);
         assert!(status.message().contains("email"));
+    }
+
+    /// A foreign-key violation is a precondition on the data, not a conflict
+    /// with an existing resource: a client told `ALREADY_EXISTS` would retry
+    /// with a different value for something that is *missing*. Regression for
+    /// the Postgres mapping, which routed `23503` to `UniqueViolation` and so
+    /// reported a dangling reference as "already exists".
+    #[test]
+    fn service_error_foreign_key_violation_to_failed_precondition() {
+        let status = Status::from(ServiceError::ForeignKeyViolation(String::new()));
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(status.message(), "Foreign key constraint violated");
+
+        let named = Status::from(ServiceError::ForeignKeyViolation(
+            "posts_author_fkey".into(),
+        ));
+        assert_eq!(named.code(), Code::FailedPrecondition);
+        assert!(named.message().contains("posts_author_fkey"));
     }
 
     /// Regression: was previously `InvalidArgument`, now correctly

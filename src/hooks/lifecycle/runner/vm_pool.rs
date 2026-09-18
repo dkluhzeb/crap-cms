@@ -8,7 +8,7 @@
 //! pool size regardless of available capacity.
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use mlua::{HookTriggers, Lua, VmState};
+use mlua::{Error::RuntimeError, HookTriggers, Lua, Result as LuaResult, VmState};
 use std::{
     sync::{
         Arc, Condvar, Mutex,
@@ -88,7 +88,7 @@ impl VmPool {
         loop {
             if let Some(vm) = inner.idle.pop() {
                 drop(inner);
-                return Ok(self.check_out(vm));
+                return self.check_out(vm);
             }
 
             // Room to grow: reserve a slot, build outside the lock.
@@ -97,13 +97,10 @@ impl VmPool {
                 drop(inner);
 
                 match (self.factory)(self.next_index.fetch_add(1, Ordering::Relaxed)) {
-                    Ok(vm) => return Ok(self.check_out(vm)),
+                    Ok(vm) => return self.check_out(vm),
                     Err(e) => {
-                        // Roll the reservation back and wake a waiter to retry.
-                        if let Ok(mut inner) = self.inner.lock() {
-                            inner.live -= 1;
-                        }
-                        self.available.notify_one();
+                        self.release_slot();
+
                         return Err(e).context("failed to build a pool Lua VM");
                     }
                 }
@@ -127,12 +124,31 @@ impl VmPool {
     }
 
     /// Arm the instruction hook and wrap the VM in a returning guard.
-    fn check_out(&self, vm: Lua) -> VmGuard<'_> {
-        set_instruction_hook(&vm);
-        VmGuard {
+    ///
+    /// A VM whose budget hook cannot be installed is dropped rather than
+    /// leased: leasing it would hand out a VM with no ceiling on how long a
+    /// hook may run, which is the one thing the budget exists to prevent.
+    fn check_out(&self, vm: Lua) -> Result<VmGuard<'_>> {
+        if let Err(e) = set_instruction_hook(&vm) {
+            self.release_slot();
+
+            return Err(anyhow!("failed to arm the Lua instruction limit: {e}"));
+        }
+
+        Ok(VmGuard {
             pool: self,
             vm: Some(vm),
+        })
+    }
+
+    /// Give back the `live` slot of a VM that never became a lease, and wake a
+    /// waiter so the freed capacity is usable again.
+    fn release_slot(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.live -= 1;
         }
+
+        self.available.notify_one();
     }
 }
 
@@ -192,26 +208,35 @@ pub(crate) fn reset_instruction_budget(vm: &Lua) {
     }
 }
 
-/// Set an instruction-counting hook on the VM if `MaxInstructions` is configured.
-fn set_instruction_hook(vm: &Lua) {
+/// Set an instruction-counting hook on the VM if `MaxInstructions` is
+/// configured.
+///
+/// The install error is propagated: a swallowed one leaves the VM running
+/// without the ceiling, and nothing downstream would notice.
+fn set_instruction_hook(vm: &Lua) -> LuaResult<()> {
     let max = vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0);
-    if max > 0 {
-        let counter = Arc::new(AtomicU64::new(0));
-        vm.set_app_data(InstructionCounter(counter.clone()));
-        let c = counter.clone();
-        let _ = vm.set_hook(
-            HookTriggers::new().every_nth_instruction(10_000),
-            move |_lua, _debug| {
-                let count = c.fetch_add(10_000, Ordering::Relaxed);
-                if count + 10_000 > max {
-                    return Err(mlua::Error::RuntimeError(
-                        "Lua execution exceeded instruction limit".into(),
-                    ));
-                }
-                Ok(VmState::Continue)
-            },
-        );
+
+    if max == 0 {
+        return Ok(());
     }
+
+    let counter = Arc::new(AtomicU64::new(0));
+    vm.set_app_data(InstructionCounter(counter.clone()));
+
+    vm.set_hook(
+        HookTriggers::new().every_nth_instruction(10_000),
+        move |_lua, _debug| {
+            let count = counter.fetch_add(10_000, Ordering::Relaxed);
+
+            if count + 10_000 > max {
+                return Err(RuntimeError(
+                    "Lua execution exceeded instruction limit".into(),
+                ));
+            }
+
+            Ok(VmState::Continue)
+        },
+    )
 }
 
 #[cfg(test)]
@@ -346,6 +371,39 @@ mod tests {
         let seed = Lua::new();
         seed.set_app_data(MaxInstructions(max_instructions));
         VmPool::new(vec![seed], factory, cap)
+    }
+
+    /// An unbounded loop must hit the ceiling — i.e. the VM was leased armed.
+    fn assert_budget_armed(vm: &Lua, which: &str) {
+        let err = vm
+            .load("while true do end")
+            .exec()
+            .expect_err("an unbounded loop must hit the ceiling");
+
+        assert!(
+            err.to_string().contains("instruction limit"),
+            "the {which} lease was handed out without an instruction ceiling: {err}"
+        );
+    }
+
+    /// Arming the budget is part of checking a VM out, not a best-effort
+    /// extra: the install error used to be discarded, which would have handed
+    /// out VMs with no ceiling at all. Every path that produces a lease — the
+    /// pre-warmed VM, one grown on demand, and a reused one — comes back armed.
+    #[test]
+    fn every_lease_comes_back_with_the_budget_armed() {
+        let pool = make_pool_with_instruction_limit(2, 50_000);
+
+        let prewarmed = pool.acquire().expect("pre-warmed lease");
+        let grown = pool.acquire().expect("on-demand lease");
+
+        assert_budget_armed(&prewarmed, "pre-warmed");
+        assert_budget_armed(&grown, "on-demand");
+
+        drop((prewarmed, grown));
+
+        let reused = pool.acquire().expect("reused lease");
+        assert_budget_armed(&reused, "reused");
     }
 
     #[test]

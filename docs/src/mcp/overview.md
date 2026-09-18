@@ -243,10 +243,10 @@ Always available:
 
 | Tool | Description |
 |------|-------------|
-| `list_jobs` | List defined jobs (slug, queue, schedule, timeout, priority) |
+| `list_jobs` | List defined jobs (slug, queue, schedule, timeout, priority). A job whose `access` hook denies (the hook runs with `ctx.user = nil`) is omitted |
 | `get_job_run` | Status + result of one run by id — **use this to poll the `job_id` from a queued bulk operation** |
 | `list_job_runs` | Recent runs, newest first; filter by `slug` and/or `status` (e.g. `"failed"`) to triage |
-| `trigger_job` | Queue any defined job; returns the run id. Takes `data` (object), `priority`, `delay` (seconds or `"5m"`-style duration), and `unique` (dedup key — an active run with the same key is returned instead of a duplicate) |
+| `trigger_job` | Queue a defined job; returns the run id. A job whose `access` hook denies answers "Job not found", exactly like an undefined slug, and `_system_*` slugs are refused the same way. Takes `data` (object), `priority`, `delay` (seconds or `"5m"`-style duration), and `unique` (dedup key — an active run with the same key is returned instead of a duplicate) |
 
 The split exists because reading and executing carry different risk:
 `"all"` lets a client queue **any** defined job, and because MCP has no end

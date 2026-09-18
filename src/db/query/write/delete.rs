@@ -1,8 +1,23 @@
 //! Delete, soft-delete, and restore operations.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Error, Result, bail};
 
-use crate::db::{DbConnection, DbValue};
+use crate::db::{ConstraintKind::Unique, DbConnection, DbValue, constraint_kind};
+
+/// Whether `e` is a unique-constraint failure.
+///
+/// The driver's result code decides (no server locale translates it); the
+/// message is the fallback for a cause that reached us with the typed error
+/// erased.
+fn is_unique_violation(e: &Error) -> bool {
+    if constraint_kind(e) == Some(Unique) {
+        return true;
+    }
+
+    let msg = format!("{e:#}");
+
+    msg.contains("UNIQUE constraint failed") || msg.contains("unique constraint")
+}
 
 /// Delete a document by ID. Returns `true` if a row was deleted, `false` if not found.
 ///
@@ -59,21 +74,19 @@ pub fn restore(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
         conn.placeholder(1)
     );
 
-    match conn.execute(&sql, &[DbValue::Text(id.to_string())]) {
-        Ok(affected) => Ok(affected > 0),
-        Err(e) => {
-            let msg = format!("{e:#}");
+    let e = match conn.execute(&sql, &[DbValue::Text(id.to_string())]) {
+        Ok(affected) => return Ok(affected > 0),
+        Err(e) => e,
+    };
 
-            if msg.contains("UNIQUE constraint failed") || msg.contains("unique constraint") {
-                bail!(
-                    "Cannot restore document '{id}' in '{slug}': a unique field value \
-                     is already in use by another active document"
-                );
-            }
-
-            Err(e).with_context(|| format!("Failed to restore {id} in '{slug}'"))
-        }
+    if is_unique_violation(&e) {
+        bail!(
+            "Cannot restore document '{id}' in '{slug}': a unique field value \
+             is already in use by another active document"
+        );
     }
+
+    Err(e).with_context(|| format!("Failed to restore {id} in '{slug}'"))
 }
 
 #[cfg(test)]

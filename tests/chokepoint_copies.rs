@@ -18,12 +18,12 @@
 //! **Scope & limits.** The scans are per-line regex over the source text, not
 //! AST-based: a call split across two lines, reached through an alias
 //! (`use x as y`), or built by a macro will not match. Test code is excluded by
-//! truncating each file at its test module — the first `#[cfg(…test…)]`
-//! attribute that gates something other than a single `use` or a file-based
-//! `mod …;`, which the scan continues past — and by skipping test-only files
-//! (`tests.rs`, `*_tests.rs`, `test_*.rs`, `*_test.rs`). Treat these as a
-//! high-signal tripwire for the obvious regression, not a proof of total
-//! coverage.
+//! `common::production_code` — every `#[cfg(…test…)]`-gated item is blanked
+//! (only that item: a gated helper in the middle of a file hides nothing after
+//! it), comments are removed, line numbers are kept — and by skipping
+//! test-only files (`tests.rs`, `*_tests.rs`, `test_*.rs`, `*_test.rs`). Treat
+//! these as a high-signal tripwire for the obvious regression, not a proof of
+//! total coverage.
 
 use std::{
     fs,
@@ -31,6 +31,10 @@ use std::{
 };
 
 use regex::Regex;
+
+mod common;
+
+use common::production_code;
 
 // ── the inventory ────────────────────────────────────────────────────────────
 
@@ -288,7 +292,7 @@ impl Chokepoint {
                 continue;
             };
 
-            for (idx, line) in production(&src).lines().enumerate() {
+            for (idx, line) in production_code(&src).lines().enumerate() {
                 let trimmed = line.trim_start();
 
                 if trimmed.starts_with("//") || trimmed.starts_with('*') {
@@ -384,42 +388,6 @@ fn is_test_only_file(path: &Path) -> bool {
         || stem.ends_with("_tests")
 }
 
-/// The part of `src` above its test module — everything before the first
-/// `#[cfg(…test…)]` attribute that gates more than a single item.
-fn production(src: &str) -> &str {
-    let lines: Vec<&str> = src.split_inclusive('\n').collect();
-    let mut offset = 0;
-
-    for (idx, line) in lines.iter().enumerate() {
-        if is_test_cfg(line) && !gates_one_item(&lines[idx + 1..]) {
-            return &src[..offset];
-        }
-
-        offset += line.len();
-    }
-
-    src
-}
-
-/// True for a `#[cfg(test)]` attribute, including the
-/// `#[cfg(all(test, feature = "sqlite"))]` spelling several modules use.
-fn is_test_cfg(line: &str) -> bool {
-    let trimmed = line.trim_start();
-
-    trimmed.starts_with("#[cfg(") && trimmed.contains("test")
-}
-
-/// True when the attribute above `rest` gates a single item production code
-/// continues after — a test-only `use`, or a test module living in its own file
-/// (`mod tests;`). Anything else is the file's inline test module (often behind
-/// a stacked `#[allow(…)]`), and with it the rest of the file.
-fn gates_one_item(rest: &[&str]) -> bool {
-    rest.iter()
-        .map(|line| line.trim())
-        .find(|line| !line.is_empty())
-        .is_some_and(|line| line.starts_with("use ") || line.ends_with(';'))
-}
-
 /// `path` relative to the crate root, in forward-slash form.
 fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
@@ -491,4 +459,174 @@ fn every_chokepoint_scan_still_matches_something() {
             chokepoint.name
         );
     }
+}
+
+// ── write transactions come from the write pool ──────────────────────────────
+
+/// How many statements above a `transaction_immediate()` the scan looks for the
+/// connection it runs on. A checkout further away than this — or a connection
+/// arriving as a function parameter — is out of the scan's reach; the caller's
+/// own site is where that one gets pinned.
+const CHECKOUT_WINDOW: usize = 25;
+
+/// `(path, why a read checkout there is not a write transaction)`. Empty: every
+/// `BEGIN IMMEDIATE` in the tree takes its connection from the write pool.
+const READ_POOL_WRITE_TX_ALLOWLIST: &[(&str, &str)] = &[];
+
+/// One statement of production source, with the line it starts on. A method
+/// chain broken across lines is joined back into one entry, so a checkout
+/// spelled `pool` / `.write()` on two lines reads as `pool.write()`.
+struct Statement {
+    line: usize,
+    text: String,
+}
+
+fn statements(src: &str) -> Vec<Statement> {
+    let mut out: Vec<Statement> = Vec::new();
+
+    for (idx, line) in production_code(src).lines().enumerate() {
+        let trimmed = line.trim();
+
+        match out.last_mut() {
+            Some(last) if trimmed.starts_with('.') => last.text.push_str(trimmed),
+            _ => out.push(Statement {
+                line: idx + 1,
+                text: trimmed.to_string(),
+            }),
+        }
+    }
+
+    out
+}
+
+/// Which pool a statement checks a connection out of, if it checks one out.
+fn checkout_pool(text: &str) -> Option<&'static str> {
+    if text.starts_with("//") || text.starts_with('*') {
+        return None;
+    }
+
+    if text.contains("pool.write()") {
+        return Some("write");
+    }
+
+    if text.contains("pool.get()") {
+        return Some("read");
+    }
+
+    None
+}
+
+/// `DbPool::write` is where a connection that will open `BEGIN IMMEDIATE`
+/// comes from.
+///
+/// A write transaction opened on a read connection holds that connection for
+/// the whole write. Under `SQLite` WAL the read pool is sized for read
+/// concurrency and the write pool is deliberately small, so a burst of writers
+/// on read connections starves the readers the split exists to protect — and
+/// the offending site reads exactly like a correct one, which is why this is
+/// scanned rather than remembered.
+#[test]
+fn write_transactions_take_a_write_pool_connection() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut files = Vec::new();
+    rs_files(&root.join("src"), &mut files);
+    files.sort();
+
+    let mut offenders = Vec::new();
+    let mut paired = 0_usize;
+
+    for file in files {
+        let rel = relative(root, &file);
+
+        let Ok(src) = fs::read_to_string(&file) else {
+            continue;
+        };
+
+        let stmts = statements(&src);
+
+        for (idx, stmt) in stmts.iter().enumerate() {
+            if stmt.text.starts_with("//") || !stmt.text.contains("transaction_immediate(") {
+                continue;
+            }
+
+            let window = &stmts[idx.saturating_sub(CHECKOUT_WINDOW)..idx];
+
+            let Some(pool) = window.iter().rev().find_map(|s| checkout_pool(&s.text)) else {
+                continue;
+            };
+
+            paired += 1;
+
+            let allowed = READ_POOL_WRITE_TX_ALLOWLIST
+                .iter()
+                .any(|(path, _)| *path == rel);
+
+            if pool == "read" && !allowed {
+                offenders.push(format!("  {rel}:{}  {}", stmt.line, stmt.text));
+            }
+        }
+    }
+
+    assert!(
+        paired > 0,
+        "The scan paired no `transaction_immediate()` with a pool checkout. It looks for a \
+         shape that no longer exists — update it in tests/chokepoint_copies.rs."
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "A write transaction is opened on a READ-pool connection:\n{}\n\nTake the connection \
+         from `pool.write()` instead — `DbPool::get` is the read pool, and holding one of its \
+         connections for a write starves concurrent readers.\n\nIf a site genuinely must open \
+         `BEGIN IMMEDIATE` on a read connection, add it to READ_POOL_WRITE_TX_ALLOWLIST in \
+         tests/chokepoint_copies.rs with the reason.",
+        offenders.join("\n")
+    );
+}
+
+/// A gated helper in the middle of a file must hide only itself. The scan
+/// used to stop at the first test gate it met, which hid every production
+/// line after it — thousands in the Postgres backend.
+#[test]
+fn production_code_keeps_the_code_after_a_gated_helper() {
+    let src = "fn a() {}\n#[cfg(test)]\nfn helper() {\n    let x = \"{\";\n}\nfn b() {}\n\
+               #[cfg(not(test))]\nfn c() {}\n#[cfg(all(test, feature = \"sqlite\"))]\n\
+               mod tests {\n    fn t() {}\n}\n";
+
+    let kept = production_code(src);
+
+    assert!(kept.contains("fn a()") && kept.contains("fn b()"), "{kept}");
+    assert!(
+        kept.contains("fn c()"),
+        "not(test) is production code: {kept}"
+    );
+    assert!(
+        !kept.contains("helper") && !kept.contains("fn t()"),
+        "{kept}"
+    );
+    assert_eq!(
+        kept.lines().count(),
+        src.lines().count(),
+        "line numbers must be preserved"
+    );
+}
+
+/// Positive control against the real tree: the Postgres backend has a test
+/// gate near its top and its `DbConnection` impl far below it.
+#[test]
+fn production_code_reaches_the_postgres_connection_impl() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/db/backend/postgres.rs");
+    let src = fs::read_to_string(path).expect("postgres backend source");
+
+    let kept = production_code(&src);
+
+    assert!(
+        kept.contains("impl DbConnection for PgConnection"),
+        "the scan stopped before the connection impl"
+    );
+    assert!(
+        !kept.contains("mod tests"),
+        "the trailing test module must be blanked"
+    );
 }

@@ -1,11 +1,9 @@
 //! Shared helpers for Lua table serializers.
 
-use std::sync::OnceLock;
-
 use mlua::{Lua, Table, Value};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use crate::core::{HookRef, LocalizedString};
+use crate::core::{HookRef, LocalizedString, max_nesting_depth};
 
 /// Serialize a [`HookRef`] back to Lua — a bare string when it carries no
 /// options, or a `{ ref, options }` table otherwise. Inverse of the parse-side
@@ -48,32 +46,6 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
             Ok(Value::Table(tbl))
         }
     }
-}
-
-/// Fallback nesting limit used before config is applied (and in unit tests /
-/// CLI paths that never call [`set_max_nesting_depth`]). Matches the
-/// `depth.max_nesting_depth` config default.
-const DEFAULT_MAX_NESTING_DEPTH: usize = 64;
-
-/// Process-wide JSON data-nesting limit, set once from `depth.max_nesting_depth`
-/// at server startup (after config validation). Distinct from relationship
-/// population depth.
-static MAX_NESTING_DEPTH: OnceLock<usize> = OnceLock::new();
-
-/// Apply the configured data-nesting limit (called once at startup). Subsequent
-/// calls are ignored — the limit is fixed for the process lifetime.
-pub fn set_max_nesting_depth(limit: usize) {
-    let _ = MAX_NESTING_DEPTH.set(limit);
-}
-
-/// The process-wide JSON data-nesting limit (`depth.max_nesting_depth`). Shared
-/// by every data-ingestion converter so the Lua↔JSON path and the gRPC↔JSON
-/// path reject over-deep data identically, guarding against stack overflow.
-pub fn max_nesting_depth() -> usize {
-    MAX_NESTING_DEPTH
-        .get()
-        .copied()
-        .unwrap_or(DEFAULT_MAX_NESTING_DEPTH)
 }
 
 /// Convert a Lua value to a JSON value.
@@ -199,6 +171,7 @@ mod tests {
     use super::*;
     use crate::core::LocalizedString;
     use mlua::Lua;
+    use proptest::prelude::*;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -466,7 +439,13 @@ mod tests {
         assert_eq!(back["count"], json!(42));
         assert_eq!(back["tags"], json!(["a", "b"]));
         assert_eq!(back["active"], json!(true));
-        assert_eq!(back["empty"], json!(null));
+        // Indexing a missing key yields `Value::Null`, so comparing
+        // `back["empty"]` against `json!(null)` would pass whether the key
+        // survived or vanished. Assert on the key set instead: Lua drops it.
+        assert!(
+            !back.as_object().expect("object").contains_key("empty"),
+            "a null-valued key is erased by Lua, not kept as null: {back}"
+        );
     }
 
     /// Edge-case numbers (`i64::MAX`, `f64::MAX`) must survive conversion without error.
@@ -486,5 +465,167 @@ mod tests {
         let big_float = json!(f64::MAX);
         let result = json_to_lua(&lua, &big_float);
         assert!(result.is_ok(), "f64::MAX should be representable");
+    }
+
+    // ── json_to_lua → lua_to_json round-trip ──────────────────────────────
+    //
+    // This pair is the data boundary every Lua hook, job handler and CRUD
+    // call crosses, so its identities AND its three non-identities are
+    // pinned here. Whole-value `assert_eq!` compares key sets, which a
+    // per-key lookup cannot: a vanished key reads back as `null`.
+
+    /// Send a JSON value through Lua and back.
+    fn round_trip(value: &JsonValue) -> JsonValue {
+        let lua = Lua::new();
+        let as_lua = json_to_lua(&lua, value).expect("json_to_lua must succeed");
+
+        lua_to_json(&as_lua).expect("lua_to_json must succeed")
+    }
+
+    /// Object keys that must survive: plain identifiers, digit-only keys
+    /// (which must stay *string* keys rather than turning into array
+    /// indices), and non-ASCII.
+    fn json_key() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("title".to_owned()),
+            Just("nested_value".to_owned()),
+            Just("7".to_owned()),
+            Just("42".to_owned()),
+            Just("ümlaut".to_owned()),
+            Just("日本".to_owned()),
+        ]
+    }
+
+    /// Scalars that must survive: both number representations (an integer
+    /// must stay an integer and a float must stay a float), booleans, and
+    /// strings carrying quotes, backslashes, control whitespace and
+    /// multi-byte characters.
+    fn json_scalar() -> impl Strategy<Value = JsonValue> {
+        prop_oneof![
+            any::<bool>().prop_map(JsonValue::Bool),
+            any::<i64>().prop_map(|i| JsonValue::Number(i.into())),
+            (-1e9f64..1e9f64)
+                .prop_map(|f| JsonValue::Number(JsonNumber::from_f64(f).expect("finite float"))),
+            Just(JsonValue::String(String::new())),
+            Just(JsonValue::String("plain".to_owned())),
+            Just(JsonValue::String(
+                "quote\" back\\slash\ttab\nnewline".to_owned()
+            )),
+            Just(JsonValue::String("ümlaut 日本 😀".to_owned())),
+        ]
+    }
+
+    /// JSON values that must survive the Lua round-trip unchanged. Two
+    /// shapes are deliberately absent because Lua cannot represent them —
+    /// each is pinned by its own named test below:
+    ///
+    /// - `null`, because assigning `nil` in Lua erases the key it is stored
+    ///   under (and the array slot it occupies),
+    /// - `[]`, because an empty Lua table is indistinguishable from `{}`.
+    fn round_trippable_json() -> impl Strategy<Value = JsonValue> {
+        json_scalar().prop_recursive(4, 32, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 1..4).prop_map(JsonValue::Array),
+                prop::collection::vec((json_key(), inner), 0..4)
+                    .prop_map(|entries| JsonValue::Object(entries.into_iter().collect())),
+            ]
+        })
+    }
+
+    proptest! {
+        /// Property: every JSON value Lua *can* represent survives
+        /// `json_to_lua` → `lua_to_json` byte-for-byte — nesting, key sets,
+        /// array order, number representation and string contents alike.
+        #[test]
+        fn json_round_trips_through_lua(value in round_trippable_json()) {
+            let back = round_trip(&value);
+
+            prop_assert_eq!(back, value);
+        }
+    }
+
+    /// Pinned non-identity: Lua has a single table type, so an empty array
+    /// and an empty object are the same value once converted, and the
+    /// round-trip reports `{}` for both. Changing this silently re-types
+    /// every empty list that crosses the Lua boundary.
+    #[test]
+    fn empty_array_round_trips_as_empty_object() {
+        assert_eq!(round_trip(&json!([])), json!({}));
+        assert_eq!(round_trip(&json!({})), json!({}));
+        assert_eq!(round_trip(&json!({ "tags": [] })), json!({ "tags": {} }));
+
+        // A non-empty array is unambiguous and keeps its type.
+        assert_eq!(
+            round_trip(&json!({ "tags": ["a"] })),
+            json!({ "tags": ["a"] })
+        );
+    }
+
+    /// Pinned non-identity: assigning `nil` removes the key, so a
+    /// present-null field does not survive — the key set shrinks rather
+    /// than the value becoming null. Callers that must tell "absent" from
+    /// "explicitly null" re-insert the null after the Lua leg (the
+    /// present-null hook-context rule).
+    #[test]
+    fn a_null_valued_key_is_dropped() {
+        let back = round_trip(&json!({ "kept": 1, "cleared": null }));
+
+        assert_eq!(back, json!({ "kept": 1 }));
+        assert!(
+            !back.as_object().expect("object").contains_key("cleared"),
+            "the key must be gone, not present-as-null: {back}"
+        );
+    }
+
+    /// Pinned non-identity: a *bare* null is Lua `nil`, which converts back
+    /// to null — only a null stored under a key or in an array slot is
+    /// lost. A sole-element null array therefore empties out and, being
+    /// empty, comes back as an object.
+    #[test]
+    fn a_bare_null_round_trips_but_a_null_element_does_not() {
+        assert_eq!(round_trip(&json!(null)), json!(null));
+        assert_eq!(round_trip(&json!([null])), json!({}));
+    }
+
+    /// Pinned non-identity: an integer above `i64::MAX` has no Lua integer
+    /// representation, so it degrades to a float — losing its integer type
+    /// and, past 2^53, its exact value.
+    #[test]
+    fn an_integer_above_i64_max_becomes_a_float() {
+        let back = round_trip(&json!(u64::MAX));
+
+        assert!(back.is_f64(), "expected a float, got {back}");
+        assert_ne!(back, json!(u64::MAX));
+    }
+
+    /// Integers at the `i64` boundaries stay integers — the degradation above
+    /// starts exactly one step past `i64::MAX`.
+    #[test]
+    fn i64_boundary_integers_stay_integers() {
+        for original in [json!(i64::MAX), json!(i64::MIN), json!(0), json!(-1)] {
+            let back = round_trip(&original);
+
+            assert_eq!(back, original);
+            assert!(back.is_i64(), "expected an integer, got {back}");
+        }
+    }
+
+    /// Objects inside arrays inside objects, both number kinds, and strings
+    /// with escapes and multi-byte characters come back identical — key
+    /// sets included, at every level.
+    #[test]
+    fn nested_mixed_structures_round_trip() {
+        let original = json!({
+            "rows": [
+                { "id": 1, "ratio": 0.5, "tags": ["a", "b"] },
+                { "id": 2, "ratio": -1.25, "tags": [["deep"], { "flag": true }] }
+            ],
+            "text": "quote\" back\\slash\nnewline 日本 😀",
+            "whole_float": 3.0,
+            "blank": "",
+            "empty_object": {}
+        });
+
+        assert_eq!(round_trip(&original), original);
     }
 }

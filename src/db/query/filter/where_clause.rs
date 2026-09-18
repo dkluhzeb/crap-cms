@@ -337,7 +337,7 @@ mod tests {
         })];
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
-        assert_eq!(sql, " WHERE status = ?1");
+        assert_eq!(sql, " WHERE \"status\" = ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -356,7 +356,7 @@ mod tests {
         ];
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
-        assert_eq!(sql, " WHERE status = ?1 AND role = ?2");
+        assert_eq!(sql, " WHERE \"status\" = ?1 AND \"role\" = ?2");
         assert_eq!(params.len(), 2);
     }
 
@@ -381,7 +381,7 @@ mod tests {
         ])];
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
-        assert_eq!(sql, " WHERE (a = ?1 OR (b = ?2 AND c = ?3))");
+        assert_eq!(sql, " WHERE (\"a\" = ?1 OR (\"b\" = ?2 AND \"c\" = ?3))");
         assert_eq!(params.len(), 3);
     }
 
@@ -395,7 +395,7 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         // Single-item OR should simplify to just the condition
-        assert_eq!(sql, " WHERE a = ?1");
+        assert_eq!(sql, " WHERE \"a\" = ?1");
     }
 
     /// The recursive tree expresses nesting the old flat OR-of-AND-groups could
@@ -422,7 +422,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE ((a = ?1 AND b = ?2) OR (c = ?3 AND (d = ?4 OR e = ?5)))"
+            " WHERE ((\"a\" = ?1 AND \"b\" = ?2) OR (\"c\" = ?3 AND (\"d\" = ?4 OR \"e\" = ?5)))"
         );
         assert_eq!(params.len(), 5);
     }
@@ -482,7 +482,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?2)"
+            " WHERE \"status\" = ?1 AND EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND \"name\" = ?2)"
         );
         assert_eq!(params.len(), 2);
     }
@@ -508,7 +508,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?2))"
+            " WHERE (\"status\" = ?1 OR EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND \"related_id\" = ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -530,7 +530,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND \"name\" = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -612,7 +612,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND \"related_id\" = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -629,7 +629,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id IN (?1, ?2))"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND \"related_id\" IN (?1, ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -657,7 +657,7 @@ mod tests {
     fn read_expr_non_localized_passthrough() {
         let def = make_collection(vec![make_field("title", FieldType::Text, false)]);
 
-        assert_eq!(read_expr("title", &def, Some(&de_ctx())), "title");
+        assert_eq!(read_expr("title", &def, Some(&de_ctx())), "\"title\"");
     }
 
     #[test]
@@ -746,7 +746,7 @@ mod tests {
     fn read_expr_no_locale_ctx() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
 
-        assert_eq!(read_expr("title", &def, None), "title");
+        assert_eq!(read_expr("title", &def, None), "\"title\"");
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
         row_field.fields = vec![make_field("slug", FieldType::Text, false)];
         let def = make_collection(vec![row_field]);
 
-        assert_eq!(read_expr("slug", &def, Some(&de_ctx())), "slug");
+        assert_eq!(read_expr("slug", &def, Some(&de_ctx())), "\"slug\"");
     }
 
     #[test]
@@ -807,7 +807,10 @@ mod tests {
 
         let ctx = de_ctx();
 
-        assert_eq!(read_expr("description", &def, Some(&ctx)), "description");
+        assert_eq!(
+            read_expr("description", &def, Some(&ctx)),
+            "\"description\""
+        );
     }
 
     #[test]
@@ -822,7 +825,7 @@ mod tests {
             },
         };
 
-        assert_eq!(read_expr("title", &def, Some(&ctx)), "title");
+        assert_eq!(read_expr("title", &def, Some(&ctx)), "\"title\"");
     }
 
     // ── locale in the WHERE clause ────────────────────────────────────────
@@ -847,7 +850,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(sql, " WHERE status = ?1");
+        assert_eq!(sql, " WHERE \"status\" = ?1");
     }
 
     #[test]

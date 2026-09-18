@@ -12,13 +12,12 @@ use crate::{
     db::{
         DbConnection, LocaleContext, query,
         query::{
+            VersionWrite,
             helpers::{locale_column, prefixed_name},
             locale_locked_field_names,
         },
     },
 };
-
-use super::snapshot::prune_versions;
 
 /// Inputs for [`save_draft_version`]. All fields are required; constructed at
 /// each draft-save site (collection persist, global persist, test).
@@ -103,9 +102,12 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
         stamp_write_locale_columns(obj, fields, &overlay, locale_ctx)?;
     }
 
-    query::create_version(conn, table, parent_id, "draft", &snapshot)?;
-
-    prune_versions(conn, table, parent_id, versions)?;
+    query::create_version_and_prune(
+        conn,
+        &VersionWrite::builder(table, parent_id, "draft", &snapshot)
+            .max_versions(VersionsConfig::cap(versions))
+            .build(),
+    )?;
 
     Ok(snapshot)
 }

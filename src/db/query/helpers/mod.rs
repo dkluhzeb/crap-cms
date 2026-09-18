@@ -45,7 +45,7 @@ pub(crate) use naming::{
 };
 pub(crate) use sql::{
     SOFT_DELETE_ACTIVE, append_soft_delete_filter, append_sql_condition, like_escape,
-    placeholder_list, quote_ident, sql_ident,
+    placeholder_list, quote_ident,
 };
 
 // The field-tree walkers `prefixed_name` and `walk_leaf_fields` now live in

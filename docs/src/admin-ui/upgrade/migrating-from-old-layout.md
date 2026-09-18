@@ -227,6 +227,11 @@ No template files moved. `templates/auth/`, `templates/collections/`,
 `templates/partials/`, `templates/fields/`, `templates/layout/`,
 `templates/email/`.
 
+Email templates render in strict mode: a reference to a variable the
+template context does not provide fails the render (and the send) instead
+of printing an empty string, so a typo in an override surfaces on the first
+send rather than as a silently blank email.
+
 ## Auto-generated migration recipe
 
 ```

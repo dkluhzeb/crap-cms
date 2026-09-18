@@ -19,7 +19,10 @@
 //! `service::jobs::queue_job` — but with `ctx.user = nil`, since MCP has no
 //! end user. A hook that errors (including on a nil deref) is treated as a
 //! DENY, so this is fail-closed; a job declared with no `access` hook at
-//! all is open to any caller that reaches this tool.
+//! all is open to any caller that reaches this tool. A denied job answers
+//! exactly like an undefined slug, and `list_jobs` omits jobs whose hook
+//! denies the caller — the same visibility rule the gRPC job RPCs apply, so
+//! neither tool can be used to discover job slugs.
 
 use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
@@ -40,6 +43,7 @@ use crate::{
         jobs::{
             ListJobRunsInput,
             bulk_queue::{self, BulkJobData, BulkOpKind, BulkRunIdentity, QueuedBy},
+            conceal_denied_trigger, job_not_found,
         },
     },
 };
@@ -278,11 +282,18 @@ pub(in crate::mcp) fn exec_job_tool(
 }
 
 fn exec_list_jobs(ctx: &ToolExecCtx<'_>) -> Result<String> {
-    let jobs: Vec<Value> = ctx
-        .infra
-        .registry
-        .jobs
-        .values()
+    let conn = ctx.infra.pool.get().context("DB connection")?;
+    let svc = job_ctx(&conn, ctx, "");
+    let registry = ctx.infra.registry.as_ref();
+
+    // The visibility gate gRPC `ListJobs` applies: a job whose access rule
+    // denies this caller is absent, matching the run-read gate.
+    let readable = service::jobs::readable_job_slugs(&svc, &conn, registry)
+        .map_err(ServiceError::into_anyhow_scrubbed)?;
+
+    let jobs: Vec<Value> = readable
+        .iter()
+        .filter_map(|slug| registry.get_job(slug))
         .map(|def| {
             json!({
                 "slug": def.slug.as_ref(),
@@ -425,7 +436,7 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
         .registry
         .get_job(slug)
         .cloned()
-        .with_context(|| format!("Job '{slug}' not found"))?;
+        .ok_or_else(|| job_not_found(slug).into_anyhow_scrubbed())?;
 
     let data_json = match args.get("data") {
         Some(v) if !v.is_null() => to_string(v)?,
@@ -466,7 +477,9 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
             unique_key: unique_key.as_deref(),
         },
     )
-    .map_err(ServiceError::into_anyhow_scrubbed)?;
+    // A denied job answers like an undefined slug — the shared rule every
+    // trigger surface applies.
+    .map_err(|e| conceal_denied_trigger(e, slug).into_anyhow_scrubbed())?;
 
     info!(
         "MCP trigger_job: {} -> {} [client={}]",
@@ -485,7 +498,10 @@ mod tests {
     use super::*;
     use crate::{
         config::{CrapConfig, McpJobTools},
-        core::{CollectionDefinition, Registry, job::SYSTEM_BULK_JOB},
+        core::{
+            CollectionDefinition, Registry,
+            job::{JobDefinition, SYSTEM_BULK_JOB},
+        },
         db::{migrate, pool, query::jobs as job_query},
         hooks::lifecycle::HookRunner,
         mcp::tools::test_helpers::{make_exec_ctx, make_registry},
@@ -545,7 +561,19 @@ mod tests {
     }
 
     fn setup_with(mode: McpJobTools) -> TestCtx {
+        setup_full(mode, Vec::new(), &[])
+    }
+
+    /// The standard context plus extra job definitions and config-dir files
+    /// (the hook sources those definitions reference).
+    fn setup_full(mode: McpJobTools, jobs: Vec<JobDefinition>, files: &[(&str, &str)]) -> TestCtx {
         let tmp = tempfile::tempdir().unwrap();
+        for (rel, contents) in files {
+            let path = tmp.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+
         let mut config = CrapConfig::test_default();
         config.database.path = "test.db".to_string();
         config.mcp.job_tools = mode;
@@ -554,6 +582,9 @@ mod tests {
 
         let mut reg = make_registry();
         reg.register_collection(CollectionDefinition::new("notes"));
+        for job in jobs {
+            reg.register_job(job);
+        }
         let registry = Arc::new(reg);
         migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
 
@@ -673,6 +704,66 @@ mod tests {
 
         // …while a read tool at the same tier succeeds.
         assert!(exec_job_tool(TOOL_LIST_JOBS, &json!({}), &ctx).is_ok());
+    }
+
+    /// One open job and one whose access rule denies every caller (MCP has
+    /// no user, so the rule sees `ctx.user = nil`).
+    fn gated_jobs() -> Vec<JobDefinition> {
+        vec![
+            JobDefinition::builder("open_job", "jobs.open").build(),
+            JobDefinition::builder("secret_job", "jobs.secret")
+                .access("access.deny_mcp")
+                .build(),
+        ]
+    }
+
+    const DENY_HOOK: (&str, &str) = (
+        "access/deny_mcp.lua",
+        "return function(ctx) return false end",
+    );
+
+    /// Regression: `list_jobs` listed every defined job regardless of its
+    /// access rule, while gRPC `ListJobs` hid the ones the caller may not
+    /// read. Both surfaces now share the same visibility gate.
+    #[test]
+    fn list_jobs_hides_jobs_whose_access_denies_the_caller() {
+        let t = setup_full(McpJobTools::Read, gated_jobs(), &[DENY_HOOK]);
+        let ctx = make_exec_ctx(&t.pool, &t.registry, &t.runner, &t.config, t.tmp.path());
+
+        let out = exec_job_tool(TOOL_LIST_JOBS, &json!({}), &ctx).unwrap();
+        let parsed: Value = from_str(&out).unwrap();
+        let slugs: Vec<&str> = parsed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|j| j["slug"].as_str())
+            .collect();
+
+        assert!(slugs.contains(&"open_job"), "{slugs:?}");
+        assert!(!slugs.contains(&"secret_job"), "{slugs:?}");
+    }
+
+    /// Regression: a denied `trigger_job` said "access denied" while an
+    /// undefined slug said "not found", so the tool leaked which jobs exist.
+    /// The two answers must be indistinguishable apart from the slug echoed.
+    #[test]
+    fn trigger_job_answers_a_denied_job_like_an_unknown_one() {
+        let t = setup_full(McpJobTools::All, gated_jobs(), &[DENY_HOOK]);
+        let ctx = make_exec_ctx(&t.pool, &t.registry, &t.runner, &t.config, t.tmp.path());
+
+        let unknown = exec_job_tool(TOOL_TRIGGER_JOB, &json!({ "slug": "nope" }), &ctx)
+            .unwrap_err()
+            .to_string();
+        let denied = exec_job_tool(TOOL_TRIGGER_JOB, &json!({ "slug": "secret_job" }), &ctx)
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            unknown.replace("nope", "{slug}"),
+            denied.replace("secret_job", "{slug}"),
+            "unknown: {unknown} / denied: {denied}"
+        );
+        assert!(!denied.contains("denied"), "{denied}");
     }
 
     /// `list_jobs` reports the registry's defined jobs.

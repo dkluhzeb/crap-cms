@@ -72,11 +72,17 @@ When `drafts = true`, documents have a `_status` field that is either `"publishe
 
 | Action | Result |
 |--------|--------|
-| Update (publish) | Main table updated, `_status = 'published'` + new version snapshot |
+| Update (publish) | The latest draft snapshot (when one is pending) merged under the request's fields, written to the main table, `_status = 'published'` + new version snapshot |
 | Update (draft) | **Version-only save** — main table is NOT modified, only a new draft version snapshot is created |
-| Unpublish | `_status` set to `'draft'` + new version snapshot |
+| Unpublish | `_status` set to `'draft'`; a new version snapshot only when no draft is pending — a pending draft stays the pending draft |
 
 The version-only draft save is key: it lets authors iterate on changes without affecting the published version. The main table always reflects the last published state.
+
+**Publishing takes the pending draft as its base.** An update with `draft = false` while a draft is pending publishes the whole draft — every field, every locale, join rows, companions and a drafted upload file — with the request's own fields applied on top, on every surface (admin, gRPC, Lua, MCP, `update_many`). A field the request sends wins; a field the publisher may not write (`access.update`) is not published from the draft — a localized field is judged once per locale (`ctx.locale` set to each configured locale), so a rule that denies one locale keeps only that locale's column at its stored value. A publish issued in a non-default locale makes the drafted file live too, with its conversions queued and the previous file's cancelled. To discard a pending draft instead, restore the published version.
+
+The same rule applies to globals: `crap.globals.update` (and every other global write surface) publishes the pending global draft merged under the request.
+
+Every version write — publish, draft save, unpublish, restore — goes through one path that locks the parent row, inserts the snapshot and prunes to `max_versions`, then releases any stored file the pruned snapshots were the last reference to.
 
 ### Reading Documents
 
@@ -156,6 +162,9 @@ This overwrites the main table with the snapshot data and creates a new
 version entry for the restore. The document's `_status` is restored to
 **the snapshot's status** — a draft snapshot restores as a draft, a
 published one as published (restore never force-publishes).
+The restore's own version entry counts against `max_versions` like every
+other version write, so restoring on a capped history prunes the oldest
+snapshot.
 
 > **Restore includes translations.** Snapshots carry every locale's value
 > (the decorated `field__xx` columns), and restore writes each locale back
@@ -187,7 +196,8 @@ crap.collections.articles.update(doc.id, {
     title = "Still editing...",
 }, { draft = true })
 
--- Publish
+-- Publish: the pending draft's other fields go live with it, the title
+-- sent here wins
 crap.collections.articles.update(doc.id, {
     title = "Final Title",
 })  -- draft defaults to false

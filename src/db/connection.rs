@@ -8,6 +8,71 @@ use crate::core::FieldType;
 
 use super::types::{DbRow, DbValue};
 
+/// The shape of an upsert: the row to write, the column it conflicts on, and
+/// the condition an existing row must satisfy for the update half to apply.
+///
+/// The guard is what makes a *claim* atomic. Spelled as a pair of statements —
+/// insert if absent, else update if stale — two workers racing the very first
+/// claim both find the row absent, and the loser's INSERT fails on the primary
+/// key: a failed tick rather than "someone else won". An IMMEDIATE transaction
+/// does not save it either, since on Postgres that is a plain `BEGIN` at READ
+/// COMMITTED. One guarded upsert has no such window on either backend, and the
+/// caller reads the outcome off the affected-row count.
+#[derive(Debug, Clone, Copy)]
+pub struct UpsertSpec<'a> {
+    pub(crate) table: &'a str,
+    pub(crate) columns: &'a [&'a str],
+    pub(crate) values: &'a str,
+    pub(crate) key_col: &'a str,
+    pub(crate) guard: Option<&'a str>,
+}
+
+impl<'a> UpsertSpec<'a> {
+    /// Start building an upsert into `table` conflicting on `key_col`.
+    #[must_use]
+    pub fn builder(table: &'a str, key_col: &'a str) -> UpsertSpecBuilder<'a> {
+        UpsertSpecBuilder {
+            spec: Self {
+                table,
+                columns: &[],
+                values: "",
+                key_col,
+                guard: None,
+            },
+        }
+    }
+}
+
+/// Builder for [`UpsertSpec`].
+pub struct UpsertSpecBuilder<'a> {
+    spec: UpsertSpec<'a>,
+}
+
+impl<'a> UpsertSpecBuilder<'a> {
+    /// The columns written and the placeholder list binding them, in the same
+    /// order. `columns` are raw names — the backend quotes them.
+    #[must_use]
+    pub fn columns(mut self, columns: &'a [&'a str], values: &'a str) -> Self {
+        self.spec.columns = columns;
+        self.spec.values = values;
+        self
+    }
+
+    /// A predicate over the row **already stored**, qualified with the table
+    /// name. The `DO UPDATE` applies only where it holds; everywhere else the
+    /// statement affects zero rows and changes nothing.
+    #[must_use]
+    pub fn guard(mut self, guard: &'a str) -> Self {
+        self.spec.guard = Some(guard);
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> UpsertSpec<'a> {
+        self.spec
+    }
+}
+
 /// Object-safe database connection trait.
 ///
 /// All query functions accept `&dyn DbConnection`, making them backend-agnostic.
@@ -224,14 +289,11 @@ pub trait DbConnection {
     /// Postgres: `INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING`
     fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String;
 
-    /// Build a complete upsert SQL statement.
-    /// `columns` are raw names — the backend quotes them as needed.
-    /// `key_col` is the conflict target (usually `"id"`).
+    /// Build a complete upsert SQL statement from [`UpsertSpec`].
     ///
-    /// `SQLite`: `INSERT OR REPLACE INTO {table} ("c1","c2") VALUES ({values})`
-    /// Postgres: `INSERT INTO {table} ("c1","c2") VALUES ({values})
-    ///           ON CONFLICT ("id") DO UPDATE SET "c1"=EXCLUDED."c1", ...`
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String;
+    /// `INSERT INTO {table} ("c1","c2") VALUES ({values})
+    ///  ON CONFLICT ("id") DO UPDATE SET "c1" = excluded."c1", …[ WHERE guard]`
+    fn build_upsert(&self, spec: &UpsertSpec<'_>) -> String;
 
     // ── Capability flags ─────────────────────────────────────────────
 
@@ -414,14 +476,8 @@ macro_rules! impl_db_connection_delegate {
             fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
                 self.inner.build_insert_ignore(table, columns, values)
             }
-            fn build_upsert(
-                &self,
-                table: &str,
-                columns: &[&str],
-                values: &str,
-                key_col: &str,
-            ) -> String {
-                self.inner.build_upsert(table, columns, values, key_col)
+            fn build_upsert(&self, spec: &UpsertSpec<'_>) -> String {
+                self.inner.build_upsert(spec)
             }
             fn supports_fts(&self) -> bool {
                 self.inner.supports_fts()

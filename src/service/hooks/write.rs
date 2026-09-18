@@ -4,12 +4,17 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
+use std::collections::{HashMap, HashSet};
+
 use crate::{
     core::{
-        Builder, Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
-        nest_group_fields,
+        Builder, Document, DocumentFields, FieldDefinition, FieldType, Hooks, Registry,
+        ValidationError, nest_group_fields, prefixed_name, walk_leaf_fields,
     },
-    db::{AccessResult, DbConnection, LocaleContext, query::helpers::column_belongs_to},
+    db::{
+        AccessResult, DbConnection, LocaleContext,
+        query::helpers::{column_belongs_to, locale_column},
+    },
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
@@ -28,6 +33,230 @@ use crate::{
 type ValidateResult = std::result::Result<(), ValidationError>;
 
 use super::richtext::apply_richtext_before_validate;
+
+/// The locales a snapshot strip judges: the write's own locale for the shared
+/// (non-localized) fields, and every configured locale for the localized ones,
+/// since the snapshot carries a column per locale and each is published.
+#[derive(Clone, Copy, Default)]
+pub struct SnapshotLocales<'a> {
+    /// The locale the write targets — what the request strip judges with.
+    pub request: Option<&'a str>,
+    /// Every configured locale; empty when localization is off, in which case
+    /// every field is judged once, as a shared one.
+    pub configured: &'a [String],
+    /// The default locale, whose value a snapshot may also carry under the
+    /// field's bare key.
+    pub default: Option<&'a str>,
+}
+
+impl<'a> SnapshotLocales<'a> {
+    /// The locales of a write running under `locale_ctx`.
+    #[must_use]
+    pub fn for_write(locale_ctx: Option<&'a LocaleContext>) -> Self {
+        Self {
+            request: locale_ctx.map(LocaleContext::access_locale),
+            configured: locale_ctx.map_or(&[], |ctx| ctx.config.locales.as_slice()),
+            default: locale_ctx.map(|ctx| ctx.config.default_locale.as_str()),
+        }
+    }
+}
+
+/// What the strip needs to know about the fields' leaves: which paths are
+/// localized, which are checkboxes, and each leaf's companion columns.
+struct LeafShape {
+    leaves: Vec<String>,
+    localized: HashSet<String>,
+    checkboxes: HashSet<String>,
+    companions: HashMap<String, Vec<String>>,
+}
+
+impl LeafShape {
+    fn of(fields: &[FieldDefinition], locales_enabled: bool) -> Self {
+        let mut shape = Self {
+            leaves: Vec::new(),
+            localized: HashSet::new(),
+            checkboxes: HashSet::new(),
+            companions: HashMap::new(),
+        };
+
+        let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
+            let path = prefixed_name(prefix, &field.name);
+
+            if locales_enabled && (field.localized || inherited) {
+                shape.localized.insert(path.clone());
+            }
+            if field.field_type == FieldType::Checkbox {
+                shape.checkboxes.insert(path.clone());
+            }
+            shape
+                .companions
+                .insert(path.clone(), field.companion_columns(&path).collect());
+            shape.leaves.push(path);
+
+            Ok(())
+        });
+
+        shape
+    }
+
+    /// The leaf paths a removed path covers — itself, or every leaf under it
+    /// when a whole group was removed.
+    fn leaves_under<'s>(&'s self, removed: &'s [String]) -> impl Iterator<Item = &'s String> {
+        self.leaves.iter().filter(move |leaf| {
+            removed
+                .iter()
+                .any(|path| *leaf == path || leaf.starts_with(&format!("{path}__")))
+        })
+    }
+
+    /// The column paths of `leaf` at `code`: the value and its companions —
+    /// and, for the default locale, the bare key a snapshot may carry the
+    /// default value under as well.
+    fn locale_columns(&self, leaf: &str, code: &str, is_default: bool) -> Vec<String> {
+        let bases = std::iter::once(leaf.to_string())
+            .chain(self.companions.get(leaf).into_iter().flatten().cloned());
+        let mut columns: Vec<String> = bases
+            .flat_map(|base| {
+                let decorated = locale_column(&base, code).ok();
+                is_default
+                    .then(|| base.clone())
+                    .into_iter()
+                    .chain(decorated)
+            })
+            .collect();
+        columns.sort();
+        columns.dedup();
+
+        columns
+    }
+}
+
+/// The `__`-joined path of every key present in `before` but missing from
+/// `after`.
+fn removed_paths(before: &Map<String, Value>, after: &Map<String, Value>) -> Vec<String> {
+    let mut removed = Vec::new();
+    collect_removed_paths(before, after, "", &mut removed);
+
+    removed
+}
+
+/// Remove every key whose `__`-joined path is one of `paths`, at this level
+/// and inside nested group objects.
+fn drop_paths(level: &mut Map<String, Value>, prefix: &str, paths: &[String]) {
+    level.retain(|key, _| !paths.contains(&format!("{prefix}{key}")));
+
+    for (key, value) in level.iter_mut() {
+        if let Value::Object(nested) = value {
+            drop_paths(nested, &format!("{prefix}{key}__"), paths);
+        }
+    }
+}
+
+/// The value stored at a `__`-joined path of a nested document.
+fn value_at<'v>(level: &'v Map<String, Value>, path: &str) -> Option<&'v Value> {
+    let (head, rest) = path.split_once("__").unwrap_or((path, ""));
+    let value = level.get(head)?;
+
+    if rest.is_empty() {
+        return Some(value);
+    }
+
+    value_at(value.as_object()?, rest)
+}
+
+/// Insert `value` at a `__`-joined path, creating the group objects on the way.
+fn insert_at(level: &mut Map<String, Value>, path: &str, value: Value) {
+    let (head, rest) = path.split_once("__").unwrap_or((path, ""));
+
+    if rest.is_empty() {
+        level.insert(head.to_string(), value);
+        return;
+    }
+
+    let nested = level
+        .entry(head.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(nested) = nested {
+        insert_at(nested, rest, value);
+    }
+}
+
+/// Put every checkbox absent from `level` into it with its stored value, so
+/// the strip judges its rule; returns the paths added.
+///
+/// A checkbox absent from a write is stored as unchecked, so a write-denied
+/// checkbox the caller simply omitted would be flipped by the row write with
+/// nothing for the strip to remove. Filled in, it is judged like a sent
+/// value: denied, it keeps the stored value ([`restore_stripped_checkboxes`]);
+/// allowed, it is taken out again ([`unfill_kept_checkboxes`]) so an omitted
+/// checkbox still means "unchecked" for a caller who may write it.
+fn prefill_checkboxes(
+    shape: &LeafShape,
+    level: &mut Map<String, Value>,
+    stored: &Map<String, Value>,
+) -> Vec<String> {
+    let mut filled = Vec::new();
+
+    for leaf in &shape.leaves {
+        if !shape.checkboxes.contains(leaf) || value_at(level, leaf).is_some() {
+            continue;
+        }
+
+        if let Some(value) = value_at(stored, leaf) {
+            insert_at(level, leaf, value.clone());
+            filled.push(leaf.clone());
+        }
+    }
+
+    filled
+}
+
+/// Take the pre-filled checkboxes the strip kept out again, along with any
+/// group object the fill created that is empty now.
+fn unfill_kept_checkboxes(
+    filled: &[String],
+    removed: &[String],
+    level: &mut Map<String, Value>,
+    original: &Map<String, Value>,
+) {
+    let kept: Vec<String> = filled
+        .iter()
+        .filter(|leaf| {
+            !removed
+                .iter()
+                .any(|path| *leaf == path || leaf.starts_with(&format!("{path}__")))
+        })
+        .cloned()
+        .collect();
+    drop_paths(level, "", &kept);
+
+    level.retain(|key, value| {
+        original.contains_key(key) || !value.as_object().is_some_and(Map::is_empty)
+    });
+}
+
+/// Put the stored value back for every checkbox the strip removed.
+///
+/// A write-denied field is left untouched by dropping it from the data — for
+/// every field but a checkbox, whose absence the row write reads as
+/// "unchecked" and stores as `0`. Restoring the stored value keeps the row
+/// write blind to the difference and the denied field genuinely untouched.
+fn restore_stripped_checkboxes(
+    shape: &LeafShape,
+    removed: &[String],
+    level: &mut Map<String, Value>,
+    stored: &Map<String, Value>,
+) {
+    for leaf in shape.leaves_under(removed) {
+        if !shape.checkboxes.contains(leaf) {
+            continue;
+        }
+
+        if let Some(value) = value_at(stored, leaf) {
+            insert_at(level, leaf, value.clone());
+        }
+    }
+}
 
 /// Drop the columns that belong to every field a write strip removed from a
 /// version snapshot: its per-locale columns (`price__en`, `seo__title__de`) and
@@ -244,6 +473,17 @@ pub trait WriteHooks: FieldReadStrip {
         }
 
         let document = nest_group_fields(stored, fields);
+        let stored_nested: Map<String, Value> = document.clone().into_inner().into_iter().collect();
+        let original: Map<String, Value> = data.clone().into_inner().into_iter().collect();
+
+        // The stored document is resolved for the write's locale, so a checkbox
+        // filled in or put back here carries that locale's stored value.
+        let shape = LeafShape::of(fields, false);
+        let mut level = original.clone();
+        let filled = prefill_checkboxes(&shape, &mut level, &stored_nested);
+        let before = level.clone();
+        *data = level.into_iter().collect();
+
         strip_in_place(
             self,
             fields,
@@ -256,6 +496,12 @@ pub trait WriteHooks: FieldReadStrip {
                 operation: "update",
             },
         );
+
+        let mut level: Map<String, Value> = std::mem::take(data).into_inner().into_iter().collect();
+        let removed = removed_paths(&before, &level);
+        unfill_kept_checkboxes(&filled, &removed, &mut level, &original);
+        restore_stripped_checkboxes(&shape, &removed, &mut level, &stored_nested);
+        *data = level.into_iter().collect();
     }
 
     /// Strip **write**-denied fields from a version-snapshot `Value::Object` in
@@ -271,6 +517,12 @@ pub trait WriteHooks: FieldReadStrip {
     /// an update does: the snapshot is the value under judgment, so it cannot
     /// also be the evidence. Mirrors
     /// [`FieldReadStrip::strip_read_access_doc`].
+    ///
+    /// A snapshot carries a column per locale, and writing it back publishes
+    /// every one of them, so a localized field is judged once per configured
+    /// locale with `ctx.locale` set to that locale and only the denied locale's
+    /// columns are dropped; a shared field is judged once, at the write's own
+    /// locale, exactly like the request strip.
     fn strip_write_access_value(
         &self,
         fields: &[FieldDefinition],
@@ -278,7 +530,7 @@ pub trait WriteHooks: FieldReadStrip {
         stored: &DocumentFields,
         collection: &str,
         user: Option<&Document>,
-        locale: Option<&str>,
+        locales: SnapshotLocales<'_>,
     ) {
         if !has_any_field_access(fields, |f| f.access.update.as_ref()) {
             return;
@@ -294,24 +546,60 @@ pub trait WriteHooks: FieldReadStrip {
         // the snapshot was stored; `nest_group_fields` is idempotent for the
         // nested snapshots current code writes. Mirrors the read-path variant.
         let nested = nest_group_fields(&obj.clone().into_iter().collect(), fields);
-        let mut level: Map<String, Value> = nested.into_inner().into_iter().collect();
-
-        let before = level.clone();
+        let original: Map<String, Value> = nested.into_inner().into_iter().collect();
         let document = nest_group_fields(stored, fields);
+        let stored_nested: Map<String, Value> = document.clone().into_inner().into_iter().collect();
 
-        self.strip_write_access_map(
-            fields,
-            &mut level,
-            &WriteStripInput {
-                document: &document,
-                collection,
-                user,
-                locale,
-                operation: "update",
-            },
-        );
+        let shape = LeafShape::of(fields, !locales.configured.is_empty());
+        let mut before = original.clone();
+        let filled = prefill_checkboxes(&shape, &mut before, &stored_nested);
 
+        let judge = |locale: Option<&str>| {
+            let mut run = before.clone();
+            self.strip_write_access_map(
+                fields,
+                &mut run,
+                &WriteStripInput {
+                    document: &document,
+                    collection,
+                    user,
+                    locale,
+                    operation: "update",
+                },
+            );
+
+            removed_paths(&before, &run)
+        };
+
+        let mut level = before.clone();
+
+        let shared: Vec<String> = judge(locales.request)
+            .into_iter()
+            .filter(|path| {
+                !shape
+                    .leaves_under(std::slice::from_ref(path))
+                    .all(|leaf| shape.localized.contains(leaf))
+            })
+            .collect();
+        let shared_leaves: Vec<String> = shape
+            .leaves_under(&shared)
+            .filter(|leaf| !shape.localized.contains(*leaf))
+            .cloned()
+            .collect();
+        drop_paths(&mut level, "", &shared_leaves);
         drop_locale_columns_of_stripped(&before, &mut level);
+        unfill_kept_checkboxes(&filled, &shared_leaves, &mut level, &original);
+        restore_stripped_checkboxes(&shape, &shared_leaves, &mut level, &stored_nested);
+
+        for code in locales.configured {
+            let denied = judge(Some(code));
+            let columns: Vec<String> = shape
+                .leaves_under(&denied)
+                .filter(|leaf| shape.localized.contains(*leaf))
+                .flat_map(|leaf| shape.locale_columns(leaf, code, locales.default == Some(code)))
+                .collect();
+            drop_paths(&mut level, "", &columns);
+        }
 
         *snapshot = Value::Object(level);
     }

@@ -1,11 +1,12 @@
-//! Version snapshot context and creation/pruning helpers.
+//! Version snapshot context and creation helpers.
 
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
     core::{Builder, Document, FieldDefinition, collection::VersionsConfig},
-    db::{DbConnection, query},
+    db::{DbConnection, query, query::VersionWrite},
 };
 
 /// Context for creating a version snapshot, bundling the table/document metadata.
@@ -25,6 +26,11 @@ pub(crate) struct VersionSnapshotCtx<'a> {
 }
 
 /// Set document status, create a version snapshot, and prune.
+///
+/// # Errors
+///
+/// Returns a backend error if the status update, the snapshot build or the
+/// version write fails.
 pub(crate) fn create_version_snapshot(
     conn: &dyn DbConnection,
     ctx: &VersionSnapshotCtx<'_>,
@@ -34,6 +40,14 @@ pub(crate) fn create_version_snapshot(
     if ctx.has_drafts {
         query::set_document_status(conn, ctx.table, ctx.parent_id, status)?;
     }
+
+    // A format converted on the background queue is not part of this write, so
+    // the row — and therefore this snapshot — still carries the PREVIOUS file's
+    // derivative url in that column until the job runs and replaces it. Under
+    // reference-checked deletion those bytes stay alive for as long as this
+    // snapshot names them, and go when it is pruned. Recording the url that was
+    // true at snapshot time is what makes a restore of this version find a file
+    // it can serve, so the stale column is kept deliberately.
     let mut snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc, ctx.locale_config)?;
 
     // The snapshot must record the status this version is stamped with, not
@@ -44,36 +58,22 @@ pub(crate) fn create_version_snapshot(
     if ctx.has_drafts
         && let Some(obj) = snapshot.as_object_mut()
     {
-        obj.insert(
-            "_status".to_string(),
-            serde_json::Value::String(status.to_string()),
-        );
+        obj.insert("_status".to_string(), Value::String(status.to_string()));
     }
 
-    query::create_version(conn, ctx.table, ctx.parent_id, status, &snapshot)?;
-    prune_versions(conn, ctx.table, ctx.parent_id, ctx.versions)?;
+    query::create_version_and_prune(
+        conn,
+        &VersionWrite::builder(ctx.table, ctx.parent_id, status, &snapshot)
+            .max_versions(VersionsConfig::cap(ctx.versions))
+            .build(),
+    )?;
+
     Ok(())
 }
 
-/// Prune versions if `max_versions` is configured and > 0.
-pub(crate) fn prune_versions(
-    conn: &dyn DbConnection,
-    table: &str,
-    parent_id: &str,
-    versions: Option<&VersionsConfig>,
-) -> Result<()> {
-    if let Some(vc) = versions
-        && vc.max_versions > 0
-    {
-        query::prune_versions(conn, table, parent_id, vc.max_versions)?;
-    }
-    Ok(())
-}
-
-#[cfg(all(test, feature = "sqlite"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::InMemoryConn;
 
     #[test]
     fn builder_defaults_to_empty_fields_no_config_no_drafts() {
@@ -97,21 +97,5 @@ mod tests {
         assert_eq!(ctx.parent_id, "doc-9");
         assert!(ctx.has_drafts);
         assert_eq!(ctx.versions.map(|v| v.max_versions), Some(5));
-    }
-
-    /// The guard must short-circuit before touching the DB. The bare in-memory
-    /// connection has no `_versions` table, so any actual prune query would
-    /// error — `Ok` proves the short-circuit fired.
-    #[test]
-    fn prune_short_circuits_without_a_config() {
-        let conn = InMemoryConn::open();
-        assert!(prune_versions(&conn, "posts", "doc-1", None).is_ok());
-    }
-
-    #[test]
-    fn prune_short_circuits_when_max_versions_is_zero() {
-        let conn = InMemoryConn::open();
-        let vc = VersionsConfig::new(true, 0);
-        assert!(prune_versions(&conn, "posts", "doc-1", Some(&vc)).is_ok());
     }
 }

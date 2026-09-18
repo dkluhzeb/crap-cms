@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::{CollectionDefinition, VersionsConfig};
-use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::core::{DocumentFields, Registry};
+use crap_cms::core::field::{FieldAccess, FieldDefinition, FieldType};
+use crap_cms::core::{DocumentFields, HookRef, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
@@ -18,7 +18,7 @@ use crap_cms::service::{
 use serde_json::{Value, json};
 
 struct Harness {
-    _tmp: tempfile::TempDir,
+    tmp: tempfile::TempDir,
     pool: DbPool,
     runner: HookRunner,
     def: CollectionDefinition,
@@ -72,7 +72,7 @@ fn setup() -> Harness {
         .expect("runner");
 
     Harness {
-        _tmp: tmp,
+        tmp,
         pool,
         runner,
         def,
@@ -607,4 +607,221 @@ fn unpublish_reports_the_default_locales_rows() {
     let doc = unpublish_document(&service_ctx(&h), &id).expect("unpublish");
 
     assert_eq!(captions(&doc), vec!["english".to_string()]);
+}
+
+/// The `slug` — a shared (non-localized) field, so it has one value whatever
+/// locale it is read under.
+fn slug_of(h: &Harness, id: &str) -> Option<String> {
+    let conn = h.pool.get().unwrap();
+    query::find_by_id(&conn, "pages", &h.def, id, Some(&ctx_for(h, "en")))
+        .unwrap()
+        .and_then(|d| d.get_str("slug").map(str::to_string))
+}
+
+/// A publish makes the pending draft live as ONE unit. A draft saved in German
+/// used to be stranded in history when the document was published in English:
+/// the publish adopted only the request locale's drafted values, and the new
+/// published snapshot was rebuilt from the row, so nothing carried the German
+/// draft forward.
+#[test]
+fn publishing_in_one_locale_publishes_every_locales_draft() {
+    let h = setup();
+    let id = seed(&h);
+    let ctx = service_ctx(&h);
+
+    let de = ctx_for(&h, "de");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Hallo Entwurf")]))
+            .locale_ctx(Some(&de))
+            .draft(true)
+            .build(),
+    )
+    .expect("german draft");
+
+    let en = ctx_for(&h, "en");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("slug", "drafted-slug")]))
+            .locale_ctx(Some(&en))
+            .draft(true)
+            .build(),
+    )
+    .expect("english draft");
+
+    // The publish sends only the English title.
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Hello published")]))
+            .locale_ctx(Some(&en))
+            .build(),
+    )
+    .expect("publish");
+
+    assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Hello published"));
+    assert_eq!(
+        title_in(&h, &id, "de").as_deref(),
+        Some("Hallo Entwurf"),
+        "the German draft goes live with the publish"
+    );
+    assert_eq!(
+        slug_of(&h, &id).as_deref(),
+        Some("drafted-slug"),
+        "the draft's shared value goes live too"
+    );
+}
+
+/// A non-default-locale publish still cannot CHANGE a shared field — the locale
+/// lock judges the request's own fields — but the draft's shared values, saved
+/// under the default locale, go live with it, and the other locales are left as
+/// the draft recorded them.
+#[test]
+fn a_german_publish_makes_the_drafts_shared_values_live() {
+    let h = setup();
+    let id = seed(&h);
+    let ctx = service_ctx(&h);
+
+    let en = ctx_for(&h, "en");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("slug", "drafted-slug"), ("title", "Hello v2")]))
+            .locale_ctx(Some(&en))
+            .draft(true)
+            .build(),
+    )
+    .expect("english draft");
+
+    let de = ctx_for(&h, "de");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Hallo v2")]))
+            .locale_ctx(Some(&de))
+            .build(),
+    )
+    .expect("german publish");
+
+    assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo v2"));
+    assert_eq!(
+        title_in(&h, &id, "en").as_deref(),
+        Some("Hello v2"),
+        "a German publish takes the English title from the draft, not the row"
+    );
+    assert_eq!(
+        slug_of(&h, &id).as_deref(),
+        Some("drafted-slug"),
+        "the draft's shared value goes live even from a German publish"
+    );
+}
+
+/// Publishing without a pending draft changes nothing beyond the request: the
+/// write-back only ever carries a draft that is actually pending.
+#[test]
+fn a_publish_without_a_pending_draft_writes_only_the_request() {
+    let h = setup();
+    let id = seed(&h);
+    let ctx = service_ctx(&h);
+
+    let en = ctx_for(&h, "en");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Hello v2")]))
+            .locale_ctx(Some(&en))
+            .build(),
+    )
+    .expect("publish");
+
+    assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Hello v2"));
+    assert_eq!(title_in(&h, &id, "de").as_deref(), Some("Hallo"));
+    assert_eq!(slug_of(&h, &id).as_deref(), Some("hello"));
+}
+
+/// A localized field's `access.update` rule is judged per locale on the
+/// write-back: the snapshot carries one column per locale and publishing
+/// writes every one, so a rule that denies `de` keeps the German column at
+/// its stored value while the English one is published from the draft.
+#[test]
+fn the_write_back_judges_a_localized_field_per_locale() {
+    let h = setup_with_locale_rule();
+    let id = seed(&h);
+    let ctx = service_ctx(&h);
+
+    let en = ctx_for(&h, "en");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Draft EN")]))
+            .locale_ctx(Some(&en))
+            .draft(true)
+            .build(),
+    )
+    .expect("english draft");
+
+    let de = ctx_for(&h, "de");
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("title", "Draft DE")]))
+            .locale_ctx(Some(&de))
+            .draft(true)
+            .build(),
+    )
+    .expect("german draft");
+
+    update_document(
+        &ctx,
+        &id,
+        WriteInput::builder(fields(&[("slug", "published")]))
+            .locale_ctx(Some(&en))
+            .build(),
+    )
+    .expect("english publish");
+
+    assert_eq!(title_in(&h, &id, "en").as_deref(), Some("Draft EN"));
+    assert_eq!(
+        title_in(&h, &id, "de").as_deref(),
+        Some("Hallo"),
+        "the rule denies German, so the German column keeps its stored value"
+    );
+}
+
+/// The harness with a `title` rule that denies writes under the German locale.
+fn setup_with_locale_rule() -> Harness {
+    let h = setup();
+    let access = h.tmp.path().join("access");
+    std::fs::create_dir_all(&access).expect("access dir");
+    std::fs::write(
+        access.join("not_de.lua"),
+        "return crap.any.access(function(context)\n\treturn context.locale ~= \"de\"\nend)\n",
+    )
+    .expect("rule");
+
+    let mut def = make_def();
+    def.fields[0] = FieldDefinition::builder("title", FieldType::Text)
+        .localized(true)
+        .access(FieldAccess {
+            update: Some(HookRef::new("access.not_de")),
+            ..Default::default()
+        })
+        .build();
+
+    let shared = Registry::shared();
+    shared.write().unwrap().register_collection(def.clone());
+    let registry = Registry::snapshot(&shared);
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.locale = h.locale.clone();
+    let runner = HookRunner::builder()
+        .config_dir(h.tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("runner");
+
+    Harness { runner, def, ..h }
 }

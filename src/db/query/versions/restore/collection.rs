@@ -1,11 +1,11 @@
 //! Restoring a version snapshot onto a collection document.
 
 use anyhow::{Result, anyhow};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document},
+    core::{CollectionDefinition, Document, collection::VersionsConfig},
     db::{
         DbConnection,
         query::{
@@ -14,13 +14,44 @@ use crate::{
             read::find_by_id_raw,
             ref_count,
             versions::{
-                create_version, restore::row::restore_locale_and_join_data, set_document_status,
-                snapshot::extract_snapshot_data,
+                VersionWrite, create_version_and_prune, restore::row::restore_locale_and_join_data,
+                set_document_status, snapshot::extract_snapshot_data,
             },
             write::update,
         },
     },
 };
+
+/// Write a stored snapshot back over a document's row: the regular columns,
+/// every locale's own column, and the join rows.
+///
+/// The shared write half of restoring a version and of publishing a pending
+/// draft — a publish takes the draft as ONE unit, so every locale the
+/// publishing request does not target takes its values from the snapshot
+/// exactly as a restore of that snapshot would write them.
+///
+/// Deliberately does not touch `_status`, version history, ref counts or the
+/// search index: the two lifecycles account for those differently, and a
+/// publish has to fold this write into its own ref-count bracket.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE or the locale/join-table sync fails.
+pub fn write_snapshot_base(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    parent_id: &str,
+    obj: &Map<String, Value>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let data = extract_snapshot_data(obj, &def.fields, locale_config.is_enabled());
+    let locale_ctx = LocaleContext::default_for(locale_config);
+
+    update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
+
+    restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)
+}
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
@@ -48,9 +79,6 @@ pub fn restore_version(
         .as_object()
         .ok_or_else(|| anyhow!("Snapshot is not a JSON object"))?;
 
-    let locales_enabled = locale_config.is_enabled();
-    let data = extract_snapshot_data(obj, &def.fields, locales_enabled);
-
     let locale_ctx = LocaleContext::default_for(locale_config);
 
     // Row lock before the unlocked ref snapshot (see `persist_update`).
@@ -58,9 +86,7 @@ pub fn restore_version(
     let old_refs =
         ref_count::snapshot_outgoing_refs(conn, slug, parent_id, &def.fields, locale_config)?;
 
-    update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
-
-    restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)?;
+    write_snapshot_base(conn, slug, def, parent_id, obj, locale_config)?;
 
     // Adjust ref counts based on before/after diff
     ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
@@ -74,7 +100,15 @@ pub fn restore_version(
     if def.has_drafts() {
         set_document_status(conn, slug, parent_id, status)?;
     }
-    create_version(conn, slug, parent_id, status, snapshot)?;
+
+    // Recording the restore is a version write like any other, so it prunes to
+    // the same cap: restoring repeatedly used to grow the table without bound.
+    create_version_and_prune(
+        conn,
+        &VersionWrite::builder(slug, parent_id, status, snapshot)
+            .max_versions(VersionsConfig::cap(def.versions.as_ref()))
+            .build(),
+    )?;
 
     // The restored document as it now stands — locale columns, rows and status
     // written — not the row as the column update read it mid-restore.
@@ -95,7 +129,7 @@ mod tests {
             query::{
                 find_by_id,
                 versions::{
-                    build_snapshot, create_version,
+                    build_snapshot, count_versions, create_version,
                     restore::test_support::{VERSIONS_SNIPPETS_DDL, code_lang_def, setup_conn},
                 },
             },
@@ -189,6 +223,60 @@ mod tests {
             row.get_string("start_date_tz").unwrap(),
             "America/New_York",
             "Restored timezone should match the snapshot"
+        );
+    }
+
+    /// Restoring records a version like every other lifecycle step, so it
+    /// prunes to the same cap. Restore created a version and never pruned, so
+    /// repeated restores grew the version table without bound.
+    #[test]
+    fn restore_version_prunes_to_the_configured_cap() {
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                body TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_notes (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO notes (id, body) VALUES ('n1', 'live');",
+        )
+        .unwrap();
+
+        let no_locale = LocaleConfig::default();
+        let mut def = CollectionDefinition::new("notes");
+        def.fields = vec![FieldDefinition::builder("body", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(false, 2));
+
+        let snapshot = json!({ "body": "v1" });
+
+        for _ in 0..5 {
+            restore_version(
+                &conn,
+                "notes",
+                &def,
+                "n1",
+                &snapshot,
+                "published",
+                &no_locale,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            count_versions(&conn, "notes", "n1", false).unwrap(),
+            2,
+            "five restores must leave the cap, not five rows"
         );
     }
 

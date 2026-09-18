@@ -37,3 +37,5 @@ pub use runner::{
     ExecuteJobParams, check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs,
 };
 pub use types::SchedulerParams;
+
+pub(crate) use runner::parse_cron;

@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **A custom route's `access` rule must return a boolean.** A rule that
+  returned a row-filter table (the shape collection access rules return) was
+  counted as "allow" for everyone; it is now a hook error, as on custom pages
+  and version gates. Any other non-boolean return (`1`, a string) used to
+  allow as well and now denies with a warning — return `true` or `false`.
+- **The `_system_*` job slugs are reserved at the queue.** `queue_job`
+  (gRPC, MCP, Lua) and `crap-cms jobs trigger` refuse a system slug the way
+  they refuse an undefined job; only the owning subsystem queues its system
+  job.
+- **Cron schedules count days of the week the crontab way.** The scheduler's
+  cron library numbers Sunday as 1 and Monday as 2, and nothing translated, so
+  `0 8 * * 1` ("Mondays at 8am" in the docs) fired on Sunday, every numeric
+  weekday ran a day early, and the standard Sunday spelling `0` failed to
+  parse — the job never ran, with only a per-tick warning. Weekdays are now
+  0–6 with Sunday 0 (7 also Sunday), as in crontab, and every schedule is
+  parsed at startup, which fails on an invalid one. A schedule written against
+  the old numbering runs one day later than before.
 - **Admin template context: the duplicate locale-picker keys are gone.** The
   collection edit/create, collection form-error, global edit and global
   form-error page contexts no longer emit `has_locales` / `current_locale` /
@@ -24,14 +41,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   published that file at all (the derived upload columns were stripped as
   untrusted, so the document kept its old file). A publisher who may not write
   a field cannot publish a drafted change to it.
-- **A stored upload file is deleted only when nothing references it.** A key
-  is removed after the write commits when neither the live row nor any draft
-  or version snapshot of the document names it; replacing a file on a
-  versioned collection keeps the previous file until the last snapshot naming
-  it is pruned, `max_versions` pruning deletes the files it releases, and a
-  superseded draft's file goes when no snapshot names it. Queued-format
-  conversions of a drafted file are enqueued at publish, not at draft save.
-  Purge deletes every file any snapshot of the document references.
+  The pending draft is one unit: a publish issued in one locale publishes
+  every locale's drafted values and the draft's shared values, not only the
+  request's locale. Globals follow the same rule — a global publish used to
+  ignore the pending global draft entirely. A publish that carries its own file
+  no longer adopts the draft's derived upload columns (`width`, per-size URLs)
+  for a different file.
+- **A localized field's write rule is judged per locale when a draft is
+  published.** The write-back carries one column per locale; its rules used
+  to run with `ctx.locale = nil`, so a rule keyed on the locale silently
+  dropped every translation or published one it would have refused. Each
+  configured locale is judged with its own `ctx.locale`, and only a denied
+  locale's column keeps its stored value.
+- **Unpublishing keeps the pending draft.** With a draft pending, unpublish
+  only flips `_status`; it used to snapshot the live row on top, making the
+  published state the "latest draft" and hiding the author's pending edits.
+  Without a pending draft the live row is snapshotted as before.
 - **`locale = "all"` is rejected on writes.** A create, update, bulk write,
   global update, validate or upload write that passes `locale = "all"` used to
   write the default locale silently and skip the shared-field lock; it is now a
@@ -2120,6 +2145,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Global draft events were never delivered.** A subscriber whose global
+  `access.draft` allowed drafts still received no draft-state events for the
+  global: the event gate resolved a global's draft view as absent while a
+  collection's was resolved from its access rule. Both go through one view
+  resolver now.
+- **A write-denied checkbox was flipped to unchecked by any update.** A
+  checkbox absent from an update is stored as `false`, so an update that
+  omitted a checkbox the caller may not write (`access.update`) — or whose
+  value the write strip removed — unchecked it: the denied caller changed the
+  field after all. A rule-bearing checkbox is now judged even when omitted,
+  and a denied one keeps its stored value, for a request and for a published
+  draft alike; an omitted checkbox the caller may write still reads as
+  unchecked.
+- **Every version write prunes and releases files.** Restore never pruned to
+  `max_versions`, and neither unpublish nor restore released the stored files
+  their pruning orphaned; bulk publish (`update_many`) adopted a drafted file
+  but never settled it, orphaning the replaced file and dropping its queued
+  conversions. Publish, draft save, unpublish and restore now share one
+  version-write path that locks the parent row (two concurrent writes could
+  previously interleave `_version` numbers), inserts, prunes and releases.
+- **Replacing an upload clears the derived columns the new file does not
+  produce.** A PDF replacing a JPEG left the old `width`, `height` and
+  per-size URLs on the row; every server-derived column is now written
+  explicitly on each file write.
+- **A stored upload file is deleted only when nothing references it.** A key
+  is removed after the write commits when neither the live row nor any draft
+  or version snapshot of the document names it; replacing a file on a
+  versioned collection keeps the previous file until the last snapshot naming
+  it is pruned, `max_versions` pruning deletes the files it releases, and a
+  superseded draft's file goes when no snapshot names it. Queued-format
+  conversions of a drafted file are enqueued at publish, not at draft save.
+  Purge deletes every file any snapshot of the document references.
+- **Enabling `soft_delete` on an existing SQLite collection with a unique
+  field deleted its junction rows and version snapshots.** The table rebuild
+  renamed the live table first; SQLite rewrites every child's `REFERENCES` to
+  the renamed table, and dropping it afterwards cascaded into the children —
+  every has-many/array/blocks row and every version of that collection was
+  deleted, and the child tables were left pointing at a table that no longer
+  existed. On Postgres the same migration aborted at boot instead. The rebuild
+  now builds the replacement under a temporary name, fills it, drops the
+  original and renames, with foreign-key enforcement off for that one sync and
+  `PRAGMA foreign_key_check` before commit; Postgres drops the constraints in
+  place without a rebuild.
+- **The Postgres pool could block a request forever.** A checkout on an
+  exhausted pool had no timeout, and a connection the server had closed (a
+  restart, `pg_terminate_backend`) was handed out again until it errored.
+  Every checkout, creation and recycle is now bounded by `[database]
+  connection_timeout`, and a closed connection leaves the pool.
+- **A schema change on another node turned every cached Postgres statement
+  into a permanent error.** Prepared statements were never invalidated, so
+  after another node's schema sync each cached query failed with "cached plan
+  must not change result type" until the process restarted. Such a statement
+  is re-prepared and retried once in autocommit; inside a transaction (which
+  the failure already aborted) it is evicted and the error reported, and the
+  next transaction re-prepares it.
+- **A foreign-key violation was reported as a duplicate.** Constraint errors
+  were classified by message text, which is locale-dependent on Postgres and
+  lumped every constraint together as `ALREADY_EXISTS` / 409 "already exists".
+  Errors are classified by the driver's typed code now: a foreign-key
+  violation is gRPC `FAILED_PRECONDITION` (HTTP 409 with its own message), a
+  transient failure `UNAVAILABLE`, and a not-found raised inside a hook is
+  reported as not-found instead of an internal error.
+- **A nested dot-path filter on a JSON column was a hard error on Postgres**
+  (`jsonb_array_elements_text(text)` does not exist); the extracted value is
+  cast to `jsonb` first.
+- **A field named like a SQL keyword compared the wrong thing on Postgres.**
+  Identifiers were only quoted when they carried capitals, so a field called
+  `user` in a filter or sort compared the session user; every identifier is
+  quoted, on both backends.
+- **Two schedulers claiming a cron job's first window at once failed a tick.**
+  The claim was a read followed by an insert, so the loser hit the primary key
+  and reported an error instead of backing off; it is one guarded upsert now
+  on both backends.
+- **The soft-delete table rebuild copied columns unquoted**, so a localized
+  column with capitals in its locale code (`title__de_DE`) aborted the
+  migration on Postgres.
+- **Four write transactions were opened on read-pool connections** (the
+  scheduler poll, image conversion, the admin locale and user-settings
+  saves), competing with readers for the SQLite write lock instead of
+  queueing on the write pool.
 - **The first startup erased multi-value selections inside array and blocks
   rows saved by an earlier release.** Those forms stored a has-many text,
   number, select or radio list in a nested row as comma-separated text; the
@@ -2216,6 +2321,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   failure in between left the account holding a live reset link nobody
   received. Token and email job are written in one transaction, through one
   path shared by the admin and gRPC forgot-password flows.
+- **MCP `list_jobs` listed every registered job regardless of its `access`
+  rule**, while gRPC `ListJobs` filtered; both filter now. `trigger_job` no
+  longer distinguishes a job that doesn't exist from one the caller may not
+  trigger, as gRPC already didn't.
+- **A clean SVG upload was always rejected** ("Failed to detect image
+  format"): every `image/*` type was sent through the image decoder, which
+  has no SVG (or AVIF) decoder, so the documented SVG sanitising and
+  attachment serving were unreachable. Whether a file is decoded now follows
+  the decoders the build has (JPEG, PNG, GIF, WebP); an SVG is sanitised and
+  stored as-is, and AVIF or any other allow-listed image type is stored
+  verbatim without dimensions or variants. The SVG scan now also rejects
+  `<script>` elements, inline event handlers, CSS `@import`, and external
+  references in `href`/`xlink:href` or `url(…)` (any scheme other than
+  `data:`, or a protocol-relative `//` URL, judged after entity decoding),
+  which the documentation had always promised.
+- **`crap.http.request` honoured `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`**, and a
+  proxy resolves the host itself, so the private-address block and the pinned
+  address were bypassed wherever a proxy is configured in the environment. The
+  client ignores proxy variables now.
+- **An email template override that misspelled a variable sent the email
+  without its link** and reported it sent. Email templates render in strict
+  mode: an unknown variable fails the render, and the send is reported failed
+  (an MFA-code delivery, which runs after the challenge response, logs the
+  failure as it does for any delivery error).
 - **A hard delete removed only the published row's files**, so a file that
   only a never-published draft (or an older version) named leaked in storage.
   The service delete, bulk delete, `crap-cms trash purge` and the retention
@@ -5559,6 +5688,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- CI runs the S3 and Redis unit tests (`--features s3-storage,redis --lib`);
+  the matrix only ever compiled those modules before. A structural test now
+  checks that every Cargo feature has a CI row that both enables it and runs
+  tests. The config's nesting-depth limit is installed through one
+  `CrapConfig::apply` step that startup and the test default share, unit tests
+  that mutate process environment variables take one crate-wide lock, and the
+  admin SSE stream has integration coverage (delivery, per-collection read
+  gating, connection cap).
 - The one-time conversions are gated per table (`nested_values:{table}`,
   `canonical_text:{table}`, `legacy_timestamps:{table}`), so a collection and a
   global sharing a slug no longer share one gate, and the nested-values gate

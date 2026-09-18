@@ -114,6 +114,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_auth_methods(&snapshot)
         .context("Auth method configuration invalid")?;
 
+    // A cron `schedule` the scheduler cannot parse can only be skipped, which
+    // is indistinguishable from "not due yet" — fail the boot instead.
+    super::startup_checks::validate_job_schedules(&snapshot)
+        .context("Job schedule validation failed")?;
+
     // Advisory warning (not a hard error): with default_deny = false, a
     // collection's draft/trash view with no gating rule is world-readable.
     super::startup_checks::warn_public_lifecycle_views(&snapshot, config.access.default_deny);

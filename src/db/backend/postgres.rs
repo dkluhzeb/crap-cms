@@ -7,20 +7,27 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
-use anyhow::{Context as _, Result, anyhow, bail};
-use deadpool::managed::{self, Metrics, RecycleResult};
+use anyhow::{Context as _, Error, Result, anyhow, bail};
+use deadpool::{Runtime, managed::Timeouts};
 use parking_lot::Mutex;
 use tokio::task::block_in_place;
-use tokio_postgres::{Client, NoTls, Statement, types::Type};
-use tracing::{error, info};
+use tokio_postgres::{Statement, types::Type};
+use tracing::info;
+
+mod stmt_cache;
+
+use stmt_cache::{
+    CachedClient, CachedManager, CachedObject, CachedPool, StmtCache, cached_stmt_call,
+};
 
 use crate::{
     config::CrapConfig,
     core::FieldType,
     db::{
-        BoxedConnection, DbConnection, DbPool, DbRow, DbValue,
+        BoxedConnection, DbConnection, DbPool, DbRow, DbValue, UpsertSpec,
         connection::{ConnectionInner, TransactionInner},
         pool::PoolBackend,
     },
@@ -195,14 +202,8 @@ macro_rules! pg_shared_methods {
             pg_build_insert_ignore(table, columns, values)
         }
 
-        fn build_upsert(
-            &self,
-            table: &str,
-            columns: &[&str],
-            values: &str,
-            key_col: &str,
-        ) -> String {
-            pg_build_upsert(table, columns, values, key_col)
+        fn build_upsert(&self, spec: &UpsertSpec<'_>) -> String {
+            pg_build_upsert(spec)
         }
 
         fn supports_fts(&self) -> bool {
@@ -313,15 +314,32 @@ fn pg_json_number_cast(expr: &str) -> String {
     format!("({expr})::double precision")
 }
 
+/// The `FROM` item that expands a JSON array into one row per element.
+///
+/// `source` is frequently a [`pg_json_extract_expr`] result, and `#>>` yields
+/// `text`; Postgres has no implicit text→jsonb cast, so without the explicit
+/// one every filter descending into an array or blocks nested inside a row
+/// fails with "function `jsonb_array_elements_text(text)` does not exist". The
+/// cast is a no-op on a `source` that is already `jsonb`. `SQLite`'s
+/// `json_each(json_extract(…))` composes without it, which is why this only
+/// ever showed on Postgres.
 fn pg_json_each_source(source: &str, alias: &str) -> String {
-    format!("jsonb_array_elements_text({source}) AS {alias}")
+    format!("jsonb_array_elements_text(({source})::jsonb) AS {alias}")
 }
 
 fn pg_build_insert_ignore(table: &str, columns: &str, values: &str) -> String {
     format!("INSERT INTO \"{table}\" ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING")
 }
 
-fn pg_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
+fn pg_build_upsert(spec: &UpsertSpec<'_>) -> String {
+    let UpsertSpec {
+        table,
+        columns,
+        values,
+        key_col,
+        guard,
+    } = *spec;
+
     let cols = columns
         .iter()
         .map(|c| format!("\"{c}\""))
@@ -333,99 +351,16 @@ fn pg_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &str) -
         .map(|c| format!("\"{c}\" = EXCLUDED.\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    let guard = guard.map_or_else(String::new, |g| format!(" WHERE {g}"));
+
     format!(
         "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
-         ON CONFLICT (\"{key_col}\") DO UPDATE SET {updates}"
+         ON CONFLICT (\"{key_col}\") DO UPDATE SET {updates}{guard}"
     )
 }
 
 fn pg_normalize_timestamp(ts: &str) -> String {
     ts.to_string()
-}
-
-// ── Statement-cached pool ────────────────────────────────────────────────
-
-/// A pooled `tokio_postgres` `Client` plus a per-connection prepared-statement
-/// cache. Statements are connection-bound, so the cache must live with the
-/// client across pool checkouts — we achieve that by making `CachedClient`
-/// the deadpool Manager's pooled `Type`.
-///
-/// rusqlite has the equivalent built in (`prepare_cached`); without this
-/// wrapper, every postgres call re-parses the SQL on the postgres side and
-/// the read-path latency is structurally higher than sqlite's even for
-/// trivial queries. Caching brings postgres to feature parity.
-pub struct CachedClient {
-    client: Client,
-    cache: Mutex<HashMap<String, Statement>>,
-}
-
-/// Custom deadpool Manager that produces `CachedClient` instances. We can't
-/// use `deadpool_postgres::Manager` because its pooled `Type` is the bare
-/// `tokio_postgres::Client` — there's no place to attach the cache.
-pub struct CachedManager {
-    config: tokio_postgres::Config,
-}
-
-impl managed::Manager for CachedManager {
-    type Type = CachedClient;
-    type Error = tokio_postgres::Error;
-
-    async fn create(&self) -> std::result::Result<CachedClient, tokio_postgres::Error> {
-        let (client, conn) = self.config.connect(NoTls).await?;
-        // Spawn the connection driver. tokio_postgres requires this — the
-        // Client is just a handle; the driver future does the actual I/O.
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                error!("postgres connection task error: {e}");
-            }
-        });
-        // Set the timezone once at connection creation, so all timestamp
-        // expressions return UTC regardless of server config. Done here
-        // (not on every checkout) so it's a one-time cost.
-        client.batch_execute("SET timezone = 'UTC'").await?;
-        Ok(CachedClient {
-            client,
-            cache: Mutex::new(HashMap::new()),
-        })
-    }
-
-    async fn recycle(
-        &self,
-        _: &mut CachedClient,
-        _: &Metrics,
-    ) -> RecycleResult<tokio_postgres::Error> {
-        // Fast no-op recycle. Cache + connection state preserved across
-        // checkouts. We don't run `DISCARD ALL` because we don't use
-        // session-local state we'd want to clear (no temp tables, no
-        // advisory locks, no SET/RESET runtime params). Discarding would
-        // also throw away the prepared statements — defeating the point.
-        Ok(())
-    }
-}
-
-type CachedPool = managed::Pool<CachedManager>;
-type CachedObject = managed::Object<CachedManager>;
-
-/// Prepare a statement (cache lookup first), then return the cached
-/// `Statement` ready for `client.execute(&stmt, &params)`. The `prepare`
-/// callable is supplied by the caller so this works against either a
-/// `Client` or a `Transaction` (both expose `prepare(&str)`); the caller
-/// closes over `sql` so the borrow stays valid for the future's lifetime.
-async fn cached_prepare<F, Fut>(
-    cache: &Mutex<HashMap<String, Statement>>,
-    sql: &str,
-    prepare: F,
-) -> std::result::Result<Statement, tokio_postgres::Error>
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<Statement, tokio_postgres::Error>>,
-{
-    if let Some(stmt) = cache.lock().get(sql).cloned() {
-        return Ok(stmt);
-    }
-    let stmt = prepare().await?;
-    cache.lock().insert(sql.to_string(), stmt.clone());
-    Ok(stmt)
 }
 
 // ── Pool ─────────────────────────────────────────────────────────────────
@@ -448,14 +383,29 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
     let pg_config: tokio_postgres::Config = url.parse().context("Invalid postgres URL")?;
     let mgr = CachedManager { config: pg_config };
 
+    // Every wait is bounded. `PgPoolBackend::get` blocks a Tokio worker thread
+    // on this future, so an unbounded wait parks that worker for as long as the
+    // pool stays exhausted or the server stays unreachable — a saturated pool
+    // would take the runtime down with it instead of failing requests. The
+    // `SQLite` pool bounds the same wait with r2d2's `connection_timeout`; both
+    // read the one configured value. A `Runtime` is required for the timeouts
+    // to be applied at all (without it deadpool answers `NoRuntimeSpecified`).
+    let timeout = Duration::from_secs(config.database.connection_timeout);
+
     let pool = CachedPool::builder(mgr)
         .max_size(config.database.pool_max_size as usize)
+        .runtime(Runtime::Tokio1)
+        .timeouts(Timeouts {
+            wait: Some(timeout),
+            create: Some(timeout),
+            recycle: Some(timeout),
+        })
         .build()
         .context("Failed to create Postgres connection pool")?;
 
     info!(
-        "Postgres pool created (max_size={}, statement cache enabled)",
-        config.database.pool_max_size
+        "Postgres pool created (max_size={}, timeout={}s, statement cache enabled)",
+        config.database.pool_max_size, config.database.connection_timeout
     );
 
     Ok(DbPool::from_backend(Arc::new(PgPoolBackend { pool })))
@@ -468,7 +418,11 @@ struct PgPoolBackend {
 impl PoolBackend for PgPoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
         let obj = block_in_place(|| tokio::runtime::Handle::current().block_on(self.pool.get()))
-            .map_err(|e| anyhow!("Failed to get Postgres connection: {e}"))?;
+            // The typed pool error stays the source of the chain: formatting it
+            // into a message would flatten it to one line and drop the cause
+            // underneath (the driver's "connection refused", say), which both
+            // the log and the transient/internal classification read.
+            .map_err(|e| Error::new(e).context("Failed to get Postgres connection"))?;
 
         Ok(BoxedConnection::new(Box::new(PgConnection { inner: obj })))
     }
@@ -512,23 +466,28 @@ impl ConnectionInner for PgConnection {
 /// Inputs:
 /// - `$exec_expr`: `self -> &impl GenericClient` accessor — used for the
 ///   actual execute/query AND for `prepare()`. Both Client and Transaction
-///   have `prepare()`; Statements are connection-bound and survive the
-///   surrounding transaction's commit/rollback so they're safe to cache
-///   at the connection level.
-/// - `$cache_expr`: `self -> &Mutex<HashMap<String, Statement>>`.
+///   have `prepare()`; a Statement is connection-bound and survives its
+///   transaction's commit and its rollback alike (only portals are
+///   transaction-scoped), so the cache lives at the connection level.
+/// - `$cache_expr`: `self -> StmtCache<'_>`.
 macro_rules! pg_query_methods {
     (|$s:ident| exec = $exec_expr:expr, cache = $cache_expr:expr) => {
         fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
             let pg_params = to_pg_params(params);
-            let refs = pg_param_refs(&pg_params);
+            let owned_refs = pg_param_refs(&pg_params);
+            // A shared reference, so the `run` closure stays callable twice
+            // (the retry) instead of moving the vector into its first future.
+            let refs = &owned_refs;
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
             let count = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
-                    exec.execute(&stmt, &refs).await
-                })
+                tokio::runtime::Handle::current().block_on(cached_stmt_call(
+                    &cache,
+                    sql,
+                    || exec.prepare(sql),
+                    |stmt| async move { exec.execute(&stmt, refs).await },
+                ))
             })
             .with_context(|| format!("execute failed: {sql}"))?;
             // tokio-postgres returns the row count as u64; we report it as
@@ -560,15 +519,18 @@ macro_rules! pg_query_methods {
 
         fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
             let pg_params = to_pg_params(params);
-            let refs = pg_param_refs(&pg_params);
+            let owned_refs = pg_param_refs(&pg_params);
+            let refs = &owned_refs;
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
             let rows = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
-                    exec.query(&stmt, &refs).await
-                })
+                tokio::runtime::Handle::current().block_on(cached_stmt_call(
+                    &cache,
+                    sql,
+                    || exec.prepare(sql),
+                    |stmt| async move { exec.query(&stmt, refs).await },
+                ))
             })
             .with_context(|| format!("query failed: {sql}"))?;
             Ok(rows.iter().map(pg_row_to_dbrow).collect())
@@ -576,15 +538,18 @@ macro_rules! pg_query_methods {
 
         fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
             let pg_params = to_pg_params(params);
-            let refs = pg_param_refs(&pg_params);
+            let owned_refs = pg_param_refs(&pg_params);
+            let refs = &owned_refs;
             let $s = self;
             let exec = $exec_expr;
             let cache = $cache_expr;
             let row = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
-                    exec.query_opt(&stmt, &refs).await
-                })
+                tokio::runtime::Handle::current().block_on(cached_stmt_call(
+                    &cache,
+                    sql,
+                    || exec.prepare(sql),
+                    |stmt| async move { exec.query_opt(&stmt, refs).await },
+                ))
             })
             .with_context(|| format!("query_one failed: {sql}"))?;
             Ok(row.as_ref().map(pg_row_to_dbrow))
@@ -593,7 +558,10 @@ macro_rules! pg_query_methods {
 }
 
 impl DbConnection for PgConnection {
-    pg_query_methods!(|this| exec = &this.inner.client, cache = &this.inner.cache);
+    pg_query_methods!(
+        |this| exec = &this.inner.client,
+        cache = StmtCache::connection(&this.inner.cache)
+    );
     pg_shared_methods!();
 }
 
@@ -606,13 +574,18 @@ pub struct PgTransaction<'conn> {
 
 impl TransactionInner for PgTransaction<'_> {
     fn commit_inner(self: Box<Self>) -> Result<()> {
-        block_in_place(|| tokio::runtime::Handle::current().block_on(self.inner.commit()))
+        let Self { inner, .. } = *self;
+
+        block_in_place(|| tokio::runtime::Handle::current().block_on(inner.commit()))
             .context("Failed to commit transaction")
     }
 }
 
 impl DbConnection for PgTransaction<'_> {
-    pg_query_methods!(|this| exec = &this.inner, cache = this.cache);
+    pg_query_methods!(
+        |this| exec = &this.inner,
+        cache = StmtCache::in_transaction(this.cache)
+    );
     pg_shared_methods!();
 }
 
@@ -831,7 +804,26 @@ mod tests {
         );
         assert_eq!(
             pg_json_each_source("col", "x"),
-            "jsonb_array_elements_text(col) AS x"
+            "jsonb_array_elements_text((col)::jsonb) AS x"
+        );
+    }
+
+    /// The two JSON expressions must compose: a filter descending into an
+    /// array/blocks nested inside a row builds the `json_each` source *from* a
+    /// `json_extract_expr`, and `#>>` yields `text`. Without the cast Postgres
+    /// has no `jsonb_array_elements_text(text)` and every such filter is a 500.
+    #[test]
+    fn json_each_source_accepts_a_json_extract_expr_as_its_source() {
+        let source = pg_json_extract_expr("posts_content.data", "items");
+        let each = pg_json_each_source(&source, "e0");
+
+        assert_eq!(
+            each,
+            "jsonb_array_elements_text((posts_content.data::jsonb#>>'{items}')::jsonb) AS e0"
+        );
+        assert!(
+            each.ends_with(")::jsonb) AS e0"),
+            "the text-yielding source must be cast back to jsonb: {each}"
         );
     }
 
@@ -846,10 +838,33 @@ mod tests {
     #[test]
     fn upsert_excludes_key_column_from_update_set() {
         // `id` is the conflict key and must not appear in the DO UPDATE SET.
+        let spec = UpsertSpec::builder("t", "id")
+            .columns(&["id", "name"], "$1, $2")
+            .build();
+
         assert_eq!(
-            pg_build_upsert("t", &["id", "name"], "$1, $2", "id"),
+            pg_build_upsert(&spec),
             "INSERT INTO \"t\" (\"id\", \"name\") VALUES ($1, $2) \
              ON CONFLICT (\"id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\""
+        );
+    }
+
+    /// A guard turns the upsert into a claim: the row is written when absent,
+    /// and overwritten only where the stored row still satisfies the predicate.
+    /// The predicate names the table so it reads the row already stored, not
+    /// the one being proposed.
+    #[test]
+    fn a_guarded_upsert_conditions_the_update_half() {
+        let spec = UpsertSpec::builder("t", "slug")
+            .columns(&["slug", "fired_at"], "$1, $2")
+            .guard("t.fired_at <= $3")
+            .build();
+
+        assert_eq!(
+            pg_build_upsert(&spec),
+            "INSERT INTO \"t\" (\"slug\", \"fired_at\") VALUES ($1, $2) \
+             ON CONFLICT (\"slug\") DO UPDATE SET \"fired_at\" = EXCLUDED.\"fired_at\" \
+             WHERE t.fired_at <= $3"
         );
     }
 

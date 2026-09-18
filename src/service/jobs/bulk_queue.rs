@@ -367,6 +367,29 @@ mod tests {
         assert_eq!(user.map(|u| u.id.to_string()), Some("u1".to_string()));
     }
 
+    /// The internal bulk path inserts the `_system_bulk` slug directly — it
+    /// must keep working while the caller-facing trigger chokepoint refuses
+    /// every system slug.
+    #[test]
+    fn queue_bulk_still_inserts_the_system_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let registry = Registry::new();
+        migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+
+        let run = queue_bulk(&db_pool, &delete_job(false)).expect("system path queues");
+
+        assert_eq!(run.slug, SYSTEM_BULK_JOB);
+        assert_eq!(run.max_attempts, 1, "a bulk run is always a single attempt");
+    }
+
     fn delete_job(force_hard_delete: bool) -> BulkJobData {
         BulkJobData {
             op: BulkOpKind::DeleteMany,

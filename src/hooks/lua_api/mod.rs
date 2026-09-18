@@ -53,5 +53,5 @@ pub(crate) mod validation;
 mod vm_label;
 
 pub use register::{register_api, register_api_pool_init};
-pub(crate) use serializers::{json_to_lua, lua_to_json, max_nesting_depth, set_max_nesting_depth};
+pub(crate) use serializers::{json_to_lua, lua_to_json};
 pub use vm_label::VmLabel;

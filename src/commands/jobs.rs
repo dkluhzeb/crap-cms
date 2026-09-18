@@ -14,7 +14,7 @@ use crate::{
     config::{CrapConfig, JobsConfig, parse_duration_string},
     core::{
         Registry,
-        job::{JobRun, JobStatus},
+        job::{JobRun, JobStatus, is_system_job_slug},
     },
     db::{DbPool, pool, query},
 };
@@ -275,6 +275,13 @@ fn run_trigger(
     data: Option<&str>,
     priority: Option<i32>,
 ) -> Result<()> {
+    // System jobs are queued only by the subsystem that owns each one — never
+    // by slug, from any surface. Refused before the registry lookup so the
+    // answer matches an undefined job.
+    if is_system_job_slug(slug) {
+        return Err(anyhow!("Job '{slug}' not defined"));
+    }
+
     let job_def = registry
         .get_job(slug)
         .ok_or_else(|| anyhow!("Job '{slug}' not defined"))?;

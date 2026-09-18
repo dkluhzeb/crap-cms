@@ -19,6 +19,9 @@
 //!   batched), filter resolution, jobs, and image-queue claim.
 //! - `ops.rs` -- a thin compatibility shim used by tests; production
 //!   callers reach the underlying `query::*` directly.
+//! - `error.rs` -- [`constraint_kind`] / [`is_transient`]: what a failed
+//!   statement or checkout was, read from the driver error's type
+//!   (SQLSTATE, `SQLite` result code) instead of its translated text.
 //! - `types.rs` -- the [`DbValue`] / [`DbRow`] data shapes returned by
 //!   the connection trait.
 //! - `document.rs` -- per-collection `Document` row shape produced by
@@ -38,6 +41,7 @@
 pub mod backend;
 pub mod connection;
 pub mod document;
+pub mod error;
 pub mod migrate;
 pub mod ops;
 #[cfg(all(test, feature = "postgres"))]
@@ -46,7 +50,8 @@ pub mod pool;
 pub mod query;
 pub mod types;
 
-pub use connection::{BoxedConnection, BoxedTransaction, DbConnection};
+pub use connection::{BoxedConnection, BoxedTransaction, DbConnection, UpsertSpec};
+pub use error::{ConstraintKind, constraint_kind, is_transient};
 pub use pool::DbPool;
 pub use query::{
     AccessResult, CachedDoc, EventViewGate, Filter, FilterClause, FilterOp, FindQuery,

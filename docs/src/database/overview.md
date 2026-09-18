@@ -122,7 +122,7 @@ On startup, Crap CMS compares Lua definitions against the database schema:
 4. **Removed columns** — logged as warnings (not dropped)
 5. **Missing `_password_hash`** — added to auth collections
 
-Schema sync runs in a single transaction. If anything fails, all changes are rolled back.
+Schema sync runs in a single transaction. If anything fails, all changes are rolled back. The one exception to "nothing outside the transaction" is a [soft-delete transition](../collections/soft-deletes.md#enabling-soft-deletes-on-an-existing-collection) on SQLite, which switches foreign-key enforcement off around that sync and verifies every reference before committing.
 
 ## Connection Pool
 
@@ -132,7 +132,17 @@ On **SQLite** there are two pools (both r2d2): a **read pool**
 serialize on SQLite's single writer, so excess writers queue on write-pool
 checkout instead of consuming read connections and starving readers. On
 **PostgreSQL** a single deadpool pool (`pool_max_size`) serves both;
-`write_pool_max_size` is ignored.
+`write_pool_max_size` is ignored. On both backends every checkout is bounded
+by `[database] connection_timeout` — on Postgres it also bounds creating and
+recycling a connection, and a connection the server closed (a restart, a
+`pg_terminate_backend`) is dropped from the pool on its next checkout instead
+of being handed out dead.
+
+Each Postgres connection keeps a prepared-statement cache. A statement whose
+plan a schema change invalidated (another node's schema sync, `crap-cms db
+migrate`) is re-prepared once and the query retried in autocommit; inside a
+transaction — which the failure has already aborted — the statement is
+evicted and the error reported, and the next transaction re-prepares it.
 
 - **Read operations** — `db/ops.rs` gets a connection from the read pool, calls `query::*` functions
 - **Write operations** — callers get a connection from the write pool, open a transaction, call `query::*`, then commit

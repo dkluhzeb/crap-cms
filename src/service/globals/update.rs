@@ -1,5 +1,7 @@
 //! Global document update.
 
+use serde_json::{Map, Value};
+
 use crate::{
     core::{
         Document, DocumentFields, canonicalize_text_values, collection::GlobalDefinition,
@@ -10,16 +12,31 @@ use crate::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
     },
     service::{
-        AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
-        helpers as svc_helpers,
+        AfterChangeInput, ServiceContext, ServiceError, SnapshotLocales, WriteHooks, WriteInput,
+        WriteResult, helpers as svc_helpers,
         persist::{DraftDocumentArgs, draft_document},
         run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
-        write::reject_locale_locked_fields,
+        write::{adopt_pending_global_draft, reject_locale_locked_fields},
     },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// The DB write phase of a global update: where it lands, the post-hook data,
+/// and the pending draft a publish makes live. Every field is required and it
+/// is built at the one call site, so a plain literal stands in for a builder.
+#[derive(Clone, Copy)]
+struct GlobalPersist<'a> {
+    gtable: &'a str,
+    final_ctx: &'a HookContext,
+    locale_ctx: Option<&'a LocaleContext>,
+    is_draft: bool,
+    /// The publisher-stripped pending draft snapshot, when this write publishes
+    /// one. It carries the locales the request does not target and the shared
+    /// values a default-locale draft save recorded.
+    pending_draft: Option<&'a Map<String, Value>>,
+}
 
 /// Load the stored global that field-level `access.update` rules judge as
 /// `ctx.document` — the global twin of
@@ -101,6 +118,12 @@ pub fn update_global_in_conn(
     input.data = nest_group_fields(&input.data, &def.fields);
     canonicalize_text_values(&mut input.data, &def.fields);
 
+    // Publishing means the same thing on a global as on a collection: the
+    // pending draft is the write's base and the request's own fields win over
+    // it. Without this a partial `crap.globals.update` published the one field
+    // it carried and silently discarded the rest of the draft.
+    let pending_draft = adopt_pending_global_draft(ctx, def, &mut input)?;
+
     // Same shared-field guard as collections: a non-default-locale write that
     // carries a locale-locked field is rejected, never silently skipped.
     reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
@@ -130,13 +153,39 @@ pub fn update_global_in_conn(
         input.locale_ctx.map(LocaleContext::access_locale),
     );
 
+    // The draft goes live as ONE unit, so the locales this request does not
+    // target come from the snapshot — stripped by the publisher's own
+    // field-level write access, exactly like the merged data above.
+    let mut publishing_draft = pending_draft.map(Value::Object);
+    if let Some(snapshot) = publishing_draft.as_mut() {
+        write_hooks.strip_write_access_value(
+            &def.fields,
+            snapshot,
+            &stored,
+            ctx.slug,
+            ctx.user,
+            SnapshotLocales::for_write(input.locale_ctx),
+        );
+    }
+
     let final_ctx =
         run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
 
     // Both reported shapes carry their rows for the write's locale before
     // after-change hooks see them: a draft save its snapshot, a published write
     // the global as `get_global` reads it.
-    let mut doc = persist_global_update(conn, ctx, def, &gtable, &final_ctx, &input, is_draft)?;
+    let mut doc = persist_global_update(
+        conn,
+        ctx,
+        def,
+        &GlobalPersist {
+            gtable: &gtable,
+            final_ctx: &final_ctx,
+            locale_ctx: input.locale_ctx,
+            is_draft,
+            pending_draft: publishing_draft.as_ref().and_then(Value::as_object),
+        },
+    )?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -237,22 +286,19 @@ fn persist_global_update(
     conn: &dyn DbConnection,
     ctx: &ServiceContext,
     def: &GlobalDefinition,
-    gtable: &str,
-    final_ctx: &HookContext,
-    input: &WriteInput<'_>,
-    is_draft: bool,
+    persist: &GlobalPersist<'_>,
 ) -> Result<Document> {
-    if is_draft && def.has_versions() {
-        let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
+    if persist.is_draft && def.has_versions() {
+        let existing_doc = query::get_global(conn, ctx.slug, def, persist.locale_ctx)?;
         let snapshot = versions::save_draft_version(&versions::SaveDraftArgs {
             conn,
-            table: gtable,
+            table: persist.gtable,
             parent_id: "default",
             fields: &def.fields,
             versions: def.versions.as_ref(),
             existing_doc: &existing_doc,
-            data: &final_ctx.data,
-            locale_ctx: input.locale_ctx,
+            data: &persist.final_ctx.data,
+            locale_ctx: persist.locale_ctx,
         })?;
         // The draft content, not the untouched published row (see
         // `persist::draft_document`).
@@ -261,10 +307,11 @@ fn persist_global_update(
             snapshot: &snapshot,
             existing: &existing_doc,
             fields: &def.fields,
-            locale_ctx: input.locale_ctx,
+            locale_ctx: persist.locale_ctx,
         })?);
     }
-    persist_global_published_update(conn, ctx, def, gtable, final_ctx, input)
+
+    persist_global_published_update(conn, ctx, def, persist)
 }
 
 /// Published-write path: snapshot the outgoing refs, write the row +
@@ -274,17 +321,22 @@ fn persist_global_published_update(
     conn: &dyn DbConnection,
     ctx: &ServiceContext,
     def: &GlobalDefinition,
-    gtable: &str,
-    final_ctx: &HookContext,
-    input: &WriteInput<'_>,
+    persist: &GlobalPersist<'_>,
 ) -> Result<Document> {
-    let locale_cfg = input
-        .locale_ctx
+    let GlobalPersist {
+        gtable,
+        final_ctx,
+        locale_ctx,
+        pending_draft,
+        ..
+    } = *persist;
+
+    let locale_cfg = locale_ctx
         .map(|lctx| lctx.config.clone())
         .unwrap_or_default();
 
     // Final post-hook data (see the collection persist path).
-    reject_locale_locked_fields(&def.fields, &final_ctx.data, input.locale_ctx)?;
+    reject_locale_locked_fields(&def.fields, &final_ctx.data, locale_ctx)?;
 
     // Lock the row BEFORE the (unlocked) outgoing-ref snapshot — parity with
     // `persist_update`: on Postgres two concurrent global updates could both
@@ -299,8 +351,17 @@ fn persist_global_published_update(
         &locale_cfg,
     )?;
 
+    // See `persist_update`: the merged data carries the draft's values for the
+    // locale this write targets, and the write-back carries its other locales
+    // and shared values. Inside the ref-count bracket, because it moves
+    // relationships of its own. Without localization the merged data is
+    // already the whole draft.
+    if let Some(pending) = pending_draft.filter(|_| locale_cfg.is_enabled()) {
+        query::write_global_snapshot_base(conn, ctx.slug, def, pending, &locale_cfg)?;
+    }
+
     let final_data = final_ctx.to_value_map();
-    let doc = query::update_global(conn, ctx.slug, def, &final_data, input.locale_ctx)?;
+    let doc = query::update_global(conn, ctx.slug, def, &final_data, locale_ctx)?;
 
     query::save_join_table_data(
         conn,
@@ -308,7 +369,7 @@ fn persist_global_published_update(
         &def.fields,
         "default",
         &final_ctx.data,
-        input.locale_ctx,
+        locale_ctx,
     )?;
 
     query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)?;
@@ -318,6 +379,7 @@ fn persist_global_published_update(
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
+            .locale_config(locale_ctx.map(|lctx| &lctx.config))
             .build();
         versions::create_version_snapshot(conn, &snap_ctx, "published", &doc)?;
     }

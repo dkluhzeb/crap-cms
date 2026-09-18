@@ -204,6 +204,9 @@ Binary data is passed natively between Rust and Lua (no base64 encoding). The `c
   storage without one is an error, never a silent fallback to local storage.
 - **Replacing a file** cancels the previous file's queued image conversions;
   a conversion already running when its file is replaced discards its output.
+  Every server-derived column the new file does not produce is cleared —
+  a PDF replacing a JPEG nulls `width`, `height` and every per-size URL
+  instead of leaving the old image's values behind.
   A stored file is deleted only when nothing references it any more — not the
   live row, not a draft, not a version snapshot — after the write commits;
   pruning versions releases the files they were the last reference to, and a
@@ -265,9 +268,11 @@ Every upload passes a fixed validation chain before anything is written to stora
 2. **MIME allowlist** — the claimed `Content-Type` must match the collection's `mime_types` patterns.
 3. **Magic-byte verification** — the file's leading bytes are sniffed; when the content is recognisable, the detected type must agree with the claimed type (`File content does not match claimed type 'image/png' (detected 'text/html')`), and the detected type is what every later check uses. A renamed `.html` cannot pass as `image/*`.
 4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
-5. **SVG sanitising** — SVG uploads are scanned once for `<!DOCTYPE>` / `<!ENTITY>` declarations and external `xlink:href` loads (XXE and data-exfiltration vectors) and rejected if any are present, so only clean SVGs ever reach storage. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP.
+5. **SVG sanitising** — SVG uploads are scanned once for `<script>` elements, inline event handlers (`onload=` …), `<!DOCTYPE>` / `<!ENTITY>` declarations, CSS `@import`, and external references in `href` / `xlink:href` or `url(…)` (any scheme other than `data:` — `mailto:` and `tel:` included — or a protocol-relative `//` URL, judged after entity decoding). Any hit rejects the upload (stored-XSS, XXE and data-exfiltration vectors), so only clean SVGs ever reach storage; fragments, relative paths and `data:` URIs are fine. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP.
 
 For processed images, the EXIF `Orientation` tag is applied before resizing so phone photos come out upright, and the re-encoded outputs (generated sizes and format conversions) carry **no EXIF metadata** — camera details and GPS coordinates are stripped as a side effect of re-encoding. The original upload is stored byte-for-byte.
+
+Only formats the server can decode — JPEG, PNG, GIF and WebP — go through the pixel pipeline (dimensions, generated sizes, format conversions). SVG, AVIF and any other allow-listed image type are stored verbatim: no dimensions are recorded and no variants are generated.
 
 ## Error Cleanup
 

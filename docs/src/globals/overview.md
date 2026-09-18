@@ -29,6 +29,8 @@ crap.globals.define("site_settings", {
 | `fields` | FieldDefinition[] | `{}` | Field definitions |
 | `hooks` | table | `{}` | Same lifecycle hooks as collections |
 | `access` | table | `{}` | Access rules. Globals honor `read`, `draft`, `update`, and the `versions` toggle — there is no `create`/`delete`/`trash` (a global has one row), and global access functions must return `true`/`false`, not a filter table. See [Access Control](../access-control/overview.md). |
+
+With `versions` enabled, publishing a global while a draft is pending takes the pending draft as its base, exactly like a collection document — see [Versions](../collections/versions.md#updating-documents).
 | `versions` | boolean or table | `nil` | Versioning config (same as collections) |
 | `live` | boolean or string | `nil` | Live update broadcasting (same as collections) |
 | `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` |

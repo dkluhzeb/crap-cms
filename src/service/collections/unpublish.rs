@@ -9,6 +9,7 @@ use crate::{
     service::{
         AfterChangeInput, ServiceContext, ServiceError, helpers, invalidate_user_streams_if_auth,
         persist_unpublish, run_after_change_hooks, run_pool_write,
+        write::{UploadSettle, document_file_keys, settle_upload_write},
     },
 };
 
@@ -74,7 +75,24 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let final_ctx =
         write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, conn)?;
 
+    // The files the document references going in — the published row's and
+    // every version snapshot's. Unpublishing writes a version like any other
+    // lifecycle step, so it prunes like one, and pruning a snapshot is what
+    // drops a stored file's last reference. Without this bracket a drafted file
+    // whose only snapshot the unpublish pruned stayed in storage forever with
+    // nothing naming it.
+    let before_files = document_file_keys(ctx, def, id, locale_ctx.as_ref())?;
+
     persist_unpublish(ctx, id)?;
+
+    // Only `_status` moved, so the published row still references exactly what
+    // it did going in; what can go is a file only a pruned snapshot named.
+    settle_upload_write(
+        ctx,
+        &UploadSettle::builder(def, id)
+            .before(Some(&before_files))
+            .build(),
+    )?;
 
     let mut doc = doc;
     doc.fields

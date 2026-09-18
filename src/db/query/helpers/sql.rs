@@ -1,8 +1,6 @@
 //! SQL text building: identifier quoting, `LIKE` escaping, `WHERE` clause
 //! assembly, the soft-delete predicate and placeholder lists.
 
-use std::borrow::Cow;
-
 use crate::{core::CollectionDefinition, db::DbConnection};
 
 /// Escape the `LIKE` wildcards (`\`, `%`, `_`) in a value so it matches
@@ -16,7 +14,9 @@ pub(crate) fn like_escape(s: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Quote a SQL identifier (column/table name) for interpolation into DDL/DML.
+/// Quote a SQL identifier (column/table/index name) for interpolation into
+/// DDL/DML. The one quoting there is — DDL, the `SELECT` list, and the
+/// filter/sort/keyset comparand all emit identifiers through here.
 ///
 /// Both `SQLite` and Postgres delimit identifiers with double quotes; an embedded
 /// `"` is doubled per the SQL standard. Applied at every identifier-emission site
@@ -26,21 +26,16 @@ pub(crate) fn like_escape(s: &str) -> String {
 /// misfeature, which would otherwise turn a quoted *missing* column into a silent
 /// string literal, is disabled per-connection via `SQLITE_DBCONFIG_DQS_*` — see
 /// the pool setup — so a quoted identifier is always an identifier.)
+///
+/// Quoting is unconditional. Quoting only the names that *look* dangerous —
+/// those with a capital, so Postgres wouldn't fold them — leaves the rest bare,
+/// and a bare `user` on Postgres is the session-user function rather than the
+/// column (a filter on it silently matches nothing), while `array`, `only`,
+/// `grant` and `lateral` are outright syntax errors. `SQLite` accepts the bare
+/// forms, so the whole class only ever showed on Postgres.
 #[must_use]
 pub(crate) fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// Render a generated identifier for SQL: quoted when it contains a capital
-/// letter, bare otherwise. Postgres folds an unquoted identifier to lowercase,
-/// so a column named after a locale code with capitals (`title__de_DE`) would
-/// otherwise refer to a column that doesn't exist.
-pub(crate) fn sql_ident(name: &str) -> Cow<'_, str> {
-    if name.bytes().any(|b| b.is_ascii_uppercase()) {
-        Cow::Owned(quote_ident(name))
-    } else {
-        Cow::Borrowed(name)
-    }
 }
 
 /// Append a SQL condition with `WHERE` or `AND` depending on whether a WHERE clause already exists.
@@ -102,11 +97,20 @@ mod tests {
         assert_eq!(placeholder_list(&conn, 3), "?1, ?2, ?3");
     }
 
-    /// A generated name with capitals (a `de_DE` locale suffix) is quoted, so
-    /// Postgres doesn't fold it to a column that doesn't exist.
+    /// Every identifier is quoted, not just the ones with a capital Postgres
+    /// would fold: a lowercase reserved word (`user`, `array`, `only`) left
+    /// bare is a different expression on Postgres — `WHERE user = $1` reads
+    /// the session-user function and matches nothing — or a syntax error.
     #[test]
-    fn sql_ident_quotes_only_names_with_capitals() {
-        assert_eq!(sql_ident("title__de"), "title__de");
-        assert_eq!(sql_ident("title__de_DE"), "\"title__de_DE\"");
+    fn quote_ident_quotes_every_name_including_reserved_words() {
+        assert_eq!(quote_ident("title__de"), "\"title__de\"");
+        assert_eq!(quote_ident("title__de_DE"), "\"title__de_DE\"");
+
+        for reserved in ["user", "array", "only", "grant", "lateral", "order"] {
+            assert_eq!(quote_ident(reserved), format!("\"{reserved}\""));
+        }
+
+        // An embedded quote is doubled, per the SQL standard.
+        assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
     }
 }

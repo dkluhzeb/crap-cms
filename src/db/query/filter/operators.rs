@@ -9,7 +9,7 @@ use crate::core::{
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
     query::{
-        helpers::{like_escape, normalize_date_value, sql_ident},
+        helpers::{like_escape, normalize_date_value, quote_ident},
         is_valid_identifier,
     },
 };
@@ -204,7 +204,14 @@ pub(crate) fn build_filter_condition(
             f.field
         );
     }
-    build_op_condition(conn, field, &sql_ident(&f.field), &f.op, field_type, params)
+    build_op_condition(
+        conn,
+        field,
+        &quote_ident(&f.field),
+        &f.op,
+        field_type,
+        params,
+    )
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -252,8 +259,29 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "status = ?1");
+        assert_eq!(sql, "\"status\" = ?1");
         assert_eq!(params.len(), 1);
+    }
+
+    /// The comparand is quoted whatever the column is called. A field named
+    /// after a SQL keyword is legal (field-name validation allows it), and left
+    /// bare on Postgres `user` is the session-user function — the filter would
+    /// compare the connection's role name and match nothing — while `array`,
+    /// `only` and `lateral` are syntax errors.
+    #[test]
+    fn filter_condition_quotes_a_reserved_word_column() {
+        let c = conn();
+
+        for reserved in ["user", "array", "only", "lateral"] {
+            let f = Filter {
+                field: reserved.to_string(),
+                op: FilterOp::Equals("x".into()),
+            };
+            let mut params: Vec<DbValue> = Vec::new();
+            let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
+
+            assert_eq!(sql, format!("\"{reserved}\" = ?1"));
+        }
     }
 
     #[test]
@@ -265,7 +293,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "status != ?1");
+        assert_eq!(sql, "\"status\" != ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -278,7 +306,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "title LIKE ?1 ESCAPE '\\'");
+        assert_eq!(sql, "\"title\" LIKE ?1 ESCAPE '\\'");
         assert_eq!(params.len(), 1);
     }
 
@@ -321,7 +349,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "body LIKE ?1 ESCAPE '\\'");
+        assert_eq!(sql, "\"body\" LIKE ?1 ESCAPE '\\'");
         assert_eq!(params.len(), 1);
     }
 
@@ -334,7 +362,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "age > ?1");
+        assert_eq!(sql, "\"age\" > ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -347,7 +375,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "price < ?1");
+        assert_eq!(sql, "\"price\" < ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -360,7 +388,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "score >= ?1");
+        assert_eq!(sql, "\"score\" >= ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -373,7 +401,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "rating <= ?1");
+        assert_eq!(sql, "\"rating\" <= ?1");
         assert_eq!(params.len(), 1);
     }
 
@@ -386,7 +414,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "status IN (?1, ?2, ?3)");
+        assert_eq!(sql, "\"status\" IN (?1, ?2, ?3)");
         assert_eq!(params.len(), 3);
     }
 
@@ -399,7 +427,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "role NOT IN (?1, ?2)");
+        assert_eq!(sql, "\"role\" NOT IN (?1, ?2)");
         assert_eq!(params.len(), 2);
     }
 
@@ -412,7 +440,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "avatar IS NOT NULL");
+        assert_eq!(sql, "\"avatar\" IS NOT NULL");
         assert_eq!(params.len(), 0);
     }
 
@@ -425,7 +453,7 @@ mod tests {
         };
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, None, &mut params).unwrap();
-        assert_eq!(sql, "deleted_at IS NULL");
+        assert_eq!(sql, "\"deleted_at\" IS NULL");
         assert_eq!(params.len(), 0);
     }
 
@@ -569,7 +597,7 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
             .unwrap();
-        assert_eq!(sql, "age > ?1");
+        assert_eq!(sql, "\"age\" > ?1");
         assert_eq!(params, vec![DbValue::Real(42.0)]);
     }
 
@@ -583,7 +611,7 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
             .unwrap();
-        assert_eq!(sql, "score = ?1");
+        assert_eq!(sql, "\"score\" = ?1");
         assert_eq!(params, vec![DbValue::Real(2.5)]);
     }
 
@@ -598,7 +626,7 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
             .unwrap();
-        assert_eq!(sql, "balance < ?1");
+        assert_eq!(sql, "\"balance\" < ?1");
         assert_eq!(params, vec![DbValue::Real(-12.5)]);
     }
 
@@ -613,7 +641,7 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &f.field, Some(&FieldType::Number), &mut params)
             .unwrap();
-        assert_eq!(sql, "big >= ?1");
+        assert_eq!(sql, "\"big\" >= ?1");
         assert_eq!(params, vec![DbValue::Real(1000.0)]);
     }
 

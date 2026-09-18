@@ -53,7 +53,7 @@ return M
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `handler` | string | (required) | Lua function ref (e.g., `"jobs.cleanup.run"`) |
-| `schedule` | string | nil | Cron expression for automatic scheduling |
+| `schedule` | string | nil | Cron expression for automatic scheduling (5 fields, or 6/7 with a leading seconds field; day-of-week is crontab-numbered — `0`/`7` Sunday … `6` Saturday, names accepted; validated at startup) |
 | `queue` | string | `"default"` | Queue name for grouping |
 | `retries` | integer | inherits queue, else 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below). Omit to inherit `[jobs.queues.<queue>] retries` from `crap.toml`; set explicitly (including `0`) to override the queue default. |
 | `timeout` | integer | 60 | Seconds before job is marked failed |
@@ -88,7 +88,10 @@ for full opts.
 The same three options exist on every trigger surface — `priority`, `delay`,
 and `unique` on the gRPC [`TriggerJob`](../grpc-api/rpcs.md#triggerjob) RPC
 and the MCP `trigger_job` tool — and all of them go through one queue
-chokepoint, so the semantics cannot differ between surfaces. The
+chokepoint, so the semantics cannot differ between surfaces. That chokepoint
+also refuses the reserved `_system_*` slugs (answered like an undefined job),
+as does `crap-cms jobs trigger`; only the owning subsystem queues a system
+job. The
 [operation-options reference](../reference/operation-options.md#job-operations)
 lists the full cross-surface field matrix.
 
