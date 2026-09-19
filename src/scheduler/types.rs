@@ -26,8 +26,30 @@ use crate::{
 pub struct SchedulerParams {
     pub infra: Arc<AppInfra>,
     pub config: JobsConfig,
+    /// The database waits a heartbeat write can legitimately sit in; the
+    /// stale-job threshold is derived from them.
+    pub db_timeouts: DbTimeouts,
     pub shutdown: CancellationToken,
     pub email_provider: Option<SharedEmailProvider>,
+}
+
+/// How long one database write may wait before it runs: for a connection
+/// from the write pool (`[database] connection_timeout`), then for the
+/// engine's write lock (`[database] busy_timeout`, `SQLite`).
+#[derive(Clone, Copy, Debug)]
+pub struct DbTimeouts {
+    pub busy_timeout_ms: u64,
+    pub connection_timeout_secs: u64,
+}
+
+impl DbTimeouts {
+    #[must_use]
+    pub fn new(busy_timeout_ms: u64, connection_timeout_secs: u64) -> Self {
+        Self {
+            busy_timeout_ms,
+            connection_timeout_secs,
+        }
+    }
 }
 
 /// Per-tick job-execution config — the parts the poll loop reads from

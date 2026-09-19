@@ -117,8 +117,10 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
 
     match result {
         Ok(result_json) => {
+            // The write pool, like every job-row write: a write on a read
+            // connection starves the readers the pool split protects.
             let c = pool
-                .get()
+                .write()
                 .context("Failed to get DB connection for completion")?;
 
             job_query::complete_job(&c, &job_run.id, job_run.attempt, result_json.as_deref())?;
@@ -160,7 +162,7 @@ fn execute_system_email(
     match result {
         Ok(()) => {
             let c = pool
-                .get()
+                .write()
                 .context("Failed to get DB connection for email job completion")?;
 
             job_query::complete_job(&c, &job_run.id, job_run.attempt, None)?;

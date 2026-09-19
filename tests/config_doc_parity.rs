@@ -307,6 +307,127 @@ fn init_template_mentions_every_config_key() {
     );
 }
 
+/// The doc's `## Configuration Validation` section, up to the next `##`.
+fn validation_section() -> &'static str {
+    let start = DOC
+        .find("## Configuration Validation")
+        .expect("crap-toml.md has a Configuration Validation section");
+    let body = &DOC[start..];
+    let end = body[1..].find("\n## ").map_or(body.len(), |i| i + 1);
+
+    &body[..end]
+}
+
+/// Identifier tokens inside the backticked spans of `line`:
+/// `` `depth.max_nesting_depth < depth.max_depth` `` yields `depth`,
+/// `max_nesting_depth` and `max_depth`.
+fn backticked_tokens(line: &str) -> BTreeSet<String> {
+    line.split('`')
+        .skip(1)
+        .step_by(2)
+        .flat_map(|span| span.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// `(section heading, key)` pairs the rules in `source` read through a
+/// `self.<section>.<key>` access. `section_prefix` names the section for a
+/// file whose rules live on the section struct itself (`self.<key>`). Only
+/// real config keys count, so method calls like `self.validate_x()` and
+/// accessor chains past the key (`self.mcp.api_key.as_ref()`) add nothing.
+fn keys_read_by_rules(source: &str, section_prefix: Option<&str>) -> BTreeSet<(String, String)> {
+    let sections = section_map();
+    let mut keys = BTreeSet::new();
+
+    for (idx, _) in source.match_indices("self.") {
+        let rest = &source[idx + "self.".len()..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(rest.len());
+        let chain: Vec<&str> = section_prefix
+            .into_iter()
+            .chain(rest[..end].split('.'))
+            .collect();
+
+        for split in 1..chain.len() {
+            let heading = chain[..split].join(".");
+            let key = chain[split];
+            let known = sections
+                .iter()
+                .any(|(h, section_keys)| *h == heading && section_keys.contains(&key));
+            if known {
+                keys.insert((heading, key.to_string()));
+            }
+        }
+    }
+
+    keys
+}
+
+/// Every config key a validation rule reads is named in the doc's
+/// `## Configuration Validation` section, on a line that also names the
+/// key's section — so a `bail!` / `warn!` rule can't ship undocumented.
+///
+/// The `[locale]` rules run at config load like every other rule (not
+/// after the Lua files), so they are pinned to the same section.
+#[test]
+fn validation_section_names_every_validated_key() {
+    const VALIDATE: &str = include_str!("../src/config/validate.rs");
+    const LOCALE: &str = include_str!("../src/config/features/locale.rs");
+
+    let mut validated = keys_read_by_rules(VALIDATE, None);
+    validated.extend(keys_read_by_rules(LOCALE, Some("locale")));
+
+    // Positive controls: the scanner sees rules in both files, warnings
+    // included, and invents none for a key no rule reads.
+    for (section, key) in [
+        ("depth", "max_nesting_depth"),
+        ("auth", "session_absolute_max_age"),
+        ("mcp", "api_key"),
+        ("locale", "default_locale"),
+    ] {
+        assert!(
+            validated.contains(&(section.to_string(), key.to_string())),
+            "the rule scanner missed [{section}] {key}"
+        );
+    }
+    assert!(
+        !validated.contains(&("locale".to_string(), "fallback".to_string())),
+        "no rule reads locale.fallback"
+    );
+
+    let lines: Vec<BTreeSet<String>> = validation_section()
+        .lines()
+        .map(backticked_tokens)
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|tokens| tokens.contains("database") && tokens.contains("pool_max_size")),
+        "the doc tokenizer must see the `[database]` pool_max_size rule"
+    );
+
+    let undocumented: Vec<String> = validated
+        .iter()
+        .filter(|(heading, key)| {
+            let section = heading.split('.').next().expect("a heading is non-empty");
+            !lines
+                .iter()
+                .any(|tokens| tokens.contains(section) && tokens.contains(key.as_str()))
+        })
+        .map(|(heading, key)| format!("[{heading}] {key}"))
+        .collect();
+
+    assert!(
+        undocumented.is_empty(),
+        "config keys checked by a validation rule that the `## Configuration \
+         Validation` section of crap-toml.md never names (add a fatal-table row \
+         or a warning bullet naming both the section and the key):\n  {}",
+        undocumented.join("\n  ")
+    );
+}
+
 /// Numeric-knob name patterns for the completeness pin.
 const PATTERNS: &[&str] = &[
     "_secs",

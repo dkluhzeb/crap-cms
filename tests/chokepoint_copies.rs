@@ -378,6 +378,10 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// True for a file that exists only for tests — a `#[cfg(test)] mod` in its own
 /// file carries no gate of its own to truncate at.
 fn is_test_only_file(path: &Path) -> bool {
+    if path.components().any(|c| c.as_os_str() == "tests") {
+        return true;
+    }
+
     let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return false;
     };
@@ -583,6 +587,208 @@ fn write_transactions_take_a_write_pool_connection() {
          tests/chokepoint_copies.rs with the reason.",
         offenders.join("\n")
     );
+}
+
+// ── autocommit writes come from the write pool too ───────────────────────────
+
+/// How many statements after an `execute(` the scan looks for the SQL verb —
+/// the statement text usually sits on the next line, as a `format!` argument.
+const SQL_TEXT_WINDOW: usize = 4;
+
+/// `(path, why an autocommit write on a read checkout there is acceptable)`.
+const READ_POOL_AUTOCOMMIT_WRITE_ALLOWLIST: &[(&str, &str)] = &[];
+
+/// The textual shapes of an autocommit write, compiled once per scan.
+struct WriteShapes {
+    /// A raw statement execution.
+    execute: Regex,
+    /// A write verb in SQL text.
+    verb: Regex,
+    /// The job-row writes that run as autocommit statements on the
+    /// connection they are handed — the writes the scheduler issues outside
+    /// any transaction of its own, and therefore the ones that were reaching
+    /// the read pool.
+    job_write: Regex,
+}
+
+impl WriteShapes {
+    fn new() -> Self {
+        let job_writes = [
+            "update_heartbeat",
+            "fail_job",
+            "mark_stale",
+            "complete_job",
+            "complete_job_repairing",
+            "insert_job",
+            "insert_job_with",
+            "set_job_data",
+            "purge_old_jobs",
+            "purge_old_jobs_for_slug",
+            "cancel_pending_job",
+            "cancel_pending_jobs",
+            "delete_pending_failed_jobs_matching",
+            "recover_stale_jobs",
+            "strip_finished_payload",
+        ]
+        .join("|");
+
+        Self {
+            execute: Regex::new(r"\.execute(_batch)?\(").expect("execute pattern compiles"),
+            verb: Regex::new(r"\b(UPDATE|INSERT|DELETE)\b").expect("verb pattern compiles"),
+            job_write: Regex::new(&format!(r"\b({job_writes})\("))
+                .expect("job-write pattern compiles"),
+        }
+    }
+
+    /// Whether the statement at `idx` writes without a transaction of its
+    /// own: a raw `execute` whose SQL text (this statement or the next few)
+    /// carries a write verb, or one of the autocommit job-row writes.
+    fn is_autocommit_write(&self, stmts: &[Statement], idx: usize) -> bool {
+        let text = &stmts[idx].text;
+
+        if self.execute.is_match(text) {
+            let end = (idx + SQL_TEXT_WINDOW).min(stmts.len());
+
+            return stmts[idx..end].iter().any(|s| self.verb.is_match(&s.text));
+        }
+
+        self.job_write.is_match(text)
+    }
+}
+
+/// The scope a write statement runs in, from the nearest checkout or
+/// transaction above it: `"tx"` (the other guard's domain), `"write"`, or
+/// `"read"`. `None` when nothing in the window says — the connection arrived
+/// as a parameter, and its caller's site is where it gets pinned.
+fn write_scope(window: &[Statement]) -> Option<&'static str> {
+    window.iter().rev().find_map(|s| {
+        if s.text.starts_with("//") || s.text.starts_with('*') {
+            return None;
+        }
+
+        if s.text.contains("transaction_immediate(") {
+            return Some("tx");
+        }
+
+        checkout_pool(&s.text)
+    })
+}
+
+/// Every statement in `src` that writes as autocommit on a read checkout.
+fn autocommit_writes_on_read_checkouts(shapes: &WriteShapes, src: &str) -> Vec<Statement> {
+    let stmts = statements(src);
+
+    stmts
+        .iter()
+        .enumerate()
+        .filter(|(idx, stmt)| {
+            !stmt.text.starts_with("//")
+                && shapes.is_autocommit_write(&stmts, *idx)
+                && write_scope(&stmts[idx.saturating_sub(CHECKOUT_WINDOW)..*idx]) == Some("read")
+        })
+        .map(|(_, stmt)| Statement {
+            line: stmt.line,
+            text: stmt.text.clone(),
+        })
+        .collect()
+}
+
+/// A write that opens no transaction still takes a write-pool connection.
+///
+/// The transaction guard above keys on `transaction_immediate()`, so it never
+/// saw an autocommit `UPDATE` on a `pool.get()` connection — the scheduler's
+/// heartbeats ran that way, and a heartbeat blocked behind a long write on a
+/// read connection was one half of a job being executed twice. The same
+/// starvation argument applies: the read pool is sized for readers, and a
+/// writer sitting on one of its connections while it waits for the write lock
+/// takes that connection from them.
+#[test]
+fn autocommit_writes_take_a_write_pool_connection() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut files = Vec::new();
+    rs_files(&root.join("src"), &mut files);
+    files.sort();
+
+    let shapes = WriteShapes::new();
+    let mut offenders = Vec::new();
+    let mut allowlisted_hits = 0_usize;
+
+    for file in files {
+        let rel = relative(root, &file);
+
+        let Ok(src) = fs::read_to_string(&file) else {
+            continue;
+        };
+
+        let allowed = READ_POOL_AUTOCOMMIT_WRITE_ALLOWLIST
+            .iter()
+            .any(|(path, _)| *path == rel);
+
+        for stmt in autocommit_writes_on_read_checkouts(&shapes, &src) {
+            if allowed {
+                allowlisted_hits += 1;
+            } else {
+                offenders.push(format!("  {rel}:{}  {}", stmt.line, stmt.text));
+            }
+        }
+    }
+
+    assert!(
+        allowlisted_hits > 0 || READ_POOL_AUTOCOMMIT_WRITE_ALLOWLIST.is_empty(),
+        "No allowlisted file matches the autocommit-write scan any more — remove the stale \
+         rows from READ_POOL_AUTOCOMMIT_WRITE_ALLOWLIST in tests/chokepoint_copies.rs."
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "An autocommit write runs on a READ-pool connection:\n{}\n\nTake the connection from \
+         `pool.write()` instead — `DbPool::get` is the read pool, and a writer waiting for the \
+         write lock on one of its connections starves concurrent readers.\n\nIf a site \
+         genuinely must write on a read connection, add it to \
+         READ_POOL_AUTOCOMMIT_WRITE_ALLOWLIST in tests/chokepoint_copies.rs with the reason.",
+        offenders.join("\n")
+    );
+}
+
+/// Positive control: the scan fires on the shape it exists for — a job-row
+/// write on a `pool.get()` checkout, and a raw `execute` whose UPDATE sits on
+/// the following line — and stays quiet once the checkout is `pool.write()`
+/// or a transaction is open (the other guard's domain).
+#[test]
+fn the_autocommit_write_scan_flags_a_read_checkout() {
+    let job_write = "fn beat(pool: &DbPool) {\n    let conn = pool.get().unwrap();\n    \
+                     job_query::update_heartbeat(&conn, id).unwrap();\n}\n";
+    let raw_write = "fn stamp(pool: &DbPool) {\n    let conn = pool.get().unwrap();\n    \
+                     conn.execute(\n        &format!(\"UPDATE t SET x = 1 WHERE id = {p}\"),\n        \
+                     &[],\n    ).unwrap();\n}\n";
+
+    let shapes = WriteShapes::new();
+
+    let hits = autocommit_writes_on_read_checkouts(&shapes, job_write);
+    let texts: Vec<&str> = hits.iter().map(|h| h.text.as_str()).collect();
+    assert_eq!(hits.len(), 1, "{texts:?}");
+    assert_eq!(hits[0].line, 3);
+
+    let hits = autocommit_writes_on_read_checkouts(&shapes, raw_write);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].line, 3);
+
+    let on_write_pool = job_write.replace("pool.get()", "pool.write()");
+    assert!(autocommit_writes_on_read_checkouts(&shapes, &on_write_pool).is_empty());
+
+    let in_transaction = job_write.replace(
+        "let conn = pool.get().unwrap();",
+        "let mut conn = pool.get().unwrap();\n    let tx = conn.transaction_immediate().unwrap();",
+    );
+    assert!(
+        autocommit_writes_on_read_checkouts(&shapes, &in_transaction).is_empty(),
+        "a write inside a transaction is the transaction guard's to flag"
+    );
+
+    let read_only = "fn count(pool: &DbPool) {\n    let conn = pool.get().unwrap();\n    \
+                     conn.execute(\"SELECT 1\", &[]).unwrap();\n}\n";
+    assert!(autocommit_writes_on_read_checkouts(&shapes, read_only).is_empty());
 }
 
 /// A gated helper in the middle of a file must hide only itself. The scan

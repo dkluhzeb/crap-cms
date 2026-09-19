@@ -12,7 +12,11 @@ use tracing::{debug, warn};
 use crate::{
     core::{DocumentFields, HookRef, collection::Hooks},
     hooks::{
-        lifecycle::{HookEvent, context::HookContext, converters::lua_table_to_json_map},
+        lifecycle::{
+            HookEvent,
+            context::{HookContext, hook_result_slot},
+            converters::lua_table_to_json_map,
+        },
         lua_api,
     },
 };
@@ -148,7 +152,8 @@ pub(crate) fn call_registered_hooks(
         let result: Value = func.call(ctx_table)?;
 
         if let Value::Table(tbl) = &result {
-            read_hook_result(&mut context, tbl)?;
+            let hook_name = format!("registered {} hook #{i}", event.as_str());
+            read_hook_result(&mut context, tbl, &hook_name)?;
         } else if !matches!(result, Value::Nil) {
             warn!(
                 "Registered {} hook #{} for {} returned {} instead of a table — ignoring",
@@ -163,9 +168,11 @@ pub(crate) fn call_registered_hooks(
     Ok(context)
 }
 
-/// Read hook result data and context back from a returned Lua table into the `HookContext`.
-pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()> {
-    if let Ok(data_tbl) = tbl.get::<Table>("data") {
+/// Read hook result data and context back from a returned Lua table into the
+/// `HookContext`. A present-but-non-table `data` / `context` slot keeps the
+/// current value with a warning naming `hook_name`.
+pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table, hook_name: &str) -> Result<()> {
+    if let Some(data_tbl) = hook_result_slot(tbl, "data", hook_name)? {
         // Lua collapses a JSON null to `nil`, and setting a table key to `nil`
         // removes it — so a field the caller explicitly set to null (the "clear
         // this column" request the gRPC surface can send) is invisible inside the
@@ -190,7 +197,7 @@ pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()>
         ctx.data = DocumentFields::from(rebuilt);
     }
 
-    ctx.read_context_back(tbl)?;
+    ctx.read_context_back(tbl, hook_name)?;
 
     Ok(())
 }
@@ -274,7 +281,7 @@ pub(crate) fn call_hook_ref(
         Value::Table(tbl) => {
             let mut ctx = context;
 
-            read_hook_result(&mut ctx, &tbl)?;
+            read_hook_result(&mut ctx, &tbl, hook_ref)?;
 
             Ok(ctx)
         }
@@ -340,6 +347,30 @@ mod tests {
             "an explicit null (clear-to-null) must survive a passthrough hook"
         );
         assert_eq!(out.data.get("title"), Some(&json!("hi")));
+    }
+
+    /// A hook returning `{ data = "oops", context = 42 }` (present but not a
+    /// table) keeps the current data and context: not an error, not a silent
+    /// replacement, and warned about by name.
+    #[test]
+    fn non_table_data_and_context_slots_keep_the_current_values() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"package.loaded["h"] = function(ctx)
+                return { data = "oops", context = 42 }
+            end"#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut ctx = HookContext::builder("posts", "update").build();
+        ctx.data.insert("title".to_string(), json!("hi"));
+        ctx.context.insert("k".to_string(), json!(1));
+
+        let out = call_hook_ref(&lua, &HookRef::new("h"), ctx).unwrap();
+
+        assert_eq!(out.data.get("title"), Some(&json!("hi")));
+        assert_eq!(out.context.get("k"), Some(&json!(1)));
     }
 
     /// A `{ ref, options }` hook config surfaces its `options` to the hook as

@@ -77,6 +77,29 @@ pub fn perform_account_action(
     id: &str,
     action: AccountAction,
 ) -> Result<(), ServiceError> {
+    check_account_action_access(ctx, id, action)?;
+
+    match action {
+        AccountAction::Lock => lock_user(ctx, id),
+        AccountAction::Unlock => unlock_user(ctx, id),
+        AccountAction::Verify => mark_verified(ctx, id),
+        AccountAction::Unverify => mark_unverified(ctx, id),
+    }
+}
+
+/// The access half of [`perform_account_action`], on its own so a surface
+/// that couples the action to another write can refuse BEFORE that write
+/// persists anything; the action itself checks again when it runs.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::AccessDenied`] when the caller may not perform the
+/// action on the target, or a hook/backend error.
+pub fn check_account_action_access(
+    ctx: &ServiceContext,
+    id: &str,
+    action: AccountAction,
+) -> Result<(), ServiceError> {
     let def = ctx.collection_def()?;
     let access_ref = match action {
         AccountAction::Lock | AccountAction::Unlock => def.access.resolve_unlock(),
@@ -104,14 +127,7 @@ pub fn perform_account_action(
 
     // A row-filter (Constrained) rule scopes which users the caller may act on
     // (e.g. `{ org = ctx.user.org }`) — enforce it against the target.
-    enforce_access_constraints(ctx, id, &access, action.operation(), false)?;
-
-    match action {
-        AccountAction::Lock => lock_user(ctx, id),
-        AccountAction::Unlock => unlock_user(ctx, id),
-        AccountAction::Verify => mark_verified(ctx, id),
-        AccountAction::Unverify => mark_unverified(ctx, id),
-    }
+    enforce_access_constraints(ctx, id, &access, action.operation(), false)
 }
 
 /// Lock a user account, preventing login.

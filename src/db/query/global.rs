@@ -354,7 +354,7 @@ mod tests {
         // Update without providing the checkbox field -- should default to 0
         let data = DocumentFields::new();
         let doc = update_global(&conn, "prefs", &def, &data, None).unwrap();
-        assert_eq!(doc.get("newsletter"), Some(&json!(0)));
+        assert_eq!(doc.get("newsletter"), Some(&json!(false)));
     }
 
     #[test]

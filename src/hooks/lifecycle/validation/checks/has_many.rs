@@ -5,6 +5,7 @@ use crate::{
     db::query::helpers::number_element,
 };
 
+use super::length::not_text_error;
 use super::numeric::{NumberViolation, number_violation};
 use super::shared::{decode_element_list, element_display};
 
@@ -65,15 +66,29 @@ pub(crate) fn check_has_many_elements(
 
     for v in &values {
         match field.field_type {
-            FieldType::Text => {
-                if let Some(s) = v.as_str() {
-                    check_text_value_length(field, data_key, s, errors);
-                }
-            }
+            FieldType::Text => check_text_element(field, data_key, v, errors),
             FieldType::Number => check_number_value_bounds(field, data_key, v, errors),
             _ => {}
         }
     }
+}
+
+/// Validate one element of a text list: it must be text — the write would
+/// store a number or a list as its JSON spelling — and within the length
+/// bounds.
+fn check_text_element(
+    field: &FieldDefinition,
+    data_key: &str,
+    element: &Value,
+    errors: &mut Vec<FieldError>,
+) {
+    let Some(s) = element.as_str() else {
+        errors.push(not_text_error(field, data_key));
+
+        return;
+    };
+
+    check_text_value_length(field, data_key, s, errors);
 }
 
 /// Validate a single text value against `min_length/max_length` constraints.
@@ -264,6 +279,29 @@ mod tests {
         );
 
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    /// Regression: a non-string element of a text list (`[1, ["a"]]`) passed
+    /// validation and was stored as its JSON spelling. Every element must be
+    /// text.
+    #[test]
+    fn a_non_string_element_of_a_text_list_is_rejected() {
+        let field = FieldDefinition::builder("tags", FieldType::Text)
+            .has_many(true)
+            .build();
+        let mut errors = Vec::new();
+
+        check_has_many_elements(
+            &field,
+            "tags",
+            Some(&json!(["ok", 1, ["a"]])),
+            false,
+            false,
+            &mut errors,
+        );
+
+        let keys: Vec<&str> = errors.iter().filter_map(|e| e.key.as_deref()).collect();
+        assert_eq!(keys, vec!["validation.invalid_text"; 2]);
     }
 
     /// Regression: a malformed (scalar / bare-string) value on a has-many

@@ -119,6 +119,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_job_schedules(&snapshot)
         .context("Job schedule validation failed")?;
 
+    // A list view orders by `admin.default_sort` on every request; a column
+    // the table does not have would only fail on the first load.
+    super::startup_checks::validate_admin_default_sorts(&snapshot)
+        .context("admin.default_sort validation failed")?;
+
     // Advisory warning (not a hard error): with default_deny = false, a
     // collection's draft/trash view with no gating rule is world-readable.
     super::startup_checks::warn_public_lifecycle_views(&snapshot, config.access.default_deny);

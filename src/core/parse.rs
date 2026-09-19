@@ -106,6 +106,15 @@ pub fn value_truthy(value: &Value) -> bool {
     }
 }
 
+/// Whether a value is an empty has-many list spelled as an empty object. A Lua
+/// table with no entries is neither a list nor a map, and crosses the boundary
+/// as `{}` — the only object an empty list can arrive as. Every reader of a
+/// has-many list takes it as `[]` (a non-empty object is still not a list).
+#[must_use]
+pub fn is_empty_object(value: &Value) -> bool {
+    matches!(value, Value::Object(map) if map.is_empty())
+}
+
 /// Read a number spelled as text, surrounding whitespace ignored — the one
 /// reading every number value shares (the write, validation, and has-many
 /// elements). `None` when the text isn't a number. A non-finite spelling
@@ -210,6 +219,17 @@ mod tests {
 
         for falsy in [json!(null), json!(false), json!(""), json!(0), json!(0.0)] {
             assert!(!value_truthy(&falsy), "{falsy}");
+        }
+    }
+
+    /// Only the empty object counts as an empty list — a map with entries and
+    /// an empty array (already a list) do not.
+    #[test]
+    fn only_an_empty_object_is_an_empty_list_spelling() {
+        assert!(is_empty_object(&json!({})));
+
+        for other in [json!({ "a": 1 }), json!([]), json!(null), json!("")] {
+            assert!(!is_empty_object(&other), "{other}");
         }
     }
 

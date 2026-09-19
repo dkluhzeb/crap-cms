@@ -140,24 +140,41 @@ fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
     })
 }
 
-/// Check whether a sort column name corresponds to a real column on the collection table.
-pub(super) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
-    // System columns that always exist
-    if matches!(
-        col,
-        "id" | "created_at" | "updated_at" | "_status" | "_deleted_at" | "_ref_count"
-    ) {
-        return true;
-    }
+/// Check whether a sort column name corresponds to a real column on the
+/// collection table. `_status` exists only when the collection keeps drafts
+/// and `_deleted_at` only with soft delete, so ordering by either elsewhere
+/// is a validation error rather than a backend error.
+pub(crate) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
+    let system = match col {
+        "id" | "created_at" | "updated_at" | "_ref_count" => true,
+        "_status" => def.has_drafts(),
+        "_deleted_at" => def.soft_delete,
+        _ => false,
+    };
 
     // User-defined fields that have a parent column (has-one scalar fields).
-    check_fields(col, &def.fields, "")
+    system || check_fields(col, &def.fields, "")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
+
+    /// `_status` and `_deleted_at` are created only by drafts and soft delete;
+    /// on a plain collection a sort by them used to reach the database.
+    #[test]
+    fn conditional_system_columns_sort_only_where_they_exist() {
+        let mut def = CollectionDefinition::new("posts");
+        assert!(!is_valid_sort_column("_status", &def));
+        assert!(!is_valid_sort_column("_deleted_at", &def));
+        assert!(is_valid_sort_column("_ref_count", &def));
+
+        def.versions = Some(crate::core::VersionsConfig::new(true, 0));
+        def.soft_delete = true;
+        assert!(is_valid_sort_column("_status", &def));
+        assert!(is_valid_sort_column("_deleted_at", &def));
+    }
     use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::column_read_expr;

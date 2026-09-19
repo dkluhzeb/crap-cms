@@ -277,14 +277,14 @@ fn checkbox_default_when_field_missing() {
     )
     .expect("Sync");
 
-    // Create without providing "enabled" — should default to 0
+    // Create without providing "enabled" — should default to false
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "checks", &def, &data, None).expect("Create");
     tx.commit().expect("Commit");
-    assert_eq!(doc.get("enabled").unwrap().as_i64(), Some(0));
+    assert_eq!(doc.get("enabled").unwrap().as_bool(), Some(false));
 }
 
 #[test]
@@ -1007,9 +1007,9 @@ fn create_checkbox_truthy_values() {
         let doc = query::create(&tx, "flags", &def, &data, None).expect("Create");
         tx.commit().expect("Commit");
         assert_eq!(
-            doc.get("active").unwrap().as_i64(),
-            Some(1),
-            "Checkbox value '{truthy}' should coerce to 1"
+            doc.get("active").unwrap().as_bool(),
+            Some(true),
+            "Checkbox value '{truthy}' should read as true"
         );
     }
 }
@@ -1045,9 +1045,9 @@ fn create_checkbox_falsy_values() {
         let doc = query::create(&tx, "flags2", &def, &data, None).expect("Create");
         tx.commit().expect("Commit");
         assert_eq!(
-            doc.get("active").unwrap().as_i64(),
-            Some(0),
-            "Checkbox value '{falsy}' should coerce to 0"
+            doc.get("active").unwrap().as_bool(),
+            Some(false),
+            "Checkbox value '{falsy}' should read as false"
         );
     }
 }

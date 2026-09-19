@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
 };
@@ -132,6 +133,35 @@ fn export_slugs(registry: &Registry, collection_filter: Option<&str>) -> Result<
     Ok(slugs)
 }
 
+/// The sibling `path` is staged under while being written: `<name>.tmp` in
+/// the same directory, so the final rename never crosses a filesystem.
+fn staged_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(OsStr::to_os_string)
+        .unwrap_or_default();
+    name.push(".tmp");
+
+    path.with_file_name(name)
+}
+
+/// Write `content` to `path` through a staged sibling renamed into place only
+/// once it is complete. A kill mid-write leaves the stage behind, never a
+/// truncated file under the final name that reads as a valid export.
+fn write_atomically(path: &Path, content: &str) -> Result<()> {
+    let staged = staged_path(path);
+
+    fs::write(&staged, content).with_context(|| format!("Failed to write {}", staged.display()))?;
+
+    if let Err(e) = fs::rename(&staged, path) {
+        let _ = fs::remove_file(&staged);
+
+        return Err(e).with_context(|| format!("Failed to write {}", path.display()));
+    }
+
+    Ok(())
+}
+
 /// Write the export to `output`, or print it when there is none.
 fn write_export(export_file: &ExportFile, output: Option<PathBuf>) -> Result<()> {
     let content = to_string_pretty(export_file)?;
@@ -141,7 +171,7 @@ fn write_export(export_file: &ExportFile, output: Option<PathBuf>) -> Result<()>
         return Ok(());
     };
 
-    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    write_atomically(&path, &content)?;
 
     cli::success(&format!(
         "Exported {} collection(s) to {}",
@@ -195,4 +225,63 @@ pub fn export(
     };
 
     write_export(&export_file, output)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::from_str;
+
+    use super::*;
+
+    fn empty_export() -> ExportFile {
+        ExportFile {
+            format_version: EXPORT_FORMAT_VERSION,
+            crap_version: "test".to_string(),
+            exported_at: "2026-01-01T00:00:00Z".to_string(),
+            collections: Map::new(),
+        }
+    }
+
+    #[test]
+    fn the_stage_is_a_sibling_of_the_final_file() {
+        assert_eq!(
+            staged_path(Path::new("/out/data/export.json")),
+            PathBuf::from("/out/data/export.json.tmp")
+        );
+    }
+
+    /// The export lands under its final name, complete, and the stage it was
+    /// written through is gone.
+    #[test]
+    fn write_export_renames_a_complete_stage_into_place() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("export.json");
+
+        write_export(&empty_export(), Some(path.clone())).expect("write export");
+
+        let written: ExportFile =
+            from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(written.format_version, EXPORT_FORMAT_VERSION);
+        assert_eq!(written.crap_version, "test");
+        assert!(!staged_path(&path).exists(), "the stage is renamed away");
+    }
+
+    /// Regression: the export was written straight to its final name, so a
+    /// kill mid-write left a truncated file that looked like a valid export.
+    /// The final name is only ever the renamed, complete stage: an existing
+    /// file keeps its full content until the replacement is whole.
+    #[test]
+    fn a_failed_write_leaves_the_previous_export_intact() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("export.json");
+        fs::write(&path, "previous").expect("seed");
+
+        // Staging into a directory that does not exist fails before the
+        // rename, the way an interrupted write never reaches it.
+        let missing = tmp.path().join("missing").join("export.json");
+        assert!(write_atomically(&missing, "partial").is_err());
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "previous");
+        assert!(!staged_path(&missing).exists());
+    }
 }

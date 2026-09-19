@@ -27,9 +27,11 @@ struct JobFailureWrite<'a> {
 /// The single place the failure write + retry/permanent log-level split lives,
 /// so every job kind records failures identically.
 fn write_job_failure(w: JobFailureWrite<'_>) -> Result<()> {
+    // The write pool, like every job-row write: a write on a read connection
+    // starves the readers the pool split protects.
     let c = w
         .pool
-        .get()
+        .write()
         .context("Failed to get DB connection to record job failure")?;
 
     // The stored error is readable through `GetJobRun`. A hook that raised

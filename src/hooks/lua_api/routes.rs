@@ -13,12 +13,13 @@
 //!   access  = false,                    -- optional: omitted=public, false=disabled, "ref"=gated
 //!   rate_limit = { max = 60, window = 60 }, -- optional
 //!   csrf    = false,                    -- optional (default false)
+//!   max_body = 1048576,                 -- optional: request body cap in bytes
 //!   options = { ... },                  -- optional, surfaced as ctx.options
 //! })
 //! ```
 //!
 //! Recognized keys: `path`, `method`, `handler`, `access`, `rate_limit`,
-//! `csrf`, `options`. `path`, `method`, and `handler` are required. Registration
+//! `csrf`, `max_body`, `options`. `path`, `method`, and `handler` are required. Registration
 //! is rejected outside the init phase (routes are read once at startup), and a
 //! bad method / path / handler ref fails loudly at load.
 
@@ -29,7 +30,7 @@ use super::utils::{lua_err, require_init_phase};
 use crate::{
     admin::custom_routes::{ALLOWED_METHODS, is_mutating_method, normalize_method, validate_path},
     core::HookRef,
-    hooks::lua_api::parse::deny_unknown_keys,
+    hooks::lua_api::{integer::opt_integer, parse::deny_unknown_keys},
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -148,10 +149,70 @@ fn apply_csrf(def: &Table, methods: &[String], entry: &Table) -> LuaResult<()> {
     Ok(())
 }
 
+/// Parse + validate the optional `rate_limit = { max, window }` table and
+/// write it into `entry`. Both fields are positive integers (a whole-valued
+/// float counts; a fractional one is an error, never rounded).
+fn apply_rate_limit(lua: &Lua, def: &Table, entry: &Table) -> LuaResult<()> {
+    const CONTEXT: &str = "crap.routes.register: rate_limit";
+
+    let rl = match def.get::<Value>("rate_limit")? {
+        Value::Nil => return Ok(()),
+        Value::Table(rl) => rl,
+        other => {
+            return Err(RuntimeError(format!(
+                "crap.routes.register: `rate_limit` must be a table {{ max, window }}, got {}",
+                other.type_name()
+            )));
+        }
+    };
+
+    deny_unknown_keys(&rl, "crap.routes.register rate_limit", &["max", "window"])
+        .map_err(lua_err)?;
+
+    let max = opt_integer(lua, &rl, "max", CONTEXT)?.unwrap_or(0);
+    let window = opt_integer(lua, &rl, "window", CONTEXT)?.unwrap_or(0);
+
+    if max <= 0 || window <= 0 {
+        return Err(RuntimeError(
+            "crap.routes.register: rate_limit.max and rate_limit.window must be > 0".into(),
+        ));
+    }
+
+    // The dispatcher reads `max` as u32 / `window` as u64; reject what
+    // would not fit instead of letting the read fail later.
+    if u32::try_from(max).is_err() {
+        return Err(RuntimeError(
+            "crap.routes.register: rate_limit.max is too large".into(),
+        ));
+    }
+
+    entry.set("rate_limit", rl)?;
+
+    Ok(())
+}
+
+/// Parse + validate the optional `max_body` byte cap and write it into
+/// `entry`. A whole-valued float (`2^16`) is accepted; a fractional value or
+/// any other type is an error rather than a silently ignored cap.
+fn apply_max_body(lua: &Lua, def: &Table, entry: &Table) -> LuaResult<()> {
+    let Some(max_body) = opt_integer(lua, def, "max_body", "crap.routes.register")? else {
+        return Ok(());
+    };
+
+    if max_body <= 0 {
+        return Err(RuntimeError(
+            "crap.routes.register: max_body must be a positive integer (bytes)".into(),
+        ));
+    }
+
+    entry.set("max_body", max_body)?;
+
+    Ok(())
+}
+
 /// Register a custom HTTP route. Init-phase only — runtime registration has no
 /// effect (routes are mounted once at startup).
 #[lua_fn(path = "crap.routes.register")]
-
 fn route_register(
     lua: &Lua,
     #[lua(ty = "table", doc = "Route definition (path, method, handler, …).")] def: Table,
@@ -198,57 +259,19 @@ fn route_register(
     entry.set("handler", handler)?;
 
     apply_access(lua, &def, &entry)?;
-
-    if let Value::Table(rl) = def.get::<Value>("rate_limit")? {
-        deny_unknown_keys(&rl, "crap.routes.register rate_limit", &["max", "window"])
-            .map_err(lua_err)?;
-        let max: u32 = rl.get("max").map_err(|_| {
-            RuntimeError("crap.routes.register: rate_limit.max must be a positive integer".into())
-        })?;
-        let window: u64 = rl.get("window").map_err(|_| {
-            RuntimeError(
-                "crap.routes.register: rate_limit.window must be a positive integer".into(),
-            )
-        })?;
-        if max == 0 || window == 0 {
-            return Err(RuntimeError(
-                "crap.routes.register: rate_limit.max and rate_limit.window must be > 0".into(),
-            ));
-        }
-        entry.set("rate_limit", rl)?;
-    }
-
+    apply_rate_limit(lua, &def, &entry)?;
     apply_csrf(&def, &methods, &entry)?;
+    apply_max_body(lua, &def, &entry)?;
 
-    // Accept an integer or a whole-valued number (Lua `2^16` is a float), but
-    // reject any other type instead of silently ignoring the cap. The numeric
-    // branches re-read as `i64` so mlua does the integral coercion (a
-    // fractional float then errors), avoiding a lossy `f64 as i64`.
-    match def.get::<Value>("max_body")? {
+    match def.get::<Value>("options")? {
         Value::Nil => {}
-        Value::Integer(_) | Value::Number(_) => {
-            let max_body: i64 = def.get("max_body").map_err(|_| {
-                RuntimeError(
-                    "crap.routes.register: max_body must be a positive integer (bytes)".into(),
-                )
-            })?;
-            if max_body <= 0 {
-                return Err(RuntimeError(
-                    "crap.routes.register: max_body must be a positive integer (bytes)".into(),
-                ));
-            }
-            entry.set("max_body", max_body)?;
-        }
+        Value::Table(opts) => entry.set("options", opts)?,
         other => {
             return Err(RuntimeError(format!(
-                "crap.routes.register: `max_body` must be a positive integer (bytes), got {}",
+                "crap.routes.register: `options` must be a table, got {}",
                 other.type_name()
             )));
         }
-    }
-
-    if let Value::Table(opts) = def.get::<Value>("options")? {
-        entry.set("options", opts)?;
     }
 
     let routes: Table = lua.named_registry_value(ROUTES_KEY)?;
@@ -534,6 +557,78 @@ mod tests {
         .unwrap();
         let e: Table = entries(&lua).get(1).unwrap();
         assert_eq!(e.get::<i64>("max_body").unwrap(), 65536);
+    }
+
+    /// A fractional `max_body` used to be truncated by the integer read
+    /// (`1.5` → `1`); it must be rejected like every other integer option.
+    #[test]
+    fn rejects_fractional_max_body() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/u", method = "POST", handler = "routes.u", max_body = 1.5 })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("max_body") && err.contains("integer"), "{err}");
+    }
+
+    /// `rate_limit.max` / `window` follow the same rule: `2^6` is fine,
+    /// `1.5` is an error, a string is an error.
+    #[test]
+    fn rate_limit_fields_follow_the_integer_rule() {
+        let lua = lua_in_init_phase();
+        lua.load(
+            r#"crap.routes.register({ path = "/a", method = "GET", handler = "routes.a", rate_limit = { max = 2^6, window = 60 } })"#,
+        )
+        .exec()
+        .unwrap();
+        let e: Table = entries(&lua).get(1).unwrap();
+        let rl: Table = e.get("rate_limit").unwrap();
+        assert_eq!(rl.get::<i64>("max").unwrap(), 64);
+
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/b", method = "GET", handler = "routes.b", rate_limit = { max = 1.5, window = 60 } })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'max' must be an integer"), "{err}");
+
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/c", method = "GET", handler = "routes.c", rate_limit = { max = 5, window = "60" } })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'window' must be an integer"), "{err}");
+    }
+
+    /// A present-but-wrong-typed `rate_limit` / `options` used to be silently
+    /// ignored — the route mounted with no limit / no options.
+    #[test]
+    fn rejects_wrong_typed_rate_limit_and_options() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/a", method = "GET", handler = "routes.a", rate_limit = 60 })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("rate_limit") && err.contains("table"), "{err}");
+
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/b", method = "GET", handler = "routes.b", options = "x" })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("options") && err.contains("table"), "{err}");
     }
 
     #[test]

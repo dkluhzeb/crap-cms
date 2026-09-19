@@ -155,7 +155,7 @@ Access functions run with transaction context — they can call `crap.collection
 ## Programmatic Access Checks
 
 Lua code can evaluate a collection's configured access rule directly with
-`crap.access.check(collection, operation)`. It runs the matching access function
+`crap.access.check(collection, operation)` — `operation` is one of `read`, `create`, `update`, `delete`, `trash` or `unlock` (which falls back to the `update` rule when no `unlock` rule is set). It runs the matching access function through the same evaluator enforcement uses, so a constraint table enforcement would reject is reported as denied here too; it runs the matching access function
 against the current user and returns `"allowed"`, `"denied"`, or a filter table
 (when the rule returns row constraints):
 

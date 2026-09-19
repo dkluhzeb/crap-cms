@@ -266,10 +266,47 @@ pub(crate) fn parse_blocks_form_data(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::core::{FieldAdmin, FieldDefinition, FieldTab, FieldType};
+    use crate::{
+        admin::handlers::field_context::json_textarea_value,
+        core::{FieldAdmin, FieldDefinition, FieldTab, FieldType},
+        db::query::join::store_rows,
+    };
+
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
+    }
+
+    /// Regression: a blocks row holding an API-written JSON object showed the
+    /// object's text in the textarea and stored the submitted text as a string,
+    /// so a save with nothing changed changed the stored value. The textarea
+    /// text is parsed back into the row's typed form: the same object.
+    #[test]
+    fn a_json_textarea_round_trips_an_api_written_object() {
+        let content = FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "card",
+                vec![make_field("meta", FieldType::Json)],
+            )])
+            .build();
+        let written = json!({ "n": 1, "tags": ["a", "b"], "nested": { "k": null } });
+
+        let mut form = HashMap::new();
+        form.insert("content[0][_block_type]".to_string(), "card".to_string());
+        form.insert(
+            "content[0][meta]".to_string(),
+            json_textarea_value(&written.to_string()),
+        );
+
+        let mut rows = parse_blocks_form_data(&form, "content", &content.blocks);
+        store_rows(&content, &mut rows);
+
+        assert_eq!(
+            rows,
+            vec![json!({ "_block_type": "card", "meta": written })]
+        );
     }
 
     #[test]

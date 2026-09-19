@@ -163,7 +163,7 @@ crap.util.trim("  hello  ")  -- "hello"
 
 ### crap.util.split(str, sep)
 
-Split a string by separator. Returns an array.
+Split a string by a plain-string separator (not a Lua pattern — `"%"` and `", "` split on exactly those characters). Returns an array; empty pieces are dropped, and an empty separator is an error.
 
 ```lua
 crap.util.split("a,b,c", ",")  -- { "a", "b", "c" }
@@ -177,6 +177,8 @@ crap.util.ends_with("hello world", "world")    -- true
 ```
 
 ### crap.util.truncate(str, max_len, suffix?)
+
+Counts UTF-8 characters, not bytes, and never returns more than `max_len` characters — a suffix longer than `max_len` is cut too.
 
 Truncate a string with optional suffix (default: `"..."`).
 
@@ -214,7 +216,7 @@ local ts2 = crap.util.date_parse("2024-01-15")
 
 ### crap.util.date_format(timestamp, format)
 
-Format a Unix timestamp using chrono format syntax.
+Format a Unix timestamp using chrono format syntax. The timestamp must be an integer (a whole-valued float such as `2^31` is accepted; `1.5` is an error).
 
 ```lua
 local str = crap.util.date_format(1705312200, "%Y-%m-%d")  -- "2024-01-15"
@@ -222,7 +224,7 @@ local str = crap.util.date_format(1705312200, "%Y-%m-%d")  -- "2024-01-15"
 
 ### crap.util.date_add(timestamp, seconds) / crap.util.date_diff(a, b)
 
-Arithmetic on timestamps.
+Arithmetic on timestamps. Arguments must be integers (a whole-valued float is accepted; a fractional one is an error).
 
 ```lua
 local tomorrow = crap.util.date_add(crap.util.date_timestamp(), 86400)

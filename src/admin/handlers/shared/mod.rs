@@ -30,7 +30,7 @@ pub(crate) use form_fields::{admin_form_fields, for_each_admin_form_leaf, render
 // Re-export query utilities from the dedicated module.
 pub(crate) use super::query::{
     ListUrlContext, extract_status_filter, extract_where_params, is_column_eligible,
-    is_sortable_column, parse_where_params, url_decode, validate_sort,
+    is_meta_column, is_sortable_column, parse_where_params, url_decode, validate_sort,
 };
 
 // access

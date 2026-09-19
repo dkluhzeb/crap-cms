@@ -176,8 +176,10 @@ crap-cms backup --include-uploads      # → <config_dir>/backups/backup-<timest
   tooling).
 
 The backup also carries `data/.jwt_secret` when one exists, so keep it as
-private as the secret (item 34). To go back on SQLite: `crap-cms restore
-<backup-dir> --confirm` (add `--include-uploads` if the archive has them);
+private as the secret (item 34). To go back on SQLite, run `crap-cms restore
+<backup-dir> --confirm` **with the alpha.9 binary** you are returning to (add
+`--include-uploads` if the archive has them) — restoring with alpha.10 and
+starting alpha.10 would migrate the restored database forward again;
 `restore` is SQLite-only, so on Postgres restore the `pg_dump` you took.
 
 **Why this is not optional.** The first startup on alpha.10 rewrites stored
@@ -1465,6 +1467,44 @@ deadline, so raise the matching queue timeout for long Lua jobs. `/ready`
 returns 503 until startup stale-job recovery has completed, and gRPC
 `Subscribe` streams are closed at shutdown, so subscribers must reconnect.
 
+### 50. Read clients: a checkbox reads back as a boolean on every surface
+
+A top-level, group or array-row checkbox read as the column's `0`/`1`, while
+the same field inside a blocks row read as `true`/`false`; every generated
+client type, the MCP schema and the gRPC type reference already said
+`boolean`. Every read now returns `true`/`false` (gRPC `bool_value`, Lua
+boolean). Writes are unchanged: `true`/`false`/`0`/`1`/`"on"` all store.
+
+**Action:** a client that compared a checkbox to `1` (or a Lua hook that
+tested `doc.flag == 1`) compares to `true`; a Lua hook that relied on `if
+doc.flag then` for a column checkbox was wrong before (integer `0` is truthy)
+and is right now. Regenerate typed clients — their existing `boolean` shape is
+now what the wire carries.
+
+### 51. Read clients: a `json` field reads back as the parsed JSON value
+
+A `json` field (and a richtext field with `admin.format = "json"`) returned
+its stored text at the top level, the parsed value inside an array row, and
+whatever was sent inside a blocks row. Every read — find, versions, drafts,
+events, gRPC (typed struct), Lua (table) — now returns the parsed value; a
+stored string that is not valid JSON stays a string.
+
+**Action:** a client that called `JSON.parse` on a top-level `json` field
+removes that call. Filters on `json` columns (`meta.a` dot paths) are
+unchanged.
+
+### 52. Write clients: stricter value types on date and text fields
+
+A number sent to a date field used to be stored as text; a non-string sent
+to a text, textarea, email or code field without a length bound was stored
+as its JSON text; a date shape the field's `picker_appearance` cannot show
+(a full timestamp on a `timeOnly` field) was accepted and then blanked by the
+next admin save. All three are validation errors now.
+
+**Action:** send dates as ISO-8601 strings in the shape the picker shows
+(`HH:MM[:SS]` for `timeOnly`, `YYYY-MM` for `monthOnly`), and strings on
+text-type fields.
+
 ## Admin UI behavior
 
 ### Template overrides: the duplicate locale-picker keys are gone
@@ -2219,8 +2259,21 @@ if you use versions on a localized collection.
 
 ## Behavior changes (likely no action)
 
+- **A coroutine no longer escapes the Lua instruction limit.** Code spinning
+  inside `coroutine.wrap`/`coroutine.resume` in a hook, route, job or effect
+  used to run unbounded and hold its VM forever; it now fails with the same
+  "exceeded instruction limit" error as straight-line code. **Action:** none
+  unless a hook deliberately ran a long coroutine — raise
+  `[hooks] max_instructions` for it.
+- **`crap-cms trash purge` requires `--confirm`** (`-y`) unless `--dry-run`
+  is given; a bare `trash purge` refuses instead of hard-deleting every
+  trashed document. **Action:** add `-y` to scripted purges.
+- **Admin logout revokes the session server-side.** A JWT captured before
+  logout used to stay valid until its `exp`; logout now bumps the user's
+  session version, so it is rejected and the user's live streams close.
+
 - **The `_system_*` job slugs are reserved at the queue.** `queue_job` (gRPC
-  `TriggerJob`, MCP `trigger_job`, `crap.jobs.trigger`) and `crap-cms jobs
+  `TriggerJob`, MCP `trigger_job`, `crap.jobs.queue`) and `crap-cms jobs
   trigger` answer a `_system_email` / `_system_image_convert` / `_system_bulk`
   slug as an unknown job; only the owning subsystem queues them. **Action:**
   none unless a client queued a system job by slug — it must use the feature

@@ -126,7 +126,7 @@ end
 | `offset` | integer | `nil` | Number of results to skip (row-offset alternative to `page`; mutually exclusive with it). |
 | `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.end_cursor`. Mutually exclusive with `page`/`offset`/`before_cursor`. Cursor-mode only. |
 | `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.start_cursor`. Mutually exclusive with `page`/`offset`/`after_cursor`. Cursor-mode only. |
-| `depth` | integer | `0` | Population depth for relationship fields. |
+| `depth` | integer | `[depth] default_depth` (1) | Population depth for relationship fields, capped by `[depth] max_depth`. |
 | `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at`/`updated_at` are included only if explicitly listed. |
 | `draft` | boolean | `false` | Include draft documents (versioned collections with `drafts = true`). |
 | `trash` | boolean | `false` | Return only soft-deleted documents (collections with `soft_delete = true`). |

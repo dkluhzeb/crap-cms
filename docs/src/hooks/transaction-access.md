@@ -66,6 +66,8 @@ function M.before_change(ctx)
 end
 ```
 
+`data` must be a table (or omitted); any other value is an error at registration.
+
 Semantics:
 
 - **Refs + plain data, not closures.** The first argument is a hook

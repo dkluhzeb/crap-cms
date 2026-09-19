@@ -17,7 +17,7 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                get_user_doc, htmx_redirect, parse_request_locale, paths, redirect_response,
+                HxNav, get_user_doc, htmx_redirect, parse_request_locale, paths, redirect_response,
                 strip_locale_locked_for_publish, toast_only_error,
             },
         },
@@ -25,10 +25,10 @@ use crate::{
     core::{
         AuthUser, CollectionDefinition, Document, ReqContext, SharedStorage, upload::UploadedFile,
     },
-    db::LocaleContext,
+    db::{BoxedConnection, LocaleContext},
     service::{
         self, AppInfra, ServiceContext, ServiceError,
-        auth::{AccountAction, perform_account_action},
+        auth::{AccountAction, check_account_action_access, is_locked, perform_account_action},
         op::{Operation, Unpublish, UnpublishArgs, Update, UpdateArgs},
         upload::{UpdateUploadInput, update_upload},
     },
@@ -45,6 +45,20 @@ use super::{SubmittedMeta, WriteErrorParams, handle_collection_write_error};
 enum LockUpdate {
     Skip,
     Set(bool),
+}
+
+/// One edit-form submission, as the route handler received it. All fields are
+/// required and it is built in exactly one place.
+pub(in crate::admin::handlers::collections) struct UpdateRequest<'a> {
+    pub state: &'a AdminState,
+    pub slug: &'a str,
+    pub id: &'a str,
+    pub form_data: HashMap<String, String>,
+    pub file: Option<UploadedFile>,
+    pub auth_user: Option<&'a Extension<AuthUser>>,
+    /// How the submit was issued — decides whether an error re-render answers
+    /// with the `#main` fragment or a full document.
+    pub hx: HxNav,
 }
 
 /// Prepared update input.
@@ -146,53 +160,112 @@ fn run_write(
     Update::run(ctx, op_args)
 }
 
-/// Apply the auth collection's `_locked` toggle after a successful write.
-///
-/// Gated through `perform_account_action` so the admin surface honors
-/// `access.unlock` (`?? update`) against the target user — identical to the
-/// gRPC `LockAccount`/`UnlockAccount` path. Building a collection context
-/// (def + caller `user` + runner) is what lets the access hook run; a
-/// `slug_only` context would silently skip the check.
-fn apply_lock(
-    infra: &AppInfra,
-    slug: &str,
-    id: &str,
-    def: &CollectionDefinition,
-    user_doc: Option<&Document>,
-    should_lock: bool,
-) -> Result<(), ServiceError> {
-    let conn = infra.pool.get().context("DB connection for lock update")?;
-
-    let ctx = ServiceContext::collection(slug, def)
-        .conn(&conn)
-        .runner(&infra.hook_runner)
-        .user(user_doc)
-        .invalidation_transport(Some(infra.invalidation_transport.clone()))
-        .build();
-
-    let action = if should_lock {
-        AccountAction::Lock
-    } else {
-        AccountAction::Unlock
-    };
-
-    perform_account_action(&ctx, id, action)?;
-
-    Ok(())
+/// The user an account action targets and the context it runs in — every
+/// field but the write input, so the input can be handed to the document
+/// write while the action waits for it to land.
+struct LockTarget<'a> {
+    slug: &'a str,
+    def: &'a CollectionDefinition,
+    id: &'a str,
+    user: Option<&'a Document>,
+    infra: &'a AppInfra,
 }
 
-/// Synchronous body of [`spawn_update`]. Builds the service context, runs the
-/// write, and applies the optional account-lock toggle for auth collections.
+impl<'a> LockTarget<'a> {
+    /// A collection context (def + caller `user` + runner) for the account
+    /// action, which is what lets its access hook run; a `slug_only` context
+    /// would silently skip the check.
+    fn context(&self, conn: &'a BoxedConnection) -> ServiceContext<'a> {
+        ServiceContext::collection(self.slug, self.def)
+            .conn(conn)
+            .runner(&self.infra.hook_runner)
+            .user(self.user)
+            .invalidation_transport(Some(self.infra.invalidation_transport.clone()))
+            .build()
+    }
+
+    /// The account action the `_locked` box asks for, or `None` when the box
+    /// matches the stored lock state.
+    ///
+    /// Diffing keeps a save that leaves the box alone from running the
+    /// account action at all: an untouched lock needs no `access.unlock`
+    /// (which may be narrower than `update`), and re-saving an already locked
+    /// user must not bump that user's `_session_version` again.
+    fn action(&self, lock: LockUpdate) -> Result<Option<AccountAction>, ServiceError> {
+        let LockUpdate::Set(should_lock) = lock else {
+            return Ok(None);
+        };
+
+        let conn = self
+            .infra
+            .pool
+            .get()
+            .context("DB connection for lock state")?;
+
+        if is_locked(&self.context(&conn), self.id)? == should_lock {
+            return Ok(None);
+        }
+
+        Ok(Some(if should_lock {
+            AccountAction::Lock
+        } else {
+            AccountAction::Unlock
+        }))
+    }
+
+    /// The access half of the action, before the document write — so a
+    /// denied toggle answers 403 with nothing persisted.
+    fn check(&self, action: AccountAction) -> Result<(), ServiceError> {
+        let conn = self
+            .infra
+            .pool
+            .get()
+            .context("DB connection for lock access")?;
+
+        check_account_action_access(&self.context(&conn), self.id, action)
+    }
+
+    /// Run the action after the document write landed, through
+    /// `perform_account_action` so the admin surface honors `access.unlock`
+    /// (`?? update`) against the target user — identical to the gRPC
+    /// `LockAccount`/`UnlockAccount` path.
+    fn apply(&self, action: AccountAction) -> Result<(), ServiceError> {
+        let conn = self
+            .infra
+            .pool
+            .get()
+            .context("DB connection for lock update")?;
+
+        perform_account_action(&self.context(&conn), self.id, action)
+    }
+}
+
+/// Synchronous body of [`spawn_update`]. Checks a changed account-lock box's
+/// access before the document write — so a denied toggle answers 403 with
+/// nothing persisted — and applies the toggle after the write landed, so a
+/// failed save never locks or unlocks an account on its own.
 fn update_document_blocking(
     args: UpdateBlockingInput,
 ) -> Result<service::WriteResult, ServiceError> {
+    // Field-level borrows, so the write input below can move out of `args`.
+    let target = LockTarget {
+        slug: &args.slug,
+        def: &args.def,
+        id: &args.id,
+        user: args.user_doc.as_ref(),
+        infra: &args.infra,
+    };
+    let action = target.action(args.input.lock)?;
+
+    if let Some(action) = action {
+        target.check(action)?;
+    }
+
     let ctx = ServiceContext::collection(&args.slug, &args.def)
         .infra(&args.infra)
         .user(args.user_doc.as_ref())
         .ui_locale(args.ui_locale.clone())
         .build();
-
-    let lock = args.input.lock;
 
     let result = run_write(
         &ctx,
@@ -205,22 +278,13 @@ fn update_document_blocking(
             image_max_attempts: args.image_max_attempts,
             input: args.input,
         },
-    );
+    )?;
 
-    if result.is_ok()
-        && let LockUpdate::Set(should_lock) = lock
-    {
-        apply_lock(
-            &args.infra,
-            &args.slug,
-            &args.id,
-            &args.def,
-            args.user_doc.as_ref(),
-            should_lock,
-        )?;
+    if let Some(action) = action {
+        target.apply(action)?;
     }
 
-    result
+    Ok(result)
 }
 
 /// Run the blocking write + lock update task.
@@ -253,14 +317,17 @@ async fn spawn_update(
 }
 
 /// Process a form update for a collection item (called from `update_action.rs`).
-pub(in crate::admin::handlers::collections) async fn do_update(
-    state: &AdminState,
-    slug: &str,
-    id: &str,
-    form_data: HashMap<String, String>,
-    file: Option<UploadedFile>,
-    auth_user: Option<&Extension<AuthUser>>,
-) -> Response {
+pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateRequest<'_>) -> Response {
+    let UpdateRequest {
+        state,
+        slug,
+        id,
+        form_data,
+        file,
+        auth_user,
+        hx,
+    } = req;
+
     let Some(def) = state.infra.registry.get_collection(slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT).into_response();
     };
@@ -336,6 +403,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
                 doc_id: Some(id),
                 auth_user,
                 meta: SubmittedMeta::new(submitted_locale.as_deref(), submitted_lock),
+                hx,
             })
             .await
         }

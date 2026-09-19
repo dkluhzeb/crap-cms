@@ -38,9 +38,7 @@ use crate::{
     typegen,
 };
 
-#[cfg(unix)]
-use super::pid::check_existing_pid;
-use super::pid::{remove_pid_file, write_pid_file};
+use super::pid::{PidFile, refuse_if_server_running};
 
 /// Which server to start when using `--only`.
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -328,12 +326,15 @@ pub(crate) fn compute_shutdown_exit_code(cleanup_errors: &[anyhow::Error]) -> i3
     i32::from(!cleanup_errors.is_empty())
 }
 
-/// Perform post-shutdown cleanup: WAL checkpoint, PID file removal.
+/// Perform post-shutdown cleanup: PID file removal, WAL checkpoint.
 /// Returns the errors encountered so the caller can select the exit code.
-fn shutdown_cleanup(config_dir: &Path, pool: &DbPool) -> Vec<anyhow::Error> {
+///
+/// Takes the PID file by value: the caller ends in `process::exit`, which
+/// runs no destructors, so the file is released here rather than by scope.
+fn shutdown_cleanup(pid_file: PidFile, pool: &DbPool) -> Vec<anyhow::Error> {
     let mut errors: Vec<anyhow::Error> = Vec::new();
 
-    remove_pid_file(config_dir);
+    pid_file.release();
 
     // Checkpoint WAL before exit — process::exit() skips destructors.
     match pool.get() {
@@ -380,10 +381,10 @@ struct StartupResources {
 /// the JWT secret, create the shared singletons (storage, cache,
 /// auth providers, rate limiters), and emit the startup-info logs.
 ///
-/// Caller must have already canonicalized `config_dir`, validated it,
-/// written the PID file, and checked for an existing process — those
-/// happen before this call so the PID file isn't created for invalid
-/// configs.
+/// Caller must have already canonicalized `config_dir`, validated it, and
+/// refused to start beside a live instance. The PID file is claimed only
+/// AFTER this returns: a bootstrap that fails here must not leave a file
+/// naming a process that never served.
 #[cfg(not(tarpaulin_include))]
 fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources> {
     let config = load_and_validate_config(&config_dir)?;
@@ -554,6 +555,10 @@ async fn run_scheduler_task(
     scheduler::start(scheduler::SchedulerParams {
         infra: Arc::clone(&res.infra),
         config: res.config.jobs.clone(),
+        db_timeouts: scheduler::DbTimeouts::new(
+            res.config.database.busy_timeout,
+            res.config.database.connection_timeout,
+        ),
         shutdown,
         email_provider: Some(create_email_provider_with_lease(
             &res.config.email,
@@ -567,8 +572,9 @@ async fn run_scheduler_task(
 ///
 /// # Errors
 ///
-/// Returns an error if config validation, PID file write, server startup,
-/// or graceful shutdown fails.
+/// Returns an error if config validation fails, another instance already
+/// holds the PID file, or the PID file write, server startup, or graceful
+/// shutdown fails.
 #[cfg(not(tarpaulin_include))]
 pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     let config_dir = config_dir
@@ -576,13 +582,17 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         .unwrap_or_else(|_| config_dir.to_path_buf());
     validate_config_dir(&config_dir)?;
 
-    #[cfg(unix)]
-    check_existing_pid(&config_dir);
+    // Before any bootstrap work: schema sync and `on_init` hooks must not run
+    // beside an instance that is already serving this project.
+    refuse_if_server_running(&config_dir)?;
     let _instance_lock = hold_instance_lock(&config_dir)?;
-    write_pid_file(&config_dir, process::id())?;
     info!("Config directory: {}", config_dir.display());
 
     let res = bootstrap_startup(config_dir)?;
+
+    // Claimed only now: the file names this process for exactly as long as it
+    // can serve, and every exit path below releases it.
+    let pid_file = PidFile::claim_server(&res.config_dir)?;
 
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone(), "");
@@ -618,7 +628,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     )
     .inspect_err(|e| error!("Server error: {}", e))?;
 
-    let cleanup_errors = shutdown_cleanup(&res.config_dir, &res.infra.pool);
+    let cleanup_errors = shutdown_cleanup(pid_file, &res.infra.pool);
     let exit_code = compute_shutdown_exit_code(&cleanup_errors);
 
     // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely

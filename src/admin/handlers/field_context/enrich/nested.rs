@@ -18,7 +18,7 @@ use crate::{
             field_context::{
                 MAX_FIELD_DEPTH, collect_node_attr_errors,
                 enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
-                locale_locked_display, safe_template_id,
+                json_textarea_value, locale_locked_display, safe_template_id,
             },
             shared::admin_form_fields,
         },
@@ -43,11 +43,13 @@ fn sub_field_indexed_name(sf: &FieldDefinition, parent_name: &str, idx: usize) -
 
 /// Stringify a raw JSON value for a sub-field context.
 ///
-/// Scalar types get their string representation; composite types return empty string
+/// Scalar types get their string representation — a JSON field's value
+/// pretty-printed for its textarea; composite types return empty string
 /// since their structure is handled recursively.
 fn stringify_sub_field_value(raw_value: Option<&Value>, sf: &FieldDefinition) -> String {
     raw_value
         .map(|v| match v {
+            Value::String(s) if sf.field_type == FieldType::Json => json_textarea_value(s),
             Value::String(s) => s.clone(),
             Value::Null => String::new(),
             other => match sf.field_type {
@@ -57,6 +59,7 @@ fn stringify_sub_field_value(raw_value: Option<&Value>, sf: &FieldDefinition) ->
                 | FieldType::Row
                 | FieldType::Collapsible
                 | FieldType::Tabs => String::new(),
+                FieldType::Json => json_textarea_value(&other.to_string()),
                 _ => other.to_string(),
             },
         })

@@ -108,8 +108,10 @@ pub(crate) fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<
 }
 
 /// Convert a UTC ISO 8601 date string to local time in the given IANA timezone.
-/// Returns the local datetime formatted for `<input type="datetime-local">` (YYYY-MM-DDTHH:MM)
-/// or `<input type="date">` (YYYY-MM-DD, using the 10-char prefix).
+/// Returns the local datetime as `YYYY-MM-DDTHH:MM:SS`, which a picker cuts to
+/// what it shows: `<input type="datetime-local">` takes the 16-char prefix (or
+/// the whole value when the seconds matter), `<input type="date">` the 10-char
+/// prefix.
 pub fn utc_to_local(utc_value: &str, tz_str: &str) -> Option<String> {
     let tz: Tz = tz_str.parse().ok()?;
     let trimmed = utc_value.trim();
@@ -124,7 +126,7 @@ pub fn utc_to_local(utc_value: &str, tz_str: &str) -> Option<String> {
 
     let local = dt.with_timezone(&tz);
 
-    Some(local.format("%Y-%m-%dT%H:%M").to_string())
+    Some(local.format("%Y-%m-%dT%H:%M:%S").to_string())
 }
 
 /// Current UTC timestamp in ISO 8601 format with milliseconds: `"2024-01-15T14:00:00.000Z"`.
@@ -250,20 +252,20 @@ mod tests {
     fn utc_to_local_sao_paulo() {
         // 12:00 UTC = 09:00 Sao Paulo (UTC-3)
         let result = utc_to_local("2026-05-01T12:00:00.000Z", "America/Sao_Paulo");
-        assert_eq!(result.unwrap(), "2026-05-01T09:00");
+        assert_eq!(result.unwrap(), "2026-05-01T09:00:00");
     }
 
     #[test]
     fn utc_to_local_new_york() {
         // 14:00 UTC = 09:00 EST (January, UTC-5)
         let result = utc_to_local("2024-01-15T14:00:00.000Z", "America/New_York");
-        assert_eq!(result.unwrap(), "2024-01-15T09:00");
+        assert_eq!(result.unwrap(), "2024-01-15T09:00:00");
     }
 
     #[test]
     fn utc_to_local_utc() {
         let result = utc_to_local("2024-01-15T09:00:00.000Z", "UTC");
-        assert_eq!(result.unwrap(), "2024-01-15T09:00");
+        assert_eq!(result.unwrap(), "2024-01-15T09:00:00");
     }
 
     #[test]
@@ -279,7 +281,15 @@ mod tests {
         assert_eq!(utc, "2026-05-01T12:00:00.000Z");
 
         let local = utc_to_local(&utc, "America/Sao_Paulo").unwrap();
-        assert_eq!(local, "2026-05-01T09:00");
+        assert_eq!(local, "2026-05-01T09:00:00");
+    }
+
+    /// The seconds a stored instant carries survive the conversion, so a
+    /// picker that shows them re-submits what is stored.
+    #[test]
+    fn utc_to_local_keeps_the_seconds() {
+        let local = utc_to_local("2026-05-01T12:30:45.000Z", "America/Sao_Paulo").unwrap();
+        assert_eq!(local, "2026-05-01T09:30:45");
     }
 
     /// `utc_now` carries the real milliseconds: a hardcoded `.000` let two

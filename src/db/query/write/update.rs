@@ -593,8 +593,8 @@ mod tests {
             updated
                 .fields
                 .get("active")
-                .and_then(serde_json::Value::as_i64),
-            Some(0),
+                .and_then(serde_json::Value::as_bool),
+            Some(false),
             "Regular update should reset absent checkbox to 0"
         );
     }
@@ -616,8 +616,8 @@ mod tests {
             updated
                 .fields
                 .get("active")
-                .and_then(serde_json::Value::as_i64),
-            Some(1),
+                .and_then(serde_json::Value::as_bool),
+            Some(true),
             "Partial update should preserve absent checkbox value"
         );
     }
@@ -639,8 +639,8 @@ mod tests {
             updated
                 .fields
                 .get("active")
-                .and_then(serde_json::Value::as_i64),
-            Some(0),
+                .and_then(serde_json::Value::as_bool),
+            Some(false),
             "Partial update with explicit checkbox value should set it"
         );
     }

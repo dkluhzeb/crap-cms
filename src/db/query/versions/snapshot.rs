@@ -12,8 +12,11 @@ use crate::{
     db::{
         DbConnection, DbValue,
         query::{
-            LocaleContext, LocaleMode, get_locale_select_columns_full, helpers::locale_column,
-            join::hydrate_document, per_locale_columns, read::decode_row,
+            LocaleContext, LocaleMode, get_locale_select_columns_full,
+            helpers::{decodes, locale_column},
+            join::hydrate_document,
+            per_locale_columns,
+            read::decode_row,
         },
     },
 };
@@ -197,8 +200,9 @@ fn add_locale_columns(
 }
 
 /// Whether a snapshot JSON value is a scalar that maps to a column write.
-/// Arrays / objects are handled via join tables and skipped here — except a
-/// scalar has-many list, which its own column stores.
+/// Arrays / objects are handled via join tables and skipped here — except the
+/// decoded form of a column that reads decoded (a scalar has-many list, a JSON
+/// value), which its own column stores.
 fn is_scalar_snapshot_value(val: &Value) -> bool {
     !matches!(val, Value::Array(_) | Value::Object(_))
 }
@@ -242,7 +246,7 @@ pub(super) fn extract_snapshot_data(
             let key = prefixed_name(prefix, &field.name);
 
             if let Some(val) = flat.get(&key)
-                && (is_scalar_snapshot_value(val) || field.is_has_many_scalar())
+                && (is_scalar_snapshot_value(val) || decodes(field))
             {
                 data.insert(key.clone(), val.clone());
             }
@@ -366,6 +370,25 @@ mod tests {
 
         let data = extract_snapshot_data(&obj, &fields, false);
         assert_eq!(data.get("tags"), Some(&json!(["a", "b"])));
+    }
+
+    /// Regression: a snapshot holds a JSON column's value parsed — an object or
+    /// a list — and a restore skipped every object and list as join data, so
+    /// the JSON column was never restored. A column that reads decoded is
+    /// restored from its decoded value; a checkbox restores from its boolean.
+    #[test]
+    fn extract_snapshot_data_keeps_decoded_json_and_checkbox_columns() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Json).build(),
+            FieldDefinition::builder("done", FieldType::Checkbox).build(),
+        ];
+
+        let obj: Map<String, Value> =
+            serde_json::from_value(json!({ "meta": { "n": [1, 2] }, "done": true })).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("meta"), Some(&json!({ "n": [1, 2] })));
+        assert_eq!(data.get("done"), Some(&json!(true)));
     }
 
     #[test]

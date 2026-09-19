@@ -24,7 +24,8 @@ use axum::{
     http::{
         Method, Request, StatusCode,
         header::{
-            AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, COOKIE, HeaderName, HeaderValue, SET_COOKIE,
+            CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HeaderName, HeaderValue,
+            SET_COOKIE,
         },
     },
     middleware::{self, Next},
@@ -734,6 +735,37 @@ async fn html_cache_control(request: Request<Body>, next: Next) -> Response {
     response
 }
 
+/// The largest urlencoded body the CSRF fallback buffers while looking for a
+/// `_csrf` field.
+const CSRF_FORM_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// The answer for a mutating submit whose body is too large for the CSRF
+/// fallback to read.
+///
+/// Not a CSRF failure: the `_csrf` field may well be in there, we simply can't
+/// reach it — and answering 403 "CSRF validation failed" sent the user hunting
+/// for a token problem that never existed. One helper so the declared-size and
+/// discovered-while-reading cases can't drift apart.
+fn csrf_body_too_large() -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "Request body too large to validate",
+    )
+        .into_response()
+}
+
+/// Whether the request declares a body past [`CSRF_FORM_BODY_LIMIT`]. A native
+/// browser form submit always declares its length, so this settles the answer
+/// before a byte is read.
+fn declares_oversized_body(request: &Request<Body>) -> bool {
+    request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        .is_some_and(|len| len > CSRF_FORM_BODY_LIMIT)
+}
+
 /// Validate CSRF token on a mutating request. Checks the `X-CSRF-Token` header
 /// first, then falls back to the `_csrf` form field for URL-encoded bodies.
 /// Returns the (possibly re-assembled) request on success, or a 403 response.
@@ -764,14 +796,14 @@ async fn validate_csrf_mutation(
         .to_string();
 
     if content_type.starts_with("application/x-www-form-urlencoded") {
+        if declares_oversized_body(&request) {
+            return Err(csrf_body_too_large());
+        }
+
         let (parts, body) = request.into_parts();
-        let bytes = body::to_bytes(body, 2 * 1024 * 1024).await.map_err(|_| {
-            (
-                StatusCode::FORBIDDEN,
-                "CSRF validation failed: body read error",
-            )
-                .into_response()
-        })?;
+        let bytes = body::to_bytes(body, CSRF_FORM_BODY_LIMIT)
+            .await
+            .map_err(|_| csrf_body_too_large())?;
 
         let form_token = form_urlencoded::parse(&bytes)
             .find(|(k, _)| k == "_csrf")
@@ -785,6 +817,41 @@ async fn validate_csrf_mutation(
     }
 
     Err((StatusCode::FORBIDDEN, "CSRF validation failed").into_response())
+}
+
+/// Run the inner handler, validating the double-submit token first when the
+/// method mutates.
+///
+/// Every exit leaves through here so the caller re-issues the `crap_csrf`
+/// cookie on it — the "no token cookie" 403 included, where the cookie is
+/// exactly what the browser is missing. Returning that 403 without a fresh
+/// cookie made every submit fail until the user reloaded a page by hand.
+#[cfg(not(tarpaulin_include))]
+async fn run_csrf_checked(
+    request: Request<Body>,
+    next: Next,
+    method: &Method,
+    cookie_value: Option<&str>,
+) -> Response {
+    if !matches!(
+        *method,
+        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
+    ) {
+        return next.run(request).await;
+    }
+
+    let Some(cookie_value) = cookie_value else {
+        return (
+            StatusCode::FORBIDDEN,
+            "CSRF validation failed: no token cookie",
+        )
+            .into_response();
+    };
+
+    match validate_csrf_mutation(request, cookie_value).await {
+        Ok(request) => next.run(request).await,
+        Err(response) => response,
+    }
 }
 
 /// CSRF middleware — double-submit cookie pattern.
@@ -801,16 +868,13 @@ async fn csrf_middleware(
     let dev_mode = state.config.admin.dev_mode;
     let cookie_lifetime = state.config.admin.csrf_cookie_lifetime;
 
-    // Bearer-authenticated API clients can't use double-submit cookies.
-    // CSRF protects browser sessions (cookies); Bearer tokens aren't auto-attached
-    // by browsers, so CSRF is irrelevant for them.
-    let has_bearer = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.starts_with("Bearer "));
-
-    if has_bearer {
+    // Bearer-authenticated API clients can't use double-submit cookies. CSRF
+    // protects browser sessions (cookies); Bearer tokens aren't auto-attached
+    // by browsers, so CSRF is irrelevant for them. Decided by the very
+    // predicate that authenticates the request, so a header the evaluator
+    // ignores — `Bearer` with nothing after it — can't skip the check and then
+    // authenticate from the session cookie anyway.
+    if bearer_token(request.headers()).is_some() {
         return next.run(request).await;
     }
 
@@ -821,44 +885,13 @@ async fn csrf_middleware(
         .unwrap_or("")
         .to_string();
 
+    // An empty cookie is no cookie: it can validate nothing, so it must be
+    // re-issued rather than treated as already present.
     let csrf_cookie = extract_cookie(&cookie_header, auth_handlers::CSRF_COOKIE)
+        .filter(|v| !v.is_empty())
         .map(std::string::ToString::to_string);
 
-    // On mutating methods, validate CSRF token
-    if matches!(
-        method,
-        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
-    ) {
-        let cookie_value = match &csrf_cookie {
-            Some(v) if !v.is_empty() => v.as_str(),
-            _ => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    "CSRF validation failed: no token cookie",
-                )
-                    .into_response();
-            }
-        };
-
-        match validate_csrf_mutation(request, cookie_value).await {
-            Ok(request) => {
-                let mut response = next.run(request).await;
-
-                ensure_csrf_cookie(
-                    &mut response,
-                    csrf_cookie.as_deref(),
-                    dev_mode,
-                    cookie_lifetime,
-                );
-
-                return response;
-            }
-            Err(response) => return response,
-        }
-    }
-
-    // Non-mutating method — pass through and set cookie if needed
-    let mut response = next.run(request).await;
+    let mut response = run_csrf_checked(request, next, &method, csrf_cookie.as_deref()).await;
 
     ensure_csrf_cookie(
         &mut response,
@@ -935,6 +968,56 @@ mod tests {
             readiness_status(false, false),
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+
+    /// Regression: an oversized declared body is answered by size, not by
+    /// blaming the CSRF token. A body at the limit still goes to the reader.
+    #[test]
+    fn an_oversized_declared_body_is_recognised_before_reading() {
+        let sized = |len: usize| {
+            declares_oversized_body(
+                &Request::post("/admin/collections/posts")
+                    .header(CONTENT_LENGTH, len.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+
+        assert!(sized(CSRF_FORM_BODY_LIMIT + 1));
+        assert!(!sized(CSRF_FORM_BODY_LIMIT));
+        assert!(!sized(0));
+
+        // No declared length at all — the reader's own limit decides.
+        assert!(!declares_oversized_body(
+            &Request::post("/admin/collections/posts")
+                .body(Body::empty())
+                .unwrap()
+        ));
+
+        assert_eq!(
+            csrf_body_too_large().status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    /// Regression: the CSRF skip and the authenticator must agree on what a
+    /// bearer request is. `Bearer` with nothing after it is not one — the
+    /// evaluator ignores it and falls back to the session cookie, so skipping
+    /// the CSRF check on it left a cookie-authenticated write unprotected.
+    #[test]
+    fn an_empty_bearer_header_is_not_a_bearer_request() {
+        let bearer_of = |value: &str| {
+            let request = Request::post("/admin/collections/posts")
+                .header("authorization", value)
+                .body(Body::empty())
+                .unwrap();
+
+            bearer_token(request.headers()).is_some()
+        };
+
+        assert!(bearer_of("Bearer abc123"));
+        assert!(!bearer_of("Bearer "));
+        assert!(!bearer_of("Basic abc123"));
     }
 
     #[test]

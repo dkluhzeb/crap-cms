@@ -69,7 +69,7 @@ pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<Value> {
     flattened.retain(|k, _| !locked.contains(k));
 
     // The snapshot stands in for the stored row: every value in the form its
-    // write stores and a read returns (a checkbox as `0`/`1`, JSON as text, a
+    // write stores and a read returns (a checkbox as a boolean, JSON parsed, a
     // timezone date normalized), so a draft read matches the published one.
     query::stored_document_values(&mut flattened, fields);
 

@@ -12,8 +12,8 @@ use crate::{
     db::{
         DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
         query::{
-            ReadLocale, filter::memory::matches_constraints_typed, helpers::locale_column,
-            regroup_by_locale,
+            ReadLocale, decode_document_values, filter::memory::matches_constraints_typed,
+            helpers::locale_column, regroup_by_locale,
         },
     },
 };
@@ -366,11 +366,12 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
     Ok(doc)
 }
 
-/// A version snapshot as a read returns the document: its fields resolved for
-/// the reading locale (every locale's `{ locale: value }` map for an
-/// all-locales read), per-locale keys dropped, groups nested. `None` for a
-/// snapshot that isn't a JSON object. The one path from a stored snapshot to a
-/// document — draft reads, draft-save responses and version history use it.
+/// A version snapshot as a read returns the document: its columns decoded as a
+/// table read decodes them, its fields resolved for the reading locale (every
+/// locale's `{ locale: value }` map for an all-locales read), per-locale keys
+/// dropped, groups nested. `None` for a snapshot that isn't a JSON object. The
+/// one path from a stored snapshot to a document — draft reads, draft-save
+/// responses and version history use it.
 ///
 /// # Errors
 ///
@@ -385,6 +386,7 @@ pub(crate) fn snapshot_read_document(
         return Ok(None);
     };
 
+    decode_document_values(&mut doc.fields, fields);
     resolve_snapshot_locale(&mut doc, fields, locale_ctx)?;
 
     Ok(Some(doc))

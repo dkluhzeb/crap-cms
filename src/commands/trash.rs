@@ -187,9 +187,20 @@ struct PurgeParams<'a> {
     collection: Option<&'a str>,
     older_than: &'a str,
     dry_run: bool,
+    confirm: bool,
+}
+
+impl PurgeParams<'_> {
+    /// Whether the purge only lists its candidates: a dry run, or a purge
+    /// that was not confirmed. Nothing is deleted either way.
+    fn previews_only(&self) -> bool {
+        self.dry_run || !self.confirm
+    }
 }
 
 /// Purge (permanently delete) trashed documents, optionally filtered by age.
+/// Without `--confirm` the purge lists what it would delete and asks for the
+/// flag, the same way `trash empty` does.
 fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
     let slugs = resolve_collections(p.registry, p.collection)?;
 
@@ -215,7 +226,7 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
             continue;
         }
 
-        if p.dry_run {
+        if p.previews_only() {
             for id in &ids {
                 cli::info(&format!("Would purge: {slug} / {id}"));
             }
@@ -229,18 +240,34 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
         total += ids.len() as u64 - skipped;
     }
 
-    if p.dry_run {
-        cli::info(&format!("{total} document(s) would be purged."));
-    } else {
-        cli::success(&format!("Purged {total} trashed document(s)."));
-        if total_skipped > 0 {
-            cli::info(&format!(
-                "{total_skipped} document(s) skipped — still referenced."
-            ));
-        }
-    }
+    report_purge(p, total, total_skipped);
 
     Ok(())
+}
+
+/// Print the purge's outcome: the dry-run tally, the confirmation request,
+/// or what was deleted.
+fn report_purge(p: &PurgeParams<'_>, total: u64, skipped: u64) {
+    if p.dry_run {
+        cli::info(&format!("{total} document(s) would be purged."));
+        return;
+    }
+
+    if !p.confirm {
+        cli::warning(&format!(
+            "This will permanently delete {total} trashed document(s)."
+        ));
+        cli::hint("Pass -y/--confirm to proceed.");
+        return;
+    }
+
+    cli::success(&format!("Purged {total} trashed document(s)."));
+
+    if skipped > 0 {
+        cli::info(&format!(
+            "{skipped} document(s) skipped — still referenced."
+        ));
+    }
 }
 
 /// Purge one collection's candidates in a transaction of their own, deleting
@@ -499,6 +526,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             collection,
             older_than,
             dry_run,
+            confirm,
         } => run_purge(&PurgeParams {
             registry: &registry,
             pool: &pool,
@@ -507,6 +535,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             collection: collection.as_deref(),
             older_than: &older_than,
             dry_run,
+            confirm,
         }),
 
         TrashAction::Restore { collection, id } => run_restore(&registry, &pool, &collection, &id),
@@ -798,6 +827,7 @@ mod tests {
             collection: Some("posts"),
             older_than: "all",
             dry_run: false,
+            confirm: true,
         })
         .unwrap();
 
@@ -807,6 +837,47 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "p1 must be purged"
+        );
+    }
+
+    /// Regression: `trash purge` defaulted to every trashed document and had
+    /// no confirmation flag, so a bare `crap-cms trash purge` deleted all of
+    /// it. Without `--confirm` (and without `--dry-run`) it must delete
+    /// nothing and ask for the flag, as `trash empty` does.
+    #[test]
+    fn purge_without_confirm_deletes_nothing() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.soft_delete = true;
+        let (tmp, db_pool, registry) = setup_db(&[posts]);
+
+        db_pool
+            .get()
+            .unwrap()
+            .execute(
+                "INSERT INTO posts (id, _deleted_at) VALUES ('p1', '2026-01-01T00:00:00.000Z')",
+                &[],
+            )
+            .unwrap();
+
+        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+        run_purge(&PurgeParams {
+            registry: &registry,
+            pool: &db_pool,
+            storage: &*storage,
+            locale: &LocaleConfig::default(),
+            collection: Some("posts"),
+            older_than: "all",
+            dry_run: false,
+            confirm: false,
+        })
+        .unwrap();
+
+        let conn = db_pool.get().unwrap();
+        assert!(
+            conn.query_one("SELECT id FROM posts WHERE id = 'p1'", &[])
+                .unwrap()
+                .is_some(),
+            "an unconfirmed purge must keep every trashed document"
         );
     }
 

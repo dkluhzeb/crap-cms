@@ -22,8 +22,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::DocumentFields;
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType, JoinConfig};
+use crap_cms::core::{DocumentFields, PickerAppearance};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
@@ -745,6 +745,16 @@ fn validate_date_field_valid_formats() {
     let date_field = FieldDefinition::builder("due_date", FieldType::Date).build();
 
     let fields = vec![date_field];
+    let time_fields = vec![
+        FieldDefinition::builder("due_date", FieldType::Date)
+            .picker_appearance(PickerAppearance::TimeOnly)
+            .build(),
+    ];
+    let month_fields = vec![
+        FieldDefinition::builder("due_date", FieldType::Date)
+            .picker_appearance(PickerAppearance::MonthOnly)
+            .build(),
+    ];
     let conn = pool.get().expect("DB connection");
 
     // YYYY-MM-DD
@@ -784,7 +794,11 @@ fn validate_date_field_valid_formats() {
     data.insert("due_date".to_string(), json!("14:30"));
     assert!(
         runner
-            .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
+            .validate_fields(
+                &time_fields,
+                &data,
+                &ValidationCtx::builder(&conn, "t").build()
+            )
             .is_ok()
     );
 
@@ -792,7 +806,11 @@ fn validate_date_field_valid_formats() {
     data.insert("due_date".to_string(), json!("14:30:00"));
     assert!(
         runner
-            .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
+            .validate_fields(
+                &time_fields,
+                &data,
+                &ValidationCtx::builder(&conn, "t").build()
+            )
             .is_ok()
     );
 
@@ -800,7 +818,11 @@ fn validate_date_field_valid_formats() {
     data.insert("due_date".to_string(), json!("2024-01"));
     assert!(
         runner
-            .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
+            .validate_fields(
+                &month_fields,
+                &data,
+                &ValidationCtx::builder(&conn, "t").build()
+            )
             .is_ok()
     );
 }

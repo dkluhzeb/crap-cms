@@ -113,8 +113,7 @@ fn approved(h: &Harness, id: &str) -> Option<bool> {
 
     query::find_by_id(&conn, "payroll", &h.def, id, None)
         .unwrap()
-        .and_then(|d| d.fields.get("approved").and_then(Value::as_i64))
-        .map(|stored| stored == 1)
+        .and_then(|d| d.fields.get("approved").and_then(Value::as_bool))
 }
 
 /// A checkbox absent from an update is stored as unchecked, so stripping a

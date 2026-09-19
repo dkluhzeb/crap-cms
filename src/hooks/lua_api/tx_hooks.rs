@@ -58,10 +58,19 @@ fn register_effect(
     resolve_hook_function(lua, hook_ref)
         .map_err(|e| RuntimeError(format!("crap.tx.{name}: hook ref '{hook_ref}': {e:#}")))?;
 
+    // `data` is a table or nothing — the documented `table?` contract. A
+    // bare string/number is refused rather than accepted as a payload the
+    // handler's `ctx.data` was never documented to carry.
     let payload = match data {
-        Some(v) => super::lua_to_json(v)
+        None | Some(Value::Nil) => JsonValue::Null,
+        Some(v @ Value::Table(_)) => super::lua_to_json(v)
             .map_err(|e| RuntimeError(format!("crap.tx.{name}: data not serializable: {e}")))?,
-        None => JsonValue::Null,
+        Some(other) => {
+            return Err(RuntimeError(format!(
+                "crap.tx.{name}: data must be a table (or nil), got {}",
+                other.type_name()
+            )));
+        }
     };
 
     queue.borrow_mut().push(DeferredEffect {
@@ -148,4 +157,88 @@ function crap.tx.on_rollback(ref, data) end
 
 ",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use serde_json::json;
+
+    use super::*;
+
+    /// A VM with `crap.tx` registered, an active deferred queue, and a
+    /// resolvable `hooks.x` ref.
+    fn lua_with_queue() -> (Lua, DeferredQueue) {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_tx_hooks(&lua).unwrap();
+        lua.load(r#"package.loaded["hooks.x"] = function(ctx) end"#)
+            .exec()
+            .unwrap();
+
+        let queue: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
+        lua.set_app_data(LuaCrudInfra {
+            event_transport: None,
+            cache: None,
+            event_queue: None,
+            verification_queue: None,
+            deferred: Some(queue.clone()),
+            file_cleanup: None,
+            cache_dirty: None,
+        });
+
+        (lua, queue)
+    }
+
+    /// `data` is typed `table?`; a string used to be accepted as a payload.
+    #[test]
+    fn non_table_data_is_rejected() {
+        let (lua, queue) = lua_with_queue();
+
+        let err = lua
+            .load(r#"crap.tx.on_commit("hooks.x", "str")"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("data must be a table"), "{err}");
+        assert!(err.contains("got string"), "{err}");
+
+        let err = lua
+            .load(r#"crap.tx.on_rollback("hooks.x", 42)"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("crap.tx.on_rollback: data must be a table"),
+            "{err}"
+        );
+
+        assert!(
+            queue.borrow().is_empty(),
+            "a refused registration queues nothing"
+        );
+    }
+
+    #[test]
+    fn table_and_absent_data_register_the_effect() {
+        let (lua, queue) = lua_with_queue();
+
+        lua.load(
+            r#"
+            crap.tx.on_commit("hooks.x", { id = "d1" })
+            crap.tx.on_commit("hooks.x")
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let effects = queue.borrow();
+        assert_eq!(effects.len(), 2);
+        assert_eq!(effects[0].payload, json!({ "id": "d1" }));
+        assert_eq!(effects[1].payload, JsonValue::Null);
+        assert_eq!(effects[0].hook_ref, "hooks.x");
+    }
 }

@@ -17,10 +17,11 @@
 //!   sometimes a `helpers.rs` for cross-action utilities.
 //!
 //! When adding a new command, default to a flat file; promote to a
-//! folder the first time you add a second action. The `helpers.rs`,
-//! `types.rs`, and `resolve_config.rs` files at this module's root
-//! are *not* commands — they're cross-cutting infrastructure shared
-//! by every subcommand (see "Cross-cutting helpers" below).
+//! folder the first time you add a second action. The `cli.rs`,
+//! `helpers.rs`, `types.rs`, and `resolve_config.rs` files at this
+//! module's root are *not* commands — they're cross-cutting
+//! infrastructure shared by every subcommand (see "Cross-cutting
+//! helpers" below).
 //!
 //! # Entry-point convention
 //!
@@ -30,6 +31,12 @@
 //! in `types.rs` and are re-exported at the crate level so
 //! `main.rs` parses them once and hands the resolved variant to
 //! `run`.
+//!
+//! The clap root itself ([`Cli`] / [`Command`]) lives in `cli.rs`,
+//! not in `main.rs`: the binary only calls `Cli::parse()` and
+//! dispatches, while the library can introspect the same
+//! [`clap::Command`] tree (the `cli_reference` MCP tool derives its
+//! whole answer from it).
 //!
 //! # Cross-cutting helpers
 //!
@@ -69,9 +76,11 @@ pub mod update;
 pub mod user;
 pub mod work;
 
+mod cli;
 mod helpers;
 mod types;
 
+pub use cli::{Cli, Command};
 pub use helpers::{Project, open_project};
 pub use resolve_config::resolve_config_dir;
 pub use types::{

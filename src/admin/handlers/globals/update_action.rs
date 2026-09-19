@@ -20,8 +20,8 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts, editor_read_ctx,
-                enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
+                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+                editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
                 is_non_default_locale, page_with_toast, parse_request_locale, paths,
                 redirect_response, split_sidebar_fields, strip_locale_locked_for_publish,
                 toast_only_error, translate_validation_errors,
@@ -100,6 +100,9 @@ struct ValidationRender<'a> {
     /// the raw form before the write — the re-render has to put it back, or
     /// the corrected save writes the translation into the default locale.
     submitted_locale: Option<&'a str>,
+    /// How the submit was issued — an htmx form post targeting `#main` gets
+    /// the fragment back, not a second full document.
+    hx: HxNav,
 }
 
 /// Build the validation error response with re-rendered form fields.
@@ -179,7 +182,14 @@ async fn render_validation_error(p: &ValidationRender<'_>, ve: &ValidationError)
         sidebar_fields,
     };
 
-    page_with_toast(p.state, p.auth_user, "globals/edit", &ctx, toast_msg).await
+    page_with_toast(
+        p.state,
+        PageRequest::new(p.hx, p.auth_user),
+        "globals/edit",
+        &ctx,
+        toast_msg,
+    )
+    .await
 }
 
 /// POST /admin/globals/{slug} — update a global
@@ -187,6 +197,7 @@ pub async fn update_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
+    hx: HxNav,
     Form(form_data): Form<HashMap<String, String>>,
 ) -> Response {
     let def = match state.infra.registry.get_global(&slug) {
@@ -235,6 +246,7 @@ pub async fn update_action(
                     form: &form_for_error,
                     auth_user: auth_user.as_ref(),
                     submitted_locale: submitted_locale.as_deref(),
+                    hx,
                 };
 
                 render_validation_error(&render, ve).await

@@ -84,6 +84,9 @@ my-project/
 > navigation partial-swaps `#main` via htmx: the server renders only the
 > page body (plus a `<title>`) when the request is a partial navigation,
 > selected by the `{{#if htmx_partial}}` branch at the top of the default
+> layout — for partial navigations and for the error re-render of a failed
+> form submit alike; an overlay that drops the branch nests the whole shell
+> inside `#main` on both —
 > `base.hbs`. An override that drops this branch nests a full HTML
 > document inside `#main` on every nav click. Always start from a fresh
 > `crap-cms templates extract layout/base.hbs` of the current version and

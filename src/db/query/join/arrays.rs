@@ -326,10 +326,11 @@ pub fn find_array_rows_batch(
     Ok(out)
 }
 
-/// Whether a sub-field column holds JSON that must be parsed on read: any
-/// composite (Group/Array/Blocks/layout wrapper/Json) or a has-many
-/// relationship/upload (stored as a JSON id array in the column).
-pub(crate) fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
+/// Whether a sub-field column holds a composite (a group, a nested array or
+/// blocks, a layout wrapper) stored whole as JSON, parsed on read. A leaf's
+/// column — a JSON field's text, a has-many reference's id list included —
+/// decodes as every leaf column does ([`decode_value`]).
+fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
     matches!(
         sf.field_type,
         FieldType::Array
@@ -338,16 +339,15 @@ pub(crate) fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
             | FieldType::Row
             | FieldType::Collapsible
             | FieldType::Tabs
-            | FieldType::Json
-    ) || (sf.field_type.is_reference() && sf.relationship.as_ref().is_some_and(|rc| rc.has_many))
+    )
 }
 
 /// Reconstruct an array-row object from a DB row's sub-field columns, starting
 /// at column index `start`. Composite sub-fields (Group/Array/Blocks/layout
-/// wrappers/Json) are stored as JSON in TEXT columns and parsed back to
-/// structured values, so nested composites at any depth come back ready for a
-/// JSON walk. Companion columns (`_tz`, `_lang`) are read as text beside their
-/// sub-field.
+/// wrappers) are stored as JSON in TEXT columns and parsed back to structured
+/// values, so nested composites at any depth come back ready for a JSON walk;
+/// every leaf column decodes as a main-table column does. Companion columns
+/// (`_tz`, `_lang`) are read as text beside their sub-field.
 ///
 /// Shared by [`find_array_rows`] (per-parent read) and
 /// [`find_all_array_rows_with_parent`] (back-reference scan) so the
@@ -366,14 +366,11 @@ pub(crate) fn reconstruct_array_row(
 
         let json_val = match val {
             DbValue::Text(s) if sub_field_stores_json(sf) => {
-                // Composite sub-fields (and has-many relationship/upload, which
-                // store a JSON id array) keep JSON in a TEXT column — parse it
-                // so nested data comes back structured.
                 serde_json::from_str(&s).unwrap_or(Value::String(s))
             }
             DbValue::Blob(_) => Value::Null,
-            // Any other column decodes as a main-table column does: a whole
-            // number as an integer, a scalar has-many list parsed from its text.
+            // A leaf column decodes as a main-table column does: a checkbox as
+            // a boolean, a whole number as an integer, JSON text parsed.
             other => decode_value(sf, &other.to_json()),
         };
         map.insert(sf.name.clone(), json_val);
@@ -438,8 +435,8 @@ mod tests {
 
     use super::*;
     use crate::config::CrapConfig;
-    use crate::core::{FieldAdmin, FieldTab, RelationshipConfig};
-    use crate::db::{BoxedConnection, pool};
+    use crate::core::{DocumentFields, FieldAdmin, FieldTab, RelationshipConfig};
+    use crate::db::{BoxedConnection, pool, query::helpers::stored_document_values};
     use tempfile::TempDir;
 
     fn setup_conn(sql: &str) -> (TempDir, BoxedConnection) {
@@ -1028,6 +1025,50 @@ mod tests {
             found[0]["inner"],
             json!([{ "label": "a" }, { "label": "b" }])
         );
+    }
+
+    /// Regression: a checkbox sub-field read as the `1`/`0` its column holds and
+    /// a JSON sub-field as its text or parsed depending on the path, so a draft
+    /// snapshot of the rows disagreed with the published read. Both read the
+    /// row the same way: the checkbox as a boolean, the JSON value parsed.
+    #[test]
+    fn a_published_and_a_draft_row_read_the_same() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_items (
+                 id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER,
+                 flag INTEGER, extra TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("flag", FieldType::Checkbox).build(),
+                FieldDefinition::builder("extra", FieldType::Json).build(),
+            ])
+            .build();
+        let sent = json!([{ "flag": "on", "extra": "{\"k\": [1, 2]}" }]);
+
+        let rows: Vec<HashMap<String, Value>> = sent
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row.as_object().unwrap().clone().into_iter().collect())
+            .collect();
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &items.fields, None).unwrap();
+        let mut published =
+            find_array_rows(&conn, "posts", "items", "p1", &items.fields, None).unwrap();
+        for row in published.iter_mut().filter_map(Value::as_object_mut) {
+            row.remove("id");
+        }
+
+        let mut draft = DocumentFields::new();
+        draft.insert("items".to_string(), sent);
+        stored_document_values(&mut draft, slice::from_ref(&items));
+
+        let expected = json!([{ "flag": true, "extra": { "k": [1, 2] } }]);
+        assert_eq!(Value::Array(published), expected, "published read");
+        assert_eq!(draft.get("items"), Some(&expected), "draft snapshot");
     }
 
     #[test]

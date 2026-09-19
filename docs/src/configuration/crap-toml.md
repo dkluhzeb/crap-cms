@@ -27,6 +27,7 @@ smtp_pass = "${SMTP_PASSWORD}"
 
 - `${VAR}` — replaced with the value of `VAR`. Startup fails if `VAR` is not set.
 - `${VAR:-default}` — replaced with `VAR` if set and non-empty, otherwise uses `default`.
+- `$${VAR}` — kept literally as `${VAR}` (no substitution); use it for a value that itself contains `${`.
 
 Substitution only applies to string values — `${VAR}` patterns in comments are safely ignored.
 
@@ -85,16 +86,20 @@ Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo n
 | `[server]` | `bulk_max_documents >= 0` |
 | `[server]` | `public_url`, when set, must be non-blank and start with `http://` or `https://` |
 | `[server]` | `trust_proxy = true` requires a non-empty `trusted_proxies`; every entry must be an IP, a CIDR, or `"*"` |
-| `[cors]` | `"*"` must be the only origin and cannot be combined with `allow_credentials = true`; every origin needs a scheme and a host and no path; header names and methods must be valid tokens |
+| `[cors]` | `allowed_origins`: `"*"` must be the only entry and cannot be combined with `allow_credentials = true`; every other origin needs a scheme and a host and no path; `allowed_methods` entries must be valid HTTP method tokens; `allowed_headers` / `exposed_headers` entries must be valid header names |
 | `[pagination]` | `default_limit > 0`, `max_limit > 0`, `default_limit <= max_limit` |
 | `[depth]` | `default_depth >= 0`, `max_depth >= 0`, `max_nesting_depth >= 1` |
 | `[hooks]` | `vm_pool_size > 0`, `max_vm_pool_size > 0` |
 | `[jobs]` | `poll_interval`, `cron_interval`, `heartbeat_interval` must be `> 0` |
 | `[auth]` | `password_policy.min_length <= password_policy.max_length` |
 | `[email]` | `smtp_port > 0` when `smtp_host` is set |
-| `[logging]` | `path` must not be empty when file logging is enabled |
-| `[mcp]` | `http = true` requires `api_key`, and the key must be at least **32 characters** |
-| `[live]` | `channel_capacity > 0` when live events are enabled |
+| `[logging]` | `path` must not be empty when `file = true` |
+| `[mcp]` | `enabled = true` with `http = true` requires `api_key`, and the key must be at least **32 characters** |
+| `[mcp]` | `max_batch_members <= 500` (`0` refuses batches) |
+| `[live]` | `channel_capacity > 0` when `enabled = true` |
+| `[auth]` | `secret` must be set explicitly when `rate_limit_backend = "redis"`, `cache.backend = "redis"` or `live.transport = "redis"` (more than one node can run) |
+| `[auth]` | `rate_limit_prefix` must neither contain nor be contained by the cache key namespace (`cache.prefix` + `cache:`) when `rate_limit_backend = "redis"` and `cache.backend = "redis"` address the same Redis (`rate_limit_redis_url` / `cache.redis_url`) |
+| `[locale]` | `default_locale` and every `locales` entry must be non-empty ASCII alphanumeric plus `-`/`_` with at least one alphanumeric character; no two `locales` entries may map to the same column (`pt-BR`/`pt_BR`, and `pt-BR`/`pt-br` — column names are compared case-insensitively); `default_locale` must be listed in `locales` when the list is non-empty |
 
 **Warnings (server starts but logs a warning):**
 - `jobs.max_concurrent = 0` — no jobs will execute
@@ -104,8 +109,11 @@ Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo n
 - `server.trusted_proxies = ["*"]` — every peer may set `X-Forwarded-For`
 - `logging.max_files = 0`
 - `cache.max_entries = 0` with the memory backend — equivalent to `backend = "none"`
+- `auth.session_absolute_max_age` above 30 days (`2592000` seconds)
+- `auth.secret` unset with `database.backend = "postgres"` — each node generates its own secret; set it before scaling out
+- `depth.max_nesting_depth > 128` — data nested deeper than the JSON parser limit is write-only
 
-Definition-level checks (hook refs, table-name and locale-column collisions, `required_locales`, auth methods, custom routes) run after the Lua files load and are described on their own pages.
+Definition-level checks (hook refs, table-name collisions, `required_locales`, auth methods, custom routes) run after the Lua files load and are described on their own pages; the `[locale]` rules above run at config load.
 
 ## Full Reference
 

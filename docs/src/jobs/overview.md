@@ -182,7 +182,7 @@ This is fixed and not currently configurable per-job. Plan your `retries` budget
 
 A running job updates a **heartbeat** timestamp every `heartbeat_interval`
 seconds. If a worker dies mid-job, its heartbeat stops; once it is older than
-`heartbeat_interval × 3` the job is considered dead and **recovered**:
+`heartbeat_interval × 3 + database.connection_timeout + database.busy_timeout` — three missed beats plus the longest a heartbeat write can wait for a write-pool slot and the database lock, so a blocked heartbeat can never be mistaken for a dead worker — the job is considered dead and **recovered**:
 
 - a job with retry attempts remaining is **re-queued** (any surviving node
   re-runs it), and

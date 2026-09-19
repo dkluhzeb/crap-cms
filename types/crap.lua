@@ -1305,6 +1305,7 @@ function crap.globals.config.list() end
 --- @class crap.GlobalUnpublishOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`).
+--- @field events? boolean Emit a live-update event for this change (default: `true`). Parity with `crap.collections.unpublish` and `crap.globals.update`.
 
 --- Optional options for `crap.globals.validate`. Globals are a singleton
 --- row, so there is no `id` to exclude — validation always runs in update
@@ -1361,9 +1362,10 @@ function crap.hooks.register(event, func) end
 --- @param func fun(context: crap.HookContext): crap.HookContext  The function to remove.
 function crap.hooks.remove(event, func) end
 
---- List all registered hook functions for an event.
+--- List all registered hook functions for an event. Returns a copy: editing
+--- the returned array does not change which hooks fire.
 --- @param event crap.HookEvent  The lifecycle event.
---- @return fun(context: crap.HookContext): crap.HookContext[] # Array of hook functions.
+--- @return fun(context: crap.HookContext): crap.HookContext[] # Array of hook functions (a copy — mutating it does not affect the registered hooks).
 function crap.hooks.list(event) end
 
 --- Events that trigger hooks.
@@ -1568,9 +1570,10 @@ function crap.util.clone(tbl) end
 --- @return string
 function crap.util.trim(str) end
 
---- Split a string by separator.
+--- Split a string by a plain (non-pattern) separator. A multi-character
+--- separator splits on the whole sequence; empty pieces are omitted.
 --- @param str string  Input string.
---- @param sep string  Separator string.
+--- @param sep string  Separator string (must be non-empty).
 --- @return string[]
 function crap.util.split(str, sep) end
 
@@ -1586,9 +1589,11 @@ function crap.util.starts_with(str, prefix) end
 --- @return boolean
 function crap.util.ends_with(str, suffix) end
 
---- Truncate a string to a max length with optional suffix.
+--- Truncate a string to at most `max_len` characters (not bytes), appending
+--- `suffix` when it was cut. The result is never longer than `max_len`
+--- characters — a suffix longer than `max_len` is itself cut to fit.
 --- @param str string       Input string.
---- @param max_len integer  Maximum length.
+--- @param max_len integer  Maximum length in characters.
 --- @param suffix? string   Suffix to append when truncated (default: "...").
 --- @return string
 function crap.util.truncate(str, max_len, suffix) end
@@ -1658,7 +1663,7 @@ crap.access = {}
 --- Evaluate the access function for a collection/global + operation against the
 --- current user. Returns `"allowed"`, `"denied"`, or a constraint-filter table.
 --- @param collection string  Collection or global slug.
---- @param operation string  Operation: `"read"`, `"create"`, `"update"`, `"delete"`, or `"trash"`.
+--- @param operation string  Operation: `"read"`, `"create"`, `"update"`, `"delete"`, `"trash"`, or `"unlock"` (`trash` / `unlock` fall back to the `update` rule when unset; globals take `"read"` / `"update"`).
 --- @return "allowed" | "denied" | table # "allowed" / "denied" string, or a `{ field = filter, ... }` constraint table.
 function crap.access.check(collection, operation) end
 

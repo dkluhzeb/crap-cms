@@ -19,7 +19,8 @@ use crate::{
     core::Registry,
     hooks::lua_api::{
         crud::{helpers::hook_user, tx_conn::get_tx_conn},
-        parse::deny_unknown_keys,
+        integer::opt_integer,
+        parse::{deny_unknown_keys, get_string_strict},
     },
     service::{self, LuaWriteHooks, ServiceContext, op::wire},
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -93,6 +94,57 @@ fn jobs_get_run(
     run.as_ref().map(|r| run_to_table(lua, r)).transpose()
 }
 
+/// The typed `crap.jobs.list_runs` options. Each option is read strictly: a
+/// wrong-typed value is an error naming the key, never a silent fallback
+/// (`{ slug = {"digest"} }` used to list every readable job).
+#[derive(Debug)]
+struct ListRunsOptions {
+    slug: Option<String>,
+    status: Option<String>,
+    limit: i64,
+    offset: i64,
+}
+
+impl Default for ListRunsOptions {
+    fn default() -> Self {
+        Self {
+            slug: None,
+            status: None,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+/// Parse the options table; unknown keys are rejected against the wire
+/// model (see `jobs.queue`), values against their declared types.
+fn parse_list_runs_options(lua: &Lua, opts: Option<&Table>) -> LuaResult<ListRunsOptions> {
+    const CONTEXT: &str = "jobs.list_runs options";
+
+    let Some(opts) = opts else {
+        return Ok(ListRunsOptions::default());
+    };
+
+    let allowed = wire::job_op("list_job_runs")
+        .expect("list_job_runs is modeled")
+        .lua_option_keys(&[]);
+    deny_unknown_keys(opts, CONTEXT, &allowed)
+        .map_err(|e| RuntimeError(format!("jobs.list_runs: {e}")))?;
+
+    let defaults = ListRunsOptions::default();
+
+    Ok(ListRunsOptions {
+        slug: get_string_strict(opts, "slug", CONTEXT)?,
+        status: get_string_strict(opts, "status", CONTEXT)?,
+        limit: opt_integer(lua, opts, "limit", CONTEXT)?
+            .unwrap_or(defaults.limit)
+            .max(0),
+        offset: opt_integer(lua, opts, "offset", CONTEXT)?
+            .unwrap_or(defaults.offset)
+            .max(0),
+    })
+}
+
 /// List recent job runs, newest first.
 #[lua_fn(
     path = "crap.jobs.list_runs",
@@ -107,27 +159,12 @@ fn jobs_list_runs(
     )]
     opts: Option<Table>,
 ) -> LuaResult<Table> {
-    if let Some(opts) = opts.as_ref() {
-        // Accepted keys come from the wire model — see `jobs.queue`.
-        let allowed = wire::job_op("list_job_runs")
-            .expect("list_job_runs is modeled")
-            .lua_option_keys(&[]);
-        deny_unknown_keys(opts, "jobs.list_runs options", &allowed)
-            .map_err(|e| RuntimeError(format!("jobs.list_runs: {e}")))?;
-    }
-
-    let slug: Option<String> = opts.as_ref().and_then(|o| o.get("slug").ok());
-    let status: Option<String> = opts.as_ref().and_then(|o| o.get("status").ok());
-    let limit: i64 = opts
-        .as_ref()
-        .and_then(|o| o.get::<Option<i64>>("limit").ok().flatten())
-        .unwrap_or(50)
-        .max(0);
-    let offset: i64 = opts
-        .as_ref()
-        .and_then(|o| o.get::<Option<i64>>("offset").ok().flatten())
-        .unwrap_or(0)
-        .max(0);
+    let ListRunsOptions {
+        slug,
+        status,
+        limit,
+        offset,
+    } = parse_list_runs_options(lua, opts.as_ref())?;
 
     let conn = get_tx_conn(lua)?;
     let user = hook_user(lua);
@@ -191,4 +228,86 @@ lua_table! {
 pub(crate) fn register_jobs_runs(lua: &Lua, state: JobsRunsState) -> anyhow::Result<()> {
     register_crap_jobs_runs(lua, state)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(lua: &Lua, src: &str) -> Table {
+        lua.load(src).eval().unwrap()
+    }
+
+    #[test]
+    fn absent_options_use_the_defaults() {
+        let lua = Lua::new();
+        let parsed = parse_list_runs_options(&lua, None).unwrap();
+        assert_eq!(parsed.slug, None);
+        assert_eq!(parsed.status, None);
+        assert_eq!(parsed.limit, 50);
+        assert_eq!(parsed.offset, 0);
+    }
+
+    #[test]
+    fn typed_options_are_read() {
+        let lua = Lua::new();
+        let t = opts(
+            &lua,
+            "return { slug = 'digest', status = 'failed', limit = 2^4, offset = 3 }",
+        );
+        let parsed = parse_list_runs_options(&lua, Some(&t)).unwrap();
+        assert_eq!(parsed.slug.as_deref(), Some("digest"));
+        assert_eq!(parsed.status.as_deref(), Some("failed"));
+        assert_eq!(parsed.limit, 16, "a whole-valued float is an integer");
+        assert_eq!(parsed.offset, 3);
+    }
+
+    /// `{ slug = {} }` used to be `.ok()`-ed away and list EVERY readable
+    /// job; it must error naming the key.
+    #[test]
+    fn wrong_typed_slug_errors_naming_the_key() {
+        let lua = Lua::new();
+        let t = opts(&lua, "return { slug = {} }");
+        let err = parse_list_runs_options(&lua, Some(&t))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'slug'"), "names the key: {err}");
+        assert!(err.contains("must be a string"), "{err}");
+    }
+
+    /// `{ limit = "x" }` used to silently fall back to 50.
+    #[test]
+    fn wrong_typed_limit_errors() {
+        let lua = Lua::new();
+        let t = opts(&lua, "return { limit = 'x' }");
+        let err = parse_list_runs_options(&lua, Some(&t))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'limit' must be an integer"), "{err}");
+
+        let t = opts(&lua, "return { offset = 1.5 }");
+        let err = parse_list_runs_options(&lua, Some(&t))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'offset' must be an integer"), "{err}");
+    }
+
+    #[test]
+    fn negative_limit_and_offset_clamp_to_zero() {
+        let lua = Lua::new();
+        let t = opts(&lua, "return { limit = -5, offset = -1 }");
+        let parsed = parse_list_runs_options(&lua, Some(&t)).unwrap();
+        assert_eq!(parsed.limit, 0);
+        assert_eq!(parsed.offset, 0);
+    }
+
+    #[test]
+    fn unknown_key_is_rejected() {
+        let lua = Lua::new();
+        let t = opts(&lua, "return { slugg = 'digest' }");
+        let err = parse_list_runs_options(&lua, Some(&t))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("slugg"), "{err}");
+    }
 }

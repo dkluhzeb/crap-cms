@@ -16,10 +16,16 @@
 //! - Install `TxContext` (conn-mode) in Lua `app_data` for the
 //!   duration of the closure call — `with_lua_db` sees `TxContext`
 //!   first and reuses the shared tx for nested CRUD ops.
-//! - On `Ok` return: remove `TxContext`, `COMMIT`, then run any
-//!   `crap.tx.on_commit` effects registered inside the closure.
+//! - On `Ok` return: remove `TxContext`, `COMMIT`, return the connection to
+//!   the write pool, then run any `crap.tx.on_commit` effects registered
+//!   inside the closure.
 //! - On `Err` return: remove `TxContext`, drop the tx → automatic
-//!   rollback, then run any `crap.tx.on_rollback` compensations.
+//!   rollback, return the connection, then run any `crap.tx.on_rollback`
+//!   compensations.
+//!
+//! The connection goes back BEFORE the effects run on both paths: an effect's
+//! own CRUD opens a scoped transaction on a fresh write-pool checkout, which
+//! must not have to wait for the slot this scope was holding.
 //!
 //! Inside a hook (already conn-mode with the parent's write tx),
 //! `crap.transaction(fn)` is a pass-through: call `fn` directly so the
@@ -71,6 +77,116 @@ fn flush_cache_dirty(
         && let Err(e) = cache.clear()
     {
         warn!("crap.transaction: cache clear failed: {e:#}");
+    }
+}
+
+/// The queues one scoped transaction owns, beside the enclosing scope's
+/// queues they hand up to on commit (`None` = no enclosing scope).
+///
+/// FRESH event/verification queues are scoped to the transaction (frozen
+/// contract: a rolled-back write never emits an event). The ambient job-level
+/// queues flush unconditionally after the handler — routing inner-CRUD events
+/// there directly would publish them even when this transaction rolls back.
+/// On commit the events are handed up; on rollback they are dropped, exactly
+/// like `run_pool_write`.
+struct ScopedQueues {
+    tx_events: EventQueue,
+    outer_events: Option<EventQueue>,
+    tx_verifications: VerificationQueue,
+    outer_verifications: Option<VerificationQueue>,
+    tx_files: FileCleanupQueue,
+    outer_files: Option<FileCleanupQueue>,
+    tx_cache_dirty: Rc<Cell<bool>>,
+    outer_cache_dirty: Option<Rc<Cell<bool>>>,
+    /// The cache handle, captured before `infra` moves into `app_data`, so the
+    /// post-commit flush can clear it when there is no enclosing scope.
+    cache: Option<SharedCache>,
+}
+
+impl ScopedQueues {
+    /// Swap fresh per-transaction queues into `infra`, keeping the enclosing
+    /// scope's queues to hand up to on commit.
+    fn install(infra: &mut LuaCrudInfra) -> Self {
+        let tx_events: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let tx_verifications: VerificationQueue = Rc::new(RefCell::new(Vec::new()));
+        let tx_files: FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
+        let tx_cache_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
+        Self {
+            outer_events: infra.event_queue.replace(tx_events.clone()),
+            outer_verifications: infra.verification_queue.replace(tx_verifications.clone()),
+            outer_files: infra.file_cleanup.replace(tx_files.clone()),
+            outer_cache_dirty: infra.cache_dirty.replace(tx_cache_dirty.clone()),
+            cache: infra.cache.clone(),
+            tx_events,
+            tx_verifications,
+            tx_files,
+            tx_cache_dirty,
+        }
+    }
+
+    /// The transaction committed: hand its events, verifications, upload
+    /// files and cache-dirty flag up to the enclosing scope — or, with none,
+    /// publish, delete and clear now. Needs no database connection.
+    fn settle_after_commit(&self, lua: &Lua, label: &str) {
+        self.hand_up_events(label);
+
+        if let Some(outer) = &self.outer_verifications {
+            outer
+                .borrow_mut()
+                .extend(self.tx_verifications.borrow_mut().drain(..));
+        }
+
+        self.settle_files(lua);
+
+        flush_cache_dirty(
+            &self.tx_cache_dirty,
+            self.outer_cache_dirty.as_ref(),
+            self.cache.as_ref(),
+        );
+    }
+
+    /// Hand the transaction's events up to the ambient (job-level) queue,
+    /// which flushes post-handler.
+    fn hand_up_events(&self, label: &str) {
+        if let Some(outer) = &self.outer_events {
+            outer
+                .borrow_mut()
+                .extend(self.tx_events.borrow_mut().drain(..));
+
+            return;
+        }
+
+        if !self.tx_events.borrow().is_empty() {
+            warn!(
+                "{label}: {} event(s) from a committed transaction had no ambient queue \
+                 to flush into and were dropped",
+                self.tx_events.borrow().len()
+            );
+        }
+    }
+
+    /// Upload files from hard deletes inside this transaction: hand up to an
+    /// enclosing scope, or — with none — delete NOW (we are post-commit) via
+    /// the VM's storage handle.
+    fn settle_files(&self, lua: &Lua) {
+        if let Some(outer) = &self.outer_files {
+            outer
+                .borrow_mut()
+                .extend(self.tx_files.borrow_mut().drain(..));
+
+            return;
+        }
+
+        let Some(storage) = lua
+            .app_data_ref::<LuaVmInfra>()
+            .and_then(|i| i.storage.clone())
+        else {
+            return;
+        };
+
+        let keys: Vec<String> = self.tx_files.borrow_mut().drain(..).collect();
+        delete_storage_keys(&*storage, &keys);
     }
 }
 
@@ -140,24 +256,7 @@ pub(crate) fn run_scoped_tx<R>(
     });
     infra.deferred = Some(dq.clone());
 
-    // FRESH event/verification queues scoped to THIS transaction (frozen
-    // contract: a rolled-back write never emits an event). The ambient
-    // job-level queues flush unconditionally after the handler — routing
-    // inner-CRUD events there directly would publish them even when this
-    // transaction rolls back. On commit the events are handed up; on
-    // rollback they are dropped, exactly like `run_pool_write`.
-    let tx_events: EventQueue = Rc::new(RefCell::new(Vec::new()));
-    let tx_verifications: VerificationQueue = Rc::new(RefCell::new(Vec::new()));
-    let outer_events = infra.event_queue.replace(tx_events.clone());
-    let outer_verifications = infra.verification_queue.replace(tx_verifications.clone());
-    let tx_files: FileCleanupQueue = Rc::new(RefCell::new(Vec::new()));
-    let outer_files = infra.file_cleanup.replace(tx_files.clone());
-    // Per-transaction populate-cache invalidation flag (see `LuaCrudInfra`).
-    let tx_cache_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let outer_cache_dirty = infra.cache_dirty.replace(tx_cache_dirty.clone());
-    // Capture the cache handle before `infra` is moved into `app_data`, so the
-    // post-commit flush below can clear it when there is no enclosing scope.
-    let tx_cache = infra.cache.clone();
+    let queues = ScopedQueues::install(&mut infra);
     lua.set_app_data(infra);
 
     // SAFETY: TxContext stores a fat pointer to `&tx`. `tx` lives on this
@@ -183,71 +282,45 @@ pub(crate) fn run_scoped_tx<R>(
 
     let effects: Vec<DeferredEffect> = dq.borrow_mut().drain(..).collect();
 
-    match call_result {
-        Ok(value) => {
-            if let Err(e) = tx.commit() {
-                // A failed commit is a rollback outcome — the queued
-                // events/verifications die with the transaction.
-                run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
-
-                return Err(RuntimeError(format!("{label}: commit: {e}")));
-            }
-
-            // Committed: hand the transaction's events/verifications up to
-            // the ambient (job-level) queues, which flush post-handler.
-            if let Some(outer) = &outer_events {
-                outer.borrow_mut().extend(tx_events.borrow_mut().drain(..));
-            } else if !tx_events.borrow().is_empty() {
-                warn!(
-                    "{label}: {} event(s) from a committed transaction had no ambient queue \
-                     to flush into and were dropped",
-                    tx_events.borrow().len()
-                );
-            }
-            if let Some(outer) = &outer_verifications {
-                outer
-                    .borrow_mut()
-                    .extend(tx_verifications.borrow_mut().drain(..));
-            }
-
-            // Upload files from hard deletes inside this transaction:
-            // hand up to an enclosing scope, or — with none — delete NOW
-            // (we are post-commit) via the VM's storage handle.
-            if let Some(outer) = &outer_files {
-                outer.borrow_mut().extend(tx_files.borrow_mut().drain(..));
-            } else if let Some(storage) = lua
-                .app_data_ref::<LuaVmInfra>()
-                .and_then(|i| i.storage.clone())
-            {
-                let keys: Vec<String> = tx_files.borrow_mut().drain(..).collect();
-                delete_storage_keys(&*storage, &keys);
-            }
-
-            // Populate-cache invalidation from writes inside this transaction:
-            // hand up to an enclosing scope, or — with none — clear now (we are
-            // post-commit) so a concurrent read can't have left a stale entry.
-            flush_cache_dirty(
-                &tx_cache_dirty,
-                outer_cache_dirty.as_ref(),
-                tx_cache.as_ref(),
-            );
-
-            // Effects run in THIS VM: `PoolContext` is live again (job
-            // context), so effect CRUD is pool-mode, and events queue into
-            // the job's own event queue (flushed post-handler).
-            run_effects_on_vm(lua, &effects, EffectOutcome::Commit);
-
-            Ok(value)
-        }
+    let value = match call_result {
+        Ok(value) => value,
         Err(e) => {
-            // Roll back (and release the write lock) BEFORE compensations
-            // run — their pool-mode CRUD needs the write path.
+            // Roll back AND return the write-pool slot BEFORE compensations
+            // run: their pool-mode CRUD opens a scoped transaction of its
+            // own, which checks a second write connection out. With this
+            // slot still held, a write pool of one would make that checkout
+            // wait for the pool timeout and fail; a larger pool would pin
+            // two slots per job.
             drop(tx);
+            drop(conn);
             run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
 
-            Err(e)
+            return Err(e);
         }
+    };
+
+    let commit_result = tx.commit();
+    // Same release-before-effects rule on the commit side: nothing below
+    // touches the database through this connection, and the effects need
+    // the slot it holds.
+    drop(conn);
+
+    if let Err(e) = commit_result {
+        // A failed commit is a rollback outcome — the queued
+        // events/verifications die with the transaction.
+        run_effects_on_vm(lua, &effects, EffectOutcome::Rollback);
+
+        return Err(RuntimeError(format!("{label}: commit: {e}")));
     }
+
+    queues.settle_after_commit(lua, label);
+
+    // Effects run in THIS VM: `PoolContext` is live again (job
+    // context), so effect CRUD is pool-mode, and events queue into
+    // the job's own event queue (flushed post-handler).
+    run_effects_on_vm(lua, &effects, EffectOutcome::Commit);
+
+    Ok(value)
 }
 
 /// Wrap a Lua closure in a single IMMEDIATE transaction.
@@ -340,4 +413,158 @@ function crap.transaction(fn) end
 
 ",
     );
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::{path::PathBuf, sync::Arc};
+
+    use crate::{
+        config::CrapConfig,
+        core::{
+            CollectionDefinition, FieldDefinition, FieldType, HookRef, JobRun, Registry,
+            collection::Hooks,
+        },
+        db::{DbPool, migrate, pool, query},
+        hooks::HookRunner,
+    };
+
+    /// The `crap.tx` fixture tree: `jobs.tx_job.run_commit` wraps a create in
+    /// `crap.transaction` and registers `hooks.effects.log_commit`, which
+    /// writes a `tx_log` row through pool-mode CRUD.
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tx_outcome")
+    }
+
+    fn tx_articles() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("tx_articles");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("boom", FieldType::Text).build(),
+        ];
+        def.hooks = Hooks {
+            before_change: vec![HookRef::new("hooks.effects.register")],
+            ..Default::default()
+        };
+
+        def
+    }
+
+    fn tx_log() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("tx_log");
+        def.fields = vec![FieldDefinition::builder("message", FieldType::Text).build()];
+
+        def
+    }
+
+    /// A migrated pool over the fixture collections with the given database
+    /// config, and a runner over the fixture hooks.
+    fn setup(config: &CrapConfig, tmp: &tempfile::TempDir) -> (DbPool, Arc<Registry>, HookRunner) {
+        let db_pool = pool::create_pool(tmp.path(), config).expect("create pool");
+
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().expect("registry");
+            reg.register_collection(tx_articles());
+            reg.register_collection(tx_log());
+        }
+        let registry = Registry::snapshot(&shared);
+        migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
+
+        let runner = HookRunner::builder()
+            .config_dir(&fixture_dir())
+            .registry(Arc::clone(&registry))
+            .config(config)
+            .build()
+            .expect("hook runner");
+
+        (db_pool, registry, runner)
+    }
+
+    fn log_messages(db_pool: &DbPool, registry: &Registry) -> Vec<String> {
+        let def = registry.get_collection("tx_log").expect("tx_log").clone();
+        let conn = db_pool.get().expect("connection");
+        let docs = query::find(&conn, "tx_log", &def, &query::FindQuery::default(), None)
+            .expect("find tx_log");
+
+        docs.iter()
+            .filter_map(|d| d.fields.get("message").and_then(|v| v.as_str()))
+            .map(String::from)
+            .collect()
+    }
+
+    /// A `crap.tx.on_commit` effect writes through a scoped transaction of its
+    /// own, which checks out a second write connection. With the pool's ONE
+    /// write connection still held by the just-committed scope, that checkout
+    /// waited out the pool timeout and the effect failed — its write never
+    /// happened, and the job reported success regardless.
+    #[test]
+    fn a_commit_effect_can_write_with_a_write_pool_of_one() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        config.database.write_pool_max_size = 1;
+        config.database.connection_timeout = 1;
+
+        let (db_pool, registry, runner) = setup(&config, &tmp);
+
+        let run = JobRun::builder("tx-test-run", "tx_test")
+            .data("{}")
+            .attempt(1)
+            .max_attempts(1)
+            .build();
+        runner
+            .run_job_handler(
+                &HookRef::new("jobs.tx_job.run_commit"),
+                &run,
+                &db_pool,
+                None,
+            )
+            .expect("run_job_handler");
+
+        let mut messages = log_messages(&db_pool, &registry);
+        messages.sort();
+
+        assert_eq!(
+            messages,
+            vec!["commit:in-tx:commit", "commit:job:commit"],
+            "both on_commit effects must have written their row"
+        );
+    }
+
+    /// The rollback side releases the slot the same way: the compensation's
+    /// own write must go through with one write connection.
+    #[test]
+    fn a_rollback_effect_can_write_with_a_write_pool_of_one() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        config.database.write_pool_max_size = 1;
+        config.database.connection_timeout = 1;
+
+        let (db_pool, registry, runner) = setup(&config, &tmp);
+
+        let run = JobRun::builder("tx-test-run", "tx_test")
+            .data("{}")
+            .attempt(1)
+            .max_attempts(1)
+            .build();
+        runner
+            .run_job_handler(
+                &HookRef::new("jobs.tx_job.run_rollback"),
+                &run,
+                &db_pool,
+                None,
+            )
+            .expect("run_job_handler");
+
+        let mut messages = log_messages(&db_pool, &registry);
+        messages.sort();
+
+        assert_eq!(
+            messages,
+            vec!["rollback:doomed:rollback", "rollback:job:rollback"],
+            "both on_rollback compensations must have written their row"
+        );
+    }
 }

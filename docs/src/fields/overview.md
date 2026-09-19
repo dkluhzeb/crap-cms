@@ -182,6 +182,7 @@ The `validate` property references a Lua function in `module.function` format. T
 - `nil` or `true` — valid
 - `false` — invalid with a generic message
 - `string` — invalid with a custom error message
+- anything else (a table, a number) — a hook error naming the field; the write fails
 
 ```lua
 -- hooks/validators.lua

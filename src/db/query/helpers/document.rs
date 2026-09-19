@@ -14,7 +14,7 @@ use crate::{
         DbValue,
         query::{
             helpers::{companion_value, stored_value, tz_column},
-            join::{store_nested_values, store_rows, sub_field_stores_json},
+            join::{store_nested_values, store_rows},
         },
     },
 };
@@ -66,9 +66,9 @@ fn store_column<R: JsonRoot>(level: &mut R, key: &str, field: &FieldDefinition) 
     }
 }
 
-/// An array's rows as stored: each sub-field with its own column in its column
-/// form, the groups, arrays and blocks stored as JSON in their typed form, and
-/// JSON-stored values (a JSON field, a has-many reference list) as sent.
+/// An array's rows as stored: each leaf sub-field's own column as a read of the
+/// row returns it (a checkbox as a boolean, JSON text parsed), and the groups,
+/// arrays and blocks stored as JSON in their typed form.
 fn stored_array_rows(sub: &[FieldDefinition], rows: &mut [Value]) {
     let subs = flatten_array_sub_fields(sub);
 
@@ -78,7 +78,6 @@ fn stored_array_rows(sub: &[FieldDefinition], rows: &mut [Value]) {
                 FieldChildren::Group(_) | FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
                     store_nested_values(row, slice::from_ref(*sf));
                 }
-                _ if sub_field_stores_json(sf) => {}
                 _ => store_column(row, &sf.name, sf),
             }
         }
@@ -146,5 +145,40 @@ mod tests {
         stored_document_values(&mut data, &fields);
 
         assert_eq!(data.get("starts_tz"), Some(&Value::Null));
+    }
+
+    /// Regression: a draft snapshot kept a JSON sub-field of an array row as
+    /// sent (the admin form's text) and left a checkbox column as `0`/`1`, so a
+    /// draft read differed from the published read of the same write. Every
+    /// column of the snapshot holds what a read returns.
+    #[test]
+    fn a_snapshot_holds_every_column_as_a_read_returns_it() {
+        let fields = vec![
+            FieldDefinition::builder("done", FieldType::Checkbox).build(),
+            FieldDefinition::builder("meta", FieldType::Json).build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("flag", FieldType::Checkbox).build(),
+                    FieldDefinition::builder("extra", FieldType::Json).build(),
+                ])
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("done".to_string(), json!("on"));
+        data.insert("meta".to_string(), json!("{\"n\": 1}"));
+        data.insert(
+            "items".to_string(),
+            json!([{ "flag": "0", "extra": "{\"k\": [1, 2]}" }]),
+        );
+
+        stored_document_values(&mut data, &fields);
+
+        assert_eq!(data.get("done"), Some(&json!(true)));
+        assert_eq!(data.get("meta"), Some(&json!({ "n": 1 })));
+        assert_eq!(
+            data.get("items"),
+            Some(&json!([{ "flag": false, "extra": { "k": [1, 2] } }]))
+        );
     }
 }

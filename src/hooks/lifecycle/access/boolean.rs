@@ -1,18 +1,18 @@
-//! Boolean-only access verdicts. Some access rules gate a single yes/no
-//! decision with no rows behind it — a custom route, for instance — so the
-//! filter-table form a collection rule may return has nothing to narrow. A
-//! table from such a rule is a configuration error reported to the author,
-//! never silently read as "allow" or "deny".
+//! Boolean-only verdicts. Some Lua rules gate a single yes/no decision with
+//! no rows behind it — a custom route's access gate, a collection's live
+//! broadcast filter — so the filter-table form a collection access rule may
+//! return has nothing to narrow. A table from such a rule is a configuration
+//! error reported to the author, never silently read as "yes" or "no".
 
 use anyhow::{Result, bail};
 use mlua::Value;
 use tracing::warn;
 
-/// Interpret the return value of a boolean-only access rule: `true` allows,
-/// `false`/`nil` denies, a table is a configuration error (`subject` names
+/// Interpret the return value of a boolean-only rule: `true` is yes,
+/// `false`/`nil` is no, a table is a configuration error (`subject` names
 /// the rule's kind in the message, e.g. "custom route"), and any other type
-/// denies with a warning — the same fail-closed reading collection rules
-/// apply to an unexpected type.
+/// is no with a warning — the same fail-closed reading collection access
+/// rules apply to an unexpected type.
 ///
 /// # Errors
 ///
@@ -22,12 +22,12 @@ pub(crate) fn boolean_verdict(value: &Value, subject: &str) -> Result<bool> {
         Value::Boolean(true) => Ok(true),
         Value::Boolean(false) | Value::Nil => Ok(false),
         Value::Table(_) => bail!(
-            "{subject} access rule returned a table; a {subject} has no rows for a filter \
-             to narrow — return true or false instead"
+            "{subject} rule returned a table; a {subject} rule decides yes or no and has no \
+             rows for a filter to narrow — return true or false instead"
         ),
         other => {
             warn!(
-                "{subject} access rule returned unexpected type '{}', denying",
+                "{subject} rule returned unexpected type '{}', treating it as false",
                 other.type_name()
             );
 

@@ -5,6 +5,7 @@
       id="field-{{name}}"
       name="{{name}}"
       value="{{datetime_local_value}}"
+      {{#if step}}step="{{step}}"{{/if}}
       {{#if required}}required{{/if}}
       {{#if readonly}}readonly{{/if}}
       {{#if min_date}}min="{{min_date}}T00:00"{{/if}}
@@ -17,6 +18,7 @@
       id="field-{{name}}"
       name="{{name}}"
       value="{{value}}"
+      {{#if step}}step="{{step}}"{{/if}}
       {{#if required}}required{{/if}}
       {{#if readonly}}readonly{{/if}}
       {{#if error}}class="form__input--error"{{/if}}

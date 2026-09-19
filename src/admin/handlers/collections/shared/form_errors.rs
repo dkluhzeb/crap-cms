@@ -16,10 +16,10 @@ use crate::{
         handlers::{
             forms::FormData,
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts, editor_read_ctx,
-                enrich_field_contexts, forbidden, get_user_doc, is_non_default_locale,
-                page_with_toast, paths, redirect_response, split_sidebar_fields, toast_only_error,
-                translate_validation_errors,
+                EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
+                editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc,
+                is_non_default_locale, page_with_toast, paths, redirect_response,
+                split_sidebar_fields, toast_only_error, translate_validation_errors,
             },
         },
     },
@@ -110,6 +110,9 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     pub auth_user: Option<&'a Extension<AuthUser>>,
     pub toast_msg: &'a str,
     pub meta: SubmittedMeta<'a>,
+    /// How the submit was issued — an htmx form post targeting `#main` gets
+    /// the fragment back, not a second full document.
+    pub hx: HxNav,
 }
 
 /// Re-add the auth-collection inputs the write handler took out of the form.
@@ -258,7 +261,14 @@ pub(in crate::admin::handlers::collections) async fn render_form_with_error(
         upload_hidden_fields,
     };
 
-    page_with_toast(p.state, p.auth_user, "collections/edit", &ctx, p.toast_msg).await
+    page_with_toast(
+        p.state,
+        PageRequest::new(p.hx, p.auth_user),
+        "collections/edit",
+        &ctx,
+        p.toast_msg,
+    )
+    .await
 }
 
 /// The rejected file's own message, when the write failed on the file rather
@@ -283,6 +293,7 @@ struct ValidationRender<'a> {
     doc_id: Option<&'a str>,
     auth_user: Option<&'a Extension<AuthUser>>,
     meta: SubmittedMeta<'a>,
+    hx: HxNav,
 }
 
 /// Re-render the form with validation errors (works for both create and edit).
@@ -305,6 +316,7 @@ async fn render_form_validation_errors(p: &ValidationRender<'_>, ve: &Validation
         auth_user: p.auth_user,
         toast_msg,
         meta: p.meta,
+        hx: p.hx,
     })
     .await
 }
@@ -319,6 +331,8 @@ pub(in crate::admin::handlers::collections) struct WriteErrorParams<'a> {
     pub auth_user: Option<&'a Extension<AuthUser>>,
     /// The meta inputs the handler took out of the form — see [`SubmittedMeta`].
     pub meta: SubmittedMeta<'a>,
+    /// How the submit was issued — see [`FormErrorParams::hx`].
+    pub hx: HxNav,
 }
 
 /// Which form response a collection write error maps to. Split out from the
@@ -393,6 +407,7 @@ pub(in crate::admin::handlers::collections) async fn handle_collection_write_err
                     doc_id: p.doc_id,
                     auth_user: p.auth_user,
                     meta: p.meta,
+                    hx: p.hx,
                 };
 
                 return render_form_validation_errors(&render, ve).await;

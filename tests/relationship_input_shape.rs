@@ -105,6 +105,17 @@ fn non_id_relationship_values_are_rejected() {
     );
 }
 
+/// Regression: an empty has-many list spelled as an empty object — the shape
+/// a Lua table with no entries takes — was rejected, so the list could not be
+/// cleared from Lua. It writes as an empty list.
+#[test]
+fn an_empty_object_writes_an_empty_has_many_list() {
+    let (_tmp, pool, registry, runner) = setup();
+
+    create_post(&pool, &registry, &runner, "reviewers", json!({}))
+        .expect("an empty object is an empty list");
+}
+
 /// A reference to an id that does not exist is the caller's mistake: a
 /// hook-style (400) error naming the target, not an internal fault.
 #[test]

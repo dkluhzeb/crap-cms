@@ -56,6 +56,7 @@ crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|grpc
 | Flag | Description |
 |------|-------------|
 | `-d`, `--detach` | Run in the background (prints PID and exits) |
+
 | `--stop` | Stop a running detached instance (SIGTERM; running jobs are drained up to the longest configured `[jobs.queues.<name>] timeout` plus five minutes, then SIGKILL; a Lua job's own `timeout` is not part of that deadline — raise the matching queue timeout for long Lua jobs) |
 | `--restart` | Restart a running detached instance (stop + start) |
 | `--status` | Show whether a detached instance is running (PID, uptime) |
@@ -64,6 +65,7 @@ crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|grpc
 | `--no-scheduler` | Disable the background job scheduler |
 
 `--detach`, `--stop`, `--restart`, and `--status` are mutually exclusive.
+A start — foreground or `--detach` — refuses when `data/crap.pid` names a live process; the PID file is written only after startup succeeded and removed on every exit path, so a failed start never hides the running server from `--stop`/`--status`.
 
 ```bash
 crap-cms serve                    # foreground
@@ -90,12 +92,15 @@ Runs a dedicated job worker without HTTP/gRPC servers. For multi-server deployme
 | Flag | Description |
 |------|-------------|
 | `-d`, `--detach` | Run in the background |
+
 | `--stop` | Stop a running detached worker |
 | `--restart` | Restart a running detached worker |
 | `--status` | Show whether a detached worker is running |
 | `--queues <list>` | Comma-separated queue names to process (default: all) |
 | `--concurrency <n>` | Override `jobs.max_concurrent` for this worker |
 | `--no-cron` | Skip cron scheduling (let another worker handle it) |
+
+As for `serve`: a start refuses when `data/crap-worker.pid` names a live worker, and the file is written only once the worker is up.
 
 ```bash
 crap-cms work                           # process all queues
@@ -716,6 +721,8 @@ crap-cms db cleanup --confirm
 crap-cms export [-c <COLLECTION>] [-o <FILE>] [--include-credentials]
 ```
 
+The file is written to `<FILE>.tmp` beside the target and renamed into place once complete, so an interrupted export never leaves a truncated file under the final name.
+
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--collection` | `-c` | Export only this collection (default: all) |
@@ -1141,7 +1148,7 @@ Restore a single trashed document back to the active list. Both `COLLECTION` and
 #### `trash purge`
 
 ```bash
-crap-cms trash purge [-c <COLLECTION>] [--older-than <DURATION>] [--dry-run]
+crap-cms trash purge [-c <COLLECTION>] [--older-than <DURATION>] [--dry-run] [-y]
 ```
 
 | Flag | Short | Default | Description |
@@ -1149,6 +1156,7 @@ crap-cms trash purge [-c <COLLECTION>] [--older-than <DURATION>] [--dry-run]
 | `--collection` | `-c` | — | Filter by collection slug (default: all soft-delete collections) |
 | `--older-than` | — | `all` | Purge documents deleted more than this ago (e.g. `30d`, `24h`, `30m`), or `all` for every trashed document |
 | `--dry-run` | — | — | Print what would be deleted without actually deleting |
+| `--confirm` | `-y` | — | Required unless `--dry-run` — confirms the destructive operation; without it the candidates are listed and nothing is deleted |
 
 #### `trash empty`
 
@@ -1166,7 +1174,7 @@ Permanently delete every trashed document in the given collection.
 crap-cms trash list
 crap-cms trash list -c posts
 crap-cms trash restore posts abc123
-crap-cms trash purge --older-than 7d
+crap-cms trash purge --older-than 7d -y
 crap-cms trash purge -c posts --dry-run
 crap-cms trash empty posts -y
 ```

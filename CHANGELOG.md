@@ -8,6 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **A checkbox reads back as a boolean on every surface.** A top-level, group
+  or array-row checkbox used to read as the column's `0`/`1` while the same
+  field inside a blocks row read as `true`/`false`, although every generated
+  client type, the MCP schema and the gRPC type reference promised `boolean`
+  (a generated Rust client decoded every column checkbox as absent, and in
+  Lua the integer `0` is truthy). Every read — find, versions, drafts, live
+  events, populate, gRPC `bool_value`, Lua — now returns `true`/`false`;
+  writes still accept `true`/`false`/`0`/`1`/`"on"`.
+- **A `json` field reads back as the parsed JSON value on every surface.** A
+  top-level `json` field (and a richtext field with `admin.format = "json"`)
+  used to return its stored text, an array-row sub-field the parsed value and
+  a blocks-row sub-field whatever was sent, so an admin no-op save of a blocks
+  row turned an API-written object into a string and a draft read disagreed
+  with the published read of the same row. Every read now returns the parsed
+  value (a legacy string that does not parse stays a string); the admin JSON
+  editor shows it pretty-printed and round-trips it unchanged. Blocks rows and
+  nested groups holding JSON text are re-typed once at the first start.
+- **A coroutine no longer escapes the Lua instruction limit.** A hook, route,
+  job or effect that spun inside `coroutine.wrap` / `coroutine.resume` ran
+  without the instruction hook (the per-thread hook uninstalled itself on the
+  new thread) and never returned its VM; the limit now applies to every
+  thread of the VM, so the documented "exceeded instruction limit" error fires
+  inside a coroutine too.
+- **`crap-cms trash purge` requires `--confirm`** (`-y`) unless `--dry-run` is
+  given, like `trash empty` and every other destructive command; it used to
+  hard-delete every trashed document in every collection by default.
 - **A custom route's `access` rule must return a boolean.** A rule that
   returned a row-filter table (the shape collection access rules return) was
   counted as "allow" for everyone; it is now a hook error, as on custom pages
@@ -2145,6 +2171,138 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A hook's `on_commit`/`on_rollback` effect that wrote could deadlock the
+  write pool.** `crap.transaction` kept its write-pool connection while the
+  effects ran, so an effect's own write needed a second slot; with
+  `write_pool_max_size = 1` it waited out `connection_timeout` and failed.
+  The slot is released before any effect runs, as the service write path
+  already did.
+- **A blocked heartbeat could requeue a job that was still running.** The
+  scheduler refreshed heartbeats synchronously on its async loop through a
+  read-pool connection, and a `busy_timeout` wait (30 s default) equalled
+  the stale threshold (3 × `heartbeat_interval`), so the same tick — or a
+  peer — could declare the job dead and run it twice. Heartbeats and stale
+  recovery run on blocking threads through the write pool, and the stale
+  threshold is `heartbeat_interval × 3 + connection_timeout + busy_timeout`,
+  longer than any heartbeat write can wait.
+- **An interrupted `crap-cms export` left a truncated file under the final
+  name**; the export is staged as `<file>.tmp` and renamed once complete.
+- **The retention tick could claim its cron window and then skip the purge**
+  if the process died in between; the claim and the purge are one
+  transaction now, and a failure retries the window.
+- **A panic after an upload's commit deleted the file the committed row
+  pointed at** — the store-then-clean-up guard was released only after the
+  post-commit work. The guard now learns of the commit the moment it
+  happens, so a later failure never removes committed bytes.
+- **A broken `crap.toml` made a running server unstoppable from the CLI.**
+  `serve --stop/--status/--restart` and `work --stop` loaded and validated
+  the config before doing anything, so a typo left the process signal-less
+  until the file was repaired. Control commands no longer require a valid
+  config.
+- **A failed second `serve` overwrote the PID file with a dead PID**, after
+  which `--stop` reported "not running" and `--restart` started a second
+  server beside the first. The PID file is written only after startup
+  succeeded, a live PID in it refuses the start, and every early exit
+  removes it.
+- **Admin logout did not revoke the session** — the route sat outside the
+  auth layer, so the handler never saw the user and the documented
+  session-version bump never ran; a captured JWT stayed valid until `exp`
+  and live streams stayed open. Logout resolves the session itself and
+  bumps the version.
+- **Saving an auth user in the admin could show a 403 for a write that had
+  persisted.** The lock/unlock account action ran unconditionally after the
+  document commit; with `access.unlock` narrower than `update` the editor
+  was denied after the save landed, and re-saving a locked user bumped the
+  session version again. The action runs only when the lock state changes,
+  and its access check runs before the document write.
+- **A server-side validation error on an htmx form submit nested the whole
+  admin shell inside the page** (and started a second live-events
+  subscriber): the error re-render never took the partial-render path.
+- **Sorting by `_status` on a collection without drafts (or `_deleted_at`
+  without soft delete) was a backend error** — the admin list answered 500,
+  the API surfaces an internal error. Both are validation errors now, and
+  `_status` cannot be saved as an admin list column where it does not exist.
+- **The MCP `cli_reference` tool served a hand-written copy of the CLI** that
+  had fallen 34 items behind the real commands (seven `make` subcommands,
+  `user info`/`verify`/`unverify`/`reset-totp`, `jobs cancel`, `templates
+  diff`/`layout`/`status`, and flags such as `--confirm`, `--password-stdin`,
+  `--priority`). The reference is now built from the command definitions
+  themselves, so it cannot drift; only the usage examples are curated, and a
+  test pins them to real commands.
+- **An `admin.default_sort` naming a column the table does not have failed
+  on the first list load** with a backend error; it fails the boot now,
+  naming the collection and the value.
+- **An empty `Authorization: Bearer` header skipped the admin CSRF check**
+  while the request still authenticated through the session cookie; one
+  predicate now decides what a bearer request is.
+- **An expired `crap_csrf` cookie made every admin submit fail until a
+  reload**; the refusal re-issues the cookie. A URL-encoded admin body over
+  2 MiB is answered with 413 instead of a CSRF 403.
+- **Two live-update toasts showed raw translation keys** (`op_restored`,
+  `op_unpublished`); the keys ship now, and a test pins every `t('…')` the
+  admin scripts call against the shipped key list.
+- **A number sent to a date field was stored as text.** The date validator
+  only checked string values, so `starts = 1736899200` stored `"1736899200"`
+  and read back as that string. Any non-string date value is rejected.
+- **A date the picker cannot show was blanked by a no-op save.** Validation
+  ignored `picker_appearance`, so an API could store a full timestamp on a
+  `timeOnly` field; the browser then discarded the value and the next save
+  stored NULL (`dayAndTime` re-saves dropped seconds). A value must fit its
+  appearance, and the form renders every appearance in the input's own
+  format so an untouched field re-submits exactly what is stored.
+- **An empty list could not clear a has-many field from Lua** — or from any
+  surface on a collection with a `before_validate` hook: an empty Lua table
+  crosses the boundary as `{}`, which the validators refused as "must be a
+  list". An empty object is accepted as an empty list everywhere has-many
+  values are validated.
+- **A non-string value on a text field was stored as its JSON text** unless
+  the field had a length bound; `title = ["a"]` stored `"[\"a\"]"`. Text,
+  textarea, email and code fields reject non-string values always.
+- **Two locale codes differing only in case passed validation** (`pt-BR` and
+  `pt-br`) and then failed the first schema sync on SQLite with a raw
+  "duplicate column name" (Postgres created two columns). Locale codes are
+  compared case-insensitively at config load, naming both codes.
+- **A config value containing a literal `${` could not be expressed** —
+  `smtp_pass = "pa${ss}word"` failed as a missing environment variable. `$${…}`
+  now renders a literal `${…}`.
+- **`crap-cms restore` into a project without a database wrote an empty
+  `crap.db.pre-restore`** and reported a previous database kept; the pool
+  it opened to checkpoint had created the file first. Whether a database
+  existed is decided before anything is opened.
+- **A live-events `filter` hook that returned a non-boolean broadcast the
+  event** while every sibling gate denies on an unexpected type; it now
+  follows the one boolean rule (`true` broadcasts, `false`/`nil` suppresses,
+  a table is a hook error, anything else suppresses with a warning).
+- **A custom field validator returning a table or a number counted as
+  valid.** The return contract is `nil`/`true` (valid), `false` (invalid),
+  a string (invalid with that message); any other type is now a hook error
+  naming the field. A hook result whose `data` or `context` is present but
+  not a table is logged instead of silently ignored.
+- **`crap.access.check` reported a verdict enforcement would reject** — it
+  called the bare evaluator, so a constraint with a disallowed operator came
+  back as a filter table; it goes through the same access chokepoint now,
+  and accepts `"unlock"` (documented).
+- **`crap.globals.<slug>.unpublish` gained the `events` option** its
+  collection twin and `globals.update` already had.
+- **`crap.auth.with_defaults` dropped malformed method entries silently**, so
+  a mis-shaped custom strategy never activated; a non-table entry or one
+  without a string `type` is an error naming its index.
+- **`crap.util.split` treated the separator as a Lua pattern** (`"%"` raised
+  "malformed pattern", a multi-character separator split on any of its
+  characters) — it splits on the plain string now; `crap.util.truncate` is
+  UTF-8-aware and never returns more than `max_len` characters.
+- **Integer options parsed from Lua follow one rule**: a whole-valued float
+  (`2^16`) is accepted everywhere, a fractional one rejected everywhere —
+  `max_body`, `rate_limit`, `priority`, `delay`, `limit`/`offset` and the
+  `crap.util.date_*` helpers used to disagree (some truncated `1.5` to `1`).
+- **`crap.tx.on_commit` / `on_rollback` accept only a table (or nil) as
+  `data`**, as their type annotation always said.
+- **`crap.hooks.list` returned the live hook registry**, so a hook could
+  mutate the per-VM hook list at runtime; it returns a copy now and, like
+  `register`/`remove`, errors on an unknown event name.
+- **`crap.jobs.list_runs` silently ignored wrong-typed options** (`slug =
+  {..}` listed every job); each option is typed and a wrong type is an error,
+  as in `crap.jobs.queue`.
 - **Global draft events were never delivered.** A subscriber whose global
   `access.draft` allowed drafts still received no draft-state events for the
   global: the event gate resolved a global's draft view as absent while a

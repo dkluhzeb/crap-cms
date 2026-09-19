@@ -2,9 +2,26 @@ use chrono::{DateTime, FixedOffset, LocalResult, NaiveDate, NaiveDateTime, TimeZ
 use chrono_tz::Tz;
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::core::{FieldDefinition, FieldType, PickerAppearance, validate::FieldError};
 
-/// Validate date format and date bounds (`min_date` / `max_date`).
+/// The shape a date value spells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DateShape {
+    /// `HH:MM` or `HH:MM:SS`.
+    Time,
+    /// `YYYY-MM`.
+    Month,
+    /// `YYYY-MM-DD`.
+    Day,
+    /// A datetime: RFC 3339, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DDTHH:MM:SS`.
+    DateTime,
+}
+
+/// Validate date format and date bounds (`min_date` / `max_date`). A present
+/// value must be a string — a number (`starts = 1736899200`) would store as
+/// the digits — spelling a shape the field's picker can show: a `timeOnly`
+/// picker a time, a `monthOnly` picker a month, a `dayOnly` or `dayAndTime`
+/// picker a date or a datetime (the picker cuts a datetime to what it shows).
 pub(crate) fn check_date_field(
     field: &FieldDefinition,
     data_key: &str,
@@ -16,19 +33,35 @@ pub(crate) fn check_date_field(
         return;
     }
 
-    let Some(Value::String(s)) = value else {
+    let Some(value) = value else {
+        return;
+    };
+    let Value::String(s) = value else {
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be an ISO-8601 date string", field.name),
+                "validation.invalid_date_type",
+            )
+            .with_param("field", field.name.clone()),
+        );
+
         return;
     };
 
-    if !is_valid_date_format(s) {
-        errors.push(
+    match date_shape(s) {
+        None => errors.push(
             FieldError::with_key(
                 data_key.to_owned(),
                 format!("{} is not a valid date format", field.name),
                 "validation.invalid_date",
             )
             .with_param("field", field.name.clone()),
-        );
+        ),
+        Some(shape) if !appearance_shows(field.picker_appearance.as_ref(), shape) => {
+            errors.push(appearance_error(field, data_key));
+        }
+        Some(_) => {}
     }
 
     let date_part = s.get(..10).unwrap_or(s.as_str());
@@ -111,65 +144,113 @@ pub(crate) fn check_local_time_exists(
     }
 }
 
-/// Check if a string is a recognized date format for the date field type.
-/// Accepts: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, full ISO 8601/RFC 3339,
-/// HH:MM (time only), HH:MM:SS, YYYY-MM (month only).
-pub(crate) fn is_valid_date_format(value: &str) -> bool {
+/// Whether a picker of `appearance` (none: the default, `dayOnly`) can show a
+/// value of `shape`. A day or datetime picker shows a date or a datetime — the
+/// stored form of a day is a datetime at noon UTC, and a datetime is cut to
+/// its day; a time picker shows only a time, a month picker only a month.
+fn appearance_shows(appearance: Option<&PickerAppearance>, shape: DateShape) -> bool {
+    match appearance {
+        Some(PickerAppearance::TimeOnly) => shape == DateShape::Time,
+        Some(PickerAppearance::MonthOnly) => shape == DateShape::Month,
+        Some(PickerAppearance::DayOnly | PickerAppearance::DayAndTime) | None => {
+            matches!(shape, DateShape::Day | DateShape::DateTime)
+        }
+    }
+}
+
+/// The error for a value the field's picker cannot show — and so could not
+/// round-trip through the admin form.
+fn appearance_error(field: &FieldDefinition, data_key: &str) -> FieldError {
+    let (expected, appearance) = match field.picker_appearance {
+        Some(PickerAppearance::TimeOnly) => ("a time (HH:MM or HH:MM:SS)", "timeOnly"),
+        Some(PickerAppearance::MonthOnly) => ("a month (YYYY-MM)", "monthOnly"),
+        Some(PickerAppearance::DayAndTime) => ("a date or datetime", "dayAndTime"),
+        Some(PickerAppearance::DayOnly) | None => ("a date or datetime", "dayOnly"),
+    };
+
+    FieldError::with_key(
+        data_key.to_owned(),
+        format!(
+            "{} must be {expected} for a {appearance} picker",
+            field.name
+        ),
+        "validation.date_shape",
+    )
+    .with_param("field", field.name.clone())
+    .with_param("expected", expected.to_string())
+    .with_param("appearance", appearance.to_string())
+}
+
+/// The shape a date value spells, or `None` when it spells no date at all.
+/// Recognized: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, full ISO
+/// 8601/RFC 3339, HH:MM (time only), HH:MM:SS, YYYY-MM (month only).
+fn date_shape(value: &str) -> Option<DateShape> {
     // Time only: HH:MM or HH:MM:SS — range-checked, not just digit shape
     // (`"99:99"` used to pass the digit-only test).
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
-        let parts: Vec<&str> = value.split(':').collect();
-
-        if parts.len() == 2 || parts.len() == 3 {
-            let nums: Option<Vec<u32>> = parts.iter().map(|p| p.parse::<u32>().ok()).collect();
-            if let Some(nums) = nums {
-                let all_two_digit = parts.iter().all(|p| p.len() == 2);
-                let hh = nums[0];
-                let mm = nums[1];
-                let ss = nums.get(2).copied().unwrap_or(0);
-
-                return all_two_digit && hh < 24 && mm < 60 && ss < 60;
-            }
-        }
-
-        return false;
+        return is_time(value).then_some(DateShape::Time);
     }
 
     // Month only: YYYY-MM — the month must be 01-12 (`"2024-99"` used to pass).
     if value.len() == 7 && value.as_bytes().get(4) == Some(&b'-') && !value.contains('T') {
-        let parts: Vec<&str> = value.split('-').collect();
-
-        if parts.len() == 2 && parts[0].len() == 4 && parts[1].len() == 2 {
-            let year_ok = parts[0].chars().all(|c| c.is_ascii_digit());
-            let month_ok = parts[1].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m));
-
-            return year_ok && month_ok;
-        }
-
-        return false;
+        return is_month(value).then_some(DateShape::Month);
     }
 
     // Full RFC 3339
     if DateTime::<FixedOffset>::parse_from_rfc3339(value).is_ok() {
-        return true;
+        return Some(DateShape::DateTime);
     }
 
     // Date only: YYYY-MM-DD
     if value.len() == 10 {
-        return NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok();
+        return NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .is_ok()
+            .then_some(DateShape::Day);
     }
 
-    // datetime-local: YYYY-MM-DDTHH:MM
-    if value.len() == 16 && value.contains('T') {
-        return NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").is_ok();
+    // datetime-local: YYYY-MM-DDTHH:MM, or with seconds (no timezone)
+    let local = match value.len() {
+        16 if value.contains('T') => NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"),
+        19 if value.contains('T') => NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"),
+        _ => return None,
+    };
+
+    local.is_ok().then_some(DateShape::DateTime)
+}
+
+/// Whether `value` is a time of day: two-digit `HH:MM` or `HH:MM:SS`, in range.
+fn is_time(value: &str) -> bool {
+    let parts: Vec<&str> = value.split(':').collect();
+
+    if parts.len() != 2 && parts.len() != 3 {
+        return false;
     }
 
-    // YYYY-MM-DDTHH:MM:SS (no timezone)
-    if value.len() == 19 && value.contains('T') {
-        return NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").is_ok();
+    let Some(nums) = parts
+        .iter()
+        .map(|p| p.parse::<u32>().ok())
+        .collect::<Option<Vec<u32>>>()
+    else {
+        return false;
+    };
+    let all_two_digit = parts.iter().all(|p| p.len() == 2);
+    let ss = nums.get(2).copied().unwrap_or(0);
+
+    all_two_digit && nums[0] < 24 && nums[1] < 60 && ss < 60
+}
+
+/// Whether `value` is a month: `YYYY-MM`, the month 01-12.
+fn is_month(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+
+    if parts.len() != 2 || parts[0].len() != 4 || parts[1].len() != 2 {
+        return false;
     }
 
-    false
+    let year_ok = parts[0].chars().all(|c| c.is_ascii_digit());
+    let month_ok = parts[1].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m));
+
+    year_ok && month_ok
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -178,6 +259,99 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Whether `value` spells any date shape at all.
+    fn is_valid_date_format(value: &str) -> bool {
+        date_shape(value).is_some()
+    }
+
+    /// The errors of validating `value` on a date field with `appearance`.
+    fn date_errors(appearance: Option<PickerAppearance>, value: &Value) -> Vec<FieldError> {
+        let mut field = FieldDefinition::builder("d", FieldType::Date).build();
+        field.picker_appearance = appearance;
+        let mut errors = Vec::new();
+
+        check_date_field(&field, "d", Some(value), false, &mut errors);
+
+        errors
+    }
+
+    fn error_keys(errors: &[FieldError]) -> Vec<&str> {
+        errors.iter().filter_map(|e| e.key.as_deref()).collect()
+    }
+
+    /// Regression: a number on a date field (`starts = 1736899200`) passed
+    /// validation and stored as its digits. Any present value that isn't a
+    /// string is rejected, whatever the picker.
+    #[test]
+    fn a_non_string_date_value_is_rejected() {
+        let values = [
+            json!(1_736_899_200),
+            json!(true),
+            json!(["2024-01-15"]),
+            json!({}),
+        ];
+
+        for value in values {
+            let errors = date_errors(None, &value);
+            assert_eq!(
+                error_keys(&errors),
+                vec!["validation.invalid_date_type"],
+                "{value}"
+            );
+            assert!(errors[0].message.contains("ISO-8601 date string"));
+        }
+
+        assert!(date_errors(None, &json!("2024-01-15")).is_empty());
+    }
+
+    /// Regression: every date shape passed for every picker, so an API could
+    /// store a datetime on a `timeOnly` field — which the editor's input then
+    /// blanked, and a no-op save wrote NULL. A picker accepts only a shape it
+    /// can show: a time picker a time, a month picker a month, a day or
+    /// datetime picker (the default) a date or a datetime.
+    #[test]
+    fn a_value_the_picker_cannot_show_is_rejected() {
+        let shapes = [
+            ("14:30", DateShape::Time),
+            ("14:30:15", DateShape::Time),
+            ("2024-01", DateShape::Month),
+            ("2024-01-15", DateShape::Day),
+            ("2024-01-15T09:00", DateShape::DateTime),
+            ("2024-01-15T09:00:30", DateShape::DateTime),
+            ("2024-01-15T12:00:00.000Z", DateShape::DateTime),
+        ];
+        let pickers = [
+            (None, "default"),
+            (Some(PickerAppearance::DayOnly), "dayOnly"),
+            (Some(PickerAppearance::DayAndTime), "dayAndTime"),
+            (Some(PickerAppearance::TimeOnly), "timeOnly"),
+            (Some(PickerAppearance::MonthOnly), "monthOnly"),
+        ];
+
+        for (value, shape) in shapes {
+            assert_eq!(date_shape(value), Some(shape), "{value}");
+
+            for (appearance, name) in &pickers {
+                let shown = match appearance {
+                    Some(PickerAppearance::TimeOnly) => shape == DateShape::Time,
+                    Some(PickerAppearance::MonthOnly) => shape == DateShape::Month,
+                    _ => matches!(shape, DateShape::Day | DateShape::DateTime),
+                };
+                let expected: Vec<&str> = if shown {
+                    vec![]
+                } else {
+                    vec!["validation.date_shape"]
+                };
+
+                let errors = date_errors(appearance.clone(), &json!(value));
+                assert_eq!(error_keys(&errors), expected, "{value} on {name}");
+            }
+        }
+
+        let errors = date_errors(Some(PickerAppearance::TimeOnly), &json!("2024-01-15"));
+        assert!(errors[0].message.contains("timeOnly picker"), "{errors:?}");
+    }
 
     // --- is_valid_date_format tests ---
 
@@ -417,6 +591,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("d", FieldType::Date)
                 .min_date("2024-06")
+                .picker_appearance(PickerAppearance::MonthOnly)
                 .build(),
         ];
         let mut data = DocumentFields::new();
@@ -479,6 +654,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("d", FieldType::Date)
                 .max_date("2024-06")
+                .picker_appearance(PickerAppearance::MonthOnly)
                 .build(),
         ];
         let mut data = DocumentFields::new();

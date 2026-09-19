@@ -32,6 +32,10 @@ pub(crate) struct GlobalUnpublishOptions {
     /// Run lifecycle hooks (default: `true`).
     #[lua(optional)]
     pub(crate) hooks: bool,
+    /// Emit a live-update event for this change (default: `true`). Parity
+    /// with `crap.collections.unpublish` and `crap.globals.update`.
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for GlobalUnpublishOptions {
@@ -39,6 +43,7 @@ impl Default for GlobalUnpublishOptions {
         Self {
             override_access: false,
             hooks: true,
+            events: true,
         }
     }
 }
@@ -92,12 +97,16 @@ fn globals_unpublish(
         .user(user.as_ref())
         .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .locale_config(Some(&state.locale_config))
         .lua_infra(lua_infra.as_ref())
         .build();
 
     // Shared operation body — identical semantics on every surface.
-    let doc = UnpublishGlobal::run(&ctx, UnpublishGlobalArgs::default())
+    let args = UnpublishGlobalArgs {
+        events: opts.events,
+    };
+    let doc = UnpublishGlobal::run(&ctx, args)
         .map_err(|e| RuntimeError(format!("unpublish global error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
@@ -127,4 +136,25 @@ pub(crate) fn register_globals_unpublish(
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `crap.globals.unpublish` takes the same `events` option as
+    /// `crap.collections.unpublish` and `crap.globals.update`: it used to be
+    /// rejected as an unknown key, so a quiet global unpublish was impossible.
+    #[test]
+    fn events_option_parses_and_defaults_to_true() {
+        let lua = Lua::new();
+
+        let quiet: LuaValue = lua.load("return { events = false }").eval().unwrap();
+        let opts = GlobalUnpublishOptions::from_lua(quiet, &lua).unwrap();
+        assert!(!opts.events);
+        assert!(opts.hooks, "other defaults untouched");
+
+        let absent = GlobalUnpublishOptions::from_lua(LuaValue::Nil, &lua).unwrap();
+        assert!(absent.events);
+    }
 }

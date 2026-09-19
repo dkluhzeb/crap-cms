@@ -12,9 +12,9 @@ use std::{path::Path, process};
 use anyhow::bail;
 use anyhow::{Context as _, Result};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
 #[cfg(unix)]
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::info;
 
 #[cfg(unix)]
 use crate::commands::helpers::{
@@ -23,9 +23,12 @@ use crate::commands::helpers::{
 };
 use crate::{
     cli,
-    commands::helpers::{
-        self, create_live_transports, load_and_validate_config, run_on_init_hooks,
-        spawn_shutdown_signal,
+    commands::{
+        helpers::{
+            self, create_live_transports, load_and_validate_config, run_on_init_hooks,
+            spawn_shutdown_signal,
+        },
+        serve::{PidFile, refuse_if_running},
     },
     core::{
         cache::{periodic_clear_interval, spawn_periodic_clear},
@@ -34,7 +37,7 @@ use crate::{
     },
     db::{migrate, pool},
     hooks::{self, HookRunner},
-    scheduler::{self, SchedulerParams},
+    scheduler::{self, DbTimeouts, SchedulerParams},
     service::{AppInfra, StandaloneInfra},
 };
 
@@ -163,8 +166,8 @@ pub fn status(config_dir: &Path) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if the current executable path can't be determined or
-/// the child process fails to spawn.
+/// Returns an error if the current executable path can't be determined, a
+/// worker already holds the PID file, or the child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(
     config_dir: &Path,
@@ -174,16 +177,9 @@ pub fn detach(
 ) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to determine executable path")?;
 
-    // Warn if a worker is already running
-    #[cfg(unix)]
-    if let Some(pid) = read_pid(config_dir, PID_FILENAME)
-        && is_process_running(pid)
-    {
-        warn!(
-            "Worker PID file exists with PID {} — another worker may be running",
-            pid
-        );
-    }
+    // Refused here as well as in the child: the child would refuse too, but
+    // only after its bootstrap, and this way the operator sees the error.
+    refuse_if_running(config_dir, PID_FILENAME)?;
 
     let config_dir = config_dir
         .canonicalize()
@@ -245,8 +241,9 @@ fn log_worker_config(queues: Option<&[String]>, no_cron: bool, concurrency: usiz
 ///
 /// # Errors
 ///
-/// Returns an error if config loading, Lua init, pool creation, migrations,
-/// hook initialization, or scheduler startup fails.
+/// Returns an error if a worker already holds the PID file, or config
+/// loading, Lua init, pool creation, migrations, hook initialization, or
+/// scheduler startup fails.
 #[cfg(not(tarpaulin_include))]
 pub async fn run(
     config_dir: &Path,
@@ -254,6 +251,10 @@ pub async fn run(
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
+    // Before any bootstrap work: schema sync and `on_init` hooks must not run
+    // beside a worker that is already running on this project.
+    refuse_if_running(config_dir, PID_FILENAME)?;
+
     let cfg = load_and_validate_config(config_dir)?;
 
     // Before the database is opened: schema sync and `on_init` hooks write, and
@@ -283,9 +284,6 @@ pub async fn run(
 
     let storage = create_storage_with_lease(config_dir, &cfg.upload, hook_runner.lua_lease())?;
     let email_provider = create_email_provider_with_lease(&cfg.email, hook_runner.lua_lease())?;
-
-    helpers::write_pid_file(config_dir, PID_FILENAME, process::id())?;
-    let pid_config_dir = config_dir.to_path_buf();
 
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone(), "worker");
@@ -318,15 +316,21 @@ pub async fn run(
         spawn_periodic_clear(Arc::clone(&infra.cache), every, shutdown.clone());
     }
 
+    // Claimed only now that the bootstrap succeeded: the file names this
+    // process for exactly as long as it can work, and every exit path below
+    // releases it.
+    let pid_file = PidFile::claim(config_dir, PID_FILENAME)?;
+
     scheduler::start(SchedulerParams {
         infra,
         config: jobs_config,
+        db_timeouts: DbTimeouts::new(cfg.database.busy_timeout, cfg.database.connection_timeout),
         shutdown,
         email_provider: Some(email_provider),
     })
     .await?;
 
-    helpers::remove_pid_file(&pid_config_dir, PID_FILENAME);
+    pid_file.release();
     info!("Worker stopped");
 
     Ok(())

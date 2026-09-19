@@ -20,6 +20,10 @@
 //! collisions, table-name collisions, auth-method shape, and job cron
 //! schedules.
 
+mod default_sort;
+
+pub use default_sort::validate_admin_default_sorts;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 

@@ -315,6 +315,60 @@ memories; the load-bearing ones:
   gates — **unreachable** (R15): the shared slug is rejected at definition time
   and again at startup, so the two gates can never be looked up under one name.
 
+## Appendix 3 — verified CLEAN (skip in the next lens; re-check only when the code moves)
+
+Each convergence lens ends with a CLEAN list. Re-verifying those areas the
+next round is where most of a round's reading goes, so they are recorded
+here per round; a lens prompt carries the instruction to skip them unless the
+files changed since. Entries are dropped when the area is touched.
+
+- **R18 (2026-09-19, commit b86a3f9e)**
+  - *Atomicity:* pool write envelope (`service/orchestrate.rs`) release-
+    before-effects on both paths; scoped Lua tx per-tx queues handed up only
+    on commit; upload `CleanupGuard` key coverage and in-tx dropped-key diff;
+    S3/local storage put/get/delete status checks, temp+fsync+rename; image-
+    convert job idempotent re-encode + source-URL guard; job queries CAS on
+    `(running, attempt)`; scheduler non-clean outcomes all leave `running`;
+    bulk runs `max_attempts = 1`; delete paths resolve files in-tx, delete
+    post-commit; `create_version_and_prune` lock→insert→prune; migrations
+    one IMMEDIATE tx under the advisory lock, gates stamped with their work,
+    idempotent re-run, FK window restored or boot fails; verification email
+    minted on the account's tx; login limiters fail closed; backup/restore
+    staging; VM pool RAII; serve shutdown drains.
+  - *Config/ops:* duration/filesize parsing edge cases; numeric-knob
+    validation pin; ports, trust_proxy, CORS, MCP key, Redis-implies-secret,
+    rate-limit prefix overlap, VM pool clamp; locale validation (except the
+    case-insensitive collision fixed this round); env substitution skips
+    comments; secret file locking/mode/staging; alpha.9→alpha.10 migration
+    idempotency and backend split; guide Actions 27/31/33/34/46/49 checked
+    for substance; backup/restore/migrate fresh/db cleanup/console gates and
+    locks; secret-bearing newtypes redact over Debug+Serialize, no log line
+    prints a secret; instance lock semantics for serve/work/mcp/CLI.
+  - *Round-trip:* one encode/decode for columns (`encode.rs`); checkbox
+    truthiness one rule; empty string → NULL uniform; number spellings and
+    non-finite rejection; has-many scalar canonical JSON at every ingress;
+    date grammar parity validator↔normalizer, tz companion, DST rejection;
+    text/email canonical form at every depth; relationship id shapes;
+    select unlisted tolerance; upload `sizes` folded once; gRPC and Lua
+    codecs round-trip (documented non-identities pinned); companions in
+    nested rows.
+  - *Lua API:* sandbox removals and chunk names; limits armed on every entry
+    point (coroutine hole fixed this round); strict unknown-key rejection on
+    every option table; hook-return interpretation per docs for every hook
+    kind; access-rule verdicts and constraint grammar; CRUD availability/tx
+    model, hook-depth guard; init-phase gating; docs↔code parity for the
+    namespace pages listed in the R18 report.
+  - *Admin UI:* CSRF coverage of every mutating route, double-submit
+    constant-time; auth chain and admin gates fail closed; session cookie
+    flags, refresh checks, no fixation; MFA pending token lifetimes, TOTP
+    URI encoding; XFF only from trusted proxies; static assets (no traversal,
+    ETag, `no-store` on HTML); dev mode scope; every triple-stash escaped,
+    JS `h()` builder; i18n keys resolve (JS-list drift fixed this round);
+    form error re-render preserves values, never echoes password; list
+    pagination/sort/filter validation (`_status` fixed this round); search
+    endpoint access + locale; dashboard per-collection cost; htmx partial
+    contract for GET navigation; multipart lifecycle.
+
 ## Maintenance
 
 - Rows are **append-only**; a class is never deleted, only upgraded to
@@ -1108,6 +1162,73 @@ memories; the load-bearing ones:
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-19 (28) — **CONVERGENCE ROUND 18** (5 fresh lenses: per-field-type
+  round-trip fidelity across surfaces, failure atomicity & resource cleanup,
+  the Lua API contract, the admin UI server side, configuration/operations/
+  upgrade). **~40 confirmed — 3 HIGH, 12 MED, ~25 LOW — NOT a quiet round;
+  no new class.** Two lenses (atomicity, ops) came back with no HIGH and
+  long CLEAN lists; the round-trip and Lua lenses did not.
+  - **F9/D4 — admin logout never revoked the session.** `/admin/logout` sat
+    on the base router, the auth middleware is layered only on the protected
+    sub-router, so the handler's optional principal was always absent and
+    the documented `_session_version` bump never ran; a captured JWT stayed
+    valid until `exp`. The ledger's own F9 anchor named a structural test
+    that did not exist — the guard row was a doc comment. Fixed + the real
+    scan added.
+  - **M6/F16 — a coroutine escaped the instruction limit.** mlua's
+    per-thread hook uninstalls itself on a thread it has no callback for,
+    and a new coroutine inherits the parent's hook pointer; `coroutine` sat
+    on the reviewed-safe allowlist. Global hook now.
+  - **M2/D1 — checkbox and `json` read shapes depended on nesting** (column
+    `1` vs nested `true`; string vs parsed vs as-sent) while every generated
+    contract promised one shape. Unified at the one decode chokepoint;
+    client-visible, guide items 50/51.
+  - **L12 — two blocking-on-async / pool-discipline sites survived R17's
+    guard**: the scoped Lua tx held its write-pool slot across effects, and
+    the scheduler's heartbeat arm wrote through a READ-pool connection in
+    autocommit — the R17 guard keyed on `transaction_immediate` only.
+  - **S4/S2/S3 — validators with a type hole**: Date accepted any non-string
+    silently; text fields only rejected wrong types when a length bound
+    existed; an empty Lua table (`{}` → `Object`) could not clear a has-many
+    list; `list_runs` `.ok()`'d wrong-typed options; validator/live-filter
+    returns of unexpected types were interpreted in opposite directions.
+  - **P2/L17 — siblings**: `trash purge` without the confirmation gate its
+    twins have; `page_with_toast` without the partial-render decision
+    `render_page` got; the admin lock action run unconditionally after the
+    document commit; `_status` sortable on collections that have no column.
+  - Lessons: (1) a dependency's *threading model* (Lua coroutines vs mlua's
+    per-thread hook) is a D10 instance the sandbox allowlist review cannot
+    see — audit what a "safe" global can spawn; (2) a guard anchored on a
+    test NAME must be pinned by existence (D4 now covers "anchor test
+    missing"); (3) a wire-shape contract (typegen, MCP schema, docs) needs a
+    pin against the actual decode at every nesting depth, not the top level.
+    Post-fix review of this round's diff (2 Sonnet lenses over ~130 changed
+    files): 2 HIGH, 1 MED — all fixed, plus the ~25 test expectations the
+    boolean/JSON read-shape change and the seconds-preserving date renderer
+    invalidated. The HIGHs were both blind-edit regressions of the round's
+    own fixes: the new snapshot decoder (`read/decode.rs`) decoded only flat
+    top-level keys, so a group's nested values and every blocks row in an
+    old-form version snapshot stayed `1`/text — the round's own test for
+    that case would have caught it on the first run; and the admin lock fix
+    moved the account action BEFORE the document write, so a save that then
+    failed (unique clash, hook error) had already locked or unlocked the
+    account — mirror image of the bug it replaced. Fixed by splitting the
+    account-action chokepoint into its access half (run before the write)
+    and the mutation (run after it lands). The MED: two CLI doc notes
+    inserted mid-table. The new clap-parity pin for the MCP `cli_reference`
+    tool found the hand-curated copy 34 items behind (7 `make` subcommands,
+    4 `user`, 3 `templates`, `jobs cancel`, ~19 flags) — the tool is now
+    generated from the clap tree, killing that D1 instance rather than
+    refilling the copy. Lesson (same as R17): a blind-written fix that adds
+    a test cannot be trusted until the test has RUN once; the coordinator's
+    first full run is part of the fix, not of the gate.
+    Gates (2026-09-19): clippy `--all-targets --all-features -D warnings`
+    clean; unit ~5,930 + integration ~1,780 + macros/xtask + doctests green
+    (every failure of the first run was a pinned expectation of the old read
+    shape, retargeted); e2e 322 green; all five `gen-*` checks and `fmt
+    --check` clean. Postgres harness NOT run (no `TEST_DATABASE_URL`).
+    `upload.rs` tests split into `upload/tests/{support,lifecycle,publish}`.
+    Streak: 0 quiet rounds.
 - 2026-09-16 (27) — **CONVERGENCE ROUND 17** (5 fresh lenses: the new
   draft/publish/file state machine, dependency error modes and defaults,
   guard-the-guards / test quality, Postgres-only behaviour since R11, the

@@ -16,7 +16,7 @@ use crate::{
             collections::shared::{SubmittedMeta, WriteErrorParams, handle_collection_write_error},
             forms::{FormData, parse_form},
             shared::{
-                get_user_doc, htmx_inline_created, htmx_redirect_with_created,
+                HxNav, get_user_doc, htmx_inline_created, htmx_redirect_with_created,
                 parse_request_locale, paths, redirect_response, toast_only_error,
             },
         },
@@ -181,6 +181,7 @@ pub async fn create_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
+    hx: HxNav,
     request: Request,
 ) -> Response {
     let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
@@ -269,6 +270,7 @@ pub async fn create_action(
                 doc_id: None,
                 auth_user: auth_user.as_ref(),
                 meta: SubmittedMeta::new(submitted_locale.as_deref(), None),
+                hx,
             })
             .await
         }

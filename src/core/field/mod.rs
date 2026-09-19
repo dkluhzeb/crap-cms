@@ -8,6 +8,7 @@ mod field_type;
 mod localized_string;
 mod relationship;
 mod select_option;
+mod storage;
 
 pub use admin::{
     FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldWidth, validate_template_name,

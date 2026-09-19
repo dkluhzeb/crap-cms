@@ -14,6 +14,23 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
     }
 }
 
+/// Whether `key` names a system column the collection's table actually has —
+/// the SINGLE source of truth, shared by the sort gate below, the list-view
+/// header/column resolver and the saved column preferences.
+///
+/// `_status` exists only on a collection that keeps drafts. Accepting it
+/// unconditionally let `?sort=_status` and a saved `_status` column through to
+/// SQL naming a column that was never created, which answers 500 instead of
+/// the 400 an unknown key owes.
+#[must_use]
+pub(crate) fn is_meta_column(key: &str, def: &CollectionDefinition) -> bool {
+    match key {
+        "created_at" | "updated_at" => true,
+        "_status" => def.has_drafts(),
+        _ => false,
+    }
+}
+
 /// Whether `key` may be sorted on — the SINGLE source of truth for
 /// sortability, shared by [`validate_sort`] (which rejects a bad
 /// `?sort=`) and the list-view column builder (which decides whether to
@@ -21,10 +38,13 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
 /// column-eligible but has no parent column, so it is NOT sortable —
 /// rendering a sort header for it produced a 400 on click when the two
 /// predicates disagreed.
+///
+/// `id` is sortable but is not a *column* the list view offers, so it sits
+/// here rather than in [`is_meta_column`].
 #[must_use]
 pub(crate) fn is_sortable_column(key: &str, def: &CollectionDefinition) -> bool {
-    const SYSTEM_COLS: [&str; 4] = ["id", "created_at", "updated_at", "_status"];
-    SYSTEM_COLS.contains(&key)
+    key == "id"
+        || is_meta_column(key, def)
         || def
             .fields
             .iter()
@@ -51,7 +71,7 @@ pub(crate) fn is_column_eligible(field_type: &FieldType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{collection::CollectionDefinition, field::FieldDefinition};
+    use crate::core::{VersionsConfig, collection::CollectionDefinition, field::FieldDefinition};
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -84,6 +104,36 @@ mod tests {
             validate_sort("-created_at", &def),
             Some("-created_at".to_string())
         );
+    }
+
+    /// Regression: `_status` is a column only on a collection that keeps
+    /// drafts. Sorting by it elsewhere reached SQL naming a column the table
+    /// never had — a 500 where an unknown sort key owes a 400.
+    #[test]
+    fn validate_sort_status_needs_drafts() {
+        let def = test_def();
+        assert_eq!(validate_sort("_status", &def), None, "no drafts, no column");
+        assert!(!is_meta_column("_status", &def));
+
+        let mut with_drafts = test_def();
+        with_drafts.versions = Some(VersionsConfig::new(true, 10));
+        assert_eq!(
+            validate_sort("-_status", &with_drafts),
+            Some("-_status".to_string())
+        );
+        assert!(is_meta_column("_status", &with_drafts));
+    }
+
+    /// The timestamp columns exist on every collection; `id` is sortable but
+    /// is not a list column.
+    #[test]
+    fn meta_columns_are_the_timestamps() {
+        let def = test_def();
+        assert!(is_meta_column("created_at", &def));
+        assert!(is_meta_column("updated_at", &def));
+        assert!(!is_meta_column("id", &def));
+        assert!(is_sortable_column("id", &def));
+        assert!(!is_meta_column("title", &def));
     }
 
     #[test]

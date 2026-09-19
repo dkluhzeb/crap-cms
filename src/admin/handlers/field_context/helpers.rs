@@ -203,7 +203,8 @@ pub fn date_picker_values(
 }
 
 /// A display date cut to what a picker of `appearance` shows: the date for
-/// `dayOnly`, the date and time for `dayAndTime`, neither otherwise.
+/// `dayOnly`, the date and time for `dayAndTime` — with the seconds when the
+/// value carries any, so a save re-submits what is stored — neither otherwise.
 ///
 /// `timeOnly` and `monthOnly` deliberately cut to neither: their inputs render
 /// the stored value as it is, and only `dayAndTime` may carry a zone at all
@@ -212,8 +213,41 @@ pub fn date_picker_values(
 fn cut_to_appearance(display: &str, appearance: &str) -> (Option<String>, Option<String>) {
     match appearance {
         "dayOnly" => (Some(display.get(..10).unwrap_or(display).to_string()), None),
-        "dayAndTime" => (None, Some(display.get(..16).unwrap_or(display).to_string())),
+        "dayAndTime" => (None, Some(datetime_local_value(display))),
         _ => (None, None),
+    }
+}
+
+/// A display datetime as `<input type="datetime-local">` takes it:
+/// `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS` when the seconds are not zero.
+fn datetime_local_value(display: &str) -> String {
+    let keeps_seconds = display
+        .get(16..19)
+        .is_some_and(|s| s.starts_with(':') && s != ":00");
+    let end = if keeps_seconds { 19 } else { 16 };
+
+    display.get(..end).unwrap_or(display).to_string()
+}
+
+/// The `step` a time-carrying input needs to show and re-submit the seconds
+/// its value carries — `"1"` when it carries any, `None` otherwise. Without it
+/// the browser drops the seconds, and a save with nothing changed stores a
+/// different value.
+fn seconds_step(value: &str) -> Option<String> {
+    (value.split(':').count() >= 3).then(|| "1".to_string())
+}
+
+/// The `step` a picker of `appearance` needs for a stored date: `"1"` for a
+/// `dayAndTime` value shown with its seconds or a `timeOnly` value that has
+/// seconds at all, `None` otherwise.
+pub fn picker_step(stored: &str, tz: &str, appearance: &str) -> Option<String> {
+    match appearance {
+        "dayAndTime" => date_picker_values(stored, tz, appearance)
+            .1
+            .as_deref()
+            .and_then(seconds_step),
+        "timeOnly" => seconds_step(stored),
+        _ => None,
     }
 }
 
@@ -222,19 +256,41 @@ fn cut_to_appearance(display: &str, appearance: &str) -> (Option<String>, Option
 pub fn set_date_picker_values(df: &mut DateField, stored: &str, tz: &str) {
     let values = date_picker_values(stored, tz, &df.picker_appearance);
     apply_picker_values(df, values);
+
+    if df.picker_appearance == "timeOnly" {
+        df.step = seconds_step(stored);
+    }
 }
 
 /// Write picker values into `df`, leaving a value the appearance doesn't show
-/// (`None`) as it is.
+/// (`None`) as it is. A datetime shown with its seconds sets the `step` that
+/// keeps them.
 fn apply_picker_values(df: &mut DateField, values: (Option<String>, Option<String>)) {
     let (date_only, datetime_local) = values;
 
     if date_only.is_some() {
         df.date_only_value = date_only;
     }
-    if datetime_local.is_some() {
-        df.datetime_local_value = datetime_local;
+    if let Some(datetime_local) = datetime_local {
+        df.step = seconds_step(&datetime_local);
+        df.datetime_local_value = Some(datetime_local);
     }
+}
+
+/// The text a JSON field's textarea shows for a stored value: JSON text
+/// pretty-printed, so an object or list reads as one; any other text as it is.
+/// The write parses the text back, so a save with nothing changed stores the
+/// same value.
+pub fn json_textarea_value(text: &str) -> String {
+    let Ok(value) = from_str::<Value>(text) else {
+        return text.to_string();
+    };
+
+    if !matches!(value, Value::Object(_) | Value::Array(_)) {
+        return text.to_string();
+    }
+
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| text.to_string())
 }
 
 /// Inject stored language picks and the picker allow-list into code sub-field
@@ -956,6 +1012,81 @@ mod tests {
             Some("2026-01-15T14:00")
         );
         assert_eq!(day_time.date_only_value, None);
+    }
+
+    /// Regression: a `dayAndTime` value stored with seconds was shown cut to
+    /// the minute, so a save with nothing changed dropped the seconds. The
+    /// picker shows the seconds — with the `step` that makes the browser keep
+    /// them — when they are not zero, and a `timeOnly` value keeps whatever
+    /// seconds it has; a value without seconds shows as before.
+    #[test]
+    fn a_stored_value_with_seconds_is_shown_with_them() {
+        assert_eq!(
+            date_picker_values("2026-01-15T14:30:45.000Z", "", "dayAndTime"),
+            (None, Some("2026-01-15T14:30:45".to_string()))
+        );
+        assert_eq!(
+            picker_step("2026-01-15T14:30:45.000Z", "", "dayAndTime").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            date_picker_values("2026-01-15T14:30:00.000Z", "", "dayAndTime"),
+            (None, Some("2026-01-15T14:30".to_string()))
+        );
+        assert_eq!(
+            picker_step("2026-01-15T14:30:00.000Z", "", "dayAndTime"),
+            None
+        );
+
+        // In a zone: Tokyo is UTC+9, the seconds survive the conversion.
+        assert_eq!(
+            date_picker_values("2026-01-15T14:30:45.000Z", "Asia/Tokyo", "dayAndTime"),
+            (None, Some("2026-01-15T23:30:45".to_string()))
+        );
+        assert_eq!(
+            picker_step("2026-01-15T14:30:45.000Z", "Asia/Tokyo", "dayAndTime").as_deref(),
+            Some("1")
+        );
+
+        assert_eq!(
+            picker_step("14:30:15", "", "timeOnly").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            picker_step("14:30:00", "", "timeOnly").as_deref(),
+            Some("1")
+        );
+        assert_eq!(picker_step("14:30", "", "timeOnly"), None);
+        assert_eq!(picker_step("2026-01", "", "monthOnly"), None);
+        assert_eq!(picker_step("2026-01-15T14:30:45.000Z", "", "dayOnly"), None);
+
+        let mut df = picker("timeOnly", None, None);
+        set_date_picker_values(&mut df, "14:30:15", "");
+        assert_eq!(df.step.as_deref(), Some("1"));
+
+        let mut df = picker("dayAndTime", None, None);
+        set_date_picker_values(&mut df, "2026-01-15T14:30:45.000Z", "");
+        assert_eq!(
+            df.datetime_local_value.as_deref(),
+            Some("2026-01-15T14:30:45")
+        );
+        assert_eq!(df.step.as_deref(), Some("1"));
+    }
+
+    /// The JSON textarea shows a stored object or list pretty-printed and any
+    /// other text as it is; the pretty text parses back to the same value.
+    #[test]
+    fn json_textarea_shows_json_pretty_printed() {
+        let pretty = json_textarea_value(r#"{"n":[1,2]}"#);
+        assert_eq!(pretty, "{\n  \"n\": [\n    1,\n    2\n  ]\n}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&pretty).unwrap(),
+            json!({ "n": [1, 2] })
+        );
+
+        assert_eq!(json_textarea_value("not json"), "not json");
+        assert_eq!(json_textarea_value("42"), "42");
+        assert_eq!(json_textarea_value(""), "");
     }
 
     /// A stored UTC instant shows in its zone, cut to the picker's appearance;

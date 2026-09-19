@@ -6,8 +6,11 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use regex::Regex;
 
-static ENV_VAR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("env var regex"));
+/// A placeholder to expand (`inner`), or one escaped with a second `$` that
+/// stays in the value literally, minus the escaping `$` (`escaped`).
+static ENV_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$(?P<escaped>\$\{[^}]*\})|\$\{(?P<inner>[^}]+)\}").expect("env var regex")
+});
 
 /// Recursively walk a TOML `Value` tree and substitute `${VAR}` / `${VAR:-default}`
 /// in all `String` nodes. Tables and arrays are descended into; other types are untouched.
@@ -35,6 +38,8 @@ pub(crate) fn substitute_in_value(value: &mut toml::Value) -> Result<()> {
 ///
 /// - `${VAR}` — replaced with the value of `VAR`. Returns an error if `VAR` is unset.
 /// - `${VAR:-fallback}` — replaced with `VAR` if set and non-empty, otherwise `fallback`.
+/// - `$${...}` — a literal `${...}`, not substituted (for values that contain
+///   the placeholder syntax themselves, such as a password with `${` in it).
 pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
     let mut result = String::with_capacity(input.len());
     let mut last_end = 0;
@@ -44,22 +49,10 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
 
         result.push_str(&input[last_end..full_match.start()]);
 
-        let inner = &cap[1];
-
-        if let Some((var_name, default_val)) = inner.split_once(":-") {
-            match env::var(var_name) {
-                Ok(val) if !val.is_empty() => result.push_str(&val),
-                _ => result.push_str(default_val),
-            }
+        if let Some(escaped) = cap.name("escaped") {
+            result.push_str(escaped.as_str());
         } else {
-            let val = env::var(inner).with_context(|| {
-                format!(
-                    "Environment variable '{inner}' referenced in crap.toml is not set \
-                     (use ${{{inner}:-default}} for a fallback)"
-                )
-            })?;
-
-            result.push_str(&val);
+            result.push_str(&expand_placeholder(&cap["inner"])?);
         }
 
         last_end = full_match.end();
@@ -68,6 +61,23 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
     result.push_str(&input[last_end..]);
 
     Ok(result)
+}
+
+/// The value of one `VAR` / `VAR:-default` placeholder body.
+fn expand_placeholder(inner: &str) -> Result<String> {
+    if let Some((var_name, default_val)) = inner.split_once(":-") {
+        return Ok(match env::var(var_name) {
+            Ok(val) if !val.is_empty() => val,
+            _ => default_val.to_string(),
+        });
+    }
+
+    env::var(inner).with_context(|| {
+        format!(
+            "Environment variable '{inner}' referenced in crap.toml is not set \
+             (use ${{{inner}:-default}} for a fallback, or $${{{inner}}} for a literal)"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -151,6 +161,51 @@ mod tests {
         assert_eq!(result, "hello world");
         unsafe { remove_env("CRAP_TEST_A") };
         unsafe { remove_env("CRAP_TEST_B") };
+    }
+
+    /// Regression: there was no way to keep a literal `${...}` in a value —
+    /// `pa${ss}word` failed with "Environment variable 'ss' is not set".
+    /// A doubled `$` escapes the placeholder.
+    #[test]
+    fn env_subst_escaped_placeholder_stays_literal() {
+        let _guard = env_lock();
+
+        unsafe { remove_env("CRAP_TEST_ESC") };
+        let result = substitute_env_vars("pass = \"pa$${CRAP_TEST_ESC}word\"").unwrap();
+        assert_eq!(result, "pass = \"pa${CRAP_TEST_ESC}word\"");
+
+        let result = substitute_env_vars("$${CRAP_TEST_ESC:-x} $${}").unwrap();
+        assert_eq!(result, "${CRAP_TEST_ESC:-x} ${}");
+    }
+
+    /// An escaped placeholder next to a real one leaves the real one expanded.
+    #[test]
+    fn env_subst_escape_does_not_disable_neighbouring_placeholders() {
+        let _guard = env_lock();
+
+        unsafe { set_env("CRAP_TEST_ESC_REAL", "value") };
+        let result =
+            substitute_env_vars("$${CRAP_TEST_ESC_REAL} ${CRAP_TEST_ESC_REAL} $${x}").unwrap();
+        assert_eq!(result, "${CRAP_TEST_ESC_REAL} value ${x}");
+        unsafe { remove_env("CRAP_TEST_ESC_REAL") };
+    }
+
+    /// The escape works through the real config load, where it matters.
+    #[test]
+    fn env_subst_escape_in_toml_load() {
+        let _guard = env_lock();
+
+        unsafe { remove_env("CRAP_TEST_ESC_LOAD") };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[email]\nsmtp_host = \"pa$${CRAP_TEST_ESC_LOAD}word\"\n",
+        )
+        .unwrap();
+
+        let config = CrapConfig::load(tmp.path()).unwrap();
+
+        assert_eq!(config.email.smtp_host, "pa${CRAP_TEST_ESC_LOAD}word");
     }
 
     #[test]

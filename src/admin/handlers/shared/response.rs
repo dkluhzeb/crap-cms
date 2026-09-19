@@ -115,13 +115,7 @@ pub async fn render_page<T: Serialize>(
     template: &str,
     ctx: &T,
 ) -> Response {
-    let mut data = to_value(ctx).expect("admin page context serializes infallibly");
-
-    if req.hx.partial
-        && let Some(obj) = data.as_object_mut()
-    {
-        obj.insert("htmx_partial".to_string(), Value::Bool(true));
-    }
+    let data = page_data(ctx, req.hx);
 
     let Some(crud) = render_access(state, req.user) else {
         return render_or_error(state, template, &data);
@@ -207,6 +201,25 @@ async fn render_blocking(
             Err(RenderFailure::TaskDied)
         }
     }
+}
+
+/// The page context as the renderer sees it: the serialized struct, plus the
+/// `htmx_partial` flag when the request is an htmx navigation into `#main`.
+///
+/// The one place that decision is made. A second render helper deciding it by
+/// hand is how an htmx form submit that failed validation came back as a whole
+/// document — swapped into `#main`, it nested the shell (a second `<html>`, a
+/// second set of component singletons) inside the page.
+fn page_data<T: Serialize>(ctx: &T, hx: HxNav) -> Value {
+    let mut data = to_value(ctx).expect("admin page context serializes infallibly");
+
+    if hx.partial
+        && let Some(obj) = data.as_object_mut()
+    {
+        obj.insert("htmx_partial".to_string(), Value::Bool(true));
+    }
+
+    data
 }
 
 /// Render an unauthenticated page (login, forgot/reset password, MFA).
@@ -341,16 +354,20 @@ fn percent_encode_header(s: &str) -> String {
 /// Render a typed page context with an `X-Crap-Toast` header attached for
 /// client-side notification. The typed context is serialized + run through
 /// the `before_render` hook before rendering.
+///
+/// Takes the same [`PageRequest`] as [`render_page`]: this is the response to
+/// a form submit, which htmx issues against `#main` exactly like a navigation,
+/// so it owes the same fragment.
 pub async fn page_with_toast<T: Serialize>(
     state: &AdminState,
-    user: Option<&Extension<AuthUser>>,
+    req: PageRequest<'_>,
     template: &str,
     ctx: &T,
     toast: &str,
 ) -> Response {
-    let data = to_value(ctx).expect("page context serializes infallibly");
+    let data = page_data(ctx, req.hx);
 
-    let Some(crud) = render_access(state, user) else {
+    let Some(crud) = render_access(state, req.user) else {
         return html_with_toast(state, template, &data, toast);
     };
 
@@ -660,6 +677,39 @@ mod tests {
             "denied",
         );
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Regression: an htmx navigation gets the fragment flag, a plain request
+    /// does not — and both page renders read it from here, so the toast path
+    /// can no longer answer a fragment target with a whole document.
+    #[test]
+    fn the_partial_flag_follows_the_navigation_intent() {
+        let ctx = json!({ "page": { "title": "edit" } });
+        let flag = ["htmx", "_partial"].concat();
+
+        let full = page_data(&ctx, HxNav { partial: false });
+        assert!(full.get(&flag).is_none(), "a plain request gets no flag");
+
+        let partial = page_data(&ctx, HxNav { partial: true });
+        assert_eq!(partial[&flag], Value::Bool(true));
+    }
+
+    /// Pin the chokepoint: every page-rendering entry point takes the request's
+    /// navigation intent. `render_auth_page` is deliberately absent — the
+    /// unauthenticated pages are never htmx fragments.
+    #[test]
+    fn every_page_render_takes_the_navigation_intent() {
+        let src = include_str!("response.rs");
+
+        for entry in ["pub async fn render_page", "pub async fn page_with_toast"] {
+            let after = src.split(entry).nth(1).expect(entry);
+            let signature = after.split(") -> Response").next().expect("signature");
+
+            assert!(
+                signature.contains("PageRequest"),
+                "{entry} must take the request's navigation intent"
+            );
+        }
     }
 
     /// An access denial still maps to 403.

@@ -15,9 +15,9 @@ use crate::commands::helpers::{
     STOP_DEADLINE_SOURCE, force_kill, send_signal, stop_deadline, wait_for_exit,
 };
 
-use super::pid::write_pid_file;
 #[cfg(unix)]
-use super::pid::{check_existing_pid, is_process_running, read_pid, remove_pid_file};
+use super::pid::{is_process_running, read_pid, remove_pid_file};
+use super::pid::{refuse_if_server_running, write_pid_file};
 use super::startup::{ServeMode, validate_config_dir};
 
 /// Build the argument vector for the re-exec'd detached child.
@@ -66,7 +66,8 @@ fn detach_child_args(
 /// # Errors
 ///
 /// Returns an error if the executable path can't be determined, the config
-/// directory is invalid, or the child process fails to spawn.
+/// directory is invalid, an instance already holds the PID file, or the
+/// child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(
     config_dir: &Path,
@@ -82,8 +83,9 @@ pub fn detach(
 
     validate_config_dir(&config_dir)?;
 
-    #[cfg(unix)]
-    check_existing_pid(&config_dir);
+    // Refused here as well as in the child: the child would refuse too, but
+    // only after its bootstrap, and this way the operator sees the error.
+    refuse_if_server_running(&config_dir)?;
 
     let mut cmd = process::Command::new(&exe);
 

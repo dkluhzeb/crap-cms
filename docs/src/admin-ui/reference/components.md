@@ -287,7 +287,7 @@ block-call syntax and reference the slot via `{{> @partial-block }}`.
 
 | Layout              | Role                                                                  |
 | ------------------- | --------------------------------------------------------------------- |
-| `layout/base.hbs`   | Authenticated admin chrome: head + sidebar + header + main slot. Contains the `{{#if htmx_partial}}` branch that serves partial navigations (`#main` swaps) — overrides must keep it |
+| `layout/base.hbs`   | Authenticated admin chrome: head + sidebar + header + main slot. Contains the `{{#if htmx_partial}}` branch that serves partial navigations (`#main` swaps) and the re-render of a form whose server-side write failed — overrides must keep it |
 | `layout/auth.hbs`   | Unauthenticated chrome: head + auth-card + slot for the form/content  |
 | `layout/header.hbs` | Page header partial rendered by `base.hbs`                            |
 | `layout/sidebar.hbs`| Left navigation rendered by `base.hbs`                                |

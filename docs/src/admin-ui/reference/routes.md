@@ -84,7 +84,12 @@ when the user is about to be logged out by token expiry.
 - **Authentication required.** The handler reads `Claims` from
   request extensions (populated by the admin auth middleware), so
   an unauthenticated request returns `401 Unauthorized`. CSRF is
-  enforced via the `X-CSRF-Token` header / `crap_csrf` cookie.
+  enforced via the `X-CSRF-Token` header / `crap_csrf` cookie: a mutating
+  request whose cookie is missing or empty is refused with 403 and the
+  response carries a fresh cookie, so the next submit works without a
+  reload; a URL-encoded body over 2 MiB answers 413; an `Authorization:
+  Bearer` header skips the CSRF check only when it carries a non-empty
+  token.
 - **Re-validates the user before reissuing.** Checks that the user
   still exists, is not `_locked`, and that the token's
   `session_version` matches the current value in the auth

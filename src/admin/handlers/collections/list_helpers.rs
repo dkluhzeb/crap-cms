@@ -6,7 +6,7 @@
 use crate::{
     admin::handlers::shared::{
         ListUrlContext, auto_label_from_name, date_picker_values, is_column_eligible,
-        is_sortable_column, tag_values_of, url_decode,
+        is_meta_column, is_sortable_column, tag_values_of, url_decode,
     },
     core::{
         FieldDefinition, FieldType, collection::CollectionDefinition, document::Document,
@@ -32,11 +32,12 @@ pub(super) fn resolve_columns(
     user_cols: Option<&[String]>,
     url_ctx: &ListUrlContext,
 ) -> Vec<Value> {
-    // Keep only columns that exist: a meta column or an eligible field.
+    // Keep only columns that exist: a meta column this collection actually
+    // has, or an eligible field.
     let valid = |cols: &[String]| -> Vec<String> {
         cols.iter()
             .filter(|k| {
-                matches!(k.as_str(), "created_at" | "updated_at" | "_status")
+                is_meta_column(k.as_str(), def)
                     || def
                         .fields
                         .iter()
@@ -577,6 +578,31 @@ mod tests {
             serde_json::json!(true),
             "a scalar number column stays sortable"
         );
+    }
+
+    /// Regression: `_status` is a column only on a collection that keeps
+    /// drafts. Rendering the header elsewhere offered a sort link against a
+    /// column the table never had.
+    #[test]
+    fn resolve_columns_drops_status_without_drafts() {
+        let def = test_collection();
+        let user_cols = vec!["_status".to_string(), "views".to_string()];
+
+        let keys: Vec<String> = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None))
+            .iter()
+            .filter_map(|c| c["key"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(keys, vec!["views".to_string()]);
+
+        let mut with_drafts = test_collection();
+        with_drafts.versions = Some(VersionsConfig::new(true, 10));
+
+        let keys: Vec<String> =
+            resolve_columns(&with_drafts, Some(&user_cols), &test_url_ctx(None))
+                .iter()
+                .filter_map(|c| c["key"].as_str().map(str::to_string))
+                .collect();
+        assert_eq!(keys, vec!["_status".to_string(), "views".to_string()]);
     }
 
     #[test]

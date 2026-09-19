@@ -177,7 +177,7 @@ impl Drop for VmGuard<'_> {
 
         match self.pool.inner.lock() {
             Ok(mut inner) => {
-                vm.remove_hook();
+                vm.remove_global_hook();
                 inner.idle.push(vm);
                 self.pool.available.notify_one();
             }
@@ -211,6 +211,14 @@ pub(crate) fn reset_instruction_budget(vm: &Lua) {
 /// Set an instruction-counting hook on the VM if `MaxInstructions` is
 /// configured.
 ///
+/// The hook is the VM's **global** hook, not a per-thread one. A per-thread
+/// hook is looked up by thread on every trigger and uninstalls itself on a
+/// miss — and a coroutine is a new thread that inherits the parent's hook
+/// pointer, so `coroutine.wrap(function() while true do end end)()` inside
+/// a hook would run with no ceiling, never return the lease, and starve the
+/// pool. The global hook reads its callback from VM-wide state, so every
+/// thread — main or coroutine — counts against the one shared budget.
+///
 /// The install error is propagated: a swallowed one leaves the VM running
 /// without the ceiling, and nothing downstream would notice.
 fn set_instruction_hook(vm: &Lua) -> LuaResult<()> {
@@ -223,7 +231,7 @@ fn set_instruction_hook(vm: &Lua) -> LuaResult<()> {
     let counter = Arc::new(AtomicU64::new(0));
     vm.set_app_data(InstructionCounter(counter.clone()));
 
-    vm.set_hook(
+    vm.set_global_hook(
         HookTriggers::new().every_nth_instruction(10_000),
         move |_lua, _debug| {
             let count = counter.fetch_add(10_000, Ordering::Relaxed);
@@ -414,6 +422,74 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("instruction limit"), "unexpected error: {err}");
+    }
+
+    /// A coroutine is a new Lua thread. The budget must follow it: a loop
+    /// spinning inside `coroutine.wrap` hits the ceiling instead of running
+    /// forever with the lease never returned.
+    #[test]
+    fn instruction_limit_applies_inside_a_wrapped_coroutine() {
+        let pool = make_pool_with_instruction_limit(1, 50_000);
+        let guard = pool.acquire().expect("should acquire VM");
+
+        let err = guard
+            .load("coroutine.wrap(function() while true do end end)()")
+            .exec()
+            .expect_err("a coroutine must not escape the instruction limit");
+
+        assert!(
+            err.to_string().contains("instruction limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Same ceiling for `coroutine.create` + `coroutine.resume`: the resume
+    /// reports the limit error instead of never returning.
+    #[test]
+    fn instruction_limit_applies_inside_a_resumed_coroutine() {
+        let pool = make_pool_with_instruction_limit(1, 50_000);
+        let guard = pool.acquire().expect("should acquire VM");
+
+        let err = guard
+            .load(
+                r#"
+                local co = coroutine.create(function() while true do end end)
+                local ok, err = coroutine.resume(co)
+                assert(not ok, "the coroutine ran to completion without a ceiling")
+                error(err, 0)
+                "#,
+            )
+            .exec()
+            .expect_err("a resumed coroutine must not escape the instruction limit");
+
+        assert!(
+            err.to_string().contains("instruction limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The budget is shared across threads: work done inside a coroutine
+    /// counts against the same lease budget as the main thread.
+    #[test]
+    fn coroutine_work_counts_against_the_shared_budget() {
+        let pool = make_pool_with_instruction_limit(1, 200_000);
+        let guard = pool.acquire().expect("should acquire VM");
+        let burn_in_coroutine = r"
+            coroutine.wrap(function()
+                local x = 0
+                for i = 1, 20000 do x = x + 1 end
+            end)()
+        ";
+
+        let mut fitted = 0;
+        while guard.load(burn_in_coroutine).exec().is_ok() {
+            fitted += 1;
+            assert!(
+                fitted < 100,
+                "coroutine work never tripped the shared budget"
+            );
+        }
+        assert!(fitted >= 1, "a single coroutine burst must fit on its own");
     }
 
     /// The budget is per lease; a Rust-driven batch loop re-arms it per

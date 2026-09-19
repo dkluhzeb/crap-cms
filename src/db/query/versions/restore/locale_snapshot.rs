@@ -143,7 +143,7 @@ mod tests {
         let doc = Document::builder("i1").build();
         let snapshot = build_snapshot(&conn, "items", &def.fields, &doc, Some(&locale)).unwrap();
         assert_eq!(snapshot["price__de"], json!(12.5));
-        assert_eq!(snapshot["done__de"], json!(1));
+        assert_eq!(snapshot["done__de"], json!(true));
         assert_eq!(snapshot["tags__de"], json!(["a", "b"]));
 
         conn.execute(

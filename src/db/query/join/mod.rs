@@ -8,7 +8,6 @@ mod nested_values;
 mod relationships;
 
 pub(crate) use arrays::find_all_array_rows_with_parent;
-pub(crate) use arrays::sub_field_stores_json;
 pub use arrays::{find_array_rows, find_array_rows_batch, set_array_rows};
 pub use blocks::{find_block_rows, find_block_rows_batch, set_block_rows};
 pub use hydrate::{

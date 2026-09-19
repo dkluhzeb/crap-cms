@@ -1,6 +1,7 @@
 //! Hook context types and Rust↔Lua marshalling.
 
-use mlua::{Lua, Result as LuaResult, Table};
+use mlua::{Lua, Result as LuaResult, Table, Value};
+use tracing::warn;
 
 use crate::{
     core::{Document, DocumentFields, ReqContext, event::EventUser},
@@ -12,6 +13,35 @@ use crate::{
 };
 
 use super::HookContextBuilder;
+
+/// Read the `key` slot (`data` / `context`) of a table a hook returned.
+/// Absent → `None`; a table → `Some`; any other type → `None` **with a
+/// warning** naming the hook and the slot. A `{ data = "oops" }` used to be
+/// indistinguishable from an untouched `data` — the hook author saw its
+/// change silently ignored.
+///
+/// # Errors
+///
+/// Propagates a failure to read the slot from the table.
+pub(crate) fn hook_result_slot(
+    tbl: &Table,
+    key: &str,
+    hook_name: &str,
+) -> LuaResult<Option<Table>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::Table(t) => Ok(Some(t)),
+        other => {
+            warn!(
+                "Hook '{hook_name}' returned `{key}` as {} instead of a table — keeping the \
+                 current {key}",
+                other.type_name()
+            );
+
+            Ok(None)
+        }
+    }
+}
 
 /// Context passed to hook functions.
 ///
@@ -144,9 +174,11 @@ impl HookContext {
     /// Read the `context` table from a returned Lua hook table, replacing
     /// `self.context`. Propagates a conversion failure rather than silently
     /// dropping the offending key — matching `read_hook_result` and
-    /// `lua_table_to_auth_user`, which both `?` on `lua_to_json`.
-    pub(crate) fn read_context_back(&mut self, tbl: &Table) -> LuaResult<()> {
-        if let Ok(context_tbl) = tbl.get::<Table>("context") {
+    /// `lua_table_to_auth_user`, which both `?` on `lua_to_json`. A present
+    /// but non-table `context` is kept as-is with a warning naming
+    /// `hook_name` (see [`hook_result_slot`]).
+    pub(crate) fn read_context_back(&mut self, tbl: &Table, hook_name: &str) -> LuaResult<()> {
+        if let Some(context_tbl) = hook_result_slot(tbl, "context", hook_name)? {
             self.context = lua_table_to_json_map(&context_tbl)?.into();
         }
 
@@ -204,7 +236,7 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&tbl).unwrap();
+        ctx.read_context_back(&tbl, "h").unwrap();
 
         assert!(
             !ctx.context.contains_key("old_key"),
@@ -224,7 +256,7 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&tbl).unwrap();
+        ctx.read_context_back(&tbl, "h").unwrap();
 
         assert!(ctx.context.contains_key("old_key"));
     }
@@ -243,7 +275,40 @@ mod tests {
 
         let mut ctx = HookContext::builder("test", "create").build();
 
-        assert!(ctx.read_context_back(&tbl).is_err());
+        assert!(ctx.read_context_back(&tbl, "h").is_err());
+    }
+
+    /// A present-but-non-table `context` (`{ context = 42 }`) keeps the
+    /// current context — it is neither an error nor a silent replacement.
+    #[test]
+    fn read_context_back_keeps_context_when_slot_is_not_a_table() {
+        let lua = mlua::Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("context", 42).unwrap();
+
+        let mut ctx_map = ReqContext::new();
+        ctx_map.insert("old_key".to_string(), json!("old_value"));
+        let mut ctx = HookContext::builder("test", "create")
+            .context(ctx_map)
+            .build();
+        ctx.read_context_back(&tbl, "h").unwrap();
+
+        assert_eq!(ctx.context.get("old_key"), Some(&json!("old_value")));
+    }
+
+    #[test]
+    fn hook_result_slot_distinguishes_absent_table_and_wrong_type() {
+        let lua = mlua::Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("data", "oops").unwrap();
+        tbl.set("context", lua.create_table().unwrap()).unwrap();
+
+        assert!(hook_result_slot(&tbl, "missing", "h").unwrap().is_none());
+        assert!(hook_result_slot(&tbl, "context", "h").unwrap().is_some());
+        assert!(
+            hook_result_slot(&tbl, "data", "h").unwrap().is_none(),
+            "a wrong-typed slot reads as absent (after warning), not as an error"
+        );
     }
 
     #[test]

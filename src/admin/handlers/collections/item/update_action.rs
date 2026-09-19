@@ -9,9 +9,9 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            collections::shared::{delete_action_impl, do_update},
+            collections::shared::{UpdateRequest, delete_action_impl, do_update},
             forms::parse_form,
-            shared::{paths, redirect_response},
+            shared::{HxNav, paths, redirect_response},
         },
     },
     core::auth::AuthUser,
@@ -22,6 +22,7 @@ pub async fn update_action(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
+    hx: HxNav,
     request: Request,
 ) -> Response {
     let Some(def) = state.infra.registry.get_collection(&slug).cloned() else {
@@ -42,5 +43,14 @@ pub async fn update_action(
         return delete_action_impl(&state, &slug, &id, auth_user.as_ref(), false, false).await;
     }
 
-    do_update(&state, &slug, &id, form_data, file, auth_user.as_ref()).await
+    do_update(UpdateRequest {
+        state: &state,
+        slug: &slug,
+        id: &id,
+        form_data,
+        file,
+        auth_user: auth_user.as_ref(),
+        hx,
+    })
+    .await
 }

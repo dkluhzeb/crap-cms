@@ -91,9 +91,9 @@ mod tests {
         let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
 
-        // Checkbox should default to 0 (integer)
+        // An absent checkbox stores 0 and reads back as `false`
         let published = doc.get("published").unwrap();
-        assert_eq!(published, &json!(0));
+        assert_eq!(published, &json!(false));
     }
 
     /// Regression: an absent checkbox with `default_value = true` must store
@@ -125,7 +125,7 @@ mod tests {
 
         assert_eq!(
             doc.get("featured").unwrap(),
-            &json!(1),
+            &json!(true),
             "an absent checkbox with default_value=true must store 1"
         );
     }
@@ -155,6 +155,6 @@ mod tests {
         let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let val = doc.get("settings__featured").unwrap();
-        assert_eq!(val, &json!(0));
+        assert_eq!(val, &json!(false));
     }
 }

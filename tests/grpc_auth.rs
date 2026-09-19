@@ -1659,7 +1659,7 @@ async fn login_mfa_when_gate_controls_challenge_per_user() {
         function M.gate(ctx)
             assert(ctx.surface == "grpc", "surface must be grpc")
             assert(ctx.collection == "users", "collection must be users")
-            return ctx.user.mfa_enabled == true or ctx.user.mfa_enabled == 1
+            return ctx.user.mfa_enabled == true
         end
         package.loaded["mfa_hooks"] = M
     "#;

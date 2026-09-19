@@ -151,7 +151,7 @@ pub(super) fn execute_system_bulk(p: &ExecuteBulkParams<'_>) -> Result<()> {
 fn fail_bulk_run(p: &ExecuteBulkParams<'_>, label: &str, reason: &str) -> Result<()> {
     let result = record_permanent_job_failure(p.pool, p.job_run, label, reason);
 
-    match p.pool.get() {
+    match p.pool.write() {
         Ok(conn) => strip_finished_payload(&conn, p.job_run),
         Err(e) => error!("bulk job: no connection to strip the finished payload: {e}"),
     }
@@ -165,9 +165,11 @@ fn fail_bulk_run(p: &ExecuteBulkParams<'_>, label: &str, reason: &str) -> Result
 ///
 /// Returns an error when the completion mark itself cannot be written.
 fn record_bulk_success(p: &ExecuteBulkParams<'_>, label: &str, summary: &str) -> Result<()> {
+    // The write pool, like every job-row write: a write on a read connection
+    // starves the readers the pool split protects.
     let conn = p
         .pool
-        .get()
+        .write()
         .context("Failed to get DB connection for bulk completion")?;
 
     // Repairing form: if the scheduler's outer timer already stamped this

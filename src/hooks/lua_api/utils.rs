@@ -7,7 +7,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Value as LuaValue};
 use nanoid::nanoid;
 use serde_json::Value;
 
-use super::{json_to_lua, lua_to_json};
+use super::{integer::LuaInt, json_to_lua, lua_to_json};
 use crate::hooks::lifecycle::InitPhase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -118,11 +118,11 @@ fn util_date_parse(
 #[lua_fn(path = "crap.util.date_format", returns_doc = "Formatted date string.")]
 fn util_date_format(
     _: &Lua,
-    #[lua(doc = "Unix timestamp (seconds).")] ts: i64,
+    #[lua(ty = "integer", doc = "Unix timestamp (seconds).")] ts: LuaInt,
     #[lua(doc = "Chrono format string (e.g. `\"%Y-%m-%d %H:%M:%S\"`).")] fmt: String,
 ) -> LuaResult<String> {
-    let dt =
-        DateTime::from_timestamp(ts, 0).ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
+    let dt = DateTime::from_timestamp(ts.0, 0)
+        .ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
 
     // Pre-validate the format string: chrono's `DelayedFormat` Display panics
     // (via `.to_string()`) on an unknown specifier, so a Lua caller must not be
@@ -141,10 +141,10 @@ fn util_date_format(
 )]
 fn util_date_add(
     _: &Lua,
-    #[lua(doc = "Base timestamp.")] ts: i64,
-    #[lua(doc = "Seconds to add (may be negative).")] secs: i64,
+    #[lua(ty = "integer", doc = "Base timestamp.")] ts: LuaInt,
+    #[lua(ty = "integer", doc = "Seconds to add (may be negative).")] secs: LuaInt,
 ) -> LuaResult<i64> {
-    ts.checked_add(secs)
+    ts.0.checked_add(secs.0)
         .ok_or_else(|| RuntimeError("date_add overflow".into()))
 }
 
@@ -155,10 +155,10 @@ fn util_date_add(
 )]
 fn util_date_diff(
     _: &Lua,
-    #[lua(doc = "First timestamp.")] a: i64,
-    #[lua(doc = "Second timestamp.")] b: i64,
+    #[lua(ty = "integer", doc = "First timestamp.")] a: LuaInt,
+    #[lua(ty = "integer", doc = "Second timestamp.")] b: LuaInt,
 ) -> LuaResult<i64> {
-    a.checked_sub(b)
+    a.0.checked_sub(b.0)
         .ok_or_else(|| RuntimeError("date_diff overflow".into()))
 }
 
@@ -285,7 +285,7 @@ mod tests {
     fn date_format_rejects_invalid_format_string() {
         let lua = Lua::new();
         for bad in ["%J", "%", "%Q"] {
-            let err = util_date_format(&lua, 0, bad.to_string())
+            let err = util_date_format(&lua, LuaInt(0), bad.to_string())
                 .expect_err("invalid format must error, not panic");
             assert!(
                 err.to_string().contains("invalid date format"),
@@ -294,7 +294,7 @@ mod tests {
         }
         // A valid format still works.
         assert_eq!(
-            util_date_format(&lua, 0, "%Y-%m-%d".to_string()).unwrap(),
+            util_date_format(&lua, LuaInt(0), "%Y-%m-%d".to_string()).unwrap(),
             "1970-01-01"
         );
     }
@@ -304,10 +304,38 @@ mod tests {
     #[test]
     fn date_add_diff_reject_overflow() {
         let lua = Lua::new();
-        assert!(util_date_add(&lua, i64::MAX, 1).is_err());
-        assert!(util_date_diff(&lua, i64::MIN, 1).is_err());
-        assert_eq!(util_date_add(&lua, 100, 5).unwrap(), 105);
-        assert_eq!(util_date_diff(&lua, 100, 40).unwrap(), 60);
+        assert!(util_date_add(&lua, LuaInt(i64::MAX), LuaInt(1)).is_err());
+        assert!(util_date_diff(&lua, LuaInt(i64::MIN), LuaInt(1)).is_err());
+        assert_eq!(util_date_add(&lua, LuaInt(100), LuaInt(5)).unwrap(), 105);
+        assert_eq!(util_date_diff(&lua, LuaInt(100), LuaInt(40)).unwrap(), 60);
+    }
+
+    /// A fractional timestamp used to be silently truncated by the integer
+    /// parameter conversion (`1.5` → `1`); it is rejected like every other
+    /// integer the Lua API reads. A whole-valued float still works.
+    #[test]
+    fn date_helpers_reject_fractional_and_accept_whole_floats() {
+        let lua = setup_lua();
+
+        let err = lua
+            .load("return crap.util.date_add(1.5, 1)")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be an integer"), "{err}");
+
+        let err = lua
+            .load("return crap.util.date_format(0.5, '%Y')")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be an integer"), "{err}");
+
+        let sum: i64 = lua
+            .load("return crap.util.date_add(2^3, 1)")
+            .eval()
+            .unwrap();
+        assert_eq!(sum, 9);
     }
 
     #[test]
@@ -356,6 +384,101 @@ mod tests {
         register_util(&lua).unwrap();
         load_lua_helpers(&lua).unwrap();
         lua
+    }
+
+    fn lua_str(lua: &Lua, src: &str) -> String {
+        lua.load(src).eval().unwrap()
+    }
+
+    /// `split` used to splice `sep` into a pattern character class, so a
+    /// magic character errored and a multi-character separator split on any
+    /// of its characters. It is a plain-string split.
+    #[test]
+    fn split_is_a_plain_string_split() {
+        let lua = setup_lua();
+
+        assert_eq!(
+            lua_str(
+                &lua,
+                r#"return table.concat(crap.util.split("a%b", "%"), "|")"#
+            ),
+            "a|b"
+        );
+        assert_eq!(
+            lua_str(
+                &lua,
+                r#"return table.concat(crap.util.split("a.b.c", "."), "|")"#
+            ),
+            "a|b|c"
+        );
+        assert_eq!(
+            lua_str(
+                &lua,
+                r#"return table.concat(crap.util.split("a::b:c::d", "::"), "|")"#
+            ),
+            "a|b:c|d",
+            "a multi-character separator splits on the whole sequence"
+        );
+        assert_eq!(
+            lua_str(
+                &lua,
+                r#"return table.concat(crap.util.split("a,,b,", ","), "|")"#
+            ),
+            "a|b",
+            "empty pieces are omitted, as before"
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return tostring(#crap.util.split("", ","))"#),
+            "0"
+        );
+    }
+
+    #[test]
+    fn split_rejects_an_empty_separator() {
+        let lua = setup_lua();
+        let err = lua
+            .load(r#"return crap.util.split("abc", "")"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-empty"), "{err}");
+    }
+
+    /// `truncate` counts characters, not bytes, and never returns more than
+    /// `max_len` characters — a byte cut used to split a multi-byte character
+    /// and a suffix longer than `max_len` used to return nearly the whole
+    /// string plus the suffix.
+    #[test]
+    fn truncate_is_utf8_aware_and_never_exceeds_max_len() {
+        let lua = setup_lua();
+
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("hello world", 8)"#),
+            "hello..."
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("hello world", 8, "~")"#),
+            "hello w~"
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("héllo", 10)"#),
+            "héllo",
+            "fits in characters even though it is longer in bytes"
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("ééééé", 4, "…")"#),
+            "ééé…",
+            "cuts on a character boundary and counts the suffix in characters"
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("hello world", 2)"#),
+            "..",
+            "a suffix longer than max_len is itself cut to max_len"
+        );
+        assert_eq!(
+            lua_str(&lua, r#"return crap.util.truncate("hello world", 0)"#),
+            ""
+        );
     }
 
     #[test]

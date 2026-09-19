@@ -22,6 +22,9 @@ pub trait JsonRoot {
     fn root_get_mut(&mut self, key: &str) -> Option<&mut Value>;
     fn root_remove(&mut self, key: &str);
     fn root_insert(&mut self, key: String, value: Value);
+    /// Every key at the root, in no particular order. Owned, so the trait
+    /// stays object-safe for the `&dyn JsonRoot` walkers.
+    fn root_keys(&self) -> Vec<String>;
 }
 
 impl JsonRoot for HashMap<String, Value> {
@@ -37,6 +40,9 @@ impl JsonRoot for HashMap<String, Value> {
     fn root_insert(&mut self, key: String, value: Value) {
         self.insert(key, value);
     }
+    fn root_keys(&self) -> Vec<String> {
+        self.keys().cloned().collect()
+    }
 }
 
 impl JsonRoot for Map<String, Value> {
@@ -51,6 +57,9 @@ impl JsonRoot for Map<String, Value> {
     }
     fn root_insert(&mut self, key: String, value: Value) {
         self.insert(key, value);
+    }
+    fn root_keys(&self) -> Vec<String> {
+        self.keys().cloned().collect()
     }
 }
 

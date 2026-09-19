@@ -357,6 +357,18 @@ mod tests {
 
         assert_eq!(DbValue::Real(-7.0).to_json(), json!(-7));
         assert_eq!(DbValue::Real(0.0).to_json(), json!(0));
+    }
+
+    /// A negative zero reads back as `0`: JSON has no negative-zero integer,
+    /// and a whole value reads as an integer. The one value a Number field
+    /// does not return exactly as written.
+    #[test]
+    fn negative_zero_reads_as_zero() {
+        let read = DbValue::Real(-0.0).to_json();
+
+        assert_eq!(read, json!(0));
+        assert_eq!(read.as_i64(), Some(0));
+        assert!(read.as_f64().is_some_and(|f| !f.is_sign_negative()));
 
         // Genuine fractions keep their float form.
         let frac = DbValue::Real(42.5).to_json();

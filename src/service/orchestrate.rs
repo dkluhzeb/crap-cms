@@ -18,7 +18,10 @@
 //! Conn-mode (Lua-in-hook-transaction) writes don't come through here by
 //! design: the caller owns their transaction and queue flushing.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use anyhow::{Context as _, anyhow};
 
@@ -32,6 +35,65 @@ use crate::{
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+thread_local! {
+    /// The commit watches open on this thread, innermost last. A pool write
+    /// marks the innermost one the moment its transaction is durable.
+    static COMMIT_WATCHES: RefCell<Vec<Rc<Cell<bool>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Learns whether a pool write issued while it is open reached a durable
+/// commit — including when the envelope's post-commit work then panics and
+/// unwinds through the caller without returning.
+///
+/// The commit is the moment the file half of an upload write settles: the
+/// stored bytes stay once the row naming them is durable, whatever happens to
+/// the cache clear, event publishing or effect flushes that run before the
+/// envelope returns. The caller sits above an operation it does not control
+/// (`create_document`, `update_document`), so the envelope reports the commit
+/// through this thread-local watch rather than through its return value.
+///
+/// Watches nest: the innermost open one is what a commit marks, so a write
+/// issued from post-commit work under a watch of its own is never mistaken
+/// for the outer one. Dropping a watch closes it.
+pub(crate) struct CommitWatch {
+    flag: Rc<Cell<bool>>,
+}
+
+impl CommitWatch {
+    /// Open a watch for the pool writes issued on this thread from now on.
+    pub(crate) fn open() -> Self {
+        let flag = Rc::new(Cell::new(false));
+
+        COMMIT_WATCHES.with(|watches| watches.borrow_mut().push(flag.clone()));
+
+        Self { flag }
+    }
+
+    /// Whether a pool write under this watch committed.
+    pub(crate) fn committed(&self) -> bool {
+        self.flag.get()
+    }
+}
+
+impl Drop for CommitWatch {
+    fn drop(&mut self) {
+        COMMIT_WATCHES.with(|watches| {
+            watches
+                .borrow_mut()
+                .retain(|watch| !Rc::ptr_eq(watch, &self.flag));
+        });
+    }
+}
+
+/// A pool write just committed: tell the innermost open watch, if any.
+fn mark_commit() {
+    COMMIT_WATCHES.with(|watches| {
+        if let Some(watch) = watches.borrow().last() {
+            watch.set(true);
+        }
+    });
+}
 
 /// Run one pool-mode write inside the shared envelope.
 ///
@@ -142,6 +204,11 @@ pub(crate) fn run_pool_write<T>(
         return Err(e.into());
     }
 
+    // Durable from here on. Reported before any post-commit work, so a
+    // caller holding stored bytes for this write keeps them even if that
+    // work panics and this function never returns.
+    mark_commit();
+
     ctx.clear_cache();
 
     // Files after commit: hard deletes performed by hooks inside this
@@ -164,4 +231,116 @@ pub(crate) fn run_pool_write<T>(
     flush_deferred_effects(ctx, &dq, EffectOutcome::Commit);
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without a pool write, a watch reports nothing.
+    #[test]
+    fn a_fresh_watch_has_seen_no_commit() {
+        let watch = CommitWatch::open();
+
+        assert!(!watch.committed());
+    }
+
+    /// A commit marks the innermost open watch only: a write issued from
+    /// post-commit work under its own watch must not count for the outer.
+    #[test]
+    fn a_commit_marks_the_innermost_watch() {
+        let outer = CommitWatch::open();
+
+        {
+            let inner = CommitWatch::open();
+
+            mark_commit();
+
+            assert!(inner.committed());
+            assert!(!outer.committed(), "the outer write has not committed");
+        }
+
+        mark_commit();
+
+        assert!(outer.committed(), "the inner watch is closed again");
+    }
+
+    /// A commit with no watch open is nobody's business — and must not
+    /// leak into a watch opened afterwards.
+    #[test]
+    fn a_commit_with_no_watch_open_is_forgotten() {
+        mark_commit();
+
+        let watch = CommitWatch::open();
+
+        assert!(!watch.committed());
+    }
+
+    #[cfg(feature = "sqlite")]
+    mod envelope {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use super::*;
+        use crate::{
+            admin::test_support::test_infra_with_events,
+            core::{CollectionDefinition, FieldDefinition, FieldType},
+        };
+
+        fn things() -> CollectionDefinition {
+            let mut def = CollectionDefinition::new("things");
+            def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+
+            def
+        }
+
+        /// The commit is reported before the post-commit callback runs, so a
+        /// panic there still leaves the watch marked — the row IS durable.
+        #[test]
+        fn a_post_commit_panic_still_reports_the_commit() {
+            let def = things();
+            let (_tmp, infra, _rx) = test_infra_with_events(def.clone());
+            let ctx = ServiceContext::collection("things", &def)
+                .infra(&infra)
+                .build();
+
+            let watch = CommitWatch::open();
+
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                run_pool_write(
+                    &ctx,
+                    None,
+                    |_| Ok(()),
+                    |_, (): &()| panic!("post-commit work failed"),
+                )
+            }));
+
+            assert!(outcome.is_err(), "the post-commit panic propagates");
+            assert!(
+                watch.committed(),
+                "the transaction committed before the panic"
+            );
+        }
+
+        /// A body error rolls the write back: the watch stays unmarked.
+        #[test]
+        fn a_rolled_back_write_reports_no_commit() {
+            let def = things();
+            let (_tmp, infra, _rx) = test_infra_with_events(def.clone());
+            let ctx = ServiceContext::collection("things", &def)
+                .infra(&infra)
+                .build();
+
+            let watch = CommitWatch::open();
+
+            let result: Result<()> = run_pool_write(
+                &ctx,
+                None,
+                |_| Err(ServiceError::Internal(anyhow!("body failed"))),
+                |_, (): &()| {},
+            );
+
+            assert!(result.is_err());
+            assert!(!watch.committed());
+        }
+    }
 }

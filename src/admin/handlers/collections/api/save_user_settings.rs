@@ -11,17 +11,22 @@ use serde_json::{Value, from_str, json, to_string};
 use tokio::task;
 
 use crate::{
-    admin::{AdminState, handlers::shared::is_column_eligible},
-    core::auth::AuthUser,
+    admin::{
+        AdminState,
+        handlers::shared::{is_column_eligible, is_meta_column},
+    },
+    core::{CollectionDefinition, auth::AuthUser},
     db::DbPool,
     service::user_settings,
 };
 
 /// Parse and validate column keys from the form against the collection definition.
-fn parse_valid_columns(
-    form: &HashMap<String, String>,
-    def: &crate::core::CollectionDefinition,
-) -> Vec<String> {
+///
+/// A key survives only if the collection's table actually has the column:
+/// `is_meta_column` is the same predicate the sort gate and the list-view
+/// header use, so a stored preference can never name a column the list then
+/// fails to render (`_status` on a collection without drafts).
+fn parse_valid_columns(form: &HashMap<String, String>, def: &CollectionDefinition) -> Vec<String> {
     let columns: Vec<String> = form
         .get("columns")
         .map(|c| {
@@ -35,9 +40,7 @@ fn parse_valid_columns(
     columns
         .into_iter()
         .filter(|k| {
-            k == "created_at"
-                || k == "updated_at"
-                || k == "_status"
+            is_meta_column(k, def)
                 || def
                     .fields
                     .iter()
@@ -119,6 +122,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::core::CollectionDefinition;
+    use crate::core::VersionsConfig;
     use crate::core::field::{FieldDefinition, FieldType};
 
     use super::*;
@@ -151,10 +155,26 @@ mod tests {
     }
 
     #[test]
-    fn always_allows_meta_columns_even_without_matching_fields() {
+    fn always_allows_the_timestamp_columns_even_without_matching_fields() {
         let def = def_with(vec![]);
-        let cols = parse_valid_columns(&form("created_at,updated_at,_status"), &def);
-        assert_eq!(cols, vec!["created_at", "updated_at", "_status"]);
+        let cols = parse_valid_columns(&form("created_at,updated_at"), &def);
+        assert_eq!(cols, vec!["created_at", "updated_at"]);
+    }
+
+    /// Regression: `_status` is a column only on a collection that keeps
+    /// drafts. Storing it as a preference elsewhere put a column the table
+    /// never had into the list view.
+    #[test]
+    fn status_is_only_storable_on_a_collection_with_drafts() {
+        let def = def_with(vec![]);
+        assert!(parse_valid_columns(&form("_status"), &def).is_empty());
+
+        let mut with_drafts = def_with(vec![]);
+        with_drafts.versions = Some(VersionsConfig::new(true, 10));
+        assert_eq!(
+            parse_valid_columns(&form("_status"), &with_drafts),
+            vec!["_status".to_string()]
+        );
     }
 
     #[test]

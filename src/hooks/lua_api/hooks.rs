@@ -23,6 +23,19 @@ fn is_known_event(event: &str) -> bool {
     KNOWN_EVENTS.contains(&event)
 }
 
+/// The one unknown-event check behind `register`, `remove`, and `list`, so
+/// a typo'd event name errors identically on every entry point.
+fn require_known_event(entry_point: &str, event: &str) -> LuaResult<()> {
+    if is_known_event(event) {
+        return Ok(());
+    }
+
+    Err(RuntimeError(format!(
+        "crap.hooks.{entry_point}: unknown event '{event}'. Known events: {}",
+        KNOWN_EVENTS.join(", ")
+    )))
+}
+
 /// Register a hook function for an event. Fires for all collections.
 #[lua_fn(path = "crap.hooks.register")]
 fn hooks_register(
@@ -41,12 +54,8 @@ fn hooks_register(
          is intermittent across requests",
     )?;
 
-    if !is_known_event(&event) {
-        return Err(RuntimeError(format!(
-            "crap.hooks.register: unknown event '{event}'. Known events: {}",
-            KNOWN_EVENTS.join(", ")
-        )));
-    }
+    require_known_event("register", &event)?;
+
     let list = get_or_create_hook_list(lua, &event)?;
     list.set(list.raw_len() + 1, func)
 }
@@ -69,12 +78,7 @@ fn hooks_remove(
          intermittent across requests",
     )?;
 
-    if !is_known_event(&event) {
-        return Err(RuntimeError(format!(
-            "crap.hooks.remove: unknown event '{event}'. Known events: {}",
-            KNOWN_EVENTS.join(", ")
-        )));
-    }
+    require_known_event("remove", &event)?;
 
     let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
     let Value::Table(list) = event_hooks.get::<Value>(event.as_str())? else {
@@ -97,22 +101,34 @@ fn hooks_remove(
     Ok(())
 }
 
-/// List all registered hook functions for an event.
+/// List all registered hook functions for an event. Returns a copy: editing
+/// the returned array does not change which hooks fire.
 #[lua_fn(
     path = "crap.hooks.list",
     returns = "fun(context: crap.HookContext): crap.HookContext[]",
-    returns_doc = "Array of hook functions."
+    returns_doc = "Array of hook functions (a copy — mutating it does not affect the registered hooks)."
 )]
 fn hooks_list(
     lua: &Lua,
     #[lua(ty = "crap.HookEvent", doc = "The lifecycle event.")] event: String,
 ) -> LuaResult<Table> {
-    let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
+    require_known_event("list", &event)?;
 
-    match event_hooks.get::<Value>(event.as_str())? {
-        Value::Table(t) => Ok(t),
-        _ => lua.create_table(),
+    let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
+    let copy = lua.create_table()?;
+
+    // A shallow copy: handing out the live registry list would let runtime
+    // code `table.insert` into it — the per-VM, intermittent registration the
+    // init-phase guard on `register` / `remove` exists to prevent.
+    let Value::Table(list) = event_hooks.get::<Value>(event.as_str())? else {
+        return Ok(copy);
+    };
+
+    for i in 1..=list.raw_len() {
+        copy.raw_set(i, list.raw_get::<Value>(i)?)?;
     }
+
+    Ok(copy)
 }
 
 lua_table! {
@@ -276,13 +292,52 @@ mod tests {
     }
 
     #[test]
-    fn test_hooks_list_empty_event_returns_empty_table() {
+    fn test_hooks_list_known_event_without_hooks_returns_empty_table() {
         let lua = lua_with_hooks();
         let list: Table = lua
-            .load("return crap.hooks.list('nonexistent')")
+            .load("return crap.hooks.list('after_delete')")
             .eval()
             .unwrap();
         assert_eq!(list.raw_len(), 0);
+    }
+
+    /// `list` used to answer an unknown event name with `{}` while `register`
+    /// and `remove` reject it — the same typo must error on every entry point.
+    #[test]
+    fn list_unknown_event_name_is_rejected() {
+        let lua = lua_with_hooks();
+        let err = lua
+            .load("return crap.hooks.list('after_chnage')")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown event 'after_chnage'"), "{err}");
+    }
+
+    /// `list` used to hand out the live registry table by reference, so
+    /// runtime code could `table.insert` a hook into it — bypassing the
+    /// init-phase guard. It must be a copy: mutating it changes nothing.
+    #[test]
+    fn list_returns_a_copy_that_does_not_mutate_the_registry() {
+        let lua = lua_with_hooks();
+        lua.load(
+            r#"
+            crap.hooks.register("before_change", function(c) return c end)
+            local list = crap.hooks.list("before_change")
+            table.insert(list, function(c) return c end)
+            list[1] = nil
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let event_hooks: Table = lua.named_registry_value("_crap_event_hooks").unwrap();
+        let live: Table = event_hooks.get("before_change").unwrap();
+        assert_eq!(live.raw_len(), 1, "the registry list must be untouched");
+        assert!(
+            matches!(live.raw_get::<Value>(1).unwrap(), Value::Function(_)),
+            "the registered hook must still be in place"
+        );
     }
 
     #[test]

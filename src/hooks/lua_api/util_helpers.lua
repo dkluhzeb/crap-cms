@@ -136,17 +136,28 @@ function util.trim(str)
     return (str:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
---- Split a string by separator.
+--- Split a string by a plain (non-pattern) separator. A multi-character
+--- separator splits on the whole sequence; empty pieces are omitted.
 --- @param str string  Input string.
---- @param sep string  Separator string.
+--- @param sep string  Separator string (must be non-empty).
 --- @return string[]
 function util.split(str, sep)
-    local out = {}
-    local pattern = "([^" .. sep .. "]+)"
-    for part in str:gmatch(pattern) do
-        out[#out + 1] = part
+    if sep == "" then
+        error("crap.util.split: separator must be a non-empty string", 2)
     end
-    return out
+    local out = {}
+    local init = 1
+    while true do
+        local s, e = string.find(str, sep, init, true)
+        local piece = s and str:sub(init, s - 1) or str:sub(init)
+        if piece ~= "" then
+            out[#out + 1] = piece
+        end
+        if not s then
+            return out
+        end
+        init = e + 1
+    end
 end
 
 --- Check if a string starts with a prefix.
@@ -165,15 +176,35 @@ function util.ends_with(str, suffix)
     return suffix == "" or str:sub(-#suffix) == suffix
 end
 
---- Truncate a string to a max length with optional suffix.
+-- Length in characters (UTF-8 aware; bytes for a string that is not valid
+-- UTF-8) and the prefix of the first `n` characters, on the same rule.
+local function char_len(s)
+    return utf8.len(s) or #s
+end
+
+local function char_prefix(s, n)
+    if not utf8.len(s) then
+        return s:sub(1, n)
+    end
+    return s:sub(1, utf8.offset(s, n + 1) - 1)
+end
+
+--- Truncate a string to at most `max_len` characters (not bytes), appending
+--- `suffix` when it was cut. The result is never longer than `max_len`
+--- characters — a suffix longer than `max_len` is itself cut to fit.
 --- @param str string       Input string.
---- @param max_len integer  Maximum length.
+--- @param max_len integer  Maximum length in characters.
 --- @param suffix? string   Suffix to append when truncated (default: "...").
 --- @return string
 function util.truncate(str, max_len, suffix)
     suffix = suffix or "..."
-    if #str <= max_len then return str end
-    return str:sub(1, max_len - #suffix) .. suffix
+    if max_len < 0 then max_len = 0 end
+    if char_len(str) <= max_len then return str end
+    local keep = max_len - char_len(suffix)
+    if keep < 0 then
+        return char_prefix(suffix, max_len)
+    end
+    return char_prefix(str, keep) .. suffix
 end
 
 -- @typegen-end

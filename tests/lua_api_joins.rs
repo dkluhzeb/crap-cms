@@ -920,3 +920,77 @@ fn lua_write_rejects_the_all_locales_mode() {
         "the error must name the locale field: {message}"
     );
 }
+
+/// Regression: `tags = {}` — the only way Lua can spell an empty list — was
+/// rejected as "not a list of ids", so a has-many list could not be cleared
+/// from Lua. The same shape reaches validation from any surface once a
+/// `before_validate` hook has rebuilt the data from Lua, so the hook is on.
+#[test]
+fn lua_update_with_an_empty_table_clears_a_has_many_list() {
+    let (_tmp, pool, _reg, runner) = setup_custom_db_with_hooks(
+        &[
+            (
+                "tags",
+                r#"
+                crap.collections.define("tags", {
+                    labels = { singular = "Tag", plural = "Tags" },
+                    fields = {
+                        { name = "name", type = "text", required = true },
+                    },
+                })
+                "#,
+            ),
+            (
+                "posts",
+                r#"
+                crap.collections.define("posts", {
+                    labels = { singular = "Post", plural = "Posts" },
+                    fields = {
+                        { name = "title", type = "text", required = true },
+                        { name = "tags", type = "relationship",
+                          relationship = { collection = "tags", has_many = true } },
+                        { name = "keywords", type = "text", has_many = true },
+                    },
+                    hooks = {
+                        before_validate = { "hooks.post_hooks.pass" },
+                    },
+                })
+                "#,
+            ),
+        ],
+        &[(
+            "post_hooks",
+            r"
+            local M = {}
+            function M.pass(ctx)
+                return ctx
+            end
+            return M
+            ",
+        )],
+    );
+
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local tag = crap.collections.create("tags", { name = "rust" })
+        local doc = crap.collections.create("posts", {
+            title = "Tagged",
+            tags = { tag.id },
+            keywords = { "a", "b" },
+        })
+
+        local before = crap.collections.find_by_id("posts", doc.id)
+
+        crap.collections.update("posts", doc.id, { tags = {}, keywords = {} })
+
+        local after = crap.collections.find_by_id("posts", doc.id)
+
+        return #before.tags .. ":" .. #before.keywords
+            .. ":" .. #after.tags .. ":" .. #after.keywords
+        "#,
+    );
+
+    assert_eq!(result, "1:2:0:0");
+}

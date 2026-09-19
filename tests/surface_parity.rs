@@ -601,6 +601,127 @@ fn auth_invalidation_is_derived_from_the_action() {
     );
 }
 
+/// The chokepoints through which a privilege revocation retires the user's
+/// already-issued credentials. Each one bumps `_session_version` (or is the
+/// bump itself) and, with a transport attached, tears down the user's open
+/// live streams — so a handler that reaches one of them cannot leave a twin
+/// credential valid.
+const REVOCATION_CHOKEPOINTS: &[&str] = &[
+    "bump_session_version(",
+    "perform_account_action(",
+    "consume_reset_token(",
+];
+
+/// Source markers that identify a handler which ends a session, locks or
+/// unlocks an account, or changes a password. Matched against production code
+/// only (comments and test modules blanked), so a doc mention doesn't count.
+const REVOKING_MARKERS: &[&str] = &[
+    "fn logout",
+    "AccountAction::",
+    "perform_account_action(",
+    "LockUpdate::",
+    "consume_reset_token(",
+    // The bare account primitives: a handler calling one of these directly
+    // has skipped the authorizing chokepoint.
+    "lock_user(",
+    "unlock_user(",
+    "update_password(",
+];
+
+/// The reviewed inventory of session-revoking surface handlers. The scan must
+/// find exactly these: a new revoking handler has to be added here (forcing
+/// the chokepoint check through review), and a vanished one is noticed too.
+const REVOKING_HANDLERS: &[&str] = &[
+    "src/admin/handlers/auth/logout_action.rs",
+    "src/admin/handlers/auth/reset_password_action.rs",
+    "src/admin/handlers/collections/shared/update.rs",
+    "src/api/handlers/auth/account.rs",
+    "src/api/handlers/auth/reset_password.rs",
+];
+
+/// Whether `production` (already scrubbed) is a revoking handler body.
+fn is_revoking_handler(production: &str) -> bool {
+    REVOKING_MARKERS.iter().any(|m| production.contains(m))
+}
+
+/// The decision core of [`auth_revoking_handlers_request_invalidation`]: a
+/// revoking handler body that reaches none of the chokepoints.
+fn revokes_without_chokepoint(production: &str) -> bool {
+    is_revoking_handler(production)
+        && !REVOCATION_CHOKEPOINTS
+            .iter()
+            .any(|call| production.contains(call))
+}
+
+/// Structural guard: every surface handler that ends a session, locks a user,
+/// or changes a password must reach a revocation chokepoint. The admin logout
+/// once read its principal from an extension no middleware had inserted on its
+/// route — the bump silently never ran and a captured JWT stayed valid until
+/// `exp`, with the cookie-clearing test still green.
+#[test]
+fn auth_revoking_handlers_request_invalidation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found: Vec<String> = Vec::new();
+    let mut offenders: Vec<String> = Vec::new();
+
+    for (surface, floor) in SURFACE_ROOTS {
+        for file in surface_files(root, surface, *floor) {
+            let production = production_code(&fs::read_to_string(&file).unwrap_or_default());
+            let rel = relative_path(root, &file);
+
+            if is_revoking_handler(&production) {
+                found.push(rel.clone());
+            }
+            if revokes_without_chokepoint(&production) {
+                offenders.push(format!("  {rel}"));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "Session-revoking handler(s) never reach a revocation chokepoint \
+         ({REVOCATION_CHOKEPOINTS:?}), so the credentials already issued to \
+         the affected user stay valid.\n\n{}",
+        offenders.join("\n")
+    );
+
+    found.sort_unstable();
+    let mut expected: Vec<String> = REVOKING_HANDLERS.iter().map(|s| (*s).to_string()).collect();
+    expected.sort_unstable();
+    assert_eq!(
+        found, expected,
+        "the set of session-revoking handlers changed — review the new or \
+         missing handler against the chokepoints and update REVOKING_HANDLERS"
+    );
+}
+
+/// Positive control: the revocation matcher must fire on a handler that
+/// locks via the bare primitive (skipping the authorizing chokepoint) and
+/// on a logout that never bumps, and must pass the compliant shapes.
+#[test]
+fn revocation_scan_fires_on_synthetic_violation() {
+    let bare_lock = "let action = AccountAction::Lock;\nlock_user(&ctx, &id)?;\n";
+    assert!(
+        revokes_without_chokepoint(bare_lock),
+        "a lock through the bare primitive must be flagged"
+    );
+
+    let cookie_only_logout = "pub async fn logout_action() -> Response {\n\
+                              clear_session_cookies(dev_mode, same_site)\n}\n";
+    assert!(
+        revokes_without_chokepoint(cookie_only_logout),
+        "a logout that only clears cookies must be flagged"
+    );
+
+    let compliant = "let action = AccountAction::Lock;\n\
+                     perform_account_action(&ctx, &id, action)?;\n";
+    assert!(!revokes_without_chokepoint(compliant));
+
+    let unrelated = "let doc = Update::run(&ctx, args)?;\n";
+    assert!(!is_revoking_handler(unrelated));
+}
+
 /// Reviewed offline-admin CLI write paths: `(path suffix, write call)`.
 /// Every entry documents which invariants the site maintains by hand.
 const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[

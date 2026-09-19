@@ -4,9 +4,13 @@
 //! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`, `trash`,
 //! `logs`, `mcp`.
 //! Running bare `crap-cms` prints help.
+//!
+//! The clap definitions themselves live in the library
+//! (`crap_cms::commands::cli`) so the same command tree can be
+//! introspected from inside the CMS; this file parses and dispatches.
 
 use anyhow::{Context as _, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -16,292 +20,9 @@ use tracing_subscriber::{
 
 use crap_cms::{
     cli::{self, crap_theme},
-    commands::{
-        self, BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction,
-        MakeAction, MigrateAction, TemplatesAction, TrashAction, TypegenAction, UpdateCmd,
-        UserAction, serve::ServeMode,
-    },
+    commands::{self, BlueprintAction, Cli, Command, DbAction, TemplatesAction, serve::ServeMode},
     config::{CrapConfig, LogRotation},
 };
-
-#[derive(Parser)]
-#[command(
-    name = "crap-cms",
-    about = "Crap CMS - Headless CMS with Lua hooks",
-    version
-)]
-struct Cli {
-    /// Path to the config directory (auto-detected from CWD if omitted)
-    #[arg(short = 'C', long, global = true, env = "CRAP_CONFIG_DIR")]
-    config: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Start the admin UI and gRPC servers
-    Serve {
-        /// Run in the background (detached)
-        #[arg(short, long, conflicts_with_all = ["stop", "restart", "status"])]
-        detach: bool,
-
-        /// Stop a running detached instance
-        #[arg(long, conflicts_with_all = ["detach", "restart", "status"])]
-        stop: bool,
-
-        /// Restart a running detached instance (stop + start)
-        #[arg(long, conflicts_with_all = ["detach", "stop", "status"])]
-        restart: bool,
-
-        /// Show status of a detached instance
-        #[arg(long, conflicts_with_all = ["detach", "stop", "restart"])]
-        status: bool,
-
-        /// Output logs as structured JSON (for log aggregation)
-        #[arg(long)]
-        json: bool,
-
-        /// Start only the specified server (admin or grpc). Omit to start both.
-        #[arg(long, value_enum)]
-        only: Option<ServeMode>,
-
-        /// Disable the background job scheduler
-        #[arg(long)]
-        no_scheduler: bool,
-    },
-
-    /// Run a standalone job worker (processes queues without HTTP/gRPC servers)
-    Work {
-        /// Run in the background (detached).
-        #[arg(short, long, conflicts_with_all = ["stop", "restart", "status"])]
-        detach: bool,
-
-        /// Stop a running detached worker.
-        #[arg(long, conflicts_with_all = ["detach", "restart", "status"])]
-        stop: bool,
-
-        /// Restart a running detached worker (stop + start).
-        #[arg(long, conflicts_with_all = ["detach", "stop", "status"])]
-        restart: bool,
-
-        /// Show status of a detached worker.
-        #[arg(long, conflicts_with_all = ["detach", "stop", "restart"])]
-        status: bool,
-
-        /// Process only specific queues (comma-separated). Default: all queues.
-        #[arg(long, value_delimiter = ',')]
-        queues: Option<Vec<String>>,
-
-        /// Override max concurrent jobs for this worker.
-        #[arg(long)]
-        concurrency: Option<usize>,
-
-        /// Skip cron scheduling (let another worker handle it).
-        #[arg(long)]
-        no_cron: bool,
-    },
-
-    /// Show project status (collections, globals, migrations)
-    Status {
-        /// Run best-practice health checks on configuration and project state
-        #[arg(long)]
-        check: bool,
-    },
-
-    /// User management for auth collections
-    #[command(name = "user")]
-    User {
-        #[command(subcommand)]
-        action: UserAction,
-    },
-
-    /// Scaffold a new config directory
-    Init {
-        /// Directory to create (prompted if omitted)
-        dir: Option<PathBuf>,
-
-        /// Non-interactive mode — skip all prompts, use defaults
-        #[arg(long)]
-        no_input: bool,
-    },
-
-    /// Generate scaffolding files (collection, global, hook, migration)
-    Make {
-        #[command(subcommand)]
-        action: MakeAction,
-    },
-
-    /// Manage saved blueprints
-    Blueprint {
-        #[command(subcommand)]
-        action: BlueprintAction,
-    },
-
-    /// Generate typed definitions from collection schemas
-    Typegen {
-        #[command(subcommand)]
-        action: TypegenAction,
-    },
-
-    /// Export the embedded content.proto file for gRPC client codegen
-    Proto {
-        /// Output path (file or directory). Omit to write to stdout.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Run database migrations
-    #[command(name = "migrate")]
-    Migrate {
-        #[command(subcommand)]
-        action: MigrateAction,
-    },
-
-    /// Backup database and optionally uploads
-    Backup {
-        /// Output directory (default: <`config_dir>/backups`/)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Also compress the uploads directory
-        #[arg(short, long)]
-        include_uploads: bool,
-    },
-
-    /// Restore database (and optionally uploads) from a backup directory
-    Restore {
-        /// Path to the backup directory (e.g. backups/backup-2026-03-07T10-00-00)
-        backup: PathBuf,
-
-        /// Also restore uploads from uploads.tar.gz if present
-        #[arg(short, long)]
-        include_uploads: bool,
-
-        /// Confirm destructive operation (required)
-        #[arg(short = 'y', long)]
-        confirm: bool,
-    },
-
-    /// Database tools
-    Db {
-        #[command(subcommand)]
-        action: DbAction,
-    },
-
-    /// Export collection data to JSON
-    Export {
-        /// Export only this collection (default: all)
-        #[arg(short, long)]
-        collection: Option<String>,
-
-        /// Output file (default: stdout)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Also export each account's password hash, lock, session version,
-        /// verification and TOTP state (treat the file like a database dump)
-        #[arg(long)]
-        include_credentials: bool,
-    },
-
-    /// Import collection data from JSON (raw upsert)
-    ///
-    /// Documents whose `id` already exists are updated, others are
-    /// created. Writes are raw: hooks and validators do NOT run.
-    /// Reference counts are kept consistent automatically.
-    Import {
-        /// JSON file to import
-        file: PathBuf,
-
-        /// Import only this collection (default: all in file)
-        #[arg(short, long)]
-        collection: Option<String>,
-    },
-
-    /// Manage admin template / static customizations: list, extract, status, diff
-    Templates {
-        #[command(subcommand)]
-        action: TemplatesAction,
-    },
-
-    /// Manage background jobs
-    Jobs {
-        #[command(subcommand)]
-        action: JobsAction,
-    },
-
-    /// Manage image processing queue
-    Images {
-        #[command(subcommand)]
-        action: ImagesAction,
-    },
-
-    /// Manage soft-deleted documents (trash)
-    Trash {
-        #[command(subcommand)]
-        action: TrashAction,
-    },
-
-    /// Start the MCP (Model Context Protocol) server (stdio transport)
-    Mcp,
-
-    /// View and manage log files
-    Logs {
-        /// Follow log output in real time
-        #[arg(short, long)]
-        follow: bool,
-
-        /// Number of lines to show (default: 100)
-        #[arg(short = 'n', long, default_value = "100")]
-        lines: usize,
-
-        #[command(subcommand)]
-        action: Option<LogsAction>,
-    },
-
-    /// Benchmark hooks, queries, and write cycles
-    Bench {
-        #[command(subcommand)]
-        action: BenchAction,
-    },
-
-    /// Format Handlebars templates (.hbs)
-    Fmt {
-        /// Paths to format. Files or directories. Defaults to `templates/`.
-        paths: Vec<PathBuf>,
-
-        /// Don't write — exit non-zero if any file would change. CI gate.
-        #[arg(long)]
-        check: bool,
-
-        /// Read source from stdin and write the formatted result to stdout.
-        /// Used by editor formatter integrations.
-        #[arg(long, conflicts_with = "check")]
-        stdio: bool,
-
-        /// Follow symlinks. Off by default: symlinked directories are not
-        /// descended and a symlinked `.hbs` is not written through to its
-        /// target (which may live outside the tree).
-        #[arg(long)]
-        follow_symlinks: bool,
-    },
-
-    /// Manage installed versions of crap-cms
-    Update {
-        /// Skip confirmation prompts (no-op for read-only subcommands).
-        #[arg(short = 'y', long, global = true)]
-        yes: bool,
-
-        /// Allow self-update even when the binary looks distro-managed.
-        #[arg(long, global = true)]
-        force: bool,
-
-        #[command(subcommand)]
-        action: Option<UpdateCmd>,
-    },
-}
 
 /// Binary entrypoint — parses CLI args and dispatches to the appropriate command.
 #[cfg(not(tarpaulin_include))]
@@ -556,6 +277,24 @@ struct LoggingSetup {
     dev_mode: bool,
 }
 
+/// Whether `command` starts a crap-cms process — in this process or as a
+/// detached child — and so needs the config loaded before logging is set up.
+///
+/// `--stop` and `--status` only signal or inspect a running instance. They
+/// must work while `crap.toml` no longer loads, or a server could never be
+/// stopped from the CLI once its config broke. A restart still loads the
+/// config first: stopping a healthy server for a config that cannot start
+/// is worse than a refused restart.
+fn starts_a_process(command: &Command) -> bool {
+    match command {
+        Command::Serve { stop, status, .. } | Command::Work { stop, status, .. } => {
+            !(*stop || *status)
+        }
+        Command::Mcp => true,
+        _ => false,
+    }
+}
+
 /// For long-running commands (`serve`, `work`, `mcp`), load config up
 /// front so file-logging can be initialized before any tracing call.
 /// Auto-enables file logging when the process is a detached child
@@ -566,11 +305,7 @@ fn prepare_logging_setup(
     config_flag: Option<PathBuf>,
     is_detached_child: bool,
 ) -> Result<LoggingSetup> {
-    let is_long_running = matches!(
-        command,
-        Command::Serve { .. } | Command::Work { .. } | Command::Mcp
-    );
-    if !is_long_running {
+    if !starts_a_process(command) {
         return Ok(LoggingSetup {
             serve_logging: None,
             dev_mode: false,
@@ -840,6 +575,102 @@ fn build_file_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `serve` invocation with only the given control flags set.
+    fn serve_with(stop: bool, status: bool, restart: bool) -> Command {
+        Command::Serve {
+            detach: false,
+            stop,
+            restart,
+            status,
+            json: false,
+            only: None,
+            no_scheduler: false,
+        }
+    }
+
+    /// A `work` invocation with only the given control flags set.
+    fn work_with(stop: bool, status: bool, restart: bool) -> Command {
+        Command::Work {
+            detach: false,
+            stop,
+            restart,
+            status,
+            queues: None,
+            concurrency: None,
+            no_cron: false,
+        }
+    }
+
+    /// A project directory whose `crap.toml` no longer deserializes.
+    fn broken_project() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nnot_a_field = 1\n").unwrap();
+
+        tmp
+    }
+
+    /// Regression: logging setup loaded (and validated) the config for every
+    /// `serve` / `work` variant, so once `crap.toml` broke, `--stop` and
+    /// `--status` failed before they could reach the running instance.
+    #[test]
+    fn stop_and_status_reach_dispatch_with_a_broken_config() {
+        let tmp = broken_project();
+        let dir = Some(tmp.path().to_path_buf());
+
+        for command in [
+            serve_with(true, false, false),
+            serve_with(false, true, false),
+            work_with(true, false, false),
+            work_with(false, true, false),
+        ] {
+            let setup = prepare_logging_setup(&command, dir.clone(), false)
+                .expect("a control command must not fail on the config");
+
+            assert!(setup.serve_logging.is_none());
+            assert!(!setup.dev_mode);
+        }
+    }
+
+    /// The commands that start a process still fail fast on a broken config:
+    /// a detached child would otherwise die silently in the background, and a
+    /// restart must not stop a healthy server for a config that cannot start.
+    #[test]
+    fn starting_commands_still_load_the_config() {
+        let tmp = broken_project();
+        let dir = Some(tmp.path().to_path_buf());
+
+        for command in [
+            serve_with(false, false, false),
+            serve_with(false, false, true),
+            work_with(false, false, false),
+            work_with(false, false, true),
+            Command::Mcp,
+        ] {
+            assert!(
+                prepare_logging_setup(&command, dir.clone(), false).is_err(),
+                "a starting command must surface the config error"
+            );
+        }
+    }
+
+    /// With a loadable config the long-running commands get their file-logging
+    /// setup, and a detached child has file logging forced on.
+    #[test]
+    fn starting_commands_carry_the_logging_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        let dir = Some(tmp.path().to_path_buf());
+
+        let setup = prepare_logging_setup(&serve_with(false, false, false), dir.clone(), true)
+            .expect("an empty crap.toml loads");
+        let (_, logging) = setup.serve_logging.expect("serve carries logging");
+        assert!(logging.file, "a detached child logs to file");
+
+        let setup = prepare_logging_setup(&serve_with(true, false, false), dir, true)
+            .expect("stop loads nothing");
+        assert!(setup.serve_logging.is_none());
+    }
 
     #[test]
     fn only_mcp_routes_console_logs_to_stderr() {

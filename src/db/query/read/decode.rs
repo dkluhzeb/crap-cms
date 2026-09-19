@@ -2,9 +2,13 @@
 //! columns to the values reads return.
 
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition},
+    core::{
+        BLOCK_TYPE_KEY, BlockDefinition, Document, DocumentFields, FieldChildren, FieldDefinition,
+        JsonRoot, field_children,
+    },
     db::{
         DbConnection, DbRow, LocaleContext, LocaleMode,
         document::row_to_document,
@@ -46,28 +50,123 @@ pub(crate) fn decode_row(
 /// its field. Array and blocks rows are decoded by their own hydration.
 fn decode_columns(fields: &[FieldDefinition], doc: &mut Document) {
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if !field.has_parent_column() || !decodes(field) {
-            return Ok(());
-        }
-
-        let base = prefixed_name(prefix, &field.name);
-        let per_locale = format!("{base}__");
-        let keys: Vec<String> = doc
-            .fields
-            .keys()
-            .filter(|k| **k == base || k.starts_with(&per_locale))
-            .cloned()
-            .collect();
-
-        for key in keys {
-            if let Some(value) = doc.fields.get(&key) {
-                let decoded = decode_value(field, value);
-                doc.fields.insert(key, decoded);
-            }
+        if field.has_parent_column() {
+            decode_column(&mut doc.fields, &prefixed_name(prefix, &field.name), field);
         }
 
         Ok(())
     });
+}
+
+/// Decode the column `base` of `level` — and its per-locale columns
+/// (`{base}__{locale}`) — by `field`, when the field decodes at all.
+fn decode_column<R: JsonRoot>(level: &mut R, base: &str, field: &FieldDefinition) {
+    if !decodes(field) {
+        return;
+    }
+
+    for key in column_keys(&*level, base) {
+        if let Some(value) = level.root_get(&key) {
+            let decoded = decode_value(field, value);
+            level.root_insert(key, decoded);
+        }
+    }
+}
+
+/// The keys of `level` that hold the column `base`: the bare key and every
+/// per-locale one.
+fn column_keys<R: JsonRoot>(level: &R, base: &str) -> Vec<String> {
+    let per_locale = format!("{base}__");
+
+    level
+        .root_keys()
+        .into_iter()
+        .filter(|key| key == base || key.starts_with(&per_locale))
+        .collect()
+}
+
+/// Decode a document held outside its table — a version or draft snapshot —
+/// the way a read of the table decodes it, at every depth: a column (bare or
+/// per locale), a group's leaves (nested as snapshots keep them, or flat), an
+/// array row's columns and a blocks row's fields, so a snapshot written before
+/// a column's read form changed reads like the live row.
+pub(crate) fn decode_document_values(data: &mut DocumentFields, fields: &[FieldDefinition]) {
+    decode_level(data, fields, "");
+}
+
+/// Decode every field of `fields` found at `level` under `prefix`.
+fn decode_level<R: JsonRoot>(level: &mut R, fields: &[FieldDefinition], prefix: &str) {
+    for field in fields {
+        let name = prefixed_name(prefix, &field.name);
+
+        match field_children(field) {
+            FieldChildren::Leaf => {
+                if field.has_parent_column() {
+                    decode_column(level, &name, field);
+                }
+            }
+            FieldChildren::Group(sub) => decode_group(level, &name, sub),
+            FieldChildren::Wrapper(sub) => decode_level(level, sub, prefix),
+            FieldChildren::Tabs(tabs) => {
+                for tab in tabs {
+                    decode_level(level, &tab.fields, prefix);
+                }
+            }
+            FieldChildren::Array(sub) => {
+                decode_rows(level, &name, |row| decode_level(row, sub, ""));
+            }
+            FieldChildren::Blocks(defs) => {
+                decode_rows(level, &name, |row| decode_block_row(row, defs));
+            }
+        }
+    }
+}
+
+/// A group's leaves sit in a nested object (as snapshots keep them) or flat
+/// under `group__leaf` (as a row reads them); both forms are decoded.
+fn decode_group<R: JsonRoot>(level: &mut R, name: &str, sub: &[FieldDefinition]) {
+    if let Some(Value::Object(nested)) = level.root_get_mut(name) {
+        decode_level(nested, sub, "");
+    }
+
+    decode_level(level, sub, &format!("{name}__"));
+}
+
+/// Apply `decode_row` to every object row of the list stored under `name`,
+/// bare or per locale.
+fn decode_rows<R: JsonRoot>(
+    level: &mut R,
+    name: &str,
+    mut decode_row: impl FnMut(&mut serde_json::Map<String, Value>),
+) {
+    for key in column_keys(&*level, name) {
+        if let Some(Value::Array(rows)) = level.root_get_mut(&key) {
+            for row in rows.iter_mut().filter_map(Value::as_object_mut) {
+                decode_row(row);
+            }
+        }
+    }
+}
+
+/// Decode a blocks row against its block's fields — or, when the row names
+/// no known block, against every block's fields.
+fn decode_block_row(row: &mut serde_json::Map<String, Value>, defs: &[BlockDefinition]) {
+    let block_type = row
+        .get(BLOCK_TYPE_KEY)
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let matched = block_type
+        .as_deref()
+        .and_then(|ty| defs.iter().find(|def| def.block_type == ty));
+
+    match matched {
+        Some(def) => decode_level(row, &def.fields, ""),
+        None => {
+            for def in defs {
+                decode_level(row, &def.fields, "");
+            }
+        }
+    }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -116,5 +215,111 @@ mod tests {
             doc.fields.get("tags"),
             Some(&json!({ "en": ["a", "b"], "de": ["c"] }))
         );
+    }
+
+    /// Regression: a checkbox column read as the `1`/`0` its column holds, and
+    /// a JSON column as its text, while the same fields inside a row read as a
+    /// boolean and a parsed value. A row decodes every column — a group's
+    /// prefixed column and a per-locale column included.
+    #[test]
+    fn a_row_decodes_checkbox_and_json_columns() {
+        let conn = InMemoryConn::open();
+        let fields = vec![
+            FieldDefinition::builder("done", FieldType::Checkbox).build(),
+            FieldDefinition::builder("meta", FieldType::Json).build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("index", FieldType::Checkbox).build(),
+                ])
+                .build(),
+            FieldDefinition::builder("flag", FieldType::Checkbox)
+                .localized(true)
+                .build(),
+        ];
+        let row = DbRow::new(
+            vec![
+                "id".into(),
+                "done".into(),
+                "meta".into(),
+                "seo__index".into(),
+                "flag__en".into(),
+                "flag__de".into(),
+            ],
+            vec![
+                DbValue::Text("d1".into()),
+                DbValue::Integer(1),
+                DbValue::Text(r#"{"n":1}"#.into()),
+                DbValue::Integer(0),
+                DbValue::Integer(1),
+                DbValue::Null,
+            ],
+        );
+        let ctx = LocaleContext {
+            mode: LocaleMode::All,
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        };
+
+        let doc = decode_row(&conn, &row, &fields, Some(&ctx)).unwrap();
+
+        assert_eq!(doc.fields.get("done"), Some(&json!(true)));
+        assert_eq!(doc.fields.get("meta"), Some(&json!({ "n": 1 })));
+        assert_eq!(doc.fields.get("seo__index"), Some(&json!(false)));
+        assert_eq!(
+            doc.fields.get("flag"),
+            Some(&json!({ "en": true, "de": false })),
+            "an unset checkbox column reads as false"
+        );
+    }
+
+    /// A snapshot written before a column's read form changed — a checkbox as
+    /// `1`, JSON as text, in a column, a per-locale column and an array row —
+    /// decodes as a table read does. Blocks rows are stored typed already.
+    #[test]
+    fn a_snapshot_decodes_its_columns_and_array_rows() {
+        let fields = vec![
+            FieldDefinition::builder("done", FieldType::Checkbox)
+                .localized(true)
+                .build(),
+            FieldDefinition::builder("meta", FieldType::Json).build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("flag", FieldType::Checkbox).build(),
+                    FieldDefinition::builder("extra", FieldType::Json).build(),
+                    FieldDefinition::builder("sub", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("deep", FieldType::Checkbox).build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("done".to_string(), json!(1));
+        data.insert("done__en".to_string(), json!(1));
+        data.insert("done__de".to_string(), json!(0));
+        data.insert("meta".to_string(), json!("{\"n\":1}"));
+        data.insert(
+            "items".to_string(),
+            json!([{ "id": "r1", "flag": 1, "extra": "[1]", "sub": { "deep": true } }]),
+        );
+
+        decode_document_values(&mut data, &fields);
+
+        assert_eq!(data.get("done"), Some(&json!(true)));
+        assert_eq!(data.get("done__en"), Some(&json!(true)));
+        assert_eq!(data.get("done__de"), Some(&json!(false)));
+        assert_eq!(data.get("meta"), Some(&json!({ "n": 1 })));
+        assert_eq!(
+            data.get("items"),
+            Some(&json!([{ "id": "r1", "flag": true, "extra": [1], "sub": { "deep": true } }]))
+        );
+
+        let once = data.clone();
+        decode_document_values(&mut data, &fields);
+        assert_eq!(data, once, "decoding a decoded snapshot changes nothing");
     }
 }

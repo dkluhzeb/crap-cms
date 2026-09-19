@@ -627,6 +627,9 @@ pub enum TrashAction {
         /// Print what would be deleted without actually deleting
         #[arg(long)]
         dry_run: bool,
+        /// Confirm destructive operation (required unless --dry-run)
+        #[arg(short = 'y', long)]
+        confirm: bool,
     },
     /// Restore a trashed document
     Restore {

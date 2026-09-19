@@ -47,6 +47,11 @@ use crate::common::production_code;
 /// number of dispatches reviewed there, and why they are not hand-rolled
 /// composite descent.
 const ALLOWLIST: &[(&str, usize, &str)] = &[
+    (
+        "src/core/field/storage.rs",
+        1,
+        "per-field value mapping (which column forms a read decodes), no tree descent",
+    ),
     // The classifier itself, and the canonical in-row walker.
     (
         "src/core/walk.rs",

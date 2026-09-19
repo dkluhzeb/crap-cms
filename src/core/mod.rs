@@ -99,7 +99,8 @@ pub use lifecycle::{Readiness, SERVER_DRAIN_SECS, drain_with_deadline};
 pub use lua_lease::{LocalLease, LuaVmLease};
 pub use nesting_depth::{NESTING_DEPTH, NestingDepth, max_nesting_depth, set_max_nesting_depth};
 pub use parse::{
-    checkbox_value, json_truthy, parse_bool, parse_number, parse_truthy, value_truthy,
+    checkbox_value, is_empty_object, json_truthy, parse_bool, parse_number, parse_truthy,
+    value_truthy,
 };
 pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry, StrategyEntry};

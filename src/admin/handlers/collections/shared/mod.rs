@@ -22,4 +22,4 @@ pub(super) use image::thumbnail_url;
 
 // Re-export update/delete handlers
 pub(super) use delete::delete_action_impl;
-pub(super) use update::do_update;
+pub(super) use update::{UpdateRequest, do_update};

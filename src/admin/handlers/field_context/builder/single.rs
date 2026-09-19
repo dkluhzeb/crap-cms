@@ -20,8 +20,8 @@ use crate::{
         handlers::{
             field_context::{
                 MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-                count_errors_in_field_contexts, date_picker_values, locale_locked_display,
-                safe_template_id, tag_values, tags_input_value,
+                count_errors_in_field_contexts, date_picker_values, json_textarea_value,
+                locale_locked_display, picker_step, safe_template_id, tag_values, tags_input_value,
             },
             shared::admin_form_fields,
         },
@@ -168,11 +168,7 @@ fn construct_field_variant(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCon
             has_many: None,
             tags: None,
         }),
-        FieldType::Json => FieldContext::Json(TextField {
-            base,
-            has_many: None,
-            tags: None,
-        }),
+        FieldType::Json => construct_json(base, fc),
         FieldType::Textarea => construct_textarea(base, fc),
         FieldType::Number if fc.field.has_many => construct_number_tags(base, fc),
         FieldType::Number => construct_number(base, fc),
@@ -308,6 +304,18 @@ fn construct_richtext(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCont
     })
 }
 
+/// The JSON textarea shows a stored value pretty-printed; the text it submits
+/// is parsed back on write, so a no-op save stores the same value.
+fn construct_json(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
+    base.value = Value::String(json_textarea_value(fc.value));
+
+    FieldContext::Json(TextField {
+        base,
+        has_many: None,
+        tags: None,
+    })
+}
+
 fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let appearance = fc
         .field
@@ -325,6 +333,7 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 
     let (date_only_value, datetime_local_value) =
         date_picker_values(fc.value, tz_value, &appearance);
+    let step = picker_step(fc.value, tz_value, &appearance);
 
     let (timezone_enabled, default_timezone, timezone_options, timezone_value) =
         if fc.field.timezone {
@@ -357,6 +366,7 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         picker_appearance: appearance,
         date_only_value,
         datetime_local_value,
+        step,
         min_date: fc.field.min_date.clone(),
         max_date: fc.field.max_date.clone(),
         timezone_enabled,

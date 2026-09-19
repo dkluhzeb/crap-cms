@@ -206,6 +206,12 @@ freeze is unconditional.
 
 ## Client-visible shapes
 
+- **Field read shapes are the same at every nesting depth and on every
+  surface**: a checkbox is `true`/`false` (never the column's `0`/`1`), a
+  `json` field is the parsed value, a scalar has-many list is a JSON list, a
+  number that is whole is an integer. One decode (`decode_value`) produces
+  them for columns, group columns and array-row columns; JSON-stored rows are
+  written in that form.
 - **Returned document shape.** `id`, the field columns, `created_at`,
   `updated_at`. Localized fields under `locale = "all"` are a per-locale map
   (`{ en = .., de = .. }`); single-locale reads return the scalar.
@@ -509,7 +515,9 @@ changing a representation is a breaking change to every consumer.
 - **Hook-return semantics.** Only `data` and `context` are read back; `data`
   **replaces** `ctx.data` wholesale. A normal hook returning `false` is ignored
   (only `error()` aborts); `before_broadcast`/live-filter returning `false`/`nil`
-  suppresses. These asymmetric meanings are locked.
+  suppresses, a table is a hook error and any other type suppresses with a
+  warning (fail-closed, like every boolean gate). These asymmetric meanings
+  are locked.
 - **`ctx.operation` value set**: `create` / `update` / `delete` / `find` /
   `find_by_id` / `get` / `init` (hook context); access functions also see
   `trash` / `undelete` / `unpublish` / `restore` / `count` / `search` / `read` /

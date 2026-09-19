@@ -295,9 +295,15 @@ pub struct DateField {
     pub date_only_value: Option<String>,
 
     /// Set when `picker_appearance == "dayAndTime"` — the
-    /// `YYYY-MM-DDTHH:MM` slice for the `<input type="datetime-local">`.
+    /// `YYYY-MM-DDTHH:MM` slice for the `<input type="datetime-local">`, or
+    /// `YYYY-MM-DDTHH:MM:SS` when the stored value carries seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datetime_local_value: Option<String>,
+
+    /// The input's `step` — `"1"` when the shown value carries seconds, so the
+    /// browser shows and re-submits them instead of dropping them on save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_date: Option<String>,
@@ -330,6 +336,7 @@ impl DateField {
             picker_appearance: "dayOnly".to_string(),
             date_only_value: None,
             datetime_local_value: None,
+            step: None,
             min_date: None,
             max_date: None,
             timezone_enabled: None,
@@ -543,6 +550,7 @@ mod tests {
             picker_appearance: "dayOnly".to_string(),
             date_only_value: Some("2026-01-15".to_string()),
             datetime_local_value: None,
+            step: None,
             min_date: None,
             max_date: None,
             timezone_enabled: None,
@@ -563,6 +571,7 @@ mod tests {
             picker_appearance: "dayAndTime".to_string(),
             date_only_value: None,
             datetime_local_value: Some("2026-01-15T09:30".to_string()),
+            step: None,
             min_date: None,
             max_date: None,
             timezone_enabled: Some(true),

@@ -101,23 +101,32 @@ impl LocaleConfig {
     /// a confusing duplicate-column error or, where the column already exists,
     /// two locales silently overwrite each other's content. Comparing the raw
     /// codes missed that entirely.
+    ///
+    /// The comparison is also case-insensitive. `SQLite` treats `title__pt_BR`
+    /// and `title__pt_br` as one column (the first sync fails with a raw
+    /// duplicate-column error) while Postgres creates two, so `pt-BR` and
+    /// `pt-br` are refused up front, the same way on both backends.
     fn reject_colliding_locales(&self) -> Result<()> {
-        let mut by_column: HashMap<String, &str> = HashMap::new();
+        let mut by_column: HashMap<String, (&str, String)> = HashMap::new();
 
         for locale in &self.locales {
             let column_form = sanitize_locale(locale)?;
+            let column_key = column_form.to_ascii_lowercase();
 
-            let Some(previous) = by_column.insert(column_form.clone(), locale) else {
+            let Some((previous, previous_column)) =
+                by_column.insert(column_key, (locale.as_str(), column_form))
+            else {
                 continue;
             };
 
-            if previous == locale {
+            if previous == locale.as_str() {
                 bail!("Duplicate locale '{locale}' in the locales list");
             }
 
             bail!(
                 "Locales '{previous}' and '{locale}' both store their values in \
-                 '__{column_form}' columns — locale codes must differ by more than a separator"
+                 '__{previous_column}' columns (column names are case-insensitive) — \
+                 locale codes must differ by more than a separator or letter case"
             );
         }
 
@@ -194,6 +203,29 @@ mod tests {
 
         assert!(err.contains("'pt-BR' and 'pt_BR'"), "unexpected: {err}");
         assert!(err.contains("__pt_BR"), "unexpected: {err}");
+    }
+
+    /// Regression: `pt-BR` and `pt-br` passed validation (their column forms
+    /// differ in case), then `SQLite` refused the second column as a duplicate
+    /// while Postgres created both. One rule for both backends: locale codes
+    /// that differ only in letter case are refused at config load.
+    #[test]
+    fn locale_validation_rejects_codes_that_differ_only_in_case() {
+        for (first, second) in [("pt-BR", "pt-br"), ("en", "EN")] {
+            let config = LocaleConfig {
+                default_locale: first.to_string(),
+                locales: vec![first.to_string(), second.to_string()],
+                fallback: true,
+            };
+
+            let err = config.validate().unwrap_err().to_string();
+
+            assert!(
+                err.contains(&format!("'{first}' and '{second}'")),
+                "unexpected: {err}"
+            );
+            assert!(err.contains("case-insensitive"), "unexpected: {err}");
+        }
     }
 
     /// The fingerprint follows the default locale and the set of locales —

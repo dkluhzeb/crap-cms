@@ -95,7 +95,7 @@ crap.collections.define("posts", {
 })
 ```
 
-The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, id, edited_by, options }`; `operation` is one of `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` — the affected document's id is `ctx.id`, matching the other hook contexts; the serialized event payload calls the same value `document_id`) and returns `true` to broadcast or `false`/`nil` to suppress.
+The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, id, edited_by, options }`; `operation` is one of `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` — the affected document's id is `ctx.id`, matching the other hook contexts; the serialized event payload calls the same value `document_id`) and returns `true` to broadcast or `false`/`nil` to suppress. Returning a table is a hook error (the event is not broadcast); any other type suppresses with a warning — the same boolean rule every other Lua gate follows.
 
 `filter` may be a bare ref string **or** a `{ ref, options }` table — the options reach the filter as `ctx.options`, so one gate function can be reused across collections with different config:
 

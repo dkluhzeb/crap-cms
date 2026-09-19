@@ -10,7 +10,7 @@ mod field;
 mod test_helpers;
 
 pub(crate) use boolean::boolean_verdict;
-pub(crate) use collection::{check_access_with_lua, check_collection_access};
+pub(crate) use collection::check_collection_access;
 pub(crate) use field::{
     ReadStripInput, WriteStripInput, check_field_read_access_with_lua,
     check_field_write_access_with_lua, collect_denials_flat, collect_read_denied_with_lua,

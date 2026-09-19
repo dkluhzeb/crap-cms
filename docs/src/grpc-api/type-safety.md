@@ -43,6 +43,7 @@ message FieldValue {
 
 A producer sets exactly one variant per value. Read a value via the oneof
 accessor for its kind: `string_value` for text, `bool_value` for checkboxes,
+`struct_value` / `list_value` for `json` fields (their parsed value),
 `struct_value` (a nested `DataMap`) for groups, `list_value` (a `FieldList`) for
 arrays/blocks, and `null_value` for null. **Numbers split into two variants** —
 whole numbers arrive as `int_value` (an exact `int64`), fractional ones as

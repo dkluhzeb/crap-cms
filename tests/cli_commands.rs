@@ -720,6 +720,7 @@ fn cmd_trash_purge_removes_files_of_a_localized_upload_collection() {
             collection: Some("docs".to_string()),
             older_than: "all".to_string(),
             dry_run: false,
+            confirm: true,
         },
         &config_dir,
     )

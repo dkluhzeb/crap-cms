@@ -1,6 +1,6 @@
 # Checkbox
 
-Boolean field stored as an integer (0 or 1).
+Boolean field. Stored as an integer (`0`/`1`); every read — find, versions, drafts, live events, populate, gRPC `bool_value`, Lua — returns `true`/`false`, at any nesting depth (an unset column reads `false`).
 
 ## SQLite Storage
 
@@ -27,4 +27,4 @@ The following string values are treated as `true`: `"on"`, `"true"`, `"1"`, `"ye
 
 - Absent checkboxes are always treated as `false` (not as a missing/required field). A checkbox the caller may not write (`access.update` denies it) is the exception: it keeps its stored value instead of being read as unchecked
 - The `required` property is effectively ignored for checkboxes — an unchecked checkbox is always valid
-- Default value is `0` at the database level
+- Default value is `0` at the database level (reads as `false`)

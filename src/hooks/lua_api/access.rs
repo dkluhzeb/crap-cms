@@ -14,8 +14,9 @@ use crate::db::{AccessResult, FilterClause, FilterOp};
 use crate::hooks::lifecycle::{
     AccessCheckInput, UserContext,
     access::{
-        check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,
-        collect_read_denied_with_lua, collect_write_denied_with_lua,
+        check_collection_access, check_field_read_access_with_lua,
+        check_field_write_access_with_lua, collect_read_denied_with_lua,
+        collect_write_denied_with_lua,
     },
 };
 use crate::hooks::lua_api::lua_to_json;
@@ -42,7 +43,7 @@ fn access_check_init(
     lua: &Lua,
     #[lua(doc = "Collection or global slug.")] collection: String,
     #[lua(
-        doc = "Operation: `\"read\"`, `\"create\"`, `\"update\"`, `\"delete\"`, or `\"trash\"`."
+        doc = "Operation: `\"read\"`, `\"create\"`, `\"update\"`, `\"delete\"`, `\"trash\"`, or `\"unlock\"` (`trash` / `unlock` fall back to the `update` rule when unset; globals take `\"read\"` / `\"update\"`)."
     )]
     operation: String,
 ) -> LuaResult<Value> {
@@ -246,6 +247,11 @@ fn resolve_access_ref(
 /// Evaluates the configured access function for the given collection and operation
 /// against the current user. Returns `"allowed"`, `"denied"`, or a table of
 /// constraint filters.
+///
+/// Goes through the same chokepoint enforcement resolves access through
+/// (`check_collection_access`), so a constraint the enforcement path rejects
+/// (a disallowed operator, a system column) is reported here as the same
+/// error instead of as a usable constraint table.
 fn check_impl(
     lua: &Lua,
     registry: &Registry,
@@ -255,7 +261,7 @@ fn check_impl(
     let access = resolve_access_ref(registry, collection, operation)?;
     let user = current_user(lua);
 
-    let result = check_access_with_lua(
+    let result = check_collection_access(
         lua,
         &AccessCheckInput::builder(operation, collection)
             .access(access.as_ref())
@@ -508,6 +514,46 @@ mod tests {
             Value::String(s) => assert_eq!(s.to_str().unwrap(), "allowed"),
             other => panic!("Expected string 'allowed', got {other:?}"),
         }
+    }
+
+    /// `crap.access.check` must give the SAME verdict as enforcement. A rule
+    /// returning a constraint with a disallowed (ordered) operator is rejected
+    /// by the enforcement chokepoint; the introspection call used to bypass it
+    /// and hand the constraint back as a table.
+    #[test]
+    fn check_agrees_with_enforcement_on_a_disallowed_operator() {
+        let lua = Lua::new();
+        lua.load(
+            r#"package.loaded["rules"] = {
+                gt = function(ctx) return { score = { greater_than = "5" } } end,
+            }"#,
+        )
+        .exec()
+        .unwrap();
+        let rule = HookRef::new("rules.gt");
+        let access = Access {
+            read: Some(rule.clone()),
+            ..Access::default()
+        };
+        let registry = make_registry_with_collection("posts", access);
+
+        let from_lua = check_impl(&lua, &registry, "posts", "read")
+            .expect_err("the introspection call must reject what enforcement rejects")
+            .to_string();
+        let from_enforcement = check_collection_access(
+            &lua,
+            &AccessCheckInput::builder("read", "posts")
+                .access(Some(&rule))
+                .build(),
+        )
+        .expect_err("enforcement rejects the ordered operator")
+        .to_string();
+
+        assert!(from_lua.contains("greater_than"), "{from_lua}");
+        assert!(
+            from_enforcement.contains("greater_than"),
+            "{from_enforcement}"
+        );
     }
 
     #[test]

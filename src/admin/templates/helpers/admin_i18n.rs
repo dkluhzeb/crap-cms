@@ -47,6 +47,8 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "op_created",
     "op_updated",
     "op_deleted",
+    "op_restored",
+    "op_unpublished",
     "stale_deleted",
     "stale_updated",
     "op_is",
@@ -181,11 +183,111 @@ mod tests {
     }
 
     use super::ADMIN_JS_KEYS;
-    use std::fs;
+    use std::{collections::HashMap, fs, path::Path};
 
     use serde_json::{Value, json};
 
     use crate::admin::templates::helpers::test_helpers::test_hbs_with_translations;
+
+    /// The keys a JavaScript source asks `t()` for.
+    ///
+    /// `t` has to stand alone: plenty of calls end in `t(` without being a
+    /// translation (`document.createElement('div')`, `params.get('_method')`).
+    fn translation_keys_in(source: &str) -> Vec<String> {
+        let bytes = source.as_bytes();
+        let mut keys = Vec::new();
+        let mut at = 0;
+
+        while let Some(offset) = source[at..].find("t('") {
+            let start = at + offset;
+            at = start + 3;
+
+            let preceded_by_name = start
+                .checked_sub(1)
+                .map(|before| bytes[before])
+                .is_some_and(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'.')
+                });
+
+            if preceded_by_name {
+                continue;
+            }
+
+            let Some(end) = source[at..].find('\'') else {
+                continue;
+            };
+
+            keys.push(source[at..at + end].to_string());
+            at += end + 1;
+        }
+
+        keys
+    }
+
+    /// Every component source, nested directories included.
+    fn collect_js(dir: &Path, out: &mut Vec<(String, String)>) {
+        for entry in fs::read_dir(dir)
+            .expect("readable component directory")
+            .flatten()
+        {
+            let path = entry.path();
+
+            if path.is_dir() {
+                collect_js(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "js") {
+                let source = fs::read_to_string(&path).expect("readable component source");
+
+                out.push((path.display().to_string(), source));
+            }
+        }
+    }
+
+    fn component_sources() -> Vec<(String, String)> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("static/components");
+        let mut out = Vec::new();
+
+        collect_js(&root, &mut out);
+        assert!(!out.is_empty(), "no component sources found under {root:?}");
+
+        out
+    }
+
+    /// The scanner reads a standalone call and ignores an identifier that
+    /// merely ends in `t`.
+    #[test]
+    fn the_scanner_reads_only_standalone_calls() {
+        let source =
+            "const a = t('save');\nconst b = document.createElement('div');\nq.get('_method');";
+
+        assert_eq!(translation_keys_in(source), vec!["save".to_string()]);
+    }
+
+    /// Pin: every key the admin JS asks `t()` for is shipped in the data
+    /// island, and every key the island ships has an English translation. A
+    /// key missing from the list still renders — as its own bare name — which
+    /// is how two live-event labels reached the toast untranslated.
+    #[test]
+    fn every_js_translation_key_ships_and_resolves() {
+        let english: HashMap<String, String> =
+            serde_json::from_str(include_str!("../../../../translations/en.json"))
+                .expect("en.json is a flat string map");
+
+        for (file, source) in component_sources() {
+            for key in translation_keys_in(&source) {
+                assert!(
+                    ADMIN_JS_KEYS.contains(&key.as_str()),
+                    "{file} translates '{key}' but ADMIN_JS_KEYS does not ship it"
+                );
+            }
+        }
+
+        for key in ADMIN_JS_KEYS {
+            assert!(
+                english.contains_key(*key),
+                "ADMIN_JS_KEYS ships '{key}' but translations/en.json has no entry"
+            );
+        }
+    }
 
     #[test]
     fn renders_valid_json_object_for_default_locale() {

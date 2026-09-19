@@ -250,6 +250,10 @@ fn restore_database(
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
+    // Decided before the checkpoint opens a pool: opening one creates an
+    // empty database where there was none, which is nothing to keep aside.
+    let kept = db_path.exists();
+
     let sidecars = checkpoint_and_list_sidecars(config_dir, cfg, db_path)?;
 
     let spin = Spinner::new("Restoring database...");
@@ -259,7 +263,6 @@ fn restore_database(
         .with_context(|| format!("Failed to stage database copy at {}", staged.display()))?;
 
     let aside = db_path.with_extension("db.pre-restore");
-    let kept = db_path.exists();
     if kept {
         keep_previous_database(db_path, &aside)?;
     }
@@ -452,6 +455,53 @@ mod tests {
         keep_previous_database(&db_path, &aside).unwrap();
 
         assert_eq!(fs::read(&aside).unwrap(), b"current");
+    }
+
+    /// Regression: the checkpoint opened a pool before the restore looked
+    /// whether a database existed, and opening the pool creates an empty one
+    /// — so restoring into a project without a database kept an empty
+    /// `crap.db.pre-restore` and announced it as the previous database.
+    #[test]
+    fn restoring_into_a_project_without_a_database_keeps_nothing_aside() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+        fs::write(backup_dir.path().join("crap.db"), b"restored database").unwrap();
+
+        let mut cfg = CrapConfig::default();
+        cfg.database.path = "crap.db".to_string();
+        let db_path = cfg.db_path(config_dir.path());
+        assert!(!db_path.exists(), "the project starts without a database");
+
+        restore_database(config_dir.path(), &cfg, backup_dir.path(), &db_path).unwrap();
+
+        assert_eq!(fs::read(&db_path).unwrap(), b"restored database");
+        assert!(
+            !db_path.with_extension("db.pre-restore").exists(),
+            "there was no previous database to keep"
+        );
+    }
+
+    /// The positive control: a project WITH a database keeps it aside.
+    #[test]
+    fn restoring_over_a_database_keeps_it_aside() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+        fs::write(backup_dir.path().join("crap.db"), b"restored database").unwrap();
+
+        let mut cfg = CrapConfig::default();
+        cfg.database.path = "crap.db".to_string();
+        let db_path = cfg.db_path(config_dir.path());
+        let pool = pool::create_pool(config_dir.path(), &cfg).unwrap();
+        drop(pool);
+        assert!(db_path.exists(), "the pool created the previous database");
+
+        restore_database(config_dir.path(), &cfg, backup_dir.path(), &db_path).unwrap();
+
+        assert_eq!(fs::read(&db_path).unwrap(), b"restored database");
+        assert!(
+            db_path.with_extension("db.pre-restore").exists(),
+            "the previous database is kept aside"
+        );
     }
 
     /// Sidecars are removed before the swap; one already gone is not an error

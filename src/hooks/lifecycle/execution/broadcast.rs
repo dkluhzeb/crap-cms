@@ -35,7 +35,7 @@ pub(crate) fn call_before_broadcast_hook(
         Value::Table(tbl) => {
             let mut ctx = context;
 
-            read_hook_result(&mut ctx, &tbl)?;
+            read_hook_result(&mut ctx, &tbl, hook_ref)?;
 
             Ok(Some(ctx))
         }
@@ -85,7 +85,8 @@ pub(crate) fn call_registered_before_broadcast(
         match result {
             Value::Boolean(false) | Value::Nil => return Ok(None),
             Value::Table(tbl) => {
-                read_hook_result(&mut context, &tbl)?;
+                let hook_name = format!("registered before_broadcast hook #{i}");
+                read_hook_result(&mut context, &tbl, &hook_name)?;
             }
             other => {
                 warn!(

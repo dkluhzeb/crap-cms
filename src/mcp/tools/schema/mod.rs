@@ -1,7 +1,6 @@
 //! Static (non-CRUD) tool implementations: collection listing, describe, field types,
 //! CLI reference, and config file operations.
 
-mod cli_details;
 mod cli_reference;
 mod config_files;
 mod describe_collection;

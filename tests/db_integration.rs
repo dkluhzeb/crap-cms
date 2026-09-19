@@ -799,23 +799,23 @@ fn coerce_checkbox_values() {
     )
     .expect("Sync");
 
-    // "on" → 1
+    // "on" → true
     let mut data = DocumentFields::new();
     data.insert("active".to_string(), json!("on"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "forms", &def, &data, None).expect("Create");
     tx.commit().expect("Commit");
-    assert_eq!(doc.get("active").unwrap().as_i64(), Some(1));
+    assert_eq!(doc.get("active").unwrap().as_bool(), Some(true));
 
-    // "false" → 0
+    // "false" → false
     let mut data = DocumentFields::new();
     data.insert("active".to_string(), json!("false"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "forms", &def, &data, None).expect("Create");
     tx.commit().expect("Commit");
-    assert_eq!(doc.get("active").unwrap().as_i64(), Some(0));
+    assert_eq!(doc.get("active").unwrap().as_bool(), Some(false));
 }
 
 #[test]

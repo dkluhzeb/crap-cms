@@ -82,13 +82,47 @@ fn with_defaults_fn(
     extras: Option<Table>,
 ) -> LuaResult<Table> {
     let out = default_methods_table(lua)?;
-    if let Some(extras) = extras {
-        let start = out.len()?;
-        for (i, m) in extras.sequence_values::<Table>().flatten().enumerate() {
-            out.set(start + i64::try_from(i).unwrap_or(i64::MAX) + 1, m)?;
-        }
+
+    let Some(extras) = extras else {
+        return Ok(out);
+    };
+
+    let start = out.raw_len();
+
+    for (index, entry) in (1..).zip(extras.sequence_values::<Value>()) {
+        let method = require_method_spec(entry?, index)?;
+        out.raw_set(start + index, method)?;
     }
+
     Ok(out)
+}
+
+/// An `extras` entry must be an auth method spec — a table with a string
+/// `type` — and a malformed one is an error naming its index. It used to be
+/// dropped silently, which shipped an auth method list missing an entry the
+/// author wrote.
+fn require_method_spec(entry: Value, index: usize) -> LuaResult<Table> {
+    let method = match entry {
+        Value::Table(method) => method,
+        other => {
+            return Err(RuntimeError(format!(
+                "crap.auth.with_defaults: extras[{index}] must be an auth method table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+
+    match method.get::<Value>("type")? {
+        Value::String(_) => Ok(method),
+        Value::Nil => Err(RuntimeError(format!(
+            "crap.auth.with_defaults: extras[{index}] is not an auth method spec — it has no \
+             string `type` (e.g. \"strategy\")"
+        ))),
+        other => Err(RuntimeError(format!(
+            "crap.auth.with_defaults: extras[{index}].type must be a string, got {}",
+            other.type_name()
+        ))),
+    }
 }
 
 lua_table! {
@@ -132,4 +166,69 @@ fn default_methods_table(lua: &Lua) -> LuaResult<Table> {
     methods.set(3, cookie)?;
 
     Ok(methods)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lua_with_auth() -> Lua {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_auth(&lua).unwrap();
+        lua
+    }
+
+    #[test]
+    fn with_defaults_appends_valid_extras_after_the_defaults() {
+        let lua = lua_with_auth();
+        let methods: Table = lua
+            .load(
+                r#"return crap.auth.with_defaults({
+                    { type = "strategy", name = "api-key", authenticate = "hooks.auth.api_key" },
+                })"#,
+            )
+            .eval()
+            .unwrap();
+
+        assert_eq!(methods.raw_len(), 4);
+        let last: Table = methods.raw_get(4).unwrap();
+        assert_eq!(last.get::<String>("name").unwrap(), "api-key");
+    }
+
+    /// A non-table entry used to be `flatten()`-ed away silently; it must
+    /// error naming the index.
+    #[test]
+    fn with_defaults_rejects_a_non_table_entry_naming_the_index() {
+        let lua = lua_with_auth();
+        let err = lua
+            .load(r#"return crap.auth.with_defaults({ { type = "bearer" }, "strategy" })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("extras[2]"), "names the index: {err}");
+        assert!(err.contains("got string"), "{err}");
+    }
+
+    /// A table that is not a method spec (no string `type`) is rejected too.
+    #[test]
+    fn with_defaults_rejects_a_table_without_a_type() {
+        let lua = lua_with_auth();
+        let err = lua
+            .load(r#"return crap.auth.with_defaults({ { name = "api-key" } })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("extras[1]"), "{err}");
+        assert!(err.contains("`type`"), "{err}");
+
+        let err = lua
+            .load("return crap.auth.with_defaults({ { type = 1 } })")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("extras[1].type must be a string"), "{err}");
+    }
 }

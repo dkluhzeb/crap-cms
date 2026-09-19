@@ -78,6 +78,9 @@ impl JsonRoot for DocumentFields {
     fn root_insert(&mut self, key: String, value: Value) {
         self.0.insert(key, value);
     }
+    fn root_keys(&self) -> Vec<String> {
+        self.0.keys().cloned().collect()
+    }
 }
 
 impl Deref for DocumentFields {

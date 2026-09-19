@@ -40,14 +40,14 @@ crap.fields.richtext({
 | Round-trip fidelity | Loses some structural info | Lossless |
 | Programmatic manipulation | Parse HTML | Walk JSON tree |
 | FTS search | Indexed as-is | Plain text extracted automatically |
-| API response | HTML string | JSON string |
+| API response | HTML string | parsed JSON document |
 
 ### Important notes
 
 - **Changing format does NOT migrate existing data.** If you switch from `"html"` to
   `"json"` (or vice versa), existing documents retain their original format. The editor
   will attempt to parse the stored content according to the current format setting.
-- The API returns the stored format as-is (HTML string or JSON string).
+- The API returns an HTML string for `"html"` and the parsed document (a table/object, not a string) for `"json"`.
 - Full-text search automatically extracts plain text from JSON-format richtext fields.
 
 ## Toolbar Configuration

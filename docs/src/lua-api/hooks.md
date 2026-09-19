@@ -58,7 +58,7 @@ crap.hooks.remove("before_change", my_hook)
 
 ## crap.hooks.list(event)
 
-Return the list of registered hook functions for an event. Useful for debugging or introspection.
+Return a copy of the list of registered hook functions for an event — useful for debugging or introspection. Mutating the returned table does not change what runs; an unknown event name is an error, as for `register`/`remove`.
 
 ```lua
 local hooks = crap.hooks.list("before_change")

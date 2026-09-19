@@ -37,7 +37,7 @@ use super::meta;
 /// of the value fingerprints the join-table columns a pass covered, so a
 /// sub-field added or retyped later — including one added to a collection
 /// whose join table already existed — runs it again.
-const MIGRATION_VERSION: &str = "2";
+const MIGRATION_VERSION: &str = "3";
 
 /// The gate of one target, keyed by its table so a collection and a global of
 /// the same slug can't share one — sharing it would leave the two rewriting
@@ -413,6 +413,41 @@ mod tests {
         let meta = stored_json(&conn, "SELECT meta FROM posts_items WHERE id = 'r1'");
         assert_eq!(meta["featured"], json!(true));
         assert_eq!(meta["starts"], UTC);
+    }
+
+    /// A JSON value inside a blocks row written as the admin form's text is
+    /// stored parsed, as a write stores it now; a text that isn't JSON stays.
+    #[test]
+    fn converts_json_text_in_a_blocks_row_to_its_value() {
+        let conn = conn_with(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_content (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, _block_type TEXT, data TEXT);",
+        );
+        let data = json!({ "meta": "{\"n\": 1}", "note": "plain" }).to_string();
+        conn.0
+            .execute(
+                "INSERT INTO posts_content VALUES ('b1', 'p1', 0, 'card', ?1)",
+                [&data],
+            )
+            .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "card",
+                    vec![
+                        FieldDefinition::builder("meta", FieldType::Json).build(),
+                        FieldDefinition::builder("note", FieldType::Json).build(),
+                    ],
+                )])
+                .build(),
+        ];
+        convert_if_needed(&conn, &registry_with(def)).unwrap();
+
+        let stored = stored_json(&conn, "SELECT data FROM posts_content WHERE id = 'b1'");
+        assert_eq!(stored["meta"], json!({ "n": 1 }));
+        assert_eq!(stored["note"], json!("plain"));
     }
 
     /// A nested array and blocks inside an array row are converted row by row.

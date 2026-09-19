@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mlua::{Lua, LuaSerdeExt as _, Value};
 use serde_json::Value as JsonValue;
 
@@ -60,10 +60,25 @@ pub(super) fn run_validate_function_inner(
     let ctx_table = lua.to_value(&ctx)?;
 
     let result: Value = func.call((lua_value, ctx_table))?;
+
+    validator_verdict(&result, src.field_name)
+}
+
+/// Interpret a custom validator's return value: `nil`/`true` is valid,
+/// `false` is invalid with the default message, a string is invalid with
+/// that message. Any other type is a hook error naming the field — a
+/// validator returning `{ error = "bad" }` or `0` used to count as valid,
+/// silently passing what it meant to reject.
+fn validator_verdict(result: &Value, field_name: &str) -> Result<Option<String>> {
     match result {
+        Value::Nil | Value::Boolean(true) => Ok(None),
         Value::Boolean(false) => Ok(Some("validation failed".to_string())),
         Value::String(s) => Ok(Some(s.to_str()?.to_string())),
-        _ => Ok(None),
+        other => bail!(
+            "validator for field '{field_name}' must return nil, true, false or a message; \
+             got {}",
+            other.type_name()
+        ),
     }
 }
 
@@ -139,42 +154,74 @@ mod tests {
         assert!(result.is_none());
     }
 
+    fn src(data: &HashMap<String, JsonValue>) -> ValidateCtxSource<'_> {
+        ValidateCtxSource {
+            data,
+            document: data,
+            collection: "test",
+            field_name: "name",
+            locale: None,
+            operation: "create",
+            id: None,
+            options: None,
+        }
+    }
+
+    /// A validator returning a number or a table used to count as VALID — a
+    /// `return { error = "bad" }` or `return 0` silently passed. Any type
+    /// outside the contract is a hook error naming the field.
     #[test]
-    fn test_run_validate_function_other_return_means_valid() {
+    fn validator_returning_an_unexpected_type_is_a_hook_error() {
         let lua = mlua::Lua::new();
         lua.load(
             r#"
             package.loaded["validators"] = {
-                validate_number = function(value, ctx)
-
-                    return 42  -- a number return is treated as valid
-                end
+                number = function(value, ctx) return 0 end,
+                table = function(value, ctx) return { error = "bad" } end,
             }
         "#,
         )
         .exec()
         .unwrap();
         let data = HashMap::new();
-        let result = run_validate_function_inner(
-            &lua,
-            "validators.validate_number",
-            &json!("test"),
-            &ValidateCtxSource {
-                data: &data,
-                document: &data,
-                collection: "test",
-                field_name: "name",
-                locale: None,
-                operation: "create",
-                id: None,
-                options: None,
-            },
+
+        for validator in ["validators.number", "validators.table"] {
+            let err = run_validate_function_inner(&lua, validator, &json!("x"), &src(&data))
+                .expect_err("an out-of-contract return must be a hook error")
+                .to_string();
+            assert!(err.contains("field 'name'"), "names the field: {err}");
+            assert!(
+                err.contains("nil, true, false or a message"),
+                "states the contract: {err}"
+            );
+        }
+    }
+
+    /// The full contract: nil/true valid, false = default message, string =
+    /// that message.
+    #[test]
+    fn validator_contract_true_false_and_message() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                yes = function(value, ctx) return true end,
+                no = function(value, ctx) return false end,
+                msg = function(value, ctx) return "too short" end,
+            }
+        "#,
         )
+        .exec()
         .unwrap();
-        assert!(
-            result.is_none(),
-            "Number return from validator should be treated as valid (None)"
-        );
+        let data = HashMap::new();
+
+        let run = |validator: &str| {
+            run_validate_function_inner(&lua, validator, &json!("x"), &src(&data)).unwrap()
+        };
+
+        assert_eq!(run("validators.yes"), None);
+        assert_eq!(run("validators.no").as_deref(), Some("validation failed"));
+        assert_eq!(run("validators.msg").as_deref(), Some("too short"));
     }
 
     /// A custom validator receives the content `ctx.locale` so it can enforce

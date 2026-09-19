@@ -35,6 +35,7 @@ hits the cache and the top-level `define` does **not** re-run.
   - `queue` (string, default: `"default"`) — Queue name
   - `retries` (integer, optional) — Max retry attempts. When omitted, inherits `[jobs.queues.<queue>] retries` from `crap.toml`; if the queue has no entry either, defaults to `0` (one attempt). Set explicitly (including `retries = 0`) to override the queue default.
   - `timeout` (integer, default: 60) — Seconds before timeout
+  - `priority` (integer, default: 0) — Default priority of runs queued for this job; a `crap.jobs.queue` call may override it per run
   - `concurrency` (integer, default: 1) — Max concurrent runs
   - `skip_if_running` (boolean, default: true) — Skip cron if still running
   - `labels` (table, optional) — `{ singular = "Display Name" }`
@@ -122,6 +123,40 @@ crap.jobs.define("analytics_rollup", {
 -- Now every cron-fired run AND every manual `crap.jobs.queue("analytics_rollup")`
 -- inherits priority = -5 unless the queue site explicitly overrides.
 ```
+
+## crap.jobs.get_run(id)
+
+Look up one run by the id `crap.jobs.queue` returned. Returns the run table
+(`id`, `slug`, `status`, `queue`, `attempt`, `max_attempts`, and `result` /
+`error` / `created_at` when set), or `nil` when it does not exist or the
+job's `access` rule hides it from the caller.
+
+```lua
+local id = crap.jobs.queue("send_digest", { user = 42 })
+local run = crap.jobs.get_run(id)
+if run and run.status == "failed" then crap.log.warn(run.error) end
+```
+
+## crap.jobs.list_runs(opts?)
+
+List runs, newest first, of every job the caller may read. Returns
+`{ runs = { ... }, total = n }`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `slug` | string | all readable jobs | Only this job's runs |
+| `status` | string | any | `"pending"`, `"running"`, `"completed"`, `"failed"` or `"stale"` |
+| `limit` | integer | `50` | Page size |
+| `offset` | integer | `0` | Rows to skip |
+
+A wrong-typed option (`slug = { "x" }`, `limit = "10"`) is an error naming
+the key; unknown keys are rejected.
+
+## crap.jobs.cancel_run(id)
+
+Cancel a run that is still pending. Returns `true` when it was cancelled,
+`false` when it does not exist, is not visible to the caller, or a worker
+has already claimed it.
 
 ## Handler Function
 
@@ -294,7 +329,7 @@ if `[jobs.queues]` references a queue name that no defined job uses
 apply to **system jobs** (`_system_image_convert`, `_system_email`,
 `_system_bulk`)
 which lack their own `JobDefinition` and cannot be queued by slug from any
-surface — `crap.jobs.trigger`, gRPC, MCP and the CLI all refuse a `_system_*`
+surface — `crap.jobs.queue`, gRPC, MCP and the CLI all refuse a `_system_*`
 slug as an unknown job:
 
 | Field | What it sets |

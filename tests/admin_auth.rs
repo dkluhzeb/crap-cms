@@ -268,7 +268,6 @@ fn csrf_cookie() -> String {
     format!("crap_csrf={TEST_CSRF}")
 }
 
-#[allow(dead_code)]
 fn auth_and_csrf(auth_cookie: &str) -> String {
     format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
@@ -357,6 +356,97 @@ async fn csrf_cookie_max_age_matches_configured_default() {
         cookie.contains("SameSite=Strict"),
         "crap_csrf cookie must be SameSite=Strict, got: {cookie}",
     );
+}
+
+/// The `crap_csrf` cookie the response hands back, if any.
+fn issued_csrf_cookie(resp: &axum::response::Response) -> Option<String> {
+    resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|s| s.starts_with("crap_csrf="))
+        .map(std::string::ToString::to_string)
+}
+
+/// Regression: an `Authorization: Bearer` header with nothing after it is not
+/// a bearer request — the evaluator ignores it and authenticates from the
+/// session cookie instead. The CSRF middleware used to accept it as one and
+/// wave the submit through unchecked.
+#[tokio::test]
+async fn an_empty_bearer_header_does_not_skip_the_csrf_check() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "bearer@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "bearer@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/users")
+                .header("cookie", cookie)
+                .header("authorization", "Bearer ")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("email=new@test.com&password=secret456"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a cookie-authenticated submit still owes a CSRF token"
+    );
+}
+
+/// Regression: once the `crap_csrf` cookie expired, every submit answered 403
+/// without handing back a replacement — so the failure repeated until the user
+/// reloaded a page by hand. The 403 now carries a fresh cookie.
+#[tokio::test]
+async fn a_missing_csrf_cookie_is_re_issued_on_the_refusal() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from("collection=users&email=a@b.c&password=x"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let cookie = issued_csrf_cookie(&resp).expect("the refusal must hand back a fresh token");
+    assert!(
+        cookie.contains("Max-Age=86400") && cookie.contains("SameSite=Strict"),
+        "the re-issued cookie keeps the configured shape, got: {cookie}"
+    );
+}
+
+/// Regression: a native form submit too large for the CSRF fallback to read
+/// answered 403 "CSRF validation failed", sending the user after a token
+/// problem that never existed. It is an oversized body — 413.
+#[tokio::test]
+async fn an_oversized_form_submit_is_too_large_not_a_csrf_failure() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let body = "x".repeat(3 * 1024 * 1024);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/users")
+                .header("cookie", csrf_cookie())
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("content-length", body.len().to_string())
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 /// Regression test for CSP hardening — the rendered page must carry a
@@ -600,6 +690,100 @@ async fn logout_clears_cookie() {
             "Cookie should be expired: {c}"
         );
     }
+}
+
+fn session_version(app: &TestApp, user_id: &str) -> u64 {
+    let conn = app.pool.get().unwrap();
+    query::get_session_version(&conn, "users", user_id).unwrap()
+}
+
+/// Regression: logout only cleared the browser's cookies. The route sits
+/// outside the auth layer, so no principal was ever resolved for it and the
+/// server-side bump never ran — a captured JWT stayed valid until `exp`.
+#[tokio::test]
+async fn logout_revokes_the_session_it_was_called_with() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "logout@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "logout@test.com");
+    let version_before = session_version(&app, &user_id);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/logout")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    assert_eq!(
+        session_version(&app, &user_id),
+        version_before + 1,
+        "logout must bump _session_version so the issued JWT is stale"
+    );
+
+    // The JWT issued before logout is now a definite failure on a protected
+    // route: refused, and the dead cookie is cleared so the browser stops
+    // sending it.
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::SEE_OTHER,
+        "a JWT issued before logout must be refused"
+    );
+    let cleared = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|c| c.starts_with("crap_session=") && c.contains("Max-Age=0"));
+    assert!(
+        cleared,
+        "a stale session is a definite failure and clears the dead cookie"
+    );
+}
+
+/// A session that no longer authenticates has nothing to retire, but the
+/// browser must still be able to clear its cookies — the reason the route
+/// stays outside the auth layer.
+#[tokio::test]
+async fn logout_with_a_dead_session_still_clears_cookies() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/logout")
+                .header("cookie", auth_and_csrf("crap_session=not-a-jwt"))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    let cleared = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|c| c.starts_with("crap_session=") && c.contains("Max-Age=0"));
+    assert!(cleared, "logout must clear the session cookie regardless");
 }
 
 // ── Auth Middleware Tests ─────────────────────────────────────────────────

@@ -48,6 +48,7 @@ pub(crate) use locale::{
     is_non_default_single_locale, locale_locked_field_names, locale_write_column,
     per_locale_columns, regroup_by_locale, stored_columns,
 };
+pub(crate) use read::decode_document_values;
 
 pub(super) use columns::collect_column_names;
 

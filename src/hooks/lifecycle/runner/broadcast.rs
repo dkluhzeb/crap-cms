@@ -14,6 +14,7 @@ use crate::{
         HookContext, HookEvent, HookRunner,
         lifecycle::{
             LiveFilterContext,
+            access::boolean_verdict,
             execution::{
                 call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
                 resolve_hook_function,
@@ -21,6 +22,15 @@ use crate::{
         },
     },
 };
+
+/// Interpret a `live.filter` return value: `true` broadcasts, `false`/`nil`
+/// suppresses, a table is a configuration error, and any other type
+/// suppresses with a warning. The same fail-closed rule every other boolean
+/// gate applies — a filter that returns a string or a number by mistake must
+/// not broadcast.
+fn live_filter_verdict(value: &Value) -> Result<bool> {
+    boolean_verdict(value, "live filter")
+}
 
 /// Bundled parameters for a mutation event to publish.
 pub struct PublishEventInput {
@@ -207,11 +217,8 @@ impl HookRunner {
                 let ctx_value = lua.to_value(&ctx)?;
 
                 let result: Value = func.call(ctx_value)?;
-                match result {
-                    Value::Boolean(b) => Ok(b),
-                    Value::Nil => Ok(false),
-                    _ => Ok(true),
-                }
+
+                live_filter_verdict(&result)
             }
         }
     }
@@ -305,4 +312,43 @@ fn publish_event_blocking(
     .into_transport_input();
 
     transport.publish(transport_input);
+}
+
+#[cfg(test)]
+mod tests {
+    use mlua::Lua;
+
+    use super::*;
+
+    fn verdict(code: &str) -> Result<bool> {
+        let lua = Lua::new();
+        let value: Value = lua.load(code).eval().unwrap();
+        live_filter_verdict(&value)
+    }
+
+    #[test]
+    fn true_broadcasts_false_and_nil_suppress() {
+        assert!(verdict("return true").unwrap());
+        assert!(!verdict("return false").unwrap());
+        assert!(!verdict("return nil").unwrap());
+    }
+
+    /// A non-boolean return (a string, a number) used to BROADCAST — the one
+    /// gate that failed open. It suppresses, like every sibling boolean gate.
+    #[test]
+    fn unexpected_types_suppress() {
+        assert!(!verdict("return 'yes'").unwrap());
+        assert!(!verdict("return 1").unwrap());
+    }
+
+    /// A filter table has nothing to narrow on a broadcast decision — it is
+    /// a configuration error naming the fix, not a broadcast.
+    #[test]
+    fn table_is_a_configuration_error() {
+        let err = verdict("return { status = 'published' }")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("live filter"), "{err}");
+        assert!(err.contains("true or false"), "{err}");
+    }
 }

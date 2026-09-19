@@ -10,7 +10,7 @@
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, validate::FieldError},
+    core::{FieldDefinition, is_empty_object, validate::FieldError},
     db::query::poly_ref,
 };
 
@@ -18,7 +18,8 @@ use crate::{
 ///
 /// A has-many value may also arrive as a string (the admin form's JSON /
 /// comma-separated encodings, decoded by the writer); those are not
-/// inspected here. `null` and absent values are left to `required`.
+/// inspected here. An empty object is the empty list a Lua table with no
+/// entries becomes. `null` and absent values are left to `required`.
 pub(crate) fn check_relationship_shape(
     field: &FieldDefinition,
     data_key: &str,
@@ -45,6 +46,7 @@ pub(crate) fn check_relationship_shape(
                 .iter()
                 .find_map(|item| element_problem(item, polymorphic)),
             Value::String(_) => None,
+            _ if is_empty_object(value) => None,
             _ => Some("must be a list of ids"),
         }
     } else {
@@ -169,6 +171,16 @@ mod tests {
         assert_eq!(errors.len(), 1, "non-string list items are rejected");
         let errors = errors_for(&has_many(), &json!({"id": "t1"}));
         assert_eq!(errors.len(), 1, "an object is not a list of ids");
+    }
+
+    /// Regression: `tags = {}` from Lua — an empty table, which crosses the
+    /// boundary as an empty object — was rejected as "not a list of ids", so a
+    /// has-many list could not be cleared from Lua. It is the empty list; a
+    /// has-one reference still cannot be an object.
+    #[test]
+    fn an_empty_object_is_an_empty_has_many_list() {
+        assert!(errors_for(&has_many(), &json!({})).is_empty());
+        assert_eq!(errors_for(&has_one(), &json!({})).len(), 1);
     }
 
     #[test]

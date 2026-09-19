@@ -34,6 +34,7 @@ pub(crate) mod fields;
 pub(crate) mod globals;
 pub(crate) mod hooks;
 pub(crate) mod http;
+pub(crate) mod integer;
 pub(crate) mod jobs;
 pub(crate) mod log;
 pub mod pages;

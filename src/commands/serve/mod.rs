@@ -9,4 +9,6 @@ pub use process::detach;
 pub use process::{restart, status, stop};
 pub use startup::run;
 
+pub(crate) use pid::{PidFile, refuse_if_running};
+
 pub use startup::ServeMode;

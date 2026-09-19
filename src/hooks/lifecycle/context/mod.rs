@@ -16,6 +16,7 @@ pub use builder::HookContextBuilder;
 pub use condition::ConditionContext;
 pub use field_hook::FieldHookContext;
 pub use hook_context::HookContext;
+pub(crate) use hook_context::hook_result_slot;
 pub use job::{JobHandlerContext, JobInfo};
 pub use live::LiveFilterContext;
 pub use route::{RouteContext, RouteHandlerInput};

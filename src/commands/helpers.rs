@@ -439,23 +439,6 @@ pub fn hold_exclusive_instance_lock(config_dir: &Path, command: &str) -> Result<
         Err(TryLockError::Error(e)) => Err(e).context("Failed to take the instance lock"),
     }
 }
-
-/// Check if a PID file exists and warn if the process is still running.
-#[cfg(unix)]
-pub fn check_existing_pid(config_dir: &Path, filename: &str) {
-    let path = pid_file_path(config_dir, filename);
-
-    if let Ok(contents) = fs::read_to_string(&path)
-        && let Ok(pid) = contents.trim().parse::<u32>()
-        && is_process_running(pid)
-    {
-        warn!(
-            "PID file exists with PID {} — another instance may be running",
-            pid
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -487,7 +470,9 @@ mod tests {
     }
 
     /// A config that can't be read must not silently shrink the deadline to
-    /// something below the framework's own job timeouts.
+    /// something below the framework's own job timeouts. This is the path a
+    /// `--stop` takes once `crap.toml` broke: the CLI reaches the stop without
+    /// loading the config, so the deadline is the only place it is read.
     #[cfg(unix)]
     #[test]
     fn an_unreadable_config_falls_back_to_the_framework_deadline() {

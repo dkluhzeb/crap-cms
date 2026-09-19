@@ -1834,6 +1834,91 @@ async fn create_action_validation_error_missing_required_field() {
     );
 }
 
+/// The list page of `slug`, asked to sort by the draft-status column.
+async fn status_sorted_list(app: &TestApp, cookie: &str, slug: &str) -> StatusCode {
+    app.router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/collections/{slug}?sort=_status"))
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// Regression: `_status` is a column only on a collection that keeps drafts.
+/// The sort gate accepted it everywhere, so the query named a column the
+/// table never had — a 500 where an unknown sort key owes a 400.
+#[tokio::test]
+async fn sorting_by_status_needs_a_collection_with_drafts() {
+    let app = setup_app(
+        vec![
+            make_posts_def(),
+            make_versioned_posts_def(),
+            make_users_def(),
+        ],
+        vec![],
+    );
+    let user_id = create_test_user(&app, "sorter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "sorter@test.com");
+
+    assert_eq!(
+        status_sorted_list(&app, &cookie, "posts").await,
+        StatusCode::BAD_REQUEST,
+        "no drafts, no `_status` column to sort on"
+    );
+    assert_eq!(
+        status_sorted_list(&app, &cookie, "articles").await,
+        StatusCode::OK,
+        "a drafts collection sorts by status"
+    );
+}
+
+/// Regression: the edit form posts with `hx-target="#main"`, so a failed save
+/// must come back as that fragment. The error re-render used to skip the
+/// partial decision and answer with a whole document, which htmx then swapped
+/// *inside* `#main` — a second `<html>`, a second set of component singletons.
+#[tokio::test]
+async fn a_failed_htmx_submit_re_renders_only_the_main_fragment() {
+    let app = setup_app(
+        vec![make_posts_with_required_title(), make_users_def()],
+        vec![],
+    );
+    let user_id = create_test_user(&app, "validate@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "validate@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/articles")
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("HX-Request", "true")
+                .header("HX-Target", "main")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("title=&body=Some+content"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_string(resp.into_body()).await;
+
+    assert!(
+        !body.contains("<!DOCTYPE") && !body.contains("<html"),
+        "an htmx submit must not get a full document back"
+    );
+    assert!(
+        body.contains("id=\"edit-form\""),
+        "the re-rendered form is what the fragment carries"
+    );
+}
+
 // ── Collections: Create for auth collection (password field) ──────────────
 
 #[tokio::test]

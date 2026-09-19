@@ -11,6 +11,7 @@ use crate::config::parse_duration_string;
 use crate::core::Registry;
 use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
+use crate::hooks::lua_api::integer::{lua_integer, opt_integer};
 use crate::hooks::lua_api::parse::deny_unknown_keys;
 use crate::service::op::wire;
 use crate::service::{self, LuaWriteHooks, ServiceContext};
@@ -102,11 +103,11 @@ fn queue_job_inner(
     // Per-enqueue `priority` overrides the definition's default;
     // absent → fall back to `JobDefinition::priority`. Wrong-typed
     // values produce a clear error rather than silently falling back.
-    let priority: i32 = parse_priority_opt(opts)?.unwrap_or(job_def.priority);
+    let priority: i32 = parse_priority_opt(lua, opts)?.unwrap_or(job_def.priority);
 
     // `delay` accepts either an integer (seconds) or a duration string
     // (`"5m"`, `"30s"`, `"1h"`). 0 / absent = no delay.
-    let delay_secs: u64 = parse_delay_opt(opts)?;
+    let delay_secs: u64 = parse_delay_opt(lua, opts)?;
 
     let unique_key: Option<String> = parse_unique_opt(opts)?;
 
@@ -153,30 +154,30 @@ fn queue_job_inner(
 
 /// Parse the `priority` option from a `crap.jobs.queue` opts table.
 /// Returns `Ok(None)` when absent so the caller can fall back to the
-/// job definition's default. Wrong-typed values produce a clear error.
-fn parse_priority_opt(opts: Option<&Table>) -> LuaResult<Option<i32>> {
+/// job definition's default. A whole-valued float (`2^3`) is an integer;
+/// a fractional value or any other type is a clear error.
+fn parse_priority_opt(lua: &Lua, opts: Option<&Table>) -> LuaResult<Option<i32>> {
     let Some(opts) = opts else { return Ok(None) };
-    match opts.get::<Value>("priority")? {
-        Value::Nil => Ok(None),
-        Value::Integer(n) => i32::try_from(n)
-            .map(Some)
-            .map_err(|_| RuntimeError(format!("priority value out of i32 range: {n}"))),
-        other => Err(RuntimeError(format!(
-            "priority must be an integer (or omitted); got {}",
-            other.type_name()
-        ))),
-    }
+
+    let Some(n) = opt_integer(lua, opts, "priority", "jobs.queue options")? else {
+        return Ok(None);
+    };
+
+    i32::try_from(n)
+        .map(Some)
+        .map_err(|_| RuntimeError(format!("priority value out of i32 range: {n}")))
 }
 
 /// Parse the `delay` option from a `crap.jobs.queue` opts table.
 /// Accepts an integer (seconds) or a duration string
 /// (`"5m"`, `"30s"`, `"1h"`). Missing / nil → `0`. Invalid string or
 /// wrong type → clear runtime error.
-fn parse_delay_opt(opts: Option<&Table>) -> LuaResult<u64> {
+fn parse_delay_opt(lua: &Lua, opts: Option<&Table>) -> LuaResult<u64> {
     let Some(opts) = opts else { return Ok(0) };
     match opts.get::<Value>("delay")? {
         Value::Nil => Ok(0),
-        Value::Integer(n) => {
+        v @ (Value::Integer(_) | Value::Number(_)) => {
+            let n = lua_integer(lua, &v, "delay")?;
             if n < 0 {
                 return Err(RuntimeError(format!("delay must be non-negative; got {n}")));
             }
@@ -236,29 +237,46 @@ mod tests {
     fn priority_absent_returns_none() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return {}");
-        assert_eq!(parse_priority_opt(Some(&t)).unwrap(), None);
+        assert_eq!(parse_priority_opt(&lua, Some(&t)).unwrap(), None);
     }
 
     #[test]
     fn priority_integer_returns_some() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { priority = 5 }");
-        assert_eq!(parse_priority_opt(Some(&t)).unwrap(), Some(5));
+        assert_eq!(parse_priority_opt(&lua, Some(&t)).unwrap(), Some(5));
     }
 
     #[test]
     fn priority_negative_integer_ok() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { priority = -10 }");
-        assert_eq!(parse_priority_opt(Some(&t)).unwrap(), Some(-10));
+        assert_eq!(parse_priority_opt(&lua, Some(&t)).unwrap(), Some(-10));
+    }
+
+    /// `2^3` is a float in Lua 5.4 — a whole value is a legitimate priority
+    /// (parity with `crap.routes.register{ max_body = 2^16 }`).
+    #[test]
+    fn priority_whole_valued_float_ok() {
+        let lua = Lua::new();
+        let t = opts_from_lua(&lua, "return { priority = 2^3 }");
+        assert_eq!(parse_priority_opt(&lua, Some(&t)).unwrap(), Some(8));
+    }
+
+    #[test]
+    fn priority_fractional_float_errors() {
+        let lua = Lua::new();
+        let t = opts_from_lua(&lua, "return { priority = 1.5 }");
+        let err = parse_priority_opt(&lua, Some(&t)).unwrap_err().to_string();
+        assert!(err.contains("'priority' must be an integer"), "got: {err}");
     }
 
     #[test]
     fn priority_string_errors() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { priority = 'high' }");
-        let err = parse_priority_opt(Some(&t)).unwrap_err().to_string();
-        assert!(err.contains("priority must be an integer"), "got: {err}");
+        let err = parse_priority_opt(&lua, Some(&t)).unwrap_err().to_string();
+        assert!(err.contains("'priority' must be an integer"), "got: {err}");
     }
 
     // ── strict opts (unknown-key rejection) ───────────────────────
@@ -292,28 +310,39 @@ mod tests {
     fn delay_absent_returns_zero() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return {}");
-        assert_eq!(parse_delay_opt(Some(&t)).unwrap(), 0);
+        assert_eq!(parse_delay_opt(&lua, Some(&t)).unwrap(), 0);
     }
 
     #[test]
     fn delay_integer_seconds() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = 30 }");
-        assert_eq!(parse_delay_opt(Some(&t)).unwrap(), 30);
+        assert_eq!(parse_delay_opt(&lua, Some(&t)).unwrap(), 30);
+    }
+
+    #[test]
+    fn delay_whole_valued_float_seconds_and_fractional_rejected() {
+        let lua = Lua::new();
+        let t = opts_from_lua(&lua, "return { delay = 2^3 }");
+        assert_eq!(parse_delay_opt(&lua, Some(&t)).unwrap(), 8);
+
+        let t = opts_from_lua(&lua, "return { delay = 1.5 }");
+        let err = parse_delay_opt(&lua, Some(&t)).unwrap_err().to_string();
+        assert!(err.contains("delay must be an integer"), "got: {err}");
     }
 
     #[test]
     fn delay_duration_string_minutes() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = '5m' }");
-        assert_eq!(parse_delay_opt(Some(&t)).unwrap(), 300);
+        assert_eq!(parse_delay_opt(&lua, Some(&t)).unwrap(), 300);
     }
 
     #[test]
     fn delay_negative_integer_errors() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = -5 }");
-        let err = parse_delay_opt(Some(&t)).unwrap_err().to_string();
+        let err = parse_delay_opt(&lua, Some(&t)).unwrap_err().to_string();
         assert!(err.contains("non-negative"), "got: {err}");
     }
 
@@ -321,7 +350,7 @@ mod tests {
     fn delay_bogus_string_errors() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = 'bogus' }");
-        let err = parse_delay_opt(Some(&t)).unwrap_err().to_string();
+        let err = parse_delay_opt(&lua, Some(&t)).unwrap_err().to_string();
         assert!(err.contains("not a valid duration"), "got: {err}");
     }
 
@@ -329,7 +358,7 @@ mod tests {
     fn delay_invalid_suffix_errors() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = '5x' }");
-        let err = parse_delay_opt(Some(&t)).unwrap_err().to_string();
+        let err = parse_delay_opt(&lua, Some(&t)).unwrap_err().to_string();
         assert!(err.contains("not a valid duration"), "got: {err}");
     }
 
@@ -337,7 +366,7 @@ mod tests {
     fn delay_wrong_type_errors() {
         let lua = Lua::new();
         let t = opts_from_lua(&lua, "return { delay = {} }");
-        let err = parse_delay_opt(Some(&t)).unwrap_err().to_string();
+        let err = parse_delay_opt(&lua, Some(&t)).unwrap_err().to_string();
         assert!(
             err.contains("must be a non-negative integer or duration string"),
             "got: {err}"

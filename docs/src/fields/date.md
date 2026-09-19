@@ -16,7 +16,7 @@ crap.fields.date({ name = "birthday", picker_appearance = "dayOnly" })
 -- Date and time — stored as full ISO 8601 UTC
 crap.fields.date({ name = "published_at", picker_appearance = "dayAndTime" })
 
--- Time only — stored as HH:MM
+-- Time only — stored as HH:MM or HH:MM:SS
 crap.fields.date({ name = "reminder", picker_appearance = "timeOnly" })
 
 -- Month only — stored as YYYY-MM
@@ -31,7 +31,7 @@ The `picker_appearance` option controls the HTML input type in the admin UI and 
 |---|---|---|---|
 | `"dayOnly"` (default) | `<input type="date">` | `YYYY-MM-DDT12:00:00.000Z` | `2026-01-15T12:00:00.000Z` |
 | `"dayAndTime"` | `<input type="datetime-local">` | `YYYY-MM-DDTHH:MM:SS.000Z` | `2026-01-15T09:30:00.000Z` |
-| `"timeOnly"` | `<input type="time">` | `HH:MM` | `14:30` |
+| `"timeOnly"` | `<input type="time">` | `HH:MM[:SS]` | `14:30` |
 | `"monthOnly"` | `<input type="month">` | `YYYY-MM` | `2026-01` |
 
 ## Date Normalization
@@ -48,7 +48,7 @@ This normalization ensures consistent storage and correct behavior when filterin
 
 ## Admin Rendering
 
-Renders as the appropriate HTML5 input type based on `picker_appearance`. For `dayOnly` and `dayAndTime`, the stored ISO string is automatically converted to the format the HTML input expects (`YYYY-MM-DD` and `YYYY-MM-DDTHH:MM` respectively).
+Renders as the appropriate HTML5 input type based on `picker_appearance`. For `dayOnly` and `dayAndTime`, the stored ISO string is automatically converted to the format the HTML input expects (`YYYY-MM-DD` and `YYYY-MM-DDTHH:MM[:SS]` respectively). A stored value that carries seconds is shown with them (the input gets `step="1"`), so an untouched field re-submits exactly what is stored.
 
 ## Date Constraints
 
@@ -66,7 +66,7 @@ Both values use ISO 8601 format. Dates outside the range produce a validation er
 
 ## Validation
 
-Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error. If `min_date` or `max_date` are set, the value is also checked against those bounds.
+A date value must be a string (a number such as an epoch is rejected, not stored as text). Non-empty values are validated against recognized date/datetime/time/month formats, and the shape must be one the field's `picker_appearance` can show: `timeOnly` takes `HH:MM[:SS]`, `monthOnly` `YYYY-MM`, `dayOnly`/`dayAndTime` a date or datetime — so an API cannot store a value the editor would blank on the next save. Invalid formats produce a validation error. If `min_date` or `max_date` are set, the value is also checked against those bounds.
 
 ## Timezone Support
 
