@@ -12,6 +12,7 @@
 //! the typed cause already erased (a hook re-wrapping a failure as a string, or
 //! r2d2, whose pool error exposes no variant to match on).
 
+#[cfg(feature = "postgres")]
 use std::{error::Error as StdError, io::Error as IoError};
 
 use anyhow::Error;
