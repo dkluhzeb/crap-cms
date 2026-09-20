@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **A changed field `type` on a column that holds data fails the boot.** It
+  used to log a warning and continue: on SQLite the column kept its old
+  affinity, so a field changed from text to number stored and read numbers
+  as text from then on; on Postgres every later write failed. The sync now
+  refuses to start, naming the table, column, stored and expected type and
+  the manual migration path.
+- **Turning `soft_delete` off while documents are trashed fails the boot.**
+  The trash filter followed the live flag, so switching it off made every
+  trashed document visible in every read. The sync now refuses when trashed
+  rows remain, naming the collection and the count; purge them (or re-enable
+  soft delete) first.
+- **Field defaults are applied by the application, not the database.** A
+  document created without a field that has a `default_value` gets that
+  value from the definition at write time; the column's `DEFAULT` clause is
+  still emitted but no longer load-bearing, so a changed `default_value`
+  takes effect on the next start without a migration (it used to be frozen
+  at the column's creation).
+- **`unique` fields are enforced by a managed unique index**, created by the
+  index sync on every backend — including for a field that became `unique`
+  after its column existed (which never got any index; validation still
+  refused duplicates, but two concurrent writes could slip through). New
+  tables no longer carry an inline `UNIQUE`.
 - **A checkbox reads back as a boolean on every surface.** A top-level, group
   or array-row checkbox used to read as the column's `0`/`1` while the same
   field inside a blocks row read as `true`/`false`, although every generated
@@ -2171,6 +2193,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`crap-cms work --queues` and `--no-cron` did nothing.** Both flags were
+  logged and forwarded to a detached child but never reached the scheduler:
+  a worker started with `--queues heavy` claimed every queue, and one
+  started with `--no-cron` still fired cron schedules. A worker now claims
+  only its queues and runs cron only when asked; `--queues` naming a queue no
+  job uses is warned about at start.
+- **A bulk update could change an auth account's email without resetting
+  `_verified`**, so an unconfirmed address stayed verified; and the single
+  update's reset did not retire the account's sessions. Both paths now run
+  one step that unverifies through the account chokepoint (session version
+  bumped, live streams closed).
+- **A removed or renamed collection left its tables — versions, junction
+  tables and, for an auth collection, password hashes — on disk unseen by
+  any tool.** `db cleanup` now reports orphan tables and drops them only
+  with `--drop-tables -y`; the boot warns about them once. Orphan columns
+  of junction tables and removed fields of globals are reported like a
+  collection's, and a relationship whose target collection changed while
+  its table holds rows is warned about at boot.
 - **Publishing a draft could land a document that violates
   `required_locales`.** The completeness check judged the other locales by
   the live row, but a publish writes every locale from the pending draft

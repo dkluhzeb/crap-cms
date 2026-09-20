@@ -10,7 +10,9 @@ mod join_tables;
 mod paged;
 mod versions;
 
-pub(in crate::db::migrate) use alter::{add_column_if_missing, reconcile_scalar_list_column};
+pub(in crate::db::migrate) use alter::{
+    add_column_if_missing, check_type_mismatch, reconcile_scalar_list_column, warn_orphan_columns,
+};
 pub(super) use column_specs::{ColumnSpec, collect_column_specs};
 pub(super) use gate::{block_paths, field_paths, versioned_fingerprint};
 pub use introspection::sanitize_locale;

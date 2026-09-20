@@ -414,7 +414,10 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
         }),
         Command::Db { action } => with_config(config_flag, |c| match action {
             DbAction::Console => commands::db::console(c),
-            DbAction::Cleanup { confirm } => commands::db::cleanup(c, confirm),
+            DbAction::Cleanup {
+                confirm,
+                drop_tables,
+            } => commands::db::cleanup(c, confirm, drop_tables),
         }),
         Command::Export {
             collection,

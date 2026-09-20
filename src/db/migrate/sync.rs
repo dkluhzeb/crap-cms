@@ -22,6 +22,7 @@ use super::{
     backfill_ref_counts, canonical_text, checkbox_columns, collection, global,
     helpers::{get_table_columns, table_exists},
     identifier_check, legacy_timestamps, locale_change, meta, nested_values,
+    orphan_tables::warn_orphan_tables,
 };
 
 /// Sync all collection tables with their Lua definitions.
@@ -175,6 +176,12 @@ fn run_sync(
         identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
     }
 
+    // Before the per-collection sync, which refuses to serve a column whose
+    // type no longer matches its field: a Postgres database created by an
+    // older release still has its checkbox columns as BIGINT, and this is the
+    // pass that brings them to the type the definitions ask for.
+    checkbox_columns::migrate_if_needed(&tx, registry)?;
+
     for (slug, def) in &registry.collections {
         collection::sync_collection_table(&tx, slug, def, locale_config)?;
     }
@@ -185,11 +192,14 @@ fn run_sync(
 
     delete_retired_meta_keys(&tx)?;
 
+    // Reported, never removed: a table that fell out of the registry may hold
+    // the only copy of its data, so the drop is an explicit operator decision.
+    warn_orphan_tables(&tx, registry)?;
+
     // The one-time conversions run in this order on purpose: nested values
     // are typed before text is canonicalized, since both rewrite the same
     // JSON-stored rows and the canonical form applies to the typed value.
     backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
-    checkbox_columns::migrate_if_needed(&tx, registry)?;
     legacy_timestamps::normalize_if_needed(&tx, registry)?;
     nested_values::convert_if_needed(&tx, registry)?;
     canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;

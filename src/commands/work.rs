@@ -219,24 +219,6 @@ pub fn detach(
     Ok(())
 }
 
-/// Log worker configuration before starting.
-fn log_worker_config(queues: Option<&[String]>, no_cron: bool, concurrency: usize) {
-    if let Some(q) = queues {
-        info!("Worker processing queues: {}", q.join(", "));
-    } else {
-        info!("Worker processing all queues");
-    }
-
-    if no_cron {
-        info!("Cron scheduling disabled for this worker");
-    }
-
-    info!(
-        "Starting worker (concurrency={}, cron={})",
-        concurrency, !no_cron
-    );
-}
-
 /// Run a standalone job worker.
 ///
 /// # Errors
@@ -294,8 +276,6 @@ pub async fn run(
         jobs_config.max_concurrent = c;
     }
 
-    log_worker_config(queues.as_deref(), no_cron, jobs_config.max_concurrent);
-
     // The standalone worker builds its own process-stable bundle, carrying
     // the config-built live transports so job writes behave like `serve`'s.
     let infra = AppInfra::standalone(StandaloneInfra {
@@ -321,14 +301,22 @@ pub async fn run(
     // releases it.
     let pid_file = PidFile::claim(config_dir, PID_FILENAME)?;
 
-    scheduler::start(SchedulerParams {
+    // `--queues` and `--no-cron` reach the scheduler here and nowhere else:
+    // the queue list narrows the claim query, `run_cron` decides whether this
+    // worker evaluates cron schedules. The scheduler states the resulting
+    // scope on its own startup line, from the values it actually runs with.
+    let params = SchedulerParams::builder(
         infra,
-        config: jobs_config,
-        db_timeouts: DbTimeouts::new(cfg.database.busy_timeout, cfg.database.connection_timeout),
+        jobs_config,
+        DbTimeouts::new(cfg.database.busy_timeout, cfg.database.connection_timeout),
         shutdown,
-        email_provider: Some(email_provider),
-    })
-    .await?;
+    )
+    .email_provider(Some(email_provider))
+    .queues(queues)
+    .run_cron(!no_cron)
+    .build();
+
+    scheduler::start(params).await?;
 
     pid_file.release();
     info!("Worker stopped");

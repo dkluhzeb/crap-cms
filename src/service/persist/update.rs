@@ -3,36 +3,15 @@
 use anyhow::Result;
 
 use crate::{
-    core::{CollectionDefinition, Document, DocumentFields, collection::Auth},
-    db::{DbConnection, LocaleContext, query},
-    service::{PersistOptions, ServiceContext, versions, write::reject_locale_locked_fields},
+    core::{Document, DocumentFields},
+    db::query,
+    service::{
+        PersistOptions, ServiceContext,
+        persist::email_change::{apply_email_change, email_changed},
+        versions,
+        write::reject_locale_locked_fields,
+    },
 };
-
-/// The address an update is about to write, when it differs from the stored
-/// one on a collection that requires email verification.
-///
-/// Changing the address invalidates the confirmation the old one carried: the
-/// new address has never been confirmed, so leaving `_verified` set would let
-/// a user log in with an address nobody proved they control.
-fn changed_email(
-    conn: &dyn DbConnection,
-    def: &CollectionDefinition,
-    slug: &str,
-    id: &str,
-    data: &DocumentFields,
-    locale_ctx: Option<&LocaleContext>,
-) -> Option<String> {
-    if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
-        return None;
-    }
-
-    let new_email = data.get("email").and_then(|v| v.as_str())?;
-    let current = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)
-        .ok()
-        .flatten()?;
-
-    (current.get_str("email") != Some(new_email)).then(|| new_email.to_string())
-}
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
 /// Performs: update -> join data -> password -> version snapshot (published).
@@ -97,7 +76,7 @@ pub fn persist_update(
 
     // Detected BEFORE anything writes the row — afterwards the stored address
     // is the new one, including when the draft write-back below carries it.
-    let new_email = changed_email(conn, def, slug, id, data, opts.locale_ctx);
+    let address_changed = email_changed(conn, def, slug, id, data, opts.locale_ctx);
 
     if let Some(pending) = publish_draft {
         query::write_snapshot_base(conn, slug, def, id, pending, &locale_cfg)?;
@@ -112,12 +91,7 @@ pub fn persist_update(
         query::update_password(conn, slug, &doc.id, pw)?;
     }
 
-    if new_email.is_some() {
-        query::mark_unverified(conn, slug, &doc.id)?;
-        // On this connection like a create's: the token and the queued mail
-        // land with the address change or not at all.
-        ctx.maybe_send_verification(&doc)?;
-    }
+    apply_email_change(ctx, &doc, address_changed)?;
 
     if def.has_versions() {
         let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
@@ -195,6 +169,10 @@ pub(crate) fn persist_bulk_update(
         None
     };
 
+    // Same bracket as the single-document path: detected before the row moves
+    // to the new address, applied once the write is on disk.
+    let address_changed = email_changed(conn, def, ctx.slug, id, data, opts.locale_ctx);
+
     if let Some(pending) = publish_draft {
         query::write_snapshot_base(conn, ctx.slug, def, id, pending, &locale_cfg)?;
     }
@@ -202,6 +180,8 @@ pub(crate) fn persist_bulk_update(
     let updated = query::update_partial(conn, ctx.slug, def, id, data, opts.locale_ctx)?;
 
     query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, opts.locale_ctx)?;
+
+    apply_email_change(ctx, &updated, address_changed)?;
 
     if def.has_versions() {
         // The locale config is what makes the snapshot record EVERY locale's

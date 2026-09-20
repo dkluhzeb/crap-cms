@@ -13,7 +13,7 @@ pub use bulk::{
     cancel_pending_job, cancel_pending_jobs, delete_pending_failed_jobs_matching, purge_old_jobs,
     purge_old_jobs_for_slug,
 };
-pub use claim::claim_pending_jobs;
+pub use claim::{ClaimParams, claim_pending_jobs, claim_pending_jobs_with};
 pub use cron::{cron_fired_at, try_claim_cron_window};
 pub use lifecycle::{
     InsertJobOpts, InsertedJob, complete_job, complete_job_repairing, fail_job, insert_job,

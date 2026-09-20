@@ -60,7 +60,8 @@ fn add_index(
     Ok(())
 }
 
-/// Collect field-level indexes (index=true, skip if unique=true — already indexed).
+/// Collect field-level indexes (index=true, skip if unique=true — the managed
+/// unique index below already indexes the column).
 fn collect_field_indexes(
     slug: &str,
     def: &CollectionDefinition,
@@ -101,18 +102,41 @@ fn collect_field_indexes(
     Ok(())
 }
 
-/// Collect partial unique indexes for soft-delete collections.
-fn collect_soft_delete_unique_indexes(
+/// The name and `CREATE` statement of one column's managed unique index.
+///
+/// Partial (`WHERE _deleted_at IS NULL`) on a soft-delete collection so
+/// trashed rows don't keep their values reserved; a plain unique index
+/// otherwise.
+fn unique_index(slug: &str, col: &str, soft_delete: bool) -> (String, String) {
+    let (suffix, filter) = if soft_delete {
+        ("active_unique", " WHERE _deleted_at IS NULL")
+    } else {
+        ("unique", "")
+    };
+
+    let idx_name = index_name(slug, &[col, suffix]);
+    let sql = format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {slug} ({}){filter}",
+        quote_ident(&idx_name),
+        quote_ident(col)
+    );
+
+    (idx_name, sql)
+}
+
+/// Collect the unique index of every `unique` field.
+///
+/// Uniqueness lives here for ALL collections rather than as an inline `UNIQUE`
+/// at CREATE: an inline constraint can only be written once, so a field that
+/// gains `unique` after its column exists would never get one and the database
+/// would leave the rule to the validation layer alone.
+fn collect_unique_indexes(
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
     desired: &mut HashSet<String>,
     stmts: &mut Vec<String>,
 ) -> Result<()> {
-    if !def.soft_delete {
-        return Ok(());
-    }
-
     for spec in &collect_column_specs(&def.fields, locale_config) {
         if !spec.field.unique || spec.companion_text {
             continue;
@@ -121,23 +145,12 @@ fn collect_soft_delete_unique_indexes(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
-                let idx_name = index_name(slug, &[&col, "active_unique"]);
-                let sql = format!(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {slug} ({}) WHERE _deleted_at IS NULL",
-                    quote_ident(&idx_name),
-                    quote_ident(&col)
-                );
+                let (idx_name, sql) = unique_index(slug, &col, def.soft_delete);
 
                 add_index(desired, stmts, idx_name, sql)?;
             }
         } else {
-            let idx_name = index_name(slug, &[&spec.col_name, "active_unique"]);
-            let sql = format!(
-                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                quote_ident(&idx_name),
-                slug,
-                quote_ident(&spec.col_name)
-            );
+            let (idx_name, sql) = unique_index(slug, &spec.col_name, def.soft_delete);
 
             add_index(desired, stmts, idx_name, sql)?;
         }
@@ -290,7 +303,7 @@ fn desired_indexes(
     let mut stmts: Vec<String> = Vec::new();
 
     collect_field_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
-    collect_soft_delete_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
+    collect_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_auth_token_indexes(slug, def, &mut desired, &mut stmts)?;
     collect_auth_email_ci_index(slug, def, &mut desired, &mut stmts)?;
@@ -351,6 +364,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldType};
     use crate::db::migrate::collection::create::create_collection_table;
+    use crate::db::migrate::collection::sync_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::{DbConnection, DbValue};
 
@@ -719,8 +733,10 @@ mod tests {
         );
     }
 
+    /// Without soft delete the unique index is the full one — no
+    /// `_deleted_at` predicate, since the column doesn't exist.
     #[test]
-    fn sync_indexes_no_partial_unique_without_soft_delete() {
+    fn sync_indexes_creates_full_unique_without_soft_delete() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
@@ -738,6 +754,58 @@ mod tests {
         assert!(
             !indexes.contains("idx_posts_slug_active_unique"),
             "Should NOT create partial unique index for non-soft-delete collection"
+        );
+        assert!(
+            indexes.contains("idx_posts_slug_unique"),
+            "Should create the managed unique index: {indexes:?}"
+        );
+
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+            .unwrap();
+        assert!(
+            conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[])
+                .is_err(),
+            "the managed unique index must block a duplicate"
+        );
+    }
+
+    /// Regression: `unique` added to a field whose column already exists was
+    /// never enforced by the database — the inline `UNIQUE` could only be
+    /// written at CREATE, and the index collector skipped `unique` fields on
+    /// the assumption it had been. The next sync must create the index.
+    #[test]
+    fn unique_added_to_an_existing_column_is_enforced_on_the_next_sync() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let plain = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("slug", FieldType::Text).build()],
+        );
+        sync_collection_table(&conn, "posts", &plain, &no_locale()).unwrap();
+
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+            .unwrap();
+
+        let unique = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        sync_collection_table(&conn, "posts", &unique, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "posts");
+        assert!(
+            indexes.contains("idx_posts_slug_unique"),
+            "adding unique must create the managed index: {indexes:?}"
+        );
+        assert!(
+            conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[])
+                .is_err(),
+            "a duplicate must fail at the DB level once unique was added"
         );
     }
 

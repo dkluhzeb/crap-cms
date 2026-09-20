@@ -11,8 +11,8 @@ use crate::{
         DbConnection,
         migrate::{
             helpers::{
-                ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-                reconcile_scalar_list_column,
+                ColumnSpec, add_column_if_missing, check_type_mismatch, collect_column_specs,
+                get_table_column_types, reconcile_scalar_list_column, warn_orphan_columns,
             },
             locale_change::{LocaleShape, column_plans},
         },
@@ -21,7 +21,9 @@ use crate::{
 };
 
 use super::create::append_default_value_for;
-use super::soft_delete::{drop_inline_unique_constraints, soft_delete_transition_pending};
+use super::soft_delete::{
+    check_no_trashed_rows, drop_inline_unique_constraints, soft_delete_transition_pending,
+};
 use super::system_columns::{
     AUTH_COLUMNS, DRAFT_STATUS_COLUMN, MFA_COLUMNS, REF_COUNT_COLUMN, TOTP_COLUMNS,
     VERIFY_EMAIL_COLUMNS,
@@ -40,19 +42,6 @@ struct AlterCtx<'a> {
     column_types: &'a HashMap<String, String>,
 }
 
-/// Warn if an existing column's DB type differs from the expected type.
-fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
-    if let Some(db_type) = ctx.column_types.get(col_name)
-        && !db_type.eq_ignore_ascii_case(expected_type)
-    {
-        warn!(
-            "Column '{}' in table '{}' has type '{}' but definition expects '{}' \
-             (not auto-migrated — manual migration required)",
-            col_name, ctx.slug, db_type, expected_type
-        );
-    }
-}
-
 /// Add a single field column if it doesn't exist, with optional default value.
 /// Returns whether the column was created by this call.
 fn add_field_column(
@@ -65,7 +54,7 @@ fn add_field_column(
         if spec.field.is_has_many_scalar() {
             reconcile_scalar_list_column(ctx.conn, ctx.slug, col_name, ctx.column_types)?;
         } else {
-            warn_type_mismatch(ctx, col_name, expected_type);
+            check_type_mismatch(ctx.slug, ctx.column_types, col_name, expected_type)?;
         }
 
         return Ok(false);
@@ -287,6 +276,8 @@ pub(super) fn alter_collection_table(
     let column_types = get_table_column_types(conn, slug)?;
     let existing: HashSet<String> = column_types.keys().cloned().collect();
 
+    check_no_trashed_rows(conn, slug, def, &existing)?;
+
     let transition = soft_delete_transition_pending(def, &existing, locale_config);
 
     let ctx = AlterCtx {
@@ -301,17 +292,11 @@ pub(super) fn alter_collection_table(
     add_system_columns(&ctx)?;
 
     // Warn about removed columns (SQLite can't DROP COLUMN easily)
-    let expected = collect_expected_column_names(def, locale_config);
-    let system: HashSet<&str> = SYSTEM_COLUMNS.iter().copied().collect();
-
-    for col in &existing {
-        if !expected.contains(col) && !system.contains(col.as_str()) {
-            warn!(
-                "Column '{}' exists in table '{}' but not in Lua definition (not removed)",
-                col, slug
-            );
-        }
-    }
+    warn_orphan_columns(
+        slug,
+        &existing,
+        &collect_expected_column_names(def, locale_config),
+    );
 
     if transition {
         drop_inline_unique_constraints(conn, slug, def, locale_config)?;
@@ -327,6 +312,7 @@ mod tests {
     use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::DbValue;
     use crate::db::migrate::collection::create::create_collection_table;
+    use crate::db::migrate::collection::sync_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
     use crate::db::query::helpers::column_value;
@@ -891,5 +877,52 @@ mod tests {
             !expected.contains("body__en"),
             "non-localized should not have locale suffix"
         );
+    }
+
+    /// Regression: a field whose `type` changed only warned. The column kept
+    /// the type it was created with, so on `SQLite` every number written into
+    /// it was stored and read back as text, and on Postgres every later write
+    /// failed to bind. The sync refuses to run instead, naming the column.
+    #[test]
+    fn a_changed_field_type_fails_the_sync() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let as_text = simple_collection("posts", vec![text_field("score")]);
+        sync_collection_table(&conn, "posts", &as_text, &no_locale()).unwrap();
+
+        let as_number = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("score", FieldType::Number).build()],
+        );
+        let err = sync_collection_table(&conn, "posts", &as_number, &no_locale())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("score"), "must name the column: {err}");
+        assert!(err.contains("posts"), "must name the table: {err}");
+        assert!(err.contains("REAL"), "must name the expected type: {err}");
+        assert!(err.contains("TEXT"), "must name the stored type: {err}");
+    }
+
+    /// The unchanged case stays a no-op — re-syncing the same definition must
+    /// not trip the type check.
+    #[test]
+    fn an_unchanged_field_type_re_syncs_cleanly() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("rank", FieldType::Number).build(),
+                FieldDefinition::builder("featured", FieldType::Checkbox).build(),
+            ],
+        );
+
+        sync_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_collection_table(&conn, "posts", &def, &no_locale())
+            .expect("re-syncing an unchanged definition must pass");
     }
 }

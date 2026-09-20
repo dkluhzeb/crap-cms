@@ -37,14 +37,18 @@ pub(super) fn collect_leaf_param(
     }
 
     let Some(value) = data.get(&data_key) else {
-        if field.field_type == FieldType::Checkbox {
-            // Absent checkbox on create honors a configured boolean default. The
-            // admin form normalizes an unchecked box to an explicit `0`, so a
-            // genuine absence here is an API create (Lua / gRPC / MCP) that
-            // omitted the field — which should inherit the default like every
-            // other field type does via its column `DEFAULT`. Falls back to 0.
-            let default_on = matches!(field.default_value.as_ref(), Some(Value::Bool(true)));
-            collector.push(conn, &col_name, DbValue::Integer(i64::from(default_on)));
+        // A field the write doesn't carry takes its configured default here,
+        // through the same encoder a sent value goes through. The column
+        // `DEFAULT` can only be written when the column is created, so leaving
+        // the job to it would freeze the default a table was born with; doing
+        // it app-side makes a changed default take effect on the next create
+        // without a migration.
+        if let Some(default) = field.default_value.as_ref() {
+            collector.push(conn, &col_name, column_value(field, default, None));
+        } else if field.field_type == FieldType::Checkbox {
+            // A checkbox without a default is off, not NULL: the read decodes
+            // the column as a bool and a NULL would surface as one anyway.
+            collector.push(conn, &col_name, DbValue::Integer(0));
         }
 
         return Ok(());
@@ -60,7 +64,7 @@ pub(super) fn collect_leaf_param(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::{
         core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
@@ -69,6 +73,112 @@ mod tests {
             test_support::{setup_db, test_def},
         },
     };
+
+    /// A table whose columns carry no `DEFAULT` at all, so anything a create
+    /// stores for an absent field came from the write path.
+    fn defaults_ddl() -> &'static str {
+        "CREATE TABLE posts (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            rank REAL,
+            kind TEXT,
+            starts TEXT,
+            tags TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )"
+    }
+
+    /// The definition behind [`defaults_ddl`], every field with a default.
+    fn defaults_def() -> CollectionDefinition {
+        let mut def = test_def();
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .default_value(json!("Untitled"))
+                .build(),
+            FieldDefinition::builder("rank", FieldType::Number)
+                .default_value(json!(7))
+                .build(),
+            FieldDefinition::builder("kind", FieldType::Select)
+                .default_value(json!("draft"))
+                .build(),
+            FieldDefinition::builder("starts", FieldType::Date)
+                .default_value(json!("2026-01-01"))
+                .build(),
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .default_value(json!(["a", "b"]))
+                .build(),
+        ];
+        def
+    }
+
+    /// Regression: a field the write omitted took its value from the column
+    /// `DEFAULT`, a clause that can only be written when the column is created
+    /// — so the stored default was whatever the table was born with. The create
+    /// path applies the configured default itself, for every field type.
+    #[test]
+    fn an_omitted_field_stores_its_configured_default() {
+        let (_dir, conn) = setup_db(defaults_ddl());
+        let def = defaults_def();
+
+        let doc = create(&conn, "posts", &def, &DocumentFields::new(), None).unwrap();
+
+        assert_eq!(doc.get("title"), Some(&json!("Untitled")));
+        assert_eq!(doc.get("rank"), Some(&json!(7)));
+        assert_eq!(doc.get("kind"), Some(&json!("draft")));
+        assert_eq!(doc.get("tags"), Some(&json!(["a", "b"])));
+        assert!(
+            doc.get("starts").is_some_and(|v| !v.is_null()),
+            "a date default must be stored: {:?}",
+            doc.get("starts")
+        );
+    }
+
+    /// A default changed in the definition reaches the next document without a
+    /// migration — the column `DEFAULT` still says the old value.
+    #[test]
+    fn a_changed_default_applies_without_a_migration() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT DEFAULT 'stale',
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = test_def();
+        def.fields[0] = FieldDefinition::builder("title", FieldType::Text)
+            .default_value(json!("current"))
+            .build();
+
+        let doc = create(&conn, "posts", &def, &DocumentFields::new(), None).unwrap();
+
+        assert_eq!(doc.get("title"), Some(&json!("current")));
+    }
+
+    /// A sent value wins over the default — including an explicit `null`, which
+    /// means "no value" and must not be overwritten by the default.
+    #[test]
+    fn a_sent_value_wins_over_the_default() {
+        let (_dir, conn) = setup_db(defaults_ddl());
+        let def = defaults_def();
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Sent"));
+        data.insert("rank".to_string(), Value::Null);
+
+        let doc = create(&conn, "posts", &def, &data, None).unwrap();
+
+        assert_eq!(doc.get("title"), Some(&json!("Sent")));
+        assert!(
+            doc.get("rank").unwrap_or(&Value::Null).is_null(),
+            "an explicit null must store NULL, not the default: {:?}",
+            doc.get("rank")
+        );
+    }
 
     #[test]
     fn create_checkbox_defaults_to_zero() {

@@ -1,5 +1,8 @@
 //! The cron tick: evaluate the cron schedules for the window since the last
 //! successful tick, and every tenth tick run the retention purges.
+//!
+//! A `--no-cron` worker skips the schedule evaluation and keeps the purges —
+//! see [`cron_mode`] for why the two are separable.
 
 use std::{
     collections::HashMap,
@@ -24,6 +27,34 @@ use super::runner::{check_cron_schedules, claim_retention_purge_tick, purge_soft
 /// The purge runs every this many cron ticks.
 const PURGE_EVERY_TICKS: u64 = 10;
 
+/// What a cron tick does on this process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CronMode {
+    /// Evaluate the cron schedules and run the retention purges.
+    Full,
+    /// Run the retention purges only.
+    PurgeOnly,
+}
+
+/// The cron work a process does, from its `run_cron` setting.
+///
+/// `--no-cron` takes a worker out of cron *scheduling* — the case it exists
+/// for is a fleet where one process owns the schedules and the rest only
+/// execute. The retention purges keep running on every process, because they
+/// are not cron jobs: they are claim-gated single-winner housekeeping
+/// (`claim_retention_purge_tick` hands each window to exactly one node, and
+/// the losers pay a single SELECT), and in a deployment of
+/// `serve --no-scheduler` app servers beside `work --no-cron` workers there
+/// is no other process that would ever run them. Dropping the tick there
+/// would silently keep finished job rows and expired trash forever.
+pub(super) const fn cron_mode(run_cron: bool) -> CronMode {
+    if run_cron {
+        CronMode::Full
+    } else {
+        CronMode::PurgeOnly
+    }
+}
+
 /// The retention purges' cadence and their configured job-row retention.
 pub(super) struct PurgeSchedule {
     /// Cron ticks seen so far; the purge runs on every tenth.
@@ -40,23 +71,25 @@ pub(super) struct CronTickInput {
     /// The end of the last window a cron tick SUCCEEDED for.
     pub last_cron_check: Arc<Mutex<DateTime<Utc>>>,
     pub purge: PurgeSchedule,
+    /// Whether this tick evaluates the cron schedules; see [`cron_mode`].
+    pub mode: CronMode,
 }
 
-/// One cron tick: enqueue the cron jobs due in `(last_check, now]`, then
-/// count the tick towards the periodic purges.
+/// Enqueue the cron jobs due in `(last_check, now]`.
+///
+/// Only advances `last_cron_check` when the evaluation SUCCEEDS. The whole
+/// evaluation runs in one transaction; a transient failure rolls back every
+/// slug's enqueue for the window `(last_check, now]`, so advancing
+/// unconditionally would silently drop all cron jobs due in that window —
+/// the next tick must re-cover it.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn cron_tick(t: &CronTickInput) {
+fn evaluate_schedules(t: &CronTickInput) {
     let now = Utc::now();
     let last_check = *t
         .last_cron_check
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
 
-    // Only advance `last_cron_check` when the tick SUCCEEDS. The whole tick
-    // runs in one transaction; a transient failure rolls back every slug's
-    // enqueue for the window `(last_check, now]`, so advancing
-    // unconditionally would silently drop all cron jobs due in that window —
-    // the next tick must re-cover it.
     match check_cron_schedules(
         &t.infra.pool,
         &t.infra.registry,
@@ -70,6 +103,16 @@ pub(super) fn cron_tick(t: &CronTickInput) {
                 .unwrap_or_else(PoisonError::into_inner) = now;
         }
         Err(e) => error!("Scheduler cron error (window will be retried): {}", e),
+    }
+}
+
+/// One cron tick: evaluate the schedules unless this process leaves them to
+/// its peers, then count the tick towards the periodic purges — which run on
+/// every process, `--no-cron` included (see [`cron_mode`]).
+#[cfg(not(tarpaulin_include))]
+pub(super) fn cron_tick(t: &CronTickInput) {
+    if t.mode == CronMode::Full {
+        evaluate_schedules(t);
     }
 
     let ticks = t.purge.counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -166,4 +209,25 @@ fn claim_and_purge(conn: &mut BoxedConnection, t: &CronTickInput) -> Result<Opti
     }
 
     Ok(Some(files))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `crap-cms work --no-cron` takes the worker out of schedule
+    /// evaluation — and out of it only: the retention purges are not cron
+    /// jobs, and a fleet of `serve --no-scheduler` beside `--no-cron`
+    /// workers has no other process that would run them.
+    #[test]
+    fn no_cron_stops_evaluating_schedules_but_keeps_purging() {
+        assert_eq!(cron_mode(false), CronMode::PurgeOnly);
+    }
+
+    /// Everything else — `serve`, and a plain `crap-cms work` — evaluates
+    /// schedules as before.
+    #[test]
+    fn cron_is_on_by_default() {
+        assert_eq!(cron_mode(true), CronMode::Full);
+    }
 }

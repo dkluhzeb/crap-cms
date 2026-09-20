@@ -24,30 +24,24 @@ use crate::{
     },
 };
 
-/// Column constraint options for `build_column_def`.
-struct ColumnConstraints<'a> {
-    required: bool,
-    unique: bool,
-    soft_delete: bool,
-    field: &'a FieldDefinition,
-}
-
 /// Build a column definition string with type, constraints, and default.
-fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstraints) -> String {
+///
+/// A `unique` field gets no inline `UNIQUE` here: uniqueness is a managed
+/// index that `sync_indexes` owns, so a field that gains `unique` later is
+/// enforced exactly like one that had it at creation.
+fn build_column_def(
+    col_name: &str,
+    col_type: &str,
+    required: bool,
+    field: &FieldDefinition,
+) -> String {
     let mut col = format!("{} {col_type}", quote_ident(col_name));
 
-    if constraints.required {
+    if required {
         col.push_str(" NOT NULL");
     }
 
-    // Skip inline UNIQUE for soft-delete collections — a partial
-    // unique index (WHERE _deleted_at IS NULL) is created instead
-    // by sync_indexes so that deleted rows don't block new inserts.
-    if constraints.unique && !constraints.soft_delete {
-        col.push_str(" UNIQUE");
-    }
-
-    append_default_value_for(&mut col, constraints.field);
+    append_default_value_for(&mut col, field);
 
     col
 }
@@ -102,25 +96,24 @@ fn collect_field_columns(
                 if spec.companion_text {
                     columns.push(format!("{} TEXT", quote_ident(&col_name)));
                 } else {
-                    let c = ColumnConstraints {
-                        required: is_required,
-                        unique: spec.field.unique,
-                        soft_delete: def.soft_delete,
-                        field: spec.field,
-                    };
-                    columns.push(build_column_def(&col_name, col_type, &c));
+                    columns.push(build_column_def(
+                        &col_name,
+                        col_type,
+                        is_required,
+                        spec.field,
+                    ));
                 }
             }
         } else if spec.companion_text {
             columns.push(format!("{} TEXT", quote_ident(&spec.col_name)));
         } else {
-            let c = ColumnConstraints {
-                required: spec.field.required && !def.has_drafts(),
-                unique: spec.field.unique,
-                soft_delete: def.soft_delete,
-                field: spec.field,
-            };
-            columns.push(build_column_def(&spec.col_name, col_type, &c));
+            let required = spec.field.required && !def.has_drafts();
+            columns.push(build_column_def(
+                &spec.col_name,
+                col_type,
+                required,
+                spec.field,
+            ));
         }
     }
 
@@ -905,8 +898,8 @@ mod tests {
         def.soft_delete = true;
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
-        // Insert two rows with the same slug — inline UNIQUE would block this,
-        // but we skipped it for soft-delete collections.
+        // Insert two rows with the same slug — a trashed row must not block a
+        // live one, which is what the partial managed index expresses.
         conn.execute(
             "INSERT INTO posts (id, slug, _deleted_at) VALUES ('a', 'hello', '2025-01-01')",
             &[],
@@ -922,8 +915,12 @@ mod tests {
         );
     }
 
+    /// A `unique` field carries no inline `UNIQUE` on a new table: the managed
+    /// index `sync_indexes` creates is the one enforcement point, so a field
+    /// that gains `unique` later ends up with exactly the same constraint as
+    /// one created with it.
     #[test]
-    fn non_soft_delete_unique_field_keeps_inline_unique() {
+    fn unique_field_gets_no_inline_unique() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
@@ -936,12 +933,18 @@ mod tests {
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
-        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+        let sql = conn
+            .query_one(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'posts'",
+                &[],
+            )
+            .unwrap()
+            .unwrap()
+            .get_string("sql")
             .unwrap();
-        let result = conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[]);
         assert!(
-            result.is_err(),
-            "Inline UNIQUE should block duplicate slug on non-soft-delete collection"
+            !sql.to_uppercase().contains("UNIQUE"),
+            "table DDL must carry no inline UNIQUE: {sql}"
         );
     }
 }

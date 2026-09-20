@@ -552,20 +552,24 @@ async fn run_scheduler_task(
 
         return Ok(());
     }
-    scheduler::start(scheduler::SchedulerParams {
-        infra: Arc::clone(&res.infra),
-        config: res.config.jobs.clone(),
-        db_timeouts: scheduler::DbTimeouts::new(
+    // `serve` takes the builder's defaults: every queue, cron on. Only
+    // `crap-cms work` narrows either.
+    let params = scheduler::SchedulerParams::builder(
+        Arc::clone(&res.infra),
+        res.config.jobs.clone(),
+        scheduler::DbTimeouts::new(
             res.config.database.busy_timeout,
             res.config.database.connection_timeout,
         ),
         shutdown,
-        email_provider: Some(create_email_provider_with_lease(
-            &res.config.email,
-            res.infra.hook_runner.lua_lease(),
-        )?),
-    })
-    .await
+    )
+    .email_provider(Some(create_email_provider_with_lease(
+        &res.config.email,
+        res.infra.hook_runner.lua_lease(),
+    )?))
+    .build();
+
+    scheduler::start(params).await
 }
 
 /// Start the admin UI and gRPC servers.

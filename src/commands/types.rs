@@ -498,11 +498,14 @@ pub enum MigrateAction {
 pub enum DbAction {
     /// Open an interactive `SQLite` console
     Console,
-    /// Detect and optionally remove orphan columns not in Lua definitions
+    /// Detect and optionally remove leftovers not in Lua definitions
     Cleanup {
-        /// Actually drop orphan columns (default: dry-run report only)
-        #[arg(long)]
+        /// Actually apply the cleanup (default: dry-run report only)
+        #[arg(short = 'y', long)]
         confirm: bool,
+        /// Also drop whole tables no definition accounts for (needs --confirm)
+        #[arg(long)]
+        drop_tables: bool,
     },
 }
 

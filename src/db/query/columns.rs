@@ -6,7 +6,10 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition},
+    core::{
+        CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition,
+        flatten_array_sub_fields,
+    },
     db::{
         LocaleContext,
         query::{
@@ -128,28 +131,70 @@ pub fn get_expected_global_column_names(
     })
 }
 
-/// The join tables a field tree implies, as their `__`-joined names off the
-/// owning table: array, blocks, and has-many relationship/upload fields, with
-/// Group prefixes applied and layout wrappers transparent.
+/// The columns a join table holds for `field`, beside the system ones every
+/// join table carries (`parent_id`, `_order`, `_locale`, `_block_type`).
 ///
-/// Pair each with the owning table through
+/// One rule shared by the schema sync's orphan warning and `db cleanup`, so a
+/// removed sub-field is recognized the same way on both: an array's flattened
+/// sub-field columns with their companions, the relationship/upload pointers,
+/// and the blocks payload.
+#[must_use]
+pub fn get_expected_junction_columns(field: &FieldDefinition) -> HashSet<String> {
+    let mut expected: HashSet<String> = HashSet::new();
+    expected.insert("id".to_string());
+    expected.insert("parent_id".to_string());
+
+    match field.field_type {
+        FieldType::Relationship | FieldType::Upload => {
+            expected.insert("related_id".to_string());
+            expected.insert("related_collection".to_string());
+        }
+        FieldType::Blocks => {
+            expected.insert("data".to_string());
+        }
+        FieldType::Array => {
+            for sub in flatten_array_sub_fields(&field.fields) {
+                expected.extend(sub.columns_with_companions(&sub.name));
+            }
+        }
+        _ => {}
+    }
+
+    expected
+}
+
+/// The join tables a field tree implies: each `__`-joined name off the owning
+/// table paired with the field that owns it — array, blocks, and has-many
+/// relationship/upload fields, with Group prefixes applied and layout wrappers
+/// transparent.
+///
+/// Pair each name with the owning table through
 /// [`join_table`](crate::db::query::helpers::join_table) to get the table name.
 #[must_use]
-pub fn join_field_names(fields: &[FieldDefinition]) -> Vec<String> {
-    let mut names = Vec::new();
+pub fn join_fields(fields: &[FieldDefinition]) -> Vec<(String, &FieldDefinition)> {
+    let mut found = Vec::new();
 
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         if matches!(
             field.field_type,
             FieldType::Array | FieldType::Blocks | FieldType::Relationship | FieldType::Upload
         ) {
-            names.push(prefixed_name(prefix, &field.name));
+            found.push((prefixed_name(prefix, &field.name), field));
         }
 
         Ok(())
     });
 
-    names
+    found
+}
+
+/// Just the names from [`join_fields`].
+#[must_use]
+pub fn join_field_names(fields: &[FieldDefinition]) -> Vec<String> {
+    join_fields(fields)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 fn collect_expected_locale_inner(
@@ -858,5 +903,56 @@ mod tests {
             "missing snippet_lang__de, got: {expected:?}"
         );
         assert!(!expected.contains("snippet_lang"));
+    }
+
+    /// An array's junction table expects its flattened sub-field columns with
+    /// their companions — the set orphan detection subtracts, so a live
+    /// sub-field must never be missing from it.
+    #[test]
+    fn expected_junction_columns_of_an_array() {
+        let field = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                make_field("label", FieldType::Text),
+                make_code_lang_field("snippet"),
+            ])
+            .build();
+
+        let expected = get_expected_junction_columns(&field);
+
+        for column in ["id", "parent_id", "label", "snippet", "snippet_lang"] {
+            assert!(expected.contains(column), "missing {column}: {expected:?}");
+        }
+    }
+
+    /// Blocks keep everything in `data`; a relationship keeps its pointers.
+    #[test]
+    fn expected_junction_columns_of_blocks_and_relationships() {
+        let blocks = get_expected_junction_columns(&make_field("content", FieldType::Blocks));
+        assert!(blocks.contains("data"), "{blocks:?}");
+
+        let rel = get_expected_junction_columns(&make_field("tags", FieldType::Relationship));
+        assert!(rel.contains("related_id"), "{rel:?}");
+        assert!(rel.contains("related_collection"), "{rel:?}");
+    }
+
+    /// The name/field pairs must agree with the names alone — the junction
+    /// scan pairs each table with the field whose columns it expects.
+    #[test]
+    fn join_fields_agree_with_join_field_names() {
+        let fields = vec![
+            make_group_field(
+                "meta",
+                vec![FieldDefinition::builder("items", FieldType::Array).build()],
+            ),
+            make_field("tags", FieldType::Relationship),
+        ];
+
+        let names: Vec<String> = join_fields(&fields)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        assert_eq!(names, join_field_names(&fields));
+        assert_eq!(names, vec!["meta__items", "tags"]);
     }
 }

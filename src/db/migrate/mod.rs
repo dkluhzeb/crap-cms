@@ -15,10 +15,13 @@ mod locale_change;
 mod meta;
 mod nested_values;
 mod one_time;
+mod orphan_tables;
+mod relationship_target;
 mod sync;
 mod tracking;
 
 pub use locale_change::warn_on_default_locale_change;
+pub use orphan_tables::{OrphanKind, OrphanTable, find_orphan_tables};
 /// Test-only re-export so `test_helpers::setup_db` and the scheduler
 /// tests can build the standard `_crap_jobs` schema via the
 /// production migration path (single source of truth — schema can't

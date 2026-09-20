@@ -13,7 +13,9 @@ use anyhow::Result;
 use crate::config::LocaleConfig;
 use crate::core::{FieldDefinition, FieldType};
 use crate::db::DbConnection;
-use crate::db::query::helpers::{prefixed_name, walk_leaf_fields};
+use crate::db::migrate::helpers::{get_table_columns, warn_orphan_columns};
+use crate::db::query::get_expected_junction_columns;
+use crate::db::query::helpers::{join_table, prefixed_name, walk_leaf_fields};
 
 use super::array::sync_array_table;
 use super::blocks::sync_blocks_table;
@@ -82,8 +84,28 @@ fn plan_join_tables<'a>(
     plans
 }
 
+/// Warn about the columns a join table still holds for a sub-field the
+/// definition dropped — the same report a collection or global table gets, so
+/// a removed array sub-field stops being the one invisible removal.
+fn warn_orphan_join_columns(
+    conn: &dyn DbConnection,
+    collection_slug: &str,
+    plan: &JoinTablePlan<'_>,
+) -> Result<()> {
+    let table = join_table(collection_slug, &plan.full_name);
+    let existing = get_table_columns(conn, &table)?;
+
+    warn_orphan_columns(
+        &table,
+        &existing,
+        &get_expected_junction_columns(plan.field),
+    );
+
+    Ok(())
+}
+
 /// Run the DDL for a single planned join table.
-fn execute_join_table_plan(
+fn run_join_table_ddl(
     conn: &dyn DbConnection,
     collection_slug: &str,
     plan: &JoinTablePlan<'_>,
@@ -114,6 +136,19 @@ fn execute_join_table_plan(
             locale_config,
         ),
     }
+}
+
+/// Sync one planned join table, then report what it holds and the definition
+/// no longer does.
+fn execute_join_table_plan(
+    conn: &dyn DbConnection,
+    collection_slug: &str,
+    plan: &JoinTablePlan<'_>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    run_join_table_ddl(conn, collection_slug, plan, locale_config)?;
+
+    warn_orphan_join_columns(conn, collection_slug, plan)
 }
 
 /// Sync join tables for has-many relationships and array fields.

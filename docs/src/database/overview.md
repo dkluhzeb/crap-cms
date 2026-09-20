@@ -124,6 +124,27 @@ On startup, Crap CMS compares Lua definitions against the database schema:
 
 Schema sync runs in a single transaction. If anything fails, all changes are rolled back. The one exception to "nothing outside the transaction" is a [soft-delete transition](../collections/soft-deletes.md#enabling-soft-deletes-on-an-existing-collection) on SQLite, which switches foreign-key enforcement off around that sync and verifies every reference before committing.
 
+## Changing a definition that has data
+
+Schema sync only ever adds; what it does with each kind of change on a
+table that already holds rows:
+
+| Change | On the next boot |
+|--------|------------------|
+| Field added | Column added; existing rows read the field's `default_value` (applied at write time for new documents) or `null` |
+| Field removed / renamed | Old column kept and reported as orphan (`db cleanup` drops it); a renamed field is a new, empty column |
+| Field moved into a group | New `group__field` column; the old column is orphaned |
+| Field `type` changed | **Boot refused** — migrate the column by hand (copy to a new field, or `ALTER` it yourself), then restart |
+| `unique` added | A managed unique index is created; duplicates already present make the index creation fail — deduplicate first |
+| `required` added | Validation only; no `NOT NULL` is retrofitted |
+| `default_value` changed | Takes effect immediately — defaults are applied by the application |
+| `localized` toggled | Values carried into the default locale's column and back (see the locale docs) |
+| `soft_delete` enabled | Inline `UNIQUE` replaced by partial indexes (see soft deletes) |
+| `soft_delete` disabled with trashed rows | **Boot refused** — purge the trash or re-enable |
+| `versions` enabled | Version table created; existing documents get their first snapshot on their next write |
+| Relationship target changed | Warned when the junction table holds rows — the old ids point at the old target |
+| Collection or global removed | Tables kept; reported by the boot and by `db cleanup`, dropped only with `--drop-tables -y` |
+
 ## Connection Pool
 
 On **SQLite** there are two pools (both r2d2): a **read pool**

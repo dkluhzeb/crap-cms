@@ -7,16 +7,21 @@
 //! - `loop_runner.rs` -- the long-running event loop (`scheduler::start`).
 //!   Owns the tokio `select!` over poll / cron / heartbeat tickers, claims
 //!   pending jobs, and spawns timeout-bounded tasks.
+//! - `announce.rs` -- the startup announcement: the line stating this
+//!   process's effective queues, cron mode and concurrency, the queue-name
+//!   typo warnings, and the stale-job recovery that precedes the loop.
 //! - `cron_tick.rs` -- the cron tick's blocking body: schedule evaluation
-//!   and the periodic retention purge (claim + purge in one transaction).
+//!   (skipped on a `--no-cron` worker) and the periodic retention purge
+//!   (claim + purge in one transaction, run on every worker).
 //! - `heartbeat.rs` -- the heartbeat tick's blocking body: this node's
 //!   heartbeats, stale-peer recovery, and the stale threshold they share.
 //! - `runner/` -- pure execution helpers: `execute_job` (the Lua
 //!   handler / system-email dispatch), `check_cron_schedules`,
 //!   `recover_stale_jobs`, `purge_soft_deleted`. No event loop,
 //!   no tokio -- callable from tests directly.
-//! - `types.rs` -- `SchedulerParams` (call-site struct literal; no
-//!   builder ceremony) and the internal `EmailQueueConfig`.
+//! - `types.rs` -- `SchedulerParams` (built via `SchedulerParams::builder`,
+//!   whose defaults are `serve`'s: every queue, cron on) and the internal
+//!   `EmailQueueConfig`.
 //!
 //! ## Conventions
 //!
@@ -34,6 +39,7 @@
 //!   (`CronTickInput`, `HeartbeatTickInput`, `PurgeCollectionInput`,
 //!   `SpawnJobInput`) instead of >4 positional arguments.
 
+mod announce;
 mod bulk;
 mod cron_tick;
 mod heartbeat;
@@ -45,6 +51,6 @@ pub use loop_runner::start;
 pub use runner::{
     ExecuteJobParams, check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs,
 };
-pub use types::{DbTimeouts, SchedulerParams};
+pub use types::{DbTimeouts, SchedulerParams, SchedulerParamsBuilder};
 
 pub(crate) use runner::parse_cron;

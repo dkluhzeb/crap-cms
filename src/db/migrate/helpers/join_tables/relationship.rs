@@ -8,6 +8,7 @@ use crate::core::FieldDefinition;
 use crate::db::DbConnection;
 use crate::db::migrate::helpers::column_specs::{ensure_locale_column, locale_column_definition};
 use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};
+use crate::db::migrate::relationship_target::track_target;
 use crate::db::query::helpers::join_table;
 
 /// Sync a has-many relationship junction table.
@@ -54,7 +55,10 @@ pub(super) fn sync_relationship_table(
         )?;
     }
 
-    Ok(())
+    // The rows hold bare ids; which collection they belong to is the
+    // definition's word alone, so the table records the target it was written
+    // against and the next sync can say when that word changed.
+    track_target(conn, &table_name, rc)
 }
 
 /// Create a new junction table for has-many relationships.

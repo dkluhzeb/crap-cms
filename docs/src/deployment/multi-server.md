@@ -160,6 +160,8 @@ crap-cms work --detach --queues email
 crap-cms work --detach --queues heavy --concurrency 2
 ```
 
+A worker's `--queues` list is enforced in the claim query — it never picks up a run from another queue — and `--no-cron` skips only schedule evaluation; the retention purge tick keeps running on every worker (it is claim-gated to one winner per window). Each worker logs its effective queues, cron mode and concurrency on start.
+
 Workers build the `[live]` transports from the same config as the app
 servers: with `transport = "redis"`, a job handler's writes publish
 live-update events and user-invalidation signals that reach every app

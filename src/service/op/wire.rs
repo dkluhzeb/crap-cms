@@ -331,6 +331,10 @@ pub static COLLECTION_OPS: &[OpWire] = &[
         fields: &[
             req("id", WireKind::Id, ""),
             f("events", WireKind::Bool, EVENT_SINGLE_DOC),
+            on(
+                WireSurfaces::LUA_ONLY,
+                f("hooks", WireKind::Bool, HOOKS_DOC),
+            ),
         ],
     },
     OpWire {

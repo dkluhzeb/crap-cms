@@ -11,18 +11,23 @@ use crate::{
         DbConnection,
         migrate::{
             collection::append_default_value_for,
+            global::defaults::apply_default_row_values,
             helpers::{
-                ColumnSpec, add_column_if_missing, collect_column_specs, get_table_column_types,
-                reconcile_scalar_list_column, sync_join_tables, sync_versions_table, table_exists,
+                ColumnSpec, add_column_if_missing, check_type_mismatch, collect_column_specs,
+                get_table_column_types, reconcile_scalar_list_column, sync_join_tables,
+                sync_versions_table, table_exists, warn_orphan_columns,
             },
             locale_change::{LocaleShape, column_plans},
         },
-        query::helpers::{global_table, locale_column, quote_ident},
+        query::{
+            get_expected_global_column_names,
+            helpers::{global_table, locale_column, quote_ident},
+        },
     },
 };
 
 /// Sync a global's schema: create or alter table, join tables, versions.
-pub(super) fn sync_global_table(
+pub(in crate::db::migrate) fn sync_global_table(
     conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
@@ -116,7 +121,7 @@ fn create_global_table(
         &[],
     )?;
 
-    Ok(())
+    apply_default_row_values(conn, table_name, def, locale_config)
 }
 
 /// Add missing columns to an existing global table.
@@ -153,6 +158,14 @@ fn alter_global_table(
         true,
         &existing,
     )?;
+
+    // The same report a collection table gets: a field removed from a global
+    // leaves its column behind exactly as it does on a collection.
+    warn_orphan_columns(
+        table_name,
+        &existing,
+        &get_expected_global_column_names(def, locale_config)?,
+    );
 
     Ok(())
 }
@@ -214,6 +227,8 @@ fn add_field_column_if_missing(
         // TEXT (else its JSON-array writes error after upgrade). No-op otherwise.
         if spec.field.is_has_many_scalar() {
             reconcile_scalar_list_column(conn, table_name, col_name, column_types)?;
+        } else {
+            check_type_mismatch(table_name, column_types, col_name, spec.ddl_type(conn))?;
         }
 
         return Ok(false);
@@ -254,42 +269,6 @@ mod tests {
     use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
-    use crate::db::{DbValue, query::helpers::column_value};
-    use serde_json::json;
-
-    /// Regression: a global's has-many default became the column DEFAULT
-    /// through the single-value coercion, so a number list stored nothing where
-    /// a write of the same default stores the list.
-    #[test]
-    fn global_has_many_default_is_stored_as_its_write_stores_it() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
-        let def = simple_global(
-            "settings",
-            vec![
-                FieldDefinition::builder("scores", FieldType::Number)
-                    .has_many(true)
-                    .default_value(json!([1, 2]))
-                    .build(),
-            ],
-        );
-        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
-
-        conn.execute_batch("INSERT INTO _global_settings (id) VALUES ('with_default')")
-            .unwrap();
-        let row = conn
-            .query_one(
-                "SELECT scores FROM _global_settings WHERE id = 'with_default'",
-                &[],
-            )
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            row.opt_text_at(0).map_or(DbValue::Null, DbValue::Text),
-            column_value(&def.fields[0], &json!([1, 2]), None)
-        );
-    }
 
     /// A global's fields switch localization the same way a collection's do:
     /// the content follows the default locale's column instead of being
@@ -839,8 +818,9 @@ mod tests {
         );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
-        // SQLite inserts NULL for the default row (INSERT OR IGNORE with just id),
-        // but the column DEFAULT is correctly set. Verify by inserting a new row.
+        // The DDL keeps emitting DEFAULT for hand-written SQL even though the
+        // migration writes the `default` row's values itself — verify it on a
+        // row inserted with nothing but an id.
         conn.execute_batch("INSERT INTO _global_settings (id) VALUES ('test_defaults')")
             .unwrap();
         let row = conn

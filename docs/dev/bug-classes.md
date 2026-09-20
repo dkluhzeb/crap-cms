@@ -1195,6 +1195,46 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-20 (30) — **CONVERGENCE ROUND 20** (budget mode: 3 Sonnet lenses —
+  definition-change schema sync, auth state machine, job-queue semantics —
+  one Opus fix batch, one reviewer). **PENDING TOTALS — see the post-fix
+  line. ~15 confirmed: 6 HIGH, 5 MED, 2 LOW, no new class.**
+  - **P — bulk update bypassed the email-change→unverify rule** the single
+    update has, and the single update used the raw unverify (no session
+    retirement) instead of the hardened service fn. One shared step now.
+  - **Definition changes on a table with data** were the under-lensed area:
+    `unique` added later got no index (validation still enforced it — a
+    race, not a hole); a changed `default_value` never reached an existing
+    column (the DB default was load-bearing) — defaults are app-side now; a
+    changed field `type` only warned while SQLite drifted the read shape and
+    Postgres failed every write — fails the boot now; `soft_delete` switched
+    off made every trashed row visible — fails the boot now; removed
+    collections/globals left their tables (auth hashes included) invisible
+    to every tool — `db cleanup` reports them; junction/global orphan-column
+    warnings brought to parity; relationship retargets warned.
+  - **L-class (dead parameter) — `work --queues` and `--no-cron` never
+    reached the scheduler**: parsed, logged, forwarded to the detached
+    child, and dropped; the multi-server docs built a topology on them. Two
+    HIGHs, one root cause; a `SchedulerParams` field each now, with the
+    claim query filtering by queue.
+  - Lesson: "what happens on the NEXT boot after a definition change" is a
+    lens family of its own (one per change kind); the sync had guards for
+    the changes it was designed around (locale, soft-delete on) and none for
+    the rest. Appendix 3 now lists the change kinds verified CLEAN.
+    Post-fix review of this round's diff (1 Sonnet reviewer): 1 MED, 4 LOW,
+    no HIGH and no regression — the highest-risk change (type-mismatch boot
+    failure) was checked exhaustively for false positives across both
+    backends' type spellings and came back clean. The MED was a reach gap
+    again: the type check landed on collections only while the docs claimed
+    it for globals — shared helper now. Also fixed: a reordered polymorphic
+    target list no longer reads as a retarget. Two style LOWs taken;
+    `is_junction_shape`'s heuristic accepted (explicit `--drop-tables -y`).
+    Gates (2026-09-20): clippy clean in both forms; unit ~6,020 + integration
+    ~2,190 + macros/xtask green; e2e 322 green (run per binary — a
+    multi-binary e2e invocation stalls on this tree, cause not chased); all
+    five `gen-*` checks and `fmt --check` clean. Postgres harness NOT run.
+    Cost: ~1.45M agent tokens (3 lenses 0.64M, 2 fixes 0.59M, review 0.21M)
+    — under half of R19. Streak: 0 quiet rounds.
 - 2026-09-20 (29) — **CONVERGENCE ROUND 19** (5 lenses on Sonnet with explicit
   file lists and the Appendix 3 skip list: gRPC/REST API surface, hook
   execution model, MCP surface, read path (populate/filters/search/cache),

@@ -48,6 +48,11 @@ use crate::common::production_code;
 /// composite descent.
 const ALLOWLIST: &[(&str, usize, &str)] = &[
     (
+        "src/db/query/columns.rs",
+        1,
+        "per-field junction-table predicate (which field types own a join table), no tree descent",
+    ),
+    (
         "src/core/field/storage.rs",
         1,
         "per-field value mapping (which column forms a read decodes), no tree descent",

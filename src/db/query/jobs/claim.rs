@@ -14,7 +14,161 @@ use crate::db::{DbConnection, DbRow, DbValue};
 /// not collide with another advisory lock (schema sync uses `"crapsync"`).
 const JOB_CLAIM_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapjobs");
 
-/// Atomically claim up to `limit` pending jobs by setting them to running.
+/// One claim pass: the budget it may spend, the caps it must respect, the
+/// priority-decay window, and the queues the claiming worker listens on.
+pub struct ClaimParams<'a> {
+    /// Upper bound on the rows this pass claims.
+    pub limit: usize,
+    /// Per-slug caps (`JobDefinition::concurrency`), keyed by slug. A slug
+    /// absent from the map is unconstrained.
+    pub job_concurrency: &'a HashMap<String, u32>,
+    /// Per-queue aggregate caps. A queue absent from the map — or mapped to
+    /// `0` — is unconstrained.
+    pub queue_concurrency: &'a HashMap<String, u32>,
+    /// Priority aging window in seconds; `0` disables decay.
+    pub decay_secs: u64,
+    /// The queues this worker claims from (`crap-cms work --queues a,b`).
+    /// `None` claims from every queue; `Some(&[])` claims nothing at all.
+    ///
+    /// This is a hard restriction on the candidate set, not a preference: a
+    /// filtered worker never claims a run outside its queues, so the peers
+    /// that do listen on those queues keep them. The per-slug, per-queue and
+    /// global concurrency caps still apply to whatever survives the filter.
+    pub queues: Option<&'a [String]>,
+}
+
+impl<'a> ClaimParams<'a> {
+    /// A claim over every queue; narrow it with [`Self::with_queues`].
+    #[must_use]
+    pub fn all_queues(
+        limit: usize,
+        job_concurrency: &'a HashMap<String, u32>,
+        queue_concurrency: &'a HashMap<String, u32>,
+        decay_secs: u64,
+    ) -> Self {
+        Self {
+            limit,
+            job_concurrency,
+            queue_concurrency,
+            decay_secs,
+            queues: None,
+        }
+    }
+
+    /// Restrict the claim to these queues (`Some(&[])` claims nothing).
+    #[must_use]
+    pub fn with_queues(mut self, queues: Option<&'a [String]>) -> Self {
+        self.queues = queues;
+        self
+    }
+}
+
+/// Atomically claim up to `limit` pending jobs from every queue.
+///
+/// The all-queues convenience form of [`claim_pending_jobs_with`]; see that
+/// function for the claim protocol and the meaning of the caps.
+///
+/// # Errors
+///
+/// Returns a backend error if the claim query/update fails.
+pub fn claim_pending_jobs(
+    conn: &dyn DbConnection,
+    limit: usize,
+    job_concurrency: &HashMap<String, u32>,
+    queue_concurrency: &HashMap<String, u32>,
+    decay_secs: u64,
+) -> Result<Vec<JobRun>> {
+    claim_pending_jobs_with(
+        conn,
+        &ClaimParams::all_queues(limit, job_concurrency, queue_concurrency, decay_secs),
+    )
+}
+
+/// The pending rows this pass may consider: the due candidates, restricted to
+/// the worker's queues, ordered by effective priority, with twice the budget
+/// as slack for the rows the cap checks below reject.
+///
+/// `FOR UPDATE SKIP LOCKED` locks the candidates for the current transaction
+/// on Postgres so concurrent worker scans skip them. `SQLite` has neither the
+/// syntax nor the need — the caller's `IMMEDIATE` transaction already
+/// serializes writes.
+fn fetch_candidates(conn: &dyn DbConnection, params: &ClaimParams<'_>) -> Result<Vec<DbRow>> {
+    let now = conn.now_expr();
+    let order_by = priority_order_by(conn.kind(), params.decay_secs);
+    let lock_clause = if conn.is_postgres() {
+        " FOR UPDATE SKIP LOCKED"
+    } else {
+        ""
+    };
+
+    // The limit binds to placeholder 1, so the queue names start at 2.
+    let (queue_clause, queue_args) = queue_filter(conn, params.queues, 2);
+
+    let mut args = vec![DbValue::Integer(
+        i64::try_from(params.limit.saturating_mul(2)).unwrap_or(i64::MAX),
+    )];
+    args.extend(queue_args);
+
+    conn.query_all(
+        &format!(
+            "SELECT id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at, priority, unique_key
+             FROM _crap_jobs
+             WHERE status = 'pending'
+               AND (retry_after IS NULL OR retry_after <= {now})
+               {queue_clause}
+             {order_by}
+             LIMIT {p1}{lock_clause}",
+            p1 = conn.placeholder(1)
+        ),
+        &args,
+    )
+}
+
+/// The `AND queue IN (…)` restriction for a worker that listens on a subset of
+/// the queues, plus the queue names to bind. Empty clause and no bindings when
+/// the worker claims from every queue.
+///
+/// Placeholders are numbered from `first_placeholder` so they sit beside the
+/// caller's own bindings rather than colliding with them.
+fn queue_filter(
+    conn: &dyn DbConnection,
+    queues: Option<&[String]>,
+    first_placeholder: usize,
+) -> (String, Vec<DbValue>) {
+    let Some(queues) = queues else {
+        return (String::new(), Vec::new());
+    };
+
+    let placeholders = (0..queues.len())
+        .map(|i| conn.placeholder(first_placeholder + i))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let args = queues.iter().cloned().map(DbValue::Text).collect();
+
+    (format!("AND queue IN ({placeholders})"), args)
+}
+
+/// Stamp one candidate row `running` and return the number of rows affected.
+///
+/// `AND status = 'pending'` is belt-and-suspenders against any drift; in
+/// practice the candidate SELECT's locking already guarantees the caller owns
+/// the row.
+fn mark_running(conn: &dyn DbConnection, id: &str) -> Result<usize> {
+    let now = conn.now_expr();
+    let p1 = conn.placeholder(1);
+
+    conn.execute(
+        &format!(
+            "UPDATE _crap_jobs SET status = 'running', started_at = {now},
+                    heartbeat_at = {now}, attempt = attempt + 1
+             WHERE id = {p1} AND status = 'pending'"
+        ),
+        &[DbValue::Text(id.to_string())],
+    )
+}
+
+/// Atomically claim up to `params.limit` pending jobs by setting them to running.
 /// Returns the claimed jobs. Respects per-slug + per-queue concurrency
 /// limits, and honors priority ordering globally.
 ///
@@ -36,12 +190,12 @@ const JOB_CLAIM_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapjobs");
 /// the SELECT's row locking, and across nodes via the advisory lock taken below
 /// when a cap is configured (see the `queue_concurrency` note).
 ///
-/// `decay_secs` controls priority aging: `0` disables decay (pure
+/// `params.decay_secs` controls priority aging: `0` disables decay (pure
 /// `priority DESC, created_at ASC` ordering — index-friendly fast path);
 /// `>0` adds `(now - created_at) / decay_secs` to the effective priority
 /// so old low-priority jobs age into being claimable.
 ///
-/// `queue_concurrency` maps queue name → aggregate concurrent cap.
+/// `params.queue_concurrency` maps queue name → aggregate concurrent cap.
 /// A queue absent from the map is unconstrained (only the global
 /// `max_concurrent` and per-slug `job_concurrency` apply). When ANY per-slug
 /// or per-queue cap is configured, the count+claim decision is serialized with
@@ -50,16 +204,22 @@ const JOB_CLAIM_LOCK_KEY: i64 = i64::from_be_bytes(*b"crapjobs");
 /// miss the other's in-flight `running` rows under READ COMMITTED and overshoot
 /// the cap). Unconstrained deployments skip the lock and claim in parallel.
 ///
+/// `params.queues` narrows the candidate set to one worker's queues before any
+/// cap is consulted, so a filtered worker leaves everything else to its peers.
+///
 /// # Errors
 ///
 /// Returns a backend error if the claim query/update fails.
-pub fn claim_pending_jobs(
+pub fn claim_pending_jobs_with(
     conn: &dyn DbConnection,
-    limit: usize,
-    job_concurrency: &HashMap<String, u32>,
-    queue_concurrency: &HashMap<String, u32>,
-    decay_secs: u64,
+    params: &ClaimParams<'_>,
 ) -> Result<Vec<JobRun>> {
+    // A worker told to listen on no queue claims nothing — and `IN ()` isn't
+    // valid SQL on either backend, so this can't be left to the filter.
+    if matches!(params.queues, Some(queues) if queues.is_empty()) {
+        return Ok(Vec::new());
+    }
+
     // Serialize the whole count+claim decision across connections/nodes when a
     // cap is in play: the running counts below are read on a per-node READ
     // COMMITTED snapshot that can't see a peer's uncommitted claims, so without
@@ -67,40 +227,11 @@ pub fn claim_pending_jobs(
     // by the node count. Transaction-scoped, released at commit; no-op on SQLite
     // (its IMMEDIATE transaction already serializes writers) and skipped
     // entirely when no cap is configured, preserving parallel claiming.
-    if !job_concurrency.is_empty() || !queue_concurrency.is_empty() {
+    if !params.job_concurrency.is_empty() || !params.queue_concurrency.is_empty() {
         conn.advisory_xact_lock(JOB_CLAIM_LOCK_KEY)?;
     }
 
-    let now = conn.now_expr();
-    let order_by = priority_order_by(conn.kind(), decay_secs);
-
-    // `FOR UPDATE SKIP LOCKED` locks candidate rows for the current
-    // transaction on Postgres so concurrent worker scans skip them.
-    // SQLite doesn't have this syntax and doesn't need it — the
-    // caller's `IMMEDIATE` transaction already serializes writes.
-    let lock_clause = if conn.is_postgres() {
-        " FOR UPDATE SKIP LOCKED"
-    } else {
-        ""
-    };
-
-    // Pull up to `limit * 2` candidates so the per-row cap check has
-    // some slack — if N candidates fail per-slug or per-queue gates
-    // we want enough remaining to still hit `limit`.
-    let rows = conn.query_all(
-        &format!(
-            "SELECT id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at, priority, unique_key
-             FROM _crap_jobs
-             WHERE status = 'pending'
-               AND (retry_after IS NULL OR retry_after <= {now})
-             {order_by}
-             LIMIT {p1}{lock_clause}",
-            p1 = conn.placeholder(1)
-        ),
-        &[DbValue::Integer(
-            i64::try_from(limit.saturating_mul(2)).unwrap_or(i64::MAX),
-        )],
-    )?;
+    let rows = fetch_candidates(conn, params)?;
 
     let running_per_slug = count_running_per_slug(conn)?;
     let running_per_queue = count_running_per_queue(conn)?;
@@ -110,7 +241,7 @@ pub fn claim_pending_jobs(
     let mut extra_per_queue: HashMap<String, i64> = HashMap::new();
 
     for row in &rows {
-        if claimed.len() >= limit {
+        if claimed.len() >= params.limit {
             break;
         }
 
@@ -124,7 +255,7 @@ pub fn claim_pending_jobs(
 
         // Per-slug cap (registry-defined jobs only; system slugs +
         // stale slugs fall through to `u32::MAX` via `per_slug_cap`).
-        let slug_cap = i64::from(per_slug_cap(&slug, job_concurrency));
+        let slug_cap = i64::from(per_slug_cap(&slug, params.job_concurrency));
         let slug_current = running_per_slug.get(&slug).copied().unwrap_or(0)
             + extra_per_slug.get(&slug).copied().unwrap_or(0);
         if slug_current >= slug_cap {
@@ -132,7 +263,7 @@ pub fn claim_pending_jobs(
         }
 
         // Per-queue cap (absent OR `concurrency = 0` → unlimited).
-        if let Some(queue_cap) = queue_concurrency.get(&queue).copied()
+        if let Some(queue_cap) = params.queue_concurrency.get(&queue).copied()
             && queue_cap > 0
         {
             let queue_cap = i64::from(queue_cap);
@@ -143,20 +274,7 @@ pub fn claim_pending_jobs(
             }
         }
 
-        // Claim. `AND status = 'pending'` belt-and-suspenders against
-        // any drift; on Postgres the FOR UPDATE SKIP LOCKED guarantees
-        // we own the row, on SQLite the IMMEDIATE tx prevents writers.
-        let p1 = conn.placeholder(1);
-        let affected = conn.execute(
-            &format!(
-                "UPDATE _crap_jobs SET status = 'running', started_at = {now},
-                        heartbeat_at = {now}, attempt = attempt + 1
-                 WHERE id = {p1} AND status = 'pending'"
-            ),
-            &[DbValue::Text(id.clone())],
-        )?;
-
-        if affected > 0 {
+        if mark_running(conn, &id)? > 0 {
             *extra_per_slug.entry(slug).or_insert(0) += 1;
             *extra_per_queue.entry(queue).or_insert(0) += 1;
             // The row's `attempt` was read pre-UPDATE; the UPDATE
@@ -578,5 +696,102 @@ mod tests {
             3,
             "queue cap=3 must allow 3 concurrent system jobs; per-slug fallback must not cap them at 1"
         );
+    }
+
+    // ── queue filtering (`crap-cms work --queues …`) ──────────────
+
+    /// A claim pass over the worker's queue list, every cap left at its
+    /// unconstrained default.
+    fn filtered<'a>(
+        queues: Option<&'a [String]>,
+        no_caps: &'a HashMap<String, u32>,
+    ) -> ClaimParams<'a> {
+        ClaimParams::all_queues(10, no_caps, no_caps, 0).with_queues(queues)
+    }
+
+    /// A worker started with `--queues heavy` claims only heavy-queue rows —
+    /// the rows in every other queue stay pending for the peers that listen
+    /// on them.
+    #[test]
+    fn queue_filter_claims_only_the_listed_queues() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "resize", "{}", "hook", 1, "heavy", 0).unwrap();
+        insert_job(&conn, "send_welcome", "{}", "hook", 1, "email", 0).unwrap();
+        insert_job(&conn, "reindex", "{}", "hook", 1, "default", 0).unwrap();
+
+        let no_caps = empty_queue_conc();
+        let queues = vec!["heavy".to_string()];
+        let params = filtered(Some(&queues), &no_caps);
+        let claimed = claim_pending_jobs_with(&conn, &params).unwrap();
+
+        let slugs: Vec<&str> = claimed.iter().map(|j| j.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["resize"]);
+
+        // The rows outside the filter are left pending, not consumed.
+        let rest = claim_pending_jobs(&conn, 10, &no_caps, &no_caps, 0).unwrap();
+        let mut rest_slugs: Vec<&str> = rest.iter().map(|j| j.slug.as_str()).collect();
+        rest_slugs.sort_unstable();
+        assert_eq!(rest_slugs, vec!["reindex", "send_welcome"]);
+    }
+
+    /// Several queues in the list are all claimable — the filter is an
+    /// allow-list, not a single-queue setting.
+    #[test]
+    fn queue_filter_accepts_several_queues() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+        insert_job(&conn, "b", "{}", "hook", 1, "email", 0).unwrap();
+        insert_job(&conn, "c", "{}", "hook", 1, "default", 0).unwrap();
+
+        let no_caps = empty_queue_conc();
+        let queues = vec!["heavy".to_string(), "email".to_string()];
+        let params = filtered(Some(&queues), &no_caps);
+        let claimed = claim_pending_jobs_with(&conn, &params).unwrap();
+
+        let mut slugs: Vec<&str> = claimed.iter().map(|j| j.slug.as_str()).collect();
+        slugs.sort_unstable();
+        assert_eq!(slugs, vec!["a", "b"]);
+    }
+
+    /// No filter at all still claims every queue — the default path must not
+    /// pick up an accidental restriction.
+    #[test]
+    fn no_queue_filter_claims_every_queue() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+        insert_job(&conn, "b", "{}", "hook", 1, "default", 0).unwrap();
+
+        let no_caps = empty_queue_conc();
+        let params = filtered(None, &no_caps);
+        let claimed = claim_pending_jobs_with(&conn, &params).unwrap();
+        assert_eq!(claimed.len(), 2);
+    }
+
+    /// An empty allow-list claims nothing rather than emitting `IN ()`, which
+    /// is a syntax error on both backends.
+    #[test]
+    fn empty_queue_filter_claims_nothing() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+
+        let no_caps = empty_queue_conc();
+        let empty: Vec<String> = Vec::new();
+        let params = filtered(Some(&empty), &no_caps);
+        let claimed = claim_pending_jobs_with(&conn, &params).unwrap();
+        assert!(claimed.is_empty());
+    }
+
+    /// The queue names are bound, not interpolated: a name carrying SQL
+    /// punctuation filters normally instead of rewriting the statement.
+    #[test]
+    fn queue_names_are_bound_parameters() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+
+        let no_caps = empty_queue_conc();
+        let queues = vec!["heavy') OR 1=1 --".to_string()];
+        let params = filtered(Some(&queues), &no_caps);
+        let claimed = claim_pending_jobs_with(&conn, &params).unwrap();
+        assert!(claimed.is_empty());
     }
 }

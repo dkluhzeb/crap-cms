@@ -1505,6 +1505,22 @@ next admin save. All three are validation errors now.
 (`HH:MM[:SS]` for `timeOnly`, `YYYY-MM` for `monthOnly`), and strings on
 text-type fields.
 
+### 53. Schema authors: a field type change or a disabled soft delete refuses to boot
+
+A changed field `type` on a column that holds data fails the boot, and
+turning `soft_delete` off while documents are trashed fails the boot. Two
+definition changes that used to boot with a warning now stop the start:
+a field whose `type` differs from the stored column's type (numbers were
+being stored as text on SQLite; Postgres writes failed), and `soft_delete =
+false` on a collection that still holds trashed documents (they became
+visible). **Action:** for a type change, rename the field or migrate the
+column by hand (see *Changing a definition that has data* in the database
+docs); for soft delete, purge the trash (`crap-cms trash purge -c <slug>
+-y`) or keep soft delete on. Field defaults are applied by the application, not the database, so a
+changed `default_value` needs no migration; `unique` fields are enforced by a
+managed unique index, created on the next start for a field that became
+`unique` later.
+
 ## Admin UI behavior
 
 ### Template overrides: the duplicate locale-picker keys are gone

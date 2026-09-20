@@ -108,6 +108,7 @@ field definitions.
 |-------|------|----------|----------|-------------|
 | `id` | id (string) | yes | gRPC, MCP, Lua |  |
 | `events` | boolean |  | gRPC, MCP, Lua | Emit a live-update event for this change (default: true) |
+| `hooks` | boolean |  | Lua | Run per-document lifecycle hooks (default: true) |
 
 ### `unpublish`
 

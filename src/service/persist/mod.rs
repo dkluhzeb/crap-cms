@@ -4,6 +4,7 @@
 //! insert/update rows, join table data, passwords, and version snapshots.
 
 mod create;
+mod email_change;
 mod update;
 mod version;
 

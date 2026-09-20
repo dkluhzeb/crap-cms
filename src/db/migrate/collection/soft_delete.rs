@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use tracing::info;
 
 use crate::{
@@ -51,6 +51,50 @@ pub(in crate::db::migrate) fn soft_delete_transition_pending(
     collect_column_specs(&def.fields, locale_config)
         .iter()
         .any(|spec| spec.field.unique && !spec.companion_text)
+}
+
+/// Refuse to serve a collection whose `soft_delete` was turned off while its
+/// table still holds trashed rows.
+///
+/// The `_deleted_at IS NULL` filter every read appends is conditional on the
+/// flag, so turning it off un-deletes every trashed document at once — in
+/// lists, counts, the API and the admin UI — without a single write.
+///
+/// # Errors
+///
+/// Returns an error naming the collection and the number of trashed rows, or a
+/// backend error if the count query fails.
+pub(super) fn check_no_trashed_rows(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    existing: &HashSet<String>,
+) -> Result<()> {
+    if def.soft_delete || !existing.contains("_deleted_at") {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "SELECT COUNT(*) AS cnt FROM {} WHERE _deleted_at IS NOT NULL",
+        quote_ident(slug)
+    );
+
+    let trashed = conn
+        .query_one(&sql, &[])
+        .with_context(|| format!("Failed to count trashed rows in '{slug}'"))?
+        .and_then(|row| row.get_i64("cnt").ok())
+        .unwrap_or(0);
+
+    if trashed == 0 {
+        return Ok(());
+    }
+
+    bail!(
+        "Collection '{slug}' has soft_delete turned off, but its table still holds {trashed} \
+         trashed document(s) — every read would show them again. Turn soft_delete back on and \
+         empty the trash (`crap-cms trash purge --collection {slug} -y`), or delete those rows \
+         by hand, then start again."
+    )
 }
 
 /// Remove the inline UNIQUE constraints that `sync_indexes` replaces with
@@ -248,6 +292,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldType, Registry, RelationshipConfig};
     use crate::db::migrate::collection::alter::alter_collection_table;
+    use crate::db::migrate::collection::sync_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::table_exists;
     use crate::db::migrate::sync_all;
@@ -638,5 +683,51 @@ mod tests {
             )
             .unwrap();
         assert!(temp_exists.is_none(), "temp table should be dropped");
+    }
+
+    /// Regression: turning `soft_delete` off dropped the `_deleted_at IS NULL`
+    /// filter from every read, so every trashed document came back — a silent
+    /// un-delete of the whole trash. The sync refuses to run instead.
+    #[test]
+    fn turning_soft_delete_off_with_trashed_rows_fails_the_sync() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let mut on = simple_collection("posts", vec![text_field("title")]);
+        on.soft_delete = true;
+        sync_collection_table(&conn, "posts", &on, &no_locale()).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO posts (id, title) VALUES ('live', 'Live');
+             INSERT INTO posts (id, title, _deleted_at) VALUES ('gone', 'Gone', '2026-01-01');",
+        )
+        .unwrap();
+
+        let off = simple_collection("posts", vec![text_field("title")]);
+        let err = sync_collection_table(&conn, "posts", &off, &no_locale())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("posts"), "must name the collection: {err}");
+        assert!(err.contains('1'), "must name the trashed count: {err}");
+    }
+
+    /// With the trash empty the flag can be turned off — the column may stay
+    /// behind, it just holds no trashed row any more.
+    #[test]
+    fn turning_soft_delete_off_with_an_empty_trash_passes() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let mut on = simple_collection("posts", vec![text_field("title")]);
+        on.soft_delete = true;
+        sync_collection_table(&conn, "posts", &on, &no_locale()).unwrap();
+
+        conn.execute_batch("INSERT INTO posts (id, title) VALUES ('live', 'Live');")
+            .unwrap();
+
+        let off = simple_collection("posts", vec![text_field("title")]);
+        sync_collection_table(&conn, "posts", &off, &no_locale())
+            .expect("an empty trash must not block turning soft_delete off");
     }
 }

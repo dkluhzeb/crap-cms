@@ -4,51 +4,58 @@ use std::{collections::HashSet, path::Path};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::db::query::helpers::quote_ident;
 use crate::{
     cli,
     commands::{Project, open_project},
     config::LocaleConfig,
-    core::Registry,
+    core::{FieldDefinition, Registry},
     db::{
-        DbConnection, migrate,
+        DbConnection,
+        migrate::{self, OrphanTable},
         query::{
-            self,
+            self, get_expected_junction_columns,
             helpers::{global_table, join_table},
+            join_fields,
         },
     },
 };
 
-/// What a scan found: orphan columns per table, and junction rows left behind
-/// by a locale the project no longer configures.
+/// What a scan found: orphan columns per table, junction rows left behind by a
+/// locale the project no longer configures, and whole tables no definition
+/// accounts for.
+///
+/// Every field is required and the struct is built in one place, so it is
+/// constructed as a plain literal.
 struct CleanupReport {
     columns: Vec<(String, Vec<String>)>,
     stale_locale_rows: Vec<(String, i64)>,
+    tables: Vec<OrphanTable>,
 }
 
 impl CleanupReport {
-    fn new(columns: Vec<(String, Vec<String>)>, stale_locale_rows: Vec<(String, i64)>) -> Self {
-        Self {
-            columns,
-            stale_locale_rows,
-        }
-    }
-
     fn is_empty(&self) -> bool {
-        self.columns.is_empty() && self.stale_locale_rows.is_empty()
+        self.columns.is_empty() && self.stale_locale_rows.is_empty() && self.tables.is_empty()
     }
 }
 
 /// Detect and optionally remove leftovers no Lua definition accounts for.
 ///
-/// Two kinds:
+/// Three kinds:
 ///
-/// - **Orphan columns** — columns in a collection or global table that no field
-///   in the current Lua definition maps to. System columns (`_`-prefixed) are
-///   always kept. Because Lua definitions include plugin-added fields (plugins
-///   run during `init_lua`), plugin columns are never flagged as orphans.
+/// - **Orphan columns** — columns in a collection, global or junction table
+///   that no field in the current Lua definition maps to. System columns
+///   (`_`-prefixed, `id`, the timestamps) are always kept. Because Lua
+///   definitions include plugin-added fields (plugins run during `init_lua`),
+///   plugin columns are never flagged as orphans.
 /// - **Stale locale rows** — junction rows (array, blocks, has-many
 ///   relationship) whose `_locale` names a locale the project no longer
 ///   configures. Dropping a locale leaves them unreachable but stored.
+/// - **Orphan tables** — a whole collection, global, versions or junction
+///   table whose definition is gone (a renamed or removed collection). These
+///   are reported by default and only ever dropped when `drop_tables` is set
+///   as well as `confirm`: a table nothing references can still hold the only
+///   copy of its data.
 ///
 /// By default runs in dry-run mode (report only). Pass `confirm = true` to
 /// actually drop the columns and delete the rows.
@@ -56,9 +63,9 @@ impl CleanupReport {
 /// # Errors
 ///
 /// Returns an error if config loading, Lua init, pool creation, schema
-/// inspection, column drops, or row deletes fail.
+/// inspection, column drops, row deletes, or table drops fail.
 #[cfg(not(tarpaulin_include))]
-pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
+pub fn cleanup(config_dir: &Path, confirm: bool, drop_tables: bool) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -73,10 +80,11 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     let conn = pool.get().context("Failed to get database connection")?;
     let conn = &conn as &dyn DbConnection;
 
-    let report = CleanupReport::new(
-        find_orphan_columns(conn, &registry, &cfg.locale)?,
-        find_stale_locale_rows(conn, &registry, &cfg.locale)?,
-    );
+    let report = CleanupReport {
+        columns: find_orphan_columns(conn, &registry, &cfg.locale)?,
+        stale_locale_rows: find_stale_locale_rows(conn, &registry, &cfg.locale)?,
+        tables: migrate::find_orphan_tables(conn, &registry)?,
+    };
 
     if report.is_empty() {
         cli::success("Nothing to clean up. The schema matches the Lua definitions.");
@@ -85,6 +93,10 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     display_report(&report);
 
+    if !report.tables.is_empty() && !drop_tables {
+        cli::hint("Tables are never dropped implicitly. Pass --drop-tables -y to remove them.");
+    }
+
     if !confirm {
         cli::hint("This is a dry run. Pass --confirm to apply these changes.");
         cli::hint("Note: dropping columns and rows is irreversible. Back up your database first.");
@@ -92,7 +104,13 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     }
 
     drop_orphan_columns(conn, &report.columns)?;
-    delete_stale_locale_rows(conn, &report.stale_locale_rows, &cfg.locale)
+    delete_stale_locale_rows(conn, &report.stale_locale_rows, &cfg.locale)?;
+
+    if drop_tables {
+        drop_orphan_tables(conn, &report.tables)?;
+    }
+
+    Ok(())
 }
 
 /// Display what the scan found.
@@ -104,6 +122,23 @@ fn display_report(report: &CleanupReport) {
     if !report.stale_locale_rows.is_empty() {
         display_stale_locale_rows(&report.stale_locale_rows);
     }
+
+    if !report.tables.is_empty() {
+        display_orphan_tables(&report.tables);
+    }
+}
+
+/// Display the tables no definition accounts for.
+fn display_orphan_tables(tables: &[OrphanTable]) {
+    cli::warning("Tables not in any Lua definition:");
+    println!();
+
+    for table in tables {
+        cli::dim(&format!("  {} ({})", table.name, table.kind.label()));
+    }
+
+    println!();
+    cli::info(&format!("{} orphan table(s) found.", tables.len()));
 }
 
 /// Display the list of orphan columns found.
@@ -170,6 +205,33 @@ fn drop_orphan_columns(conn: &dyn DbConnection, orphans: &[(String, Vec<String>)
     Ok(())
 }
 
+/// Drop the tables no definition accounts for.
+///
+/// Only ever reached with both `--drop-tables` and `--confirm`: dropping one
+/// destroys the last copy of whatever the removed definition stored.
+fn drop_orphan_tables(conn: &dyn DbConnection, tables: &[OrphanTable]) -> Result<()> {
+    if tables.is_empty() {
+        return Ok(());
+    }
+
+    // A junction table's `parent_id` references its collection, and Postgres
+    // refuses to drop a table another one references.
+    let cascade = if conn.is_postgres() { " CASCADE" } else { "" };
+
+    for table in tables {
+        let sql = format!("DROP TABLE IF EXISTS {}{cascade}", quote_ident(&table.name));
+
+        conn.execute_ddl(&sql, &[])
+            .with_context(|| format!("Failed to drop table {}", table.name))?;
+
+        cli::success(&format!("Dropped: {}", table.name));
+    }
+
+    cli::success(&format!("{} table(s) dropped.", tables.len()));
+
+    Ok(())
+}
+
 /// Delete the junction rows whose locale is no longer configured.
 fn delete_stale_locale_rows(
     conn: &dyn DbConnection,
@@ -196,11 +258,14 @@ fn delete_stale_locale_rows(
 }
 
 /// Every table the scan inspects, paired with the columns its definition
-/// expects: one entry per collection table and one per global table.
+/// expects: one entry per collection table, one per global table, and one per
+/// junction table either of them owns.
 ///
 /// Globals are included for the same reason collections are — a removed field
 /// leaves `_global_site.title__fr` behind exactly as it would on a collection,
-/// and a scan that skipped them reported the schema as clean.
+/// and a scan that skipped them reported the schema as clean. Junction tables
+/// for the same reason again: a removed array sub-field leaves
+/// `posts_items.label` behind.
 fn expected_columns_by_table(
     reg: &Registry,
     locale_config: &LocaleConfig,
@@ -216,6 +281,7 @@ fn expected_columns_by_table(
             slug.to_string(),
             query::get_expected_column_names(def, locale_config)?,
         ));
+        tables.extend(expected_junction_columns(slug, &def.fields));
     }
 
     let mut global_slugs: Vec<_> = reg.globals.keys().collect();
@@ -223,13 +289,33 @@ fn expected_columns_by_table(
 
     for slug in global_slugs {
         let def = &reg.globals[slug];
+        let table = global_table(slug);
+        tables.extend(expected_junction_columns(&table, &def.fields));
         tables.push((
-            global_table(slug),
+            table,
             query::get_expected_global_column_names(def, locale_config)?,
         ));
     }
 
     Ok(tables)
+}
+
+/// The junction tables `fields` imply off `owner`, each paired with the
+/// columns its owning field expects.
+fn expected_junction_columns(
+    owner: &str,
+    fields: &[FieldDefinition],
+) -> Vec<(String, HashSet<String>)> {
+    let mut tables = Vec::new();
+
+    for (name, field) in join_fields(fields) {
+        tables.push((
+            join_table(owner, &name),
+            get_expected_junction_columns(field),
+        ));
+    }
+
+    tables
 }
 
 /// Find orphan columns across all collection and global tables.
@@ -786,5 +872,41 @@ mod tests {
 
         let orphans = find_orphan_columns(&conn, &reg, &locale_en_de()).unwrap();
         assert!(orphans.is_empty(), "per-locale _lang columns: {orphans:?}");
+    }
+
+    /// Regression: the scan walked collection and global tables only, so a
+    /// sub-field removed from an array left a column in the junction table
+    /// that nothing ever reported. The live sub-fields and the junction's own
+    /// system columns must stay out of the report.
+    #[test]
+    fn detects_orphan_column_in_a_junction_table() {
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT, title TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts_items (
+                id TEXT, parent_id TEXT, _order INTEGER, label TEXT, retired TEXT
+             );",
+        )
+        .unwrap();
+
+        let mut reg = Registry::default();
+        reg.collections.insert(
+            "posts".into(),
+            Arc::new(simple_collection(
+                "posts",
+                vec![
+                    text_field("title"),
+                    FieldDefinition::builder("items", FieldType::Array)
+                        .fields(vec![text_field("label")])
+                        .build(),
+                ],
+            )),
+        );
+
+        let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
+
+        assert_eq!(orphans.len(), 1, "{orphans:?}");
+        assert_eq!(orphans[0].0, "posts_items");
+        assert_eq!(orphans[0].1, vec!["retired"]);
     }
 }

@@ -96,9 +96,9 @@ Runs a dedicated job worker without HTTP/gRPC servers. For multi-server deployme
 | `--stop` | Stop a running detached worker |
 | `--restart` | Restart a running detached worker |
 | `--status` | Show whether a detached worker is running |
-| `--queues <list>` | Comma-separated queue names to process (default: all) |
+| `--queues <list>` | Comma-separated queue names to process (default: all). Enforced in the claim itself — the worker never claims a run outside its queues; a name no job uses is warned about at start |
 | `--concurrency <n>` | Override `jobs.max_concurrent` for this worker |
-| `--no-cron` | Skip cron scheduling (let another worker handle it) |
+| `--no-cron` | Skip cron scheduling (let another worker handle it). The retention purges still run on this worker — they are single-winner housekeeping, not cron jobs |
 
 As for `serve`: a start refuses when `data/crap-worker.pid` names a live worker, and the file is written only once the worker is up.
 
@@ -698,12 +698,13 @@ Opens an interactive shell on the project database: `sqlite3 <path>` on SQLite, 
 #### `db cleanup`
 
 ```bash
-crap-cms db cleanup [--confirm]
+crap-cms db cleanup [-y] [--drop-tables]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--confirm` | Apply the changes: drop orphan columns and delete stale-locale junction rows (default: dry-run report only) |
+| `--confirm`, `-y` | Apply the changes: drop orphan columns (of collection, global and junction tables) and delete stale-locale junction rows (default: dry-run report only) |
+| `--drop-tables` | Together with `-y`: also drop orphan tables — a collection, global, versions or junction table whose definition no longer exists. Without it they are only reported; the boot warns about them too |
 
 Detects columns in collection and global tables that don't correspond to any field in the current Lua definitions, and rows in array, blocks and relationship junction tables whose `_locale` is no longer configured. System columns (`_`-prefixed like `_password_hash`, `_locked`) are always kept. Plugin columns are safe because plugins run during schema loading — their fields are part of the live definitions.
 

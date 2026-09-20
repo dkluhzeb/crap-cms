@@ -11,10 +11,10 @@ use crate::{
     service::AppInfra,
 };
 
-/// Parameters for starting the scheduler. Constructed via plain
-/// struct literal at the call site -- both callers (`crap-cms work`
-/// and `serve`'s startup) supply every field, so a builder added no
-/// real DX over the literal form.
+/// Parameters for starting the scheduler, built via
+/// [`SchedulerParams::builder`]. The four fields every caller supplies are
+/// the builder's arguments; the rest carry the `serve` defaults — every
+/// queue, cron on — so only `crap-cms work` has to name them.
 ///
 /// The scheduler consumes the "core" subset of [`AppInfra`] (pool, hook
 /// runner, registry, storage, locale config); `serve` shares the boot bundle,
@@ -31,6 +31,88 @@ pub struct SchedulerParams {
     pub db_timeouts: DbTimeouts,
     pub shutdown: CancellationToken,
     pub email_provider: Option<SharedEmailProvider>,
+    /// The queues this process claims from (`crap-cms work --queues a,b`).
+    /// `None` — the default, and what `serve` always passes — claims from
+    /// every queue. The filter is applied inside the claim query, so a
+    /// filtered worker never takes a run its peers are meant to handle.
+    pub queues: Option<Vec<String>>,
+    /// Whether this process evaluates cron schedules. `false` is
+    /// `crap-cms work --no-cron`: the worker still executes jobs and still
+    /// runs the retention purges, it just leaves the schedule evaluation to
+    /// its peers. Defaults to `true`.
+    pub run_cron: bool,
+}
+
+impl SchedulerParams {
+    /// Start a builder from the fields no caller can default.
+    #[must_use]
+    pub fn builder(
+        infra: Arc<AppInfra>,
+        config: JobsConfig,
+        db_timeouts: DbTimeouts,
+        shutdown: CancellationToken,
+    ) -> SchedulerParamsBuilder {
+        SchedulerParamsBuilder {
+            infra,
+            config,
+            db_timeouts,
+            shutdown,
+            email_provider: None,
+            queues: None,
+            run_cron: true,
+        }
+    }
+}
+
+/// Builder for [`SchedulerParams`]; see [`SchedulerParams::builder`].
+pub struct SchedulerParamsBuilder {
+    infra: Arc<AppInfra>,
+    config: JobsConfig,
+    db_timeouts: DbTimeouts,
+    shutdown: CancellationToken,
+    email_provider: Option<SharedEmailProvider>,
+    queues: Option<Vec<String>>,
+    run_cron: bool,
+}
+
+impl SchedulerParamsBuilder {
+    /// The provider `_system_email` jobs send through. Without one those jobs
+    /// fail rather than silently vanish.
+    #[must_use]
+    pub fn email_provider(mut self, provider: Option<SharedEmailProvider>) -> Self {
+        self.email_provider = provider;
+
+        self
+    }
+
+    /// Restrict this process to a set of queues; `None` keeps every queue.
+    #[must_use]
+    pub fn queues(mut self, queues: Option<Vec<String>>) -> Self {
+        self.queues = queues;
+
+        self
+    }
+
+    /// Whether this process evaluates cron schedules.
+    #[must_use]
+    pub fn run_cron(mut self, run_cron: bool) -> Self {
+        self.run_cron = run_cron;
+
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> SchedulerParams {
+        SchedulerParams {
+            infra: self.infra,
+            config: self.config,
+            db_timeouts: self.db_timeouts,
+            shutdown: self.shutdown,
+            email_provider: self.email_provider,
+            queues: self.queues,
+            run_cron: self.run_cron,
+        }
+    }
 }
 
 /// How long one database write may wait before it runs: for a connection
@@ -77,6 +159,10 @@ pub(super) struct TickJobConfig {
     /// per-job timeout. Queues without an entry fall back to a
     /// hardcoded default in the scheduler.
     pub queue_timeouts: HashMap<String, u64>,
+    /// The queues this worker claims from (`crap-cms work --queues a,b`), or
+    /// `None` for every queue. Handed straight to the claim query, so a
+    /// filtered worker's poll never even sees a run outside its queues.
+    pub queues: Option<Arc<[String]>>,
     pub storage: SharedStorage,
     /// Event transport + populate cache threaded into user job handlers'
     /// Lua CRUD calls (cloned per handler; `run_job_handler` injects and
