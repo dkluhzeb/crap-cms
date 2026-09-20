@@ -251,9 +251,9 @@ crap.collections.posts.delete("abc123", { override_access = true })
 
 Restore a soft-deleted document from trash. Returns `true` on
 success. Only available on collections with `soft_delete = true`.
-Re-syncs the FTS index after undelete. Accepts `override_access`
-and `events` options (`events = false` for a quiet restore, matching
-the gRPC/MCP undelete flag).
+Runs the lifecycle hooks like every other write. Accepts `override_access`,
+`hooks` (`false` skips the lifecycle hooks, as on `unpublish`) and `events`
+(`events = false` for a quiet restore, matching the gRPC/MCP undelete flag).
 
 ```lua
 crap.collections.posts.undelete("abc123")

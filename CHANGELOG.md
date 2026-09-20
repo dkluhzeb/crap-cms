@@ -2171,6 +2171,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Publishing a draft could land a document that violates
+  `required_locales`.** The completeness check judged the other locales by
+  the live row, but a publish writes every locale from the pending draft
+  after validation — so a draft that cleared a required translation
+  published cleanly, and a version restore whose snapshot was complete was
+  refused when the live row was not. The check now judges the values the
+  write will land, on single, bulk and global publishes and on restore.
+- **Restoring a document from the trash runs the lifecycle hooks** —
+  `before_change`/`after_change` with `ctx.operation = "undelete"`, exactly
+  as `unpublish` does; it used to run none, so an `after_change`-driven
+  re-index or audit stamp never saw a restore from trash. `crap.collections.undelete`
+  gains the `hooks = false` opt-out its siblings have.
+- **A misspelled `live.filter` hook reference passed startup and silently
+  dropped every live event** for the collection; startup now validates the
+  live filter of every collection and global like every other hook
+  reference, and refuses to boot naming the bad ref. The same sweep found
+  three more references that were never validated — an auth method's
+  `mfa_when`, a field's `required_when` and a field's `validate` — so a typo
+  in any of them now fails the boot instead of surfacing at the first
+  request; a pin test keeps the validated set equal to every hook reference
+  the definition model can hold. A custom page's `access` gate is validated the same
+  way (it used to lock the page at its first request).
+- **A list read with `depth >= 2` expanded a circular relationship to the
+  full depth** (`posts.best_comment` ↔ `comments.post`): batch population
+  restarted its cycle guard at each has-one/has-many hop, while a single
+  document read stopped after the first repeat. Both stop now.
+- **Lua VM-pool exhaustion answered 500 / `INTERNAL`** while the identical
+  database-pool timeout answers 503 / `UNAVAILABLE`; it is a typed transient
+  error on every surface now, so clients retry it.
+- **MCP silently dropped a value sent for a `join` field** instead of
+  reporting an unknown field like a typo — a join field is read-only and has
+  no column; the writable-field rule is one predicate now.
+- **The MCP reserved-argument table omitted `trash`**; the table is derived
+  from the wire model instead of a hand list.
+- **`write_config_file` wrote in place**; a crash mid-write could leave
+  `crap.toml` or a hook file truncated. It stages and renames now, and the
+  stdio MCP transport caps a request line at `http_max_body_bytes` like the
+  HTTP transport.
 - **A hook's `on_commit`/`on_rollback` effect that wrote could deadlock the
   write pool.** `crap.transaction` kept its write-pool connection while the
   effects ran, so an effect's own write needed a second slot; with

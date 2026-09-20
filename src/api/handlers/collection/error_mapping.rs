@@ -66,7 +66,8 @@ impl From<ServiceError> for Status {
 #[cfg(test)]
 mod tests {
     use crate::core::{FieldError, ValidationError};
-    use anyhow::anyhow;
+    use crate::hooks::VmPoolExhausted;
+    use anyhow::{Context as _, anyhow};
     use tonic::Code;
 
     use super::*;
@@ -166,6 +167,22 @@ mod tests {
     fn service_error_transient_to_unavailable() {
         let se = ServiceError::Transient(anyhow!("database is locked"));
         let status = Status::from(se);
+        assert_eq!(status.code(), Code::Unavailable);
+    }
+
+    /// A Lua VM pool that ran dry reaches the gRPC surface as UNAVAILABLE —
+    /// the capacity signal clients retry on — the way an exhausted DB pool
+    /// already did. It used to arrive untyped and answer INTERNAL.
+    #[test]
+    fn vm_pool_exhaustion_to_unavailable() {
+        let e = Err::<(), _>(anyhow::Error::new(VmPoolExhausted {
+            waited_secs: 5,
+            cap: 4,
+        }))
+        .context("Failed to run before_change hooks")
+        .unwrap_err();
+
+        let status = Status::from(ServiceError::classify(e, "sqlite"));
         assert_eq!(status.code(), Code::Unavailable);
     }
 

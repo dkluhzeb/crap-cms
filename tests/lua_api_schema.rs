@@ -390,6 +390,13 @@ crap.collections.define("events", {
         "#,
     )
     .unwrap();
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        hooks_dir.join("live.lua"),
+        "local M = {}\nfunction M.filter(ctx)\n    return true\nend\nreturn M\n",
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();

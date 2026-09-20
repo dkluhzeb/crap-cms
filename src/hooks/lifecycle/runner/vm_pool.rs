@@ -7,9 +7,10 @@
 //! fixed-size pool, which blocked up to 5s whenever concurrency exceeded the
 //! pool size regardless of available capacity.
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow};
 use mlua::{Error::RuntimeError, HookTriggers, Lua, Result as LuaResult, VmState};
 use std::{
+    fmt,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -29,6 +30,33 @@ pub(super) type VmFactory = Box<dyn Fn(usize) -> Result<Lua> + Send + Sync>;
 /// How long `acquire` waits for a returned VM once the pool is at its cap and
 /// every VM is checked out.
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Every VM up to the cap was checked out for the whole wait.
+///
+/// A TYPED error, not a message: the condition is structurally the DB pool's
+/// checkout timeout — the same request retried a moment later succeeds — and
+/// the surfaces classify it by downcast, so it reports as retryable (503 /
+/// `UNAVAILABLE`) instead of an internal fault. Matching on the text would
+/// put the verdict back in a second place.
+#[derive(Debug, Clone, Copy)]
+pub struct VmPoolExhausted {
+    /// Seconds `acquire` waited before giving up.
+    pub waited_secs: u64,
+    /// The pool's hard ceiling on live VMs — every one of them was busy.
+    pub cap: usize,
+}
+
+impl fmt::Display for VmPoolExhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "VM pool acquire timed out after {}s (all {} VMs busy)",
+            self.waited_secs, self.cap
+        )
+    }
+}
+
+impl std::error::Error for VmPoolExhausted {}
 
 struct PoolInner {
     /// VMs available for immediate reuse.
@@ -114,11 +142,10 @@ impl VmPool {
             inner = guard;
 
             if wait.timed_out() && inner.idle.is_empty() && inner.live >= self.cap {
-                bail!(
-                    "VM pool acquire timed out after {}s (all {} VMs busy)",
-                    ACQUIRE_TIMEOUT.as_secs(),
-                    self.cap
-                );
+                return Err(anyhow::Error::new(VmPoolExhausted {
+                    waited_secs: ACQUIRE_TIMEOUT.as_secs(),
+                    cap: self.cap,
+                }));
             }
         }
     }
@@ -263,10 +290,12 @@ fn set_instruction_hook(vm: &Lua) -> LuaResult<()> {
     clippy::used_underscore_binding
 )]
 mod tests {
-    use super::*;
+    use anyhow::bail;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::thread;
+
+    use super::*;
 
     /// A pool whose factory builds bare VMs and counts how many it built.
     fn make_pool_counting(prewarm: usize, cap: usize) -> (Arc<VmPool>, Arc<AtomicUsize>) {
@@ -543,6 +572,29 @@ mod tests {
             .eval()
             .expect("second run should succeed with fresh counter");
         assert_eq!(result, 500500);
+    }
+
+    /// A pool exhaustion carries its TYPED cause through the `anyhow` context
+    /// layers a caller adds, so the classifier downcasts instead of matching
+    /// the wording — and the wording itself is unchanged for the log.
+    #[test]
+    fn exhaustion_is_a_typed_cause_that_survives_context() {
+        let e = Err::<(), _>(anyhow::Error::new(VmPoolExhausted {
+            waited_secs: 5,
+            cap: 8,
+        }))
+        .context("Failed to run before_change hooks")
+        .unwrap_err();
+
+        let typed = e
+            .downcast_ref::<VmPoolExhausted>()
+            .expect("the typed cause must survive context layers");
+        assert_eq!(typed.cap, 8);
+        assert_eq!(typed.waited_secs, 5);
+        assert!(
+            format!("{e:#}").contains("all 8 VMs busy"),
+            "the log wording is preserved: {e:#}"
+        );
     }
 
     #[test]

@@ -2,27 +2,26 @@
 
 use crate::{
     core::{Document, event::EventOperation},
-    db::{AccessResult, query},
+    db::{AccessResult, LocaleContext, query},
     hooks::AccessCheckInput,
     service::{
-        ServiceContext, ServiceError, helpers, invalidate_user_streams_if_auth, run_pool_write,
+        ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
+        run_after_change_hooks, run_pool_write, run_state_before_change,
     },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Core undelete logic on an existing connection: access check + restore row.
+/// The capability and access gates every undelete passes, whatever surface it
+/// came from.
 ///
-/// Does NOT manage transactions — caller must open/commit.
-fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let conn = ctx.resolve_conn()?;
-    let conn = conn.as_ref();
+/// Soft-delete must be enabled (otherwise there is no trashed row to restore),
+/// the `trash` access rule must allow the caller, and a `Constrained` result is
+/// enforced against the target row — searched in the trash view, where it sits.
+fn gate_undelete(ctx: &ServiceContext, id: &str) -> Result<()> {
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Authoritative capability gate: undelete only makes sense when soft-delete is
-    // enabled (otherwise there is no trashed row to restore). Enforced at the one
-    // service chokepoint so every surface agrees.
     if !def.has_soft_delete() {
         return Err(ServiceError::HookError(format!(
             "Collection '{}' does not support undelete: soft-delete is not enabled",
@@ -42,25 +41,63 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));
     }
 
-    // When the hook returned Constrained filters, enforce row-level match.
-    // The target row is soft-deleted, so we must search the trash view.
-    helpers::enforce_access_constraints(ctx, id, &access, "Undelete", true)?;
+    helpers::enforce_access_constraints(ctx, id, &access, "Undelete", true)
+}
 
-    let restored = query::restore(conn, ctx.slug, id)?;
+/// The trashed document as it stands going in: the data `before_change` sees.
+///
+/// Read with `include_deleted`, since the row is in the trash — and under the
+/// default locale context, because a localized collection's per-locale columns
+/// (`title__en`) only resolve with one.
+fn trashed_document(
+    ctx: &ServiceContext,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let def = ctx.collection_def()?;
 
-    if !restored {
+    query::find_by_id_raw(conn.as_ref(), ctx.slug, def, id, locale_ctx, true)?
+        .ok_or_else(|| ServiceError::NotFound("Document not found or not deleted".into()))
+}
+
+/// Core undelete logic on an existing connection: gates, `before_change`,
+/// restore the row, `after_change`.
+///
+/// Does NOT manage transactions — caller must open/commit.
+fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def()?;
+
+    gate_undelete(ctx, id)?;
+
+    let locale_ctx = ctx.default_locale_ctx();
+    let change = StateChange::Undelete;
+
+    let trashed = trashed_document(ctx, id, locale_ctx.as_ref())?;
+    let req_context = run_state_before_change(ctx, change, &trashed, locale_ctx.as_ref())?;
+
+    // A soft-deleted row keeps its FTS entry (the trash view is searchable),
+    // so nothing to re-index.
+    if !query::restore(conn, ctx.slug, id)? {
         return Err(ServiceError::NotFound(
             "Document not found or not deleted".into(),
         ));
     }
 
-    // A soft-deleted row keeps its FTS entry (the trash view is searchable),
-    // so nothing to re-index. Re-read under the default locale context: a
-    // localized collection's per-locale columns (`title__en`) only resolve with
-    // one; the bare `title` column does not exist there.
-    let locale_ctx = ctx.default_locale_ctx();
     let mut doc = query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())?
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
+
+    run_after_change_hooks(
+        write_hooks,
+        &def.hooks,
+        &def.fields,
+        &doc,
+        change.after_change(ctx, locale_ctx.as_ref(), req_context),
+        conn,
+    )?;
 
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
@@ -113,9 +150,9 @@ fn undelete_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use std::collections::HashMap;
+    use std::{cell::RefCell, collections::HashMap};
 
-    use anyhow::Result as AnyResult;
+    use anyhow::{Result as AnyResult, anyhow};
     use serde_json::{Value, json};
 
     use super::*;
@@ -180,6 +217,79 @@ mod tests {
     }
 
     impl FieldReadStrip for AllowAllWriteHooks {}
+
+    /// Write hooks that record the operation of every lifecycle event they are
+    /// handed, and can be told to fail the `before_change` one.
+    struct RecordingWriteHooks {
+        before: RefCell<Vec<String>>,
+        after: RefCell<Vec<String>>,
+        fail_before: bool,
+    }
+
+    impl RecordingWriteHooks {
+        fn new(fail_before: bool) -> Self {
+            Self {
+                before: RefCell::new(Vec::new()),
+                after: RefCell::new(Vec::new()),
+                fail_before,
+            }
+        }
+    }
+
+    impl WriteHooks for RecordingWriteHooks {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            self.after.borrow_mut().push(ctx.operation.clone());
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            self.before.borrow_mut().push(ctx.operation.clone());
+
+            if self.fail_before {
+                return Err(anyhow!("before_change refused the undelete"));
+            }
+
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for RecordingWriteHooks {}
 
     /// A soft-delete collection with an `items` array, holding one trashed
     /// document that has one array row. Returns the pool, definition and id.
@@ -253,6 +363,54 @@ mod tests {
             Some(1),
             "undelete must report the array rows: {:?}",
             doc.fields
+        );
+    }
+
+    /// Regression: undelete ran no lifecycle hooks at all, so a collection
+    /// could not react to a document coming back out of the trash — while
+    /// unpublish, its sibling state write, ran the full pair. Both events name
+    /// the operation `undelete`, matching the event the write publishes.
+    #[test]
+    fn undelete_runs_the_lifecycle_hooks() {
+        let (_tmp, db_pool, def, id) = trashed_document_with_array_row();
+        let conn = db_pool.get().unwrap();
+        let hooks = RecordingWriteHooks::new(false);
+        let ctx = ServiceContext::collection("articles", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .build();
+
+        undelete_document_in_conn(&ctx, &id).unwrap();
+
+        assert_eq!(hooks.before.borrow().join(","), "undelete");
+        assert_eq!(hooks.after.borrow().join(","), "undelete");
+    }
+
+    /// A `before_change` hook that errors aborts the undelete: the row stays
+    /// trashed and no `after_change` hook runs.
+    #[test]
+    fn a_failing_before_change_leaves_the_row_trashed() {
+        let (_tmp, db_pool, def, id) = trashed_document_with_array_row();
+        let conn = db_pool.get().unwrap();
+        let hooks = RecordingWriteHooks::new(true);
+        let ctx = ServiceContext::collection("articles", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .build();
+
+        assert!(
+            undelete_document_in_conn(&ctx, &id).is_err(),
+            "a refusing before_change must fail the undelete"
+        );
+        assert!(
+            hooks.after.borrow().is_empty(),
+            "after_change must not run for a refused undelete"
+        );
+        assert!(
+            query::find_by_id(&conn, "articles", &def, &id, None)
+                .unwrap()
+                .is_none(),
+            "the document must still be in the trash"
         );
     }
 }

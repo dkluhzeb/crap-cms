@@ -2259,6 +2259,12 @@ if you use versions on a localized collection.
 
 ## Behavior changes (likely no action)
 
+- **Four more hook references fail the boot when misspelled**: a collection
+  or global's `live.filter`, an auth method's `mfa_when`, a field's
+  `required_when` and a field's `validate`. A config that booted with a typo
+  in one of these (and silently never ran it) is refused at startup with the
+  source and ref named. **Action:** fix the ref; nothing else changes.
+
 - **A coroutine no longer escapes the Lua instruction limit.** Code spinning
   inside `coroutine.wrap`/`coroutine.resume` in a hook, route, job or effect
   used to run unbounded and hold its VM forever; it now fails with the same

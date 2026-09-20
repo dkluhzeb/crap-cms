@@ -1,14 +1,10 @@
 //! Shared helpers for collection CRUD tool implementations.
 
-use std::collections::HashSet;
-
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
 use crate::{
-    core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition, flatten_array_sub_fields,
-    },
+    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, writable_field_names},
     db::{query, query::filter::decode_where_map},
 };
 
@@ -144,16 +140,18 @@ pub(in crate::mcp::tools) fn doc_to_json(doc: &Document) -> Value {
 /// typed write pipeline routes them to columns or join tables based on each
 /// field's type.
 ///
-/// A key that is neither a `skip_key` nor a declared top-level field of the
+/// A key that is neither a `skip_key` nor a **writable** top-level field of the
 /// collection is **rejected** (rather than silently dropped by the field-driven
 /// write pipeline) so a hallucinated/misspelled field name on this AI-driven
 /// surface fails loudly. Layout wrappers (Row/Collapsible/Tabs) are transparent,
-/// so their sub-fields are the valid top-level keys.
+/// so their sub-fields are the valid top-level keys; a virtual `Join` field is
+/// not writable, so a value sent for one is rejected like a typo instead of
+/// being dropped at persist.
 ///
 /// # Errors
 ///
-/// Returns an error naming any key that is not a `skip_key` and not a field of
-/// the collection.
+/// Returns an error naming any key that is not a `skip_key` and not a writable
+/// field of the collection.
 pub(in crate::mcp::tools) fn extract_data_from_args(
     args: &Value,
     skip_keys: &[&str],
@@ -163,10 +161,7 @@ pub(in crate::mcp::tools) fn extract_data_from_args(
         return Ok(DocumentFields::new());
     };
 
-    let known: HashSet<&str> = flatten_array_sub_fields(fields)
-        .iter()
-        .map(|f| f.name.as_str())
-        .collect();
+    let known = writable_field_names(fields);
 
     let mut data = DocumentFields::new();
 
@@ -211,7 +206,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{DocumentFields, DocumentId, collection::Auth, document::Document},
+        core::{
+            DocumentFields, DocumentId, JoinConfig, Slug, collection::Auth, document::Document,
+        },
         db::query,
     };
 
@@ -637,6 +634,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field 'titel'"), "got: {err}");
+    }
+
+    /// Regression: a `Join` field is virtual — no column, no join table — so a
+    /// value sent for it can never be stored. It passed the known-field check
+    /// (the flatten classifies `Join` as a leaf) and was silently discarded at
+    /// persist; it must be reported like any other unwritable key.
+    #[test]
+    fn extract_data_rejects_a_join_field_key() {
+        let mut join = FieldDefinition::builder("comments", crate::core::FieldType::Join).build();
+        join.join = Some(JoinConfig {
+            collection: Slug::new("comments"),
+            on: "post".to_string(),
+        });
+        let fields = vec![text_field("title"), join];
+
+        let err = extract_data_from_args(&json!({ "comments": "x" }), &[], &fields)
+            .expect_err("a Join key is not writable");
+        assert!(
+            err.to_string().contains("unknown field 'comments'"),
+            "{err}"
+        );
+
+        // A real typo still errors, and a writable field still passes.
+        assert!(extract_data_from_args(&json!({ "titel": "x" }), &[], &fields).is_err());
+        let data = extract_data_from_args(&json!({ "title": "x" }), &[], &fields).unwrap();
+        assert_eq!(data.get("title").and_then(Value::as_str), Some("x"));
+    }
+
+    /// A nested composite still passes: only the virtual `Join` type is
+    /// unwritable, so a group's object value reaches the write pipeline.
+    #[test]
+    fn extract_data_accepts_a_nested_group_value() {
+        let group = FieldDefinition::builder("seo", crate::core::FieldType::Group)
+            .fields(vec![text_field("meta_title")])
+            .build();
+        let fields = vec![group];
+
+        let data =
+            extract_data_from_args(&json!({ "seo": { "meta_title": "t" } }), &[], &fields).unwrap();
+        assert_eq!(
+            data.get("seo").and_then(|v| v.get("meta_title")),
+            Some(&json!("t"))
+        );
     }
 
     /// Layout wrappers (Row/Collapsible/Tabs) are transparent — their sub-fields

@@ -240,6 +240,91 @@ pub(crate) fn run_after_change_hooks(
     Ok(after_result.context)
 }
 
+/// A write that moves a document between states without touching its fields.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StateChange {
+    /// `_status` moves to `draft`: the document is a draft afterwards.
+    Unpublish,
+    /// The row comes back out of the trash.
+    Undelete,
+}
+
+impl StateChange {
+    /// The `ctx.operation` hooks see. Unpublishing is an `update` to a hook —
+    /// the same operation the admin form's status toggle performs — while an
+    /// undelete names itself, matching the event it publishes.
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Unpublish => "update",
+            Self::Undelete => "undelete",
+        }
+    }
+
+    /// Whether the document is a draft once the write has landed.
+    fn is_draft(self) -> bool {
+        matches!(self, Self::Unpublish)
+    }
+
+    /// The after-change input this state write hands its hooks, carrying the
+    /// request context its `before_change` produced — so the pair around one
+    /// write can never name the operation or the draft flag differently.
+    pub(crate) fn after_change<'a>(
+        self,
+        ctx: &'a ServiceContext,
+        locale_ctx: Option<&LocaleContext>,
+        req_context: ReqContext,
+    ) -> AfterChangeInput<'a> {
+        AfterChangeInput::builder(ctx.slug, self.operation())
+            .draft(self.is_draft())
+            .locale(locale_ctx.map(|lc| lc.access_locale().to_string()))
+            .req_context(req_context)
+            .user(ctx.user)
+            .ui_locale(ctx.ui_locale.as_deref())
+            .build()
+    }
+}
+
+/// Run `before_change` for a state write and return its request context.
+///
+/// The stored document is the hook's `ctx.data`, and a hook may not replace it
+/// — a state write carries no field edits — so only the request context
+/// travels on to [`run_after_change_hooks`]. An error here aborts the write
+/// before anything has moved. Unpublish and undelete share this so neither can
+/// drift on what a hook sees.
+///
+/// # Errors
+///
+/// Returns the hook's own error, or an internal error when no connection,
+/// write hooks or collection definition is attached.
+pub(crate) fn run_state_before_change(
+    ctx: &ServiceContext,
+    change: StateChange,
+    doc: &Document,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<ReqContext, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def()?;
+
+    let hook_ctx = HookContext::builder(ctx.slug, change.operation())
+        .data(doc.fields.clone())
+        .document_id(doc.id.to_string())
+        .draft(change.is_draft())
+        .locale(locale_ctx.map(LocaleContext::access_locale))
+        .user(ctx.user)
+        .ui_locale(ctx.ui_locale.as_deref())
+        .build();
+
+    let final_ctx = write_hooks.run_hooks_with_conn(
+        &def.hooks,
+        HookEvent::BeforeChange,
+        hook_ctx,
+        conn.as_ref(),
+    )?;
+
+    Ok(final_ctx.context)
+}
+
 /// Collect denials for fields marked top-level `hidden = true`, for stripping
 /// from API read responses (gRPC, Lua, MCP, admin JSON, REST). Covers flat
 /// columns, group subfields (`__` prefix), and fields nested inside array/blocks

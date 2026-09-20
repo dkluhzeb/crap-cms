@@ -352,6 +352,10 @@ pub(crate) fn restore_collection_version_core(
     // locale context and required-locales the completeness check silently
     // no-ops, so a published snapshot missing a required localized value (a
     // field added or tightened after the snapshot) would restore anyway.
+    //
+    // Every locale is written from the snapshot below, so the snapshot is also
+    // what completeness judges: the live row's translations are the ones this
+    // restore replaces, not the ones it leaves behind.
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(document_id))
         .soft_delete(def.soft_delete)
@@ -359,6 +363,7 @@ pub(crate) fn restore_collection_version_core(
         .locale_ctx(restore_locale_ctx.as_ref())
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
+        .locale_overlay(snapshot.as_object())
         .build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)
@@ -503,12 +508,15 @@ pub(crate) fn restore_global_version_core(
 
     // Mirror the global update path's validation strictness: draft-aware and
     // locale-scoped, so a published restore enforces localized completeness and
-    // a draft restore is exempt (see the collection variant above).
+    // a draft restore is exempt (see the collection variant above) — judged
+    // against the snapshot every locale is written from, not the translations
+    // the restore replaces.
     let val_ctx = ValidationCtx::builder(conn, &gtable)
         .exclude_id(Some("default"))
         .draft(restored_status == "draft")
         .locale_ctx(restore_locale_ctx.as_ref())
         .user(ctx.user)
+        .locale_overlay(snapshot.as_object())
         .build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)

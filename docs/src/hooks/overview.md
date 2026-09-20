@@ -53,9 +53,11 @@ return M
 
 Every statically-known reference is resolved at boot — collection, global,
 and field hooks; collection, global, and field access rules; field display
-conditions (`admin.condition`); job `handler` and `access` refs; auth
-method refs (a strategy's `authenticate`, `mfa_deliver`); custom route
-handlers; and the `[admin] access` gate. A typo fails the boot with the
+conditions (`admin.condition`); field validators; live-event filters
+(`live = { filter = … }` on collections and globals); job `handler` and
+`access` refs; auth method refs (a strategy's `authenticate`,
+`mfa_deliver`); custom route
+handlers and gates; custom page `access` gates; and the `[admin] access` gate. A typo fails the boot with the
 source and ref named, instead of surfacing at the first request (or, for
 the admin gate, locking everyone out — it fails closed at runtime). Only
 dynamic registrations (`crap.hooks.register`, which passes a live function
@@ -108,7 +110,7 @@ vm_pool_size = 8       # Lua VMs pre-warmed at startup (default: CPU cores)
 # max_vm_pool_size = 64  # hard cap; the pool grows on demand up to this
 ```
 
-The pool is **elastic**: `vm_pool_size` VMs are pre-warmed at startup, and further VMs are built on demand up to `max_vm_pool_size` as concurrency rises (each with the same full initialization: package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.
+The pool is **elastic**: `vm_pool_size` VMs are pre-warmed at startup, and further VMs are built on demand up to `max_vm_pool_size` as concurrency rises (each with the same full initialization: package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load. When every VM is busy for longer than the acquire timeout, the request fails as a *transient* error — HTTP 503 / gRPC `UNAVAILABLE` — like a database-pool timeout, so clients retry it; raise `max_vm_pool_size` if it recurs.
 
 ## Resource Limits
 

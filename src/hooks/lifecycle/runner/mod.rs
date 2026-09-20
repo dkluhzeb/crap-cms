@@ -20,3 +20,4 @@ pub use display::{RenderCrud, RenderInfo, RenderParams};
 pub use hook_runner::HookRunner;
 pub use read_write::EventAfterReadInput;
 pub use run::{FieldHooksCall, FieldWriteCtx};
+pub use vm_pool::VmPoolExhausted;

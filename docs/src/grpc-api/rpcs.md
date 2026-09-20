@@ -19,13 +19,13 @@ message FindRequest {
   optional string order_by = 3;         // "-field" for descending
   optional int64 limit = 4;
   optional int64 page = 5;             // page number (1-based, default: 1)
-  optional int32 depth = 6;             // population depth (default: 0)
+  optional int32 depth = 6;             // population depth (default: depth.default_depth from crap.toml)
   optional string locale = 7;           // locale code for localized fields
   repeated string select = 8;           // fields to return (empty = all)
   optional bool draft = 9;              // true = include drafts (versioned collections)
   optional string after_cursor = 10;    // opaque forward cursor for cursor-based pagination
   optional string before_cursor = 11;   // opaque backward cursor for cursor-based pagination
-  optional string search = 12;          // FTS5 full-text search query
+  optional string search = 12;          // full-text search query (FTS5 on SQLite, tsquery on Postgres)
   optional bool trash = 13;             // true = return only soft-deleted documents
 }
 
@@ -340,7 +340,7 @@ message CountRequest {
   optional string where = 2;            // JSON where clause
   optional string locale = 3;           // locale code for localized field filtering
   optional bool draft = 4;              // true = include drafts
-  optional string search = 5;           // FTS5 full-text search query
+  optional string search = 5;           // full-text search query (FTS5 on SQLite, tsquery on Postgres)
   optional bool trash = 6;              // true = count soft-deleted (trashed) docs instead of live; default false
 }
 

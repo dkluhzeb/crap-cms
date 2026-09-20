@@ -279,7 +279,10 @@ fn insert_level(
                     insert_level(props, required, &tab.fields, relational);
                 }
             }
-            _ if field.field_type == FieldType::Join => {}
+            // A field a write cannot store (the virtual `Join`) is not
+            // advertised — the same predicate the arg extractor rejects it by,
+            // so the schema and the accepted key set cannot drift apart.
+            _ if !field.field_type.is_writable() => {}
             _ => insert_prop(props, required, field, relational),
         }
     }

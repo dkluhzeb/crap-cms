@@ -88,7 +88,7 @@ crap.fields.text({
 ```
 
 Completeness is checked on **non-draft** writes against the document's actual
-state (submitted data overlaid on the existing row), so it acts as a **publish
+state (submitted data overlaid on what the rest of the write lands), so it acts as a **publish
 gate**: you can save incomplete translations as **drafts**, and publishing (or
 any live save on a non-versioned collection) requires every locale in
 `required_locales` to be filled. To *remove* a translation, clear that locale's
@@ -117,6 +117,8 @@ Locale codes in `required_locales` are checked against `[locale].locales` at
 startup: a typo (e.g. `"de-DE"` when only `"de"` is configured), or setting
 `required_locales` while localization is disabled, fails to boot with a clear
 error instead of silently breaking every non-draft write.
+
+The check judges the values a write will actually land: on a publish that adopts a pending draft, the draft's other locales (a draft that cleared a required translation cannot be published); on a version restore, the snapshot being restored (a complete snapshot restores over an incomplete live row).
 
 ### Unique + Localized
 

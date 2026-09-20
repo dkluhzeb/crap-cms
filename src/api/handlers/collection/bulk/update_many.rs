@@ -36,7 +36,7 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let mut data: DocumentFields = req
+        let data: DocumentFields = req
             .data
             .map(|s| data_map_to_json_map(&s))
             .transpose()
@@ -48,10 +48,6 @@ impl ContentService {
             return Err(Status::invalid_argument(
                 "Password updates are not supported in UpdateMany. Use Update for individual documents.",
             ));
-        }
-
-        if def.is_auth_collection() {
-            data.remove("password");
         }
 
         let locale_ctx =

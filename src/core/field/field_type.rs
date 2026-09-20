@@ -113,6 +113,43 @@ impl FieldType {
         matches!(self, FieldType::Array | FieldType::Blocks)
     }
 
+    /// True for the field types a write may carry data for.
+    ///
+    /// Everything owns storage — a parent column, a join table, or nested JSON
+    /// inside a parent's row — except `Join`, which is virtual: it has no
+    /// column and no join table of its own, and its value is derived from the
+    /// target collection's rows at read time. A write naming a `Join` field is
+    /// therefore data that can never be stored, and surfaces that reject
+    /// unknown keys must reject it rather than drop it at persist time.
+    ///
+    /// Listed EXHAUSTIVELY (no `_` wildcard) so a new `FieldType` must decide
+    /// its writability here rather than silently defaulting to writable.
+    #[must_use]
+    pub fn is_writable(&self) -> bool {
+        match self {
+            FieldType::Join => false,
+            FieldType::Text
+            | FieldType::Number
+            | FieldType::Textarea
+            | FieldType::Richtext
+            | FieldType::Select
+            | FieldType::Radio
+            | FieldType::Checkbox
+            | FieldType::Date
+            | FieldType::Email
+            | FieldType::Json
+            | FieldType::Upload
+            | FieldType::Relationship
+            | FieldType::Code
+            | FieldType::Group
+            | FieldType::Array
+            | FieldType::Blocks
+            | FieldType::Row
+            | FieldType::Collapsible
+            | FieldType::Tabs => true,
+        }
+    }
+
     /// The complete set of valid field-type strings — the frozen public
     /// contract. Used for strict parsing and for did-you-mean error messages.
     pub const ALL: &'static [&'static str] = &[
@@ -262,6 +299,22 @@ mod tests {
             FieldType::Row,
         ] {
             assert!(!ft.has_rows(), "{ft:?} must not have rows");
+        }
+    }
+
+    /// `Join` is the one virtual field type: no column, no join table, value
+    /// derived at read time — so it is the one type a write can never carry
+    /// data for. Every other type owns storage somewhere.
+    #[test]
+    fn only_join_is_unwritable() {
+        assert!(!FieldType::Join.is_writable());
+        for name in FieldType::ALL {
+            let ft = FieldType::parse(name).expect("ALL lists parseable names");
+            assert_eq!(
+                ft.is_writable(),
+                ft != FieldType::Join,
+                "{ft:?} writability"
+            );
         }
     }
 

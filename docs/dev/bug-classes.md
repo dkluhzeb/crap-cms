@@ -369,6 +369,39 @@ files changed since. Entries are dropped when the area is touched.
     endpoint access + locale; dashboard per-collection cost; htmx partial
     contract for GET navigation; multipart lifecycle.
 
+- **R19 (2026-09-20, commit 1aea0304)**
+  - *API surface:* bearer/API-key extraction parity gRPC↔REST; auth before
+    existence disclosure on account actions; pagination and depth clamping;
+    locale/draft downgrade semantics; `where` parsing (proptest); error →
+    Status/HTTP mapping leak-free; Subscribe lifecycle (RAII limit,
+    fail-closed lag/revocation, drain); REST upload auth-before-body; login/
+    MFA/reset rate-limit atomicity and non-enumeration; TriggerJob delay and
+    concealment; bulk queue actor/auth and `bulk_max_documents` parity; gRPC
+    limiter TCP-peer keying; proto↔wire parity (gated); FieldValue codec.
+  - *Hooks execution model:* write/read/broadcast ordering per
+    `lifecycle-events.md`; field-vs-collection-vs-registered ordering;
+    `ctx.document` per-pass snapshot; strip-before-hooks by design;
+    `after_change` sees the persisted row; `after_read` fail-open; hook-depth
+    guard on every CRUD entry; TxContext/read-only gating; exhaustive
+    destructuring of collection `Hooks`/`Access`.
+  - *MCP:* HTTP auth-before-session; sessions audit-only; `execute_crud_tool`
+    re-checks include/exclude + `access.mcp` at call time with one
+    `UnknownTool` answer; batch handling; job/config tool tiering symmetric
+    at list and call; error scrubbing on every `exec_*`; `where` grammar
+    shared; config-file secret redaction structural; client-name sanitised.
+  - *Versions × locale × soft delete:* restore on a trashed document refused;
+    ref-count diff on restore (collections and globals); pruning never drops
+    the sole published snapshot; locale added/removed after snapshots; draft
+    read fallback published→null; trash keeps the pending draft, undelete
+    restores it; hard delete/purge one chokepoint (CLI, scheduler, bulk);
+    globals cannot own upload files; `list_versions` access + pagination;
+    globals reject `required_locales` as unknown.
+  - *Read path:* populate cache key and write-through invalidation; trash/
+    draft/access gating on populate targets incl. nested containers and
+    joins; FTS sanitisation both backends; every `FilterOp` both backends;
+    keyset NULL/duplicate stability; count/find parity; SQL↔in-memory filter
+    agreement.
+
 ## Maintenance
 
 - Rows are **append-only**; a class is never deleted, only upgraded to
@@ -1162,6 +1195,59 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-20 (29) — **CONVERGENCE ROUND 19** (5 lenses on Sonnet with explicit
+  file lists and the Appendix 3 skip list: gRPC/REST API surface, hook
+  execution model, MCP surface, read path (populate/filters/search/cache),
+  versions × locale × soft-delete interplay). **~20 confirmed — 3 HIGH,
+  6 MED, ~8 LOW — NOT a quiet round, but the lowest count since R13; no
+  new class.** The API and MCP lenses came back without a HIGH.
+  - **M8 — `live.filter` never validated at boot**: the one HookRef site the
+    startup inventory missed; a typo'd filter dropped every live event with
+    a warning. Field-level `FieldAccess` was read positionally, so a new key
+    would have escaped the same way — destructured now, and the inventory is
+    pinned against a source scan of every `HookRef` field.
+  - **L-class — batch populate lost its cycle guard across has-one/has-many
+    recursion**: the recursion re-entered the public entry that seeds a fresh
+    `visited` set, so a mutual has-one expanded to the full depth on list
+    reads while `FindByID` stopped correctly.
+  - **L8 — VM-pool exhaustion classified `Internal`** while the identical
+    DB-pool timeout is `Transient`: an untyped `anyhow!` string. Typed now.
+  - **S1 — MCP dropped a `Join`-named key silently** (its "known field" set
+    came from a walker that classifies Join as a leaf); one writable-field
+    predicate now.
+  - **M-class — the `required_locales` completeness gate judged the LIVE
+    row's other locales**, which R17's publish-adopts-the-whole-draft (and
+    version restore, all along) overwrite after validation: a draft that
+    cleared a required translation published cleanly. The gate now judges the
+    snapshot the write will land. A mechanism (validation) not extended for a
+    new instance (the write-back) — the R17 fix's own post-fix review missed
+    it because the reviewer's lens was file lifecycle, not validation.
+  - P2 sibling: `undelete` ran no lifecycle hooks while `unpublish` runs the
+    full set; hooked now.
+  - D1 instances: `mcp_reserved` hand list missing `trash`; `rpcs.md` depth
+    default and FTS5 wording; `publish_event` rustdoc. L4: config-file write
+    and stdio line cap.
+  - Lessons: (1) the cheap-model lens with a file list and the skip
+    appendix cost ~280–380k tokens each (vs 300–560k on Fable) and found
+    the same class of bugs; (2) a "fresh entry point" that seeds state is a
+    recursion hazard wherever a private `_with_state` variant exists — the
+    public entry must not be reachable from inside.
+    Post-fix review of this round's diff (1 Sonnet reviewer, ~40 files):
+    2 MED, no HIGH — the first round whose blind-written fixes survived
+    review without a regression. The MEDs were both *reach* gaps of the
+    round's own fix: the new HookRef pin scanned `src/core` only, so a
+    custom page's `access` gate (`src/admin/custom_pages.rs`) stayed
+    unvalidated; and `undelete`, now hooked, lacked the `hooks = false`
+    opt-out every sibling has. Both fixed by hand. First-run test fallout
+    was small: one fixture that had relied on an unvalidated live-filter ref,
+    and the reserved-args pin that demanded hand prose for every argument —
+    resolved by taking each argument's description from the wire field
+    itself (the hand map is now an optional override), which also removes
+    the last reason for that list to drift.
+    Gates (2026-09-20): clippy clean in both forms (`--all-features` and
+    default features); unit ~5,980 + integration ~1,790 + macros/xtask green;
+    e2e 322 green; all five `gen-*` checks and `fmt --check` clean. Postgres
+    harness NOT run (no `TEST_DATABASE_URL`). Streak: 0 quiet rounds.
 - 2026-09-19 (28) — **CONVERGENCE ROUND 18** (5 fresh lenses: per-field-type
   round-trip fidelity across surfaces, failure atomicity & resource cleanup,
   the Lua API contract, the admin UI server side, configuration/operations/

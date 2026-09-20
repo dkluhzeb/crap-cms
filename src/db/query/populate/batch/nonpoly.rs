@@ -4,25 +4,37 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::populate_relationships_batch_cached;
+use super::dispatch::populate_batch_with_visited;
 use crate::core::{CollectionDefinition, Document, upload};
 use crate::db::query::populate::helpers::{
     fetch_targets, resolve_target_views, target_row_visible,
 };
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
+    PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json, locale_cache_key,
     populate_cache_key,
 };
+
+/// The target side of a batch relationship fetch: the collection the ids point
+/// at, its definition, and the ancestors' cycle guard.
+///
+/// `visited` travels WITH the target because the fetch recurses into it: the
+/// recursive populate must inherit the set, not start a fresh one, or a mutual
+/// reference re-expands its way back to a document already on the path.
+pub(super) struct BatchTarget<'a> {
+    pub(super) collection: &'a str,
+    pub(super) def: &'a CollectionDefinition,
+    pub(super) visited: &'a HashSet<(String, String)>,
+}
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
 pub(super) fn batch_nonpoly_has_many(
     ctx: &PopulateCtx<'_>,
     docs: &mut [Document],
     field_name: &str,
-    rel_collection: &str,
-    rel_def: &CollectionDefinition,
-    visited: &HashSet<(String, String)>,
+    target: &BatchTarget<'_>,
 ) -> Result<()> {
+    let (rel_collection, visited) = (target.collection, target.visited);
+
     // Collect all unique IDs across all docs for this has-many field
     let mut all_ids: Vec<String> = Vec::new();
 
@@ -40,7 +52,7 @@ pub(super) fn batch_nonpoly_has_many(
     all_ids.sort();
     all_ids.dedup();
 
-    let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
+    let doc_map = batch_fetch_single_collection(ctx, target, &all_ids)?;
 
     // Distribute back to each document preserving order.
     // DB misses (soft-deleted / vanished targets) are dropped from the array;
@@ -77,10 +89,10 @@ pub(super) fn batch_nonpoly_has_one(
     ctx: &PopulateCtx<'_>,
     docs: &mut [Document],
     field_name: &str,
-    rel_collection: &str,
-    rel_def: &CollectionDefinition,
-    visited: &HashSet<(String, String)>,
+    target: &BatchTarget<'_>,
 ) -> Result<()> {
+    let (rel_collection, visited) = (target.collection, target.visited);
+
     let mut all_ids: Vec<String> = Vec::new();
 
     for doc in docs.iter() {
@@ -95,7 +107,7 @@ pub(super) fn batch_nonpoly_has_one(
     all_ids.sort();
     all_ids.dedup();
 
-    let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
+    let doc_map = batch_fetch_single_collection(ctx, target, &all_ids)?;
 
     // Distribute back. DB miss (soft-deleted / vanished target) sets the field
     // to null; visited IDs (cycle protection) remain as raw strings.
@@ -122,13 +134,14 @@ pub(super) fn batch_nonpoly_has_one(
 }
 
 /// Shared helper: fetch documents from a single collection with cache support.
-/// Used by non-polymorphic batch population.
+/// Used by non-polymorphic batch population (and, per target collection, by
+/// the polymorphic path).
 pub(super) fn batch_fetch_single_collection(
     ctx: &PopulateCtx<'_>,
-    collection: &str,
-    rel_def: &CollectionDefinition,
+    target: &BatchTarget<'_>,
     all_ids: &[String],
 ) -> Result<HashMap<String, Document>> {
+    let (collection, rel_def) = (target.collection, target.def);
     let locale_key = locale_cache_key(ctx.locale_ctx);
 
     // Resolve the target collection's view access (read + draft) once for the
@@ -177,7 +190,17 @@ pub(super) fn batch_fetch_single_collection(
     }
 
     if ctx.effective_depth - 1 > 0 {
-        populate_relationships_batch_cached(
+        // Inherit the ancestors' cycle guard: recursing through the public
+        // entry would seed a FRESH set, and a mutual reference (posts →
+        // comments → posts) would then expand once per remaining depth level
+        // instead of stopping at the document it came from.
+        let mut nested_visited = target.visited.clone();
+        // A fresh dedup table for the child level: the ancestor's own fetch is
+        // still in flight here, so re-entering its table could wait on a key
+        // this very call stack owns.
+        let child_singleflight = Singleflight::new();
+
+        populate_batch_with_visited(
             &PopulateContext {
                 conn: ctx.conn,
                 registry: ctx.registry,
@@ -194,6 +217,8 @@ pub(super) fn batch_fetch_single_collection(
                 user: ctx.user,
             },
             ctx.cache,
+            &child_singleflight,
+            &mut nested_visited,
         )?;
     }
 

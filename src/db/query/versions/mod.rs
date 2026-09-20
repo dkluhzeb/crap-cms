@@ -13,6 +13,7 @@ pub use crud::{
 pub use snapshot::build_snapshot;
 pub(crate) use snapshot::{JoinOwner, locale_join_rows, localized_join_keys};
 
+pub(crate) use restore::{LocaleSnapshot, SnapshotKey};
 pub use restore::{
     restore_global_version, restore_version, snapshot_write_fields, write_global_snapshot_base,
     write_snapshot_base,

@@ -10,6 +10,8 @@ use serde::Serialize;
 use serde_json::to_string_pretty;
 use tracing::info;
 
+use crate::core::write_atomically;
+
 /// Response shape for `write_config_file`: echoes the relative path written.
 #[derive(Serialize)]
 struct WrittenResponse<'a> {
@@ -187,6 +189,11 @@ pub(in crate::mcp::tools) fn exec_read_config_file(
 }
 
 /// Write a file to the config directory, creating parent directories as needed.
+///
+/// The write is staged and renamed (see [`write_atomically`]): the server
+/// loads these files at boot, so a failed or interrupted write must leave the
+/// previous version whole rather than a half-written collection definition
+/// that no longer parses.
 pub(in crate::mcp::tools) fn exec_write_config_file(
     path: &str,
     content: &str,
@@ -199,8 +206,8 @@ pub(in crate::mcp::tools) fn exec_write_config_file(
         fs::create_dir_all(parent)?;
     }
     info!("MCP write_config_file: {} [client={}]", path, client_label);
-    fs::write(&full_path, content)
-        .with_context(|| format!("Failed to write {}", full_path.display()))?;
+    write_atomically(&full_path, content)?;
+
     Ok(to_string_pretty(&WrittenResponse { written: path })?)
 }
 
@@ -370,6 +377,36 @@ bucket = \"my-bucket\"
         assert_eq!(parsed["written"], "output.txt");
         let written = fs::read_to_string(dir.path().join("output.txt")).unwrap();
         assert_eq!(written, "hello");
+    }
+
+    /// Regression: the write went straight to the final name, so a failure
+    /// mid-write left a truncated config file the server would then fail to
+    /// parse at boot. The previous version survives a failed write, and no
+    /// stage is left behind under the final name's directory.
+    #[test]
+    fn exec_write_config_file_leaves_the_previous_file_intact_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("posts.lua");
+        fs::write(&existing, "-- previous").unwrap();
+
+        // A path whose final component is an existing DIRECTORY: staging
+        // succeeds, the rename onto a non-empty directory fails.
+        fs::create_dir(dir.path().join("collections")).unwrap();
+        fs::write(dir.path().join("collections/keep.lua"), "-- keep").unwrap();
+        assert!(
+            exec_write_config_file("collections", "-- clobber", dir.path(), "(test)").is_err(),
+            "a rename that cannot complete must be reported, not silently partial"
+        );
+
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "-- previous");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("collections/keep.lua")).unwrap(),
+            "-- keep"
+        );
+        assert!(
+            !dir.path().join("collections.tmp").exists(),
+            "the stage is cleaned up after a failed rename"
+        );
     }
 
     #[test]

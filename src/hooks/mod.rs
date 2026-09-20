@@ -10,12 +10,13 @@
 //! - `lua_api/` -- the `crap.*` API surface registered into each VM:
 //!   collections / globals / jobs CRUD, http, email, cache, fields,
 //!   richtext, json, log, version, etc. One file per `crap.<area>`.
-//! - `startup_checks.rs` -- post-init correctness passes that walk
+//! - `startup_checks/` -- post-init correctness passes that walk
 //!   the registry once at boot: every statically-known hook/access
-//!   ref must resolve in the Lua VM, and no field name may collide
-//!   with the generated `{name}__{locale}` column pattern. Distinct
-//!   from `lifecycle/validation/`, which runs per-write field
-//!   validation.
+//!   ref must resolve in the Lua VM (`hook_refs`), custom routes
+//!   (`routes`) and `auth.methods` (`auth_methods`) must be
+//!   well-shaped, and no field name may collide with the generated
+//!   `{name}__{locale}` column pattern. Distinct from
+//!   `lifecycle/validation/`, which runs per-write field validation.
 //! - `lifecycle/` -- runtime hook execution. `HookRunner` owns a Lua
 //!   VM pool; `HookEvent` enumerates the events that fire user hooks
 //!   (`before_validate`, `before_change`, `after_change`, `before_read`,
@@ -46,5 +47,5 @@ pub use init::init_lua;
 pub(crate) use init::{install_relative_chunk_searcher, load_lua_dir, sandbox_lua};
 pub use lifecycle::{
     AccessCheckInput, ConditionContext, DisplayConditionResult, EventAfterReadInput, HookContext,
-    HookEvent, HookRunner, LuaCrudInfra, ValidationCtx,
+    HookEvent, HookRunner, LuaCrudInfra, ValidationCtx, VmPoolExhausted,
 };

@@ -12,8 +12,8 @@ use crate::{
     hooks::lua_api::crud::{
         get_tx_conn,
         helpers::{
-            hook_invalidation_transport, hook_lua_infra, hook_ui_locale, hook_user,
-            resolve_collection,
+            check_hook_depth, hook_invalidation_transport, hook_locale_config, hook_lua_infra,
+            hook_ui_locale, hook_user, resolve_collection,
         },
     },
     service::{
@@ -31,6 +31,9 @@ pub(crate) struct UndeleteOptions {
     /// Skip access control checks (default: `false`).
     #[lua(optional)]
     pub(crate) override_access: bool,
+    /// Run lifecycle hooks (default: `true`), as on `unpublish`.
+    #[lua(optional)]
+    pub(crate) hooks: bool,
     /// Emit a live-update event for the restored document (default: `true`).
     /// Set `false` for a quiet restore. Parity with the gRPC/MCP undelete.
     #[lua(optional)]
@@ -41,6 +44,7 @@ impl Default for UndeleteOptions {
     fn default() -> Self {
         Self {
             override_access: false,
+            hooks: true,
             events: true,
         }
     }
@@ -81,11 +85,22 @@ fn collections_undelete(
     // Capability gate (soft-delete required) is enforced at the shared service
     // chokepoint `service::undelete_document`, so every surface agrees.
 
+    // Undelete runs the lifecycle hooks like every other state write, so the
+    // nesting guard applies to it too. Validation stays off: an undelete
+    // carries no field edits to validate.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "undelete");
+
     let wh = LuaWriteHooks::builder(lua)
         .override_access(opts.override_access)
-        .hooks_enabled(false)
+        .registry(Some(state.as_ref()))
+        .hooks_enabled(hooks_enabled)
         .run_validation(false)
         .build();
+
+    // The locale config is what lets the reads around the restore address a
+    // localized collection's per-locale columns (`title__en`); without it the
+    // SELECT names a bare `title` that does not exist there.
+    let locale_config = hook_locale_config(lua);
 
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
@@ -94,6 +109,7 @@ fn collections_undelete(
         .ui_locale(ui_locale.clone())
         .override_access(opts.override_access)
         .emit_events(opts.events)
+        .locale_config(locale_config.as_ref())
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
         .build();
@@ -141,5 +157,16 @@ mod tests {
         assert!(!opts.override_access);
 
         assert!(UndeleteOptions::default().events, "quiet must be opt-in");
+    }
+
+    /// `hooks` defaults on and can be switched off, exactly like unpublish.
+    #[test]
+    fn hooks_option_defaults_on_and_can_be_disabled() {
+        let lua = mlua::Lua::new();
+        assert!(UndeleteOptions::default().hooks);
+
+        let table: mlua::Table = lua.load("return { hooks = false }").eval().unwrap();
+        let opts: UndeleteOptions = lua.from_value(mlua::Value::Table(table)).unwrap();
+        assert!(!opts.hooks);
     }
 }

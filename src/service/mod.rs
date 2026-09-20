@@ -102,7 +102,7 @@ pub(crate) use email::{
 pub(crate) use events::{EventAccessInput, EventAccessMap, EventGate, event_op_str};
 pub(crate) use globals::{check_global_update_access, stored_global_fields_for_update_rules};
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
-pub(crate) use helpers::run_after_change_hooks;
+pub(crate) use helpers::{StateChange, run_after_change_hooks, run_state_before_change};
 pub use hooks::{
     FieldReadStrip, LuaReadHooks, LuaWriteHooks, ReadHooks, ReadStripArgs, RunnerReadHooks,
     RunnerWriteHooks, SnapshotLocales, WriteHooks,

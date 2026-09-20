@@ -4,11 +4,11 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, event::EventOperation},
-    db::{AccessResult, LocaleContext, query},
-    hooks::{AccessCheckInput, HookContext, HookEvent},
+    db::{AccessResult, query},
+    hooks::AccessCheckInput,
     service::{
-        AfterChangeInput, ServiceContext, ServiceError, helpers, invalidate_user_streams_if_auth,
-        persist_unpublish, run_after_change_hooks, run_pool_write,
+        ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
+        persist_unpublish, run_after_change_hooks, run_pool_write, run_state_before_change,
         write::{UploadSettle, document_file_keys, settle_upload_write},
     },
 };
@@ -64,16 +64,8 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
             ServiceError::NotFound(format!("Document '{id}' not found in '{}'", ctx.slug))
         })?;
 
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
-        .data(doc.fields.clone())
-        .document_id(id)
-        .draft(true)
-        .locale(locale_ctx.as_ref().map(LocaleContext::access_locale))
-        .user(ctx.user)
-        .build();
-
-    let final_ctx =
-        write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, conn)?;
+    let change = StateChange::Unpublish;
+    let req_context = run_state_before_change(ctx, change, &doc, locale_ctx.as_ref())?;
 
     // The files the document references going in — the published row's and
     // every version snapshot's. Unpublishing writes a version like any other
@@ -106,12 +98,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         &def.hooks,
         &def.fields,
         &doc,
-        AfterChangeInput::builder(ctx.slug, "update")
-            .draft(true)
-            .locale(locale_ctx.as_ref().map(|lc| lc.access_locale().to_string()))
-            .req_context(final_ctx.context)
-            .user(ctx.user)
-            .build(),
+        change.after_change(ctx, locale_ctx.as_ref(), req_context),
         conn,
     )?;
 

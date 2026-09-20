@@ -3,9 +3,12 @@
 //! A `required` **localized** field must be present in every locale of its
 //! effective `required_locales` (field override → collection default → default
 //! locale only). The write-locale value comes from the submitted data; other
-//! locales come from the existing row (column-backed fields) or the field's
-//! join table (array / blocks / has-many relationship). Skipped for drafts and
-//! when localization is disabled.
+//! locales come from the snapshot this write lands over the row
+//! ([`ValidationCtx::locale_overlay`] — a publish's pending draft, a restored
+//! version) and, for a locale that snapshot does not carry, from the existing
+//! row (column-backed fields) or the field's join table (array / blocks /
+//! has-many relationship). Skipped for drafts and when localization is
+//! disabled.
 
 use std::collections::HashMap;
 
@@ -16,7 +19,7 @@ use crate::{
     db::{
         DbValue, LocaleContext,
         query::{
-            fetch_row_columns,
+            LocaleSnapshot, SnapshotKey, fetch_row_columns,
             helpers::{join_table, locale_column, prefixed_name, walk_leaf_fields},
             localized_join_row_exists,
         },
@@ -51,8 +54,21 @@ enum FieldKind {
 
 struct Target {
     data_key: String,
+    /// The group prefix the flat walk reached this field under (`""` at the
+    /// top level) and the field's own name. Together with `data_key` they
+    /// address the field's value in an overlay snapshot, which carries groups
+    /// in either the flat or the nested form.
+    prefix: String,
+    name: String,
     locales: Vec<String>,
     kind: FieldKind,
+}
+
+impl Target {
+    /// Where this field's value sits in an overlay snapshot.
+    fn snapshot_key(&self) -> SnapshotKey<'_> {
+        (&self.data_key, &self.prefix, &self.name)
+    }
 }
 
 /// Run the localized completeness check, pushing a `validation.required_locale`
@@ -90,11 +106,12 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
     for target in &targets {
         for loc in &target.locales {
             // The document's actual post-write state: submitted data overlaid on
-            // the existing row. For the write locale a *provided* value wins
-            // (even an empty one — that's an explicit clear), but an *omitted*
-            // field keeps its existing value (partial-update semantics, matching
-            // `check_required`'s `is_update && value.is_none()` exemption). Other
-            // locales are never touched by this write, so they read existing.
+            // what the rest of the write lands. For the write locale a *provided*
+            // value wins (even an empty one — that's an explicit clear), but an
+            // *omitted* field keeps whatever the write leaves there
+            // (partial-update semantics, matching `check_required`'s
+            // `is_update && value.is_none()` exemption). Other locales come from
+            // the overlay this write writes back, falling back to the stored row.
             let present = if loc == write_locale {
                 match data.get(&target.data_key) {
                     Some(value) => submitted_present(target.kind, Some(value)),
@@ -133,13 +150,22 @@ fn submitted_present(kind: FieldKind, value: Option<&serde_json::Value>) -> bool
     }
 }
 
-/// Whether a non-write locale's value is present on the existing row.
+/// Whether a locale the request does not write carries a value once this
+/// write has landed.
+///
+/// The overlay — the snapshot a later step of the same write writes back —
+/// decides for every locale it carries. Only a locale it does not carry reads
+/// the stored row, which is exactly what the write-back leaves there.
 fn existing_present(
     ctx: &ValidationCtx,
     existing_cols: Option<&HashMap<String, DbValue>>,
     target: &Target,
     loc: &str,
 ) -> bool {
+    if let Some(present) = overlay_present(ctx, target, loc) {
+        return present;
+    }
+
     match target.kind {
         FieldKind::Scalar => locale_column(&target.data_key, loc)
             .ok()
@@ -147,6 +173,27 @@ fn existing_present(
             .unwrap_or(false),
         FieldKind::Join => join_row_exists(ctx, &target.data_key, loc),
     }
+}
+
+/// The overlay's verdict for one (field, locale), or `None` when it carries
+/// nothing for that locale and the stored row still decides.
+///
+/// Resolution goes through [`LocaleSnapshot`], the same resolver the write-back
+/// uses — a column takes the decorated `{field}__{locale}` key (the default
+/// locale falling back to the bare one), join rows take the decorated key only.
+fn overlay_present(ctx: &ValidationCtx, target: &Target, loc: &str) -> Option<bool> {
+    let overlay = ctx.locale_overlay?;
+    let config = &ctx.locale_ctx?.config;
+
+    let snapshot = LocaleSnapshot::new(overlay, config);
+    let value = match target.kind {
+        FieldKind::Scalar => snapshot.value(target.snapshot_key(), loc),
+        FieldKind::Join => snapshot.rows(&target.data_key, loc),
+    }
+    .ok()
+    .flatten()?;
+
+    Some(submitted_present(target.kind, Some(value)))
 }
 
 /// Whether the field's join table has at least one row for this parent + locale.
@@ -211,6 +258,8 @@ fn collect_required_localized(
             };
             out.push(Target {
                 data_key,
+                prefix: prefix.to_string(),
+                name: field.name.clone(),
                 locales: effective_locales(field, cctx.ctx, cctx.lctx),
                 kind,
             });
@@ -333,10 +382,13 @@ fn db_present(v: Option<&DbValue>) -> bool {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use mlua::Lua;
-    use serde_json::json;
+    use serde_json::{Map, Value, json};
 
     use crate::config::LocaleConfig;
-    use crate::core::{DocumentFields, FieldDefinition, FieldType, JoinConfig};
+    use crate::core::{
+        DocumentFields, FieldDefinition, FieldType, JoinConfig, RequiredLocales,
+        validate::FieldError,
+    };
     use crate::db::{LocaleContext, LocaleMode};
 
     use super::{ValidationCtx, check_localized_completeness};
@@ -366,6 +418,90 @@ mod tests {
                 fallback: false,
             },
         }
+    }
+
+    /// A `title` required in every locale, with a German value supplied by an
+    /// overlay (or not) and the English one submitted. Returns the errors the
+    /// completeness gate raises.
+    fn errors_with_overlay(overlay: Option<&Map<String, Value>>) -> Vec<FieldError> {
+        let lua = Lua::new();
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .required(true)
+                .required_locales(RequiredLocales::All)
+                .build(),
+        ];
+        let lctx = en_de_ctx();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ctx = ValidationCtx::builder(&conn, "docs")
+            .exclude_id(Some("d1"))
+            .locale_ctx(Some(&lctx))
+            .locale_overlay(overlay)
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+
+        let mut errors = Vec::new();
+        check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
+
+        errors
+    }
+
+    fn has_required_locale_error(errors: &[FieldError]) -> bool {
+        errors
+            .iter()
+            .any(|e| e.key.as_deref() == Some("validation.required_locale"))
+    }
+
+    /// Regression: publishing a pending draft writes the draft's OTHER locales
+    /// back over the row AFTER validation, so judging the live row let a draft
+    /// that cleared a required translation publish an empty one. The overlay —
+    /// the snapshot the write lands — decides for those locales instead.
+    #[test]
+    fn an_overlay_that_clears_a_locale_is_rejected() {
+        let cleared: Map<String, Value> =
+            [("title__de".to_string(), json!(""))].into_iter().collect();
+
+        let errors = errors_with_overlay(Some(&cleared));
+
+        assert!(
+            has_required_locale_error(&errors),
+            "an overlay that clears a required translation must be rejected, got: {errors:?}"
+        );
+    }
+
+    /// The mirror case: the write supplies the translation the stored row does
+    /// not have, so the document IS complete once it lands. Judging the live
+    /// row refused it.
+    #[test]
+    fn an_overlay_that_supplies_a_locale_is_accepted() {
+        let filled: Map<String, Value> = [("title__de".to_string(), json!("Hallo"))]
+            .into_iter()
+            .collect();
+
+        let errors = errors_with_overlay(Some(&filled));
+
+        assert!(
+            errors.is_empty(),
+            "an overlay supplying the translation must satisfy completeness, got: {errors:?}"
+        );
+    }
+
+    /// A locale the overlay carries no value for keeps whatever is stored —
+    /// the write-back's own rule — so the stored row still decides for it.
+    #[test]
+    fn a_locale_the_overlay_omits_falls_back_to_the_row() {
+        let other: Map<String, Value> =
+            [("slug".to_string(), json!("hello"))].into_iter().collect();
+
+        let errors = errors_with_overlay(Some(&other));
+
+        assert!(
+            has_required_locale_error(&errors),
+            "the stored row (empty here) decides for a locale the overlay omits, got: {errors:?}"
+        );
     }
 
     /// Regression: a localized field's `required_when` predicate is enforced via

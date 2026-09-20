@@ -12,6 +12,7 @@ use crate::{
         constraint_kind, is_transient,
         query::DocumentNotFound,
     },
+    hooks::VmPoolExhausted,
 };
 
 /// Typed service-layer errors that callers can match on for surface-specific handling.
@@ -167,7 +168,7 @@ impl ServiceError {
         // transient (unavailable/503) on every surface.
         let msg = format!("{e:#}");
 
-        if is_transient(&e) || transient_message(&msg, db_kind) {
+        if transient_cause(&e) || transient_message(&msg, db_kind) {
             return Self::Transient(e);
         }
 
@@ -238,6 +239,17 @@ impl ServiceError {
             other => other.into_anyhow(),
         }
     }
+}
+
+/// Whether the error chain carries a TYPED cause that says "retryable".
+///
+/// Every exhausted-resource condition answers here, by downcast, not by
+/// wording: [`is_transient`] reads the driver's SQLSTATE / `SQLite` result
+/// code, and [`VmPoolExhausted`] is the Lua VM pool's checkout timeout — the
+/// structural twin of the DB pool's, and equally retryable. A pool that runs
+/// dry is a capacity signal (503 / `UNAVAILABLE`), never an internal fault.
+fn transient_cause(e: &anyhow::Error) -> bool {
+    is_transient(e) || e.downcast_ref::<VmPoolExhausted>().is_some()
 }
 
 /// The transient conditions recognizable only from text, for causes that reach
@@ -454,6 +466,51 @@ mod tests {
         let e = anyhow!("Timed out waiting for connection pool");
         let se = ServiceError::classify(e, "sqlite");
         assert!(matches!(se, ServiceError::Transient(_)));
+    }
+
+    /// Regression: an exhausted Lua VM pool is the structural twin of an
+    /// exhausted DB pool — the same request retried a moment later succeeds —
+    /// but it arrived as an untyped message and landed as `Internal` (500 /
+    /// INTERNAL) while the DB pool's timeout was `Transient` (503 /
+    /// UNAVAILABLE). Both classify the same, on every surface, and the VM
+    /// pool's verdict comes from its typed cause, not its wording.
+    #[test]
+    fn classify_vm_pool_exhaustion_like_a_db_pool_timeout() {
+        let vm = Err::<(), _>(anyhow::Error::new(VmPoolExhausted {
+            waited_secs: 5,
+            cap: 4,
+        }))
+        .context("Failed to run before_change hooks")
+        .unwrap_err();
+        assert!(
+            matches!(
+                ServiceError::classify(vm, "sqlite"),
+                ServiceError::Transient(_)
+            ),
+            "an exhausted VM pool is retryable, not an internal fault"
+        );
+
+        let db = Err::<(), _>(anyhow!("timed out waiting for connection"))
+            .context("Failed to get DB connection")
+            .unwrap_err();
+        assert!(matches!(
+            ServiceError::classify(db, "sqlite"),
+            ServiceError::Transient(_)
+        ));
+    }
+
+    /// The verdict is the typed cause, not the text: a message that merely
+    /// *reads* like the pool error carries no verdict of its own.
+    #[test]
+    fn vm_pool_verdict_is_not_message_matching() {
+        let e = anyhow!("VM pool acquire timed out after 5s (all 4 VMs busy)");
+        assert!(
+            matches!(
+                ServiceError::classify(e, "sqlite"),
+                ServiceError::Internal(_)
+            ),
+            "the wording alone must not decide — only the typed cause does"
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::{
     db::query::populate::{PopulateCtx, document_to_json, parse_poly_ref},
 };
 
-use super::nonpoly::batch_fetch_single_collection;
+use super::nonpoly::{BatchTarget, batch_fetch_single_collection};
 
 /// Outcome of resolving a single polymorphic reference in batch distribution.
 enum PolyResolution {
@@ -76,7 +76,7 @@ pub(super) fn batch_poly_has_many(
     }
 
     // Batch fetch per collection
-    let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection)?;
+    let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection, visited)?;
 
     // Distribute results back to each document. DB misses (soft-deleted /
     // vanished targets) are dropped; malformed / visited / unknown-collection
@@ -127,7 +127,7 @@ pub(super) fn batch_poly_has_one(
         ids.dedup();
     }
 
-    let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection)?;
+    let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection, visited)?;
 
     // DB misses set the field to null; malformed / visited / unknown-collection
     // refs remain as raw strings.
@@ -151,17 +151,24 @@ pub(super) fn batch_poly_has_one(
 }
 
 /// Shared helper: fetch documents from multiple collections with cache support.
-/// Used by polymorphic batch population.
+/// Used by polymorphic batch population. `visited` is the ancestors' cycle
+/// guard, inherited by the recursive populate each target fetch performs.
 pub(super) fn batch_fetch_with_cache(
     ctx: &PopulateCtx<'_>,
     ids_by_collection: &HashMap<String, Vec<String>>,
+    visited: &HashSet<(String, String)>,
 ) -> Result<HashMap<String, HashMap<String, Document>>> {
     let mut fetched_map: HashMap<String, HashMap<String, Document>> = HashMap::new();
 
     for (col, col_ids) in ids_by_collection {
         if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            let doc_map = batch_fetch_single_collection(ctx, col, &item_def, col_ids)?;
+            let target = BatchTarget {
+                collection: col,
+                def: &item_def,
+                visited,
+            };
+            let doc_map = batch_fetch_single_collection(ctx, &target, col_ids)?;
 
             fetched_map.insert(col.clone(), doc_map);
         }

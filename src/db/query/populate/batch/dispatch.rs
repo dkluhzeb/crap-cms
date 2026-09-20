@@ -33,7 +33,8 @@ use crate::db::{
 use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
 use crate::db::query::populate::single::nested;
 
-use super::{nonpoly, poly};
+use super::nonpoly::{self, BatchTarget};
+use super::poly;
 
 /// Coerce a doc-field `Value` to the string form used as a join-key bucket
 /// label. Strings, numbers, and bools all become valid scalar keys; missing
@@ -103,9 +104,14 @@ fn populate_relationships_batch_cached_inner(
 }
 
 /// Core of the batch populate, taking a caller-seeded `visited` set so
-/// nested batch invocations (join children) inherit their ancestors' cycle
-/// guard. Seeds the current docs into `visited` itself.
-fn populate_batch_with_visited(
+/// nested batch invocations (join children, relationship targets) inherit
+/// their ancestors' cycle guard. Seeds the current docs into `visited` itself.
+///
+/// EVERY recursion site goes through here rather than through the public
+/// entry, which seeds a fresh empty set: a recursion that starts over cannot
+/// see the ancestors it came from, so a mutual reference expands once per
+/// remaining depth level instead of stopping at the first repeat.
+pub(super) fn populate_batch_with_visited(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
@@ -184,24 +190,16 @@ fn populate_flat_relationships(
                 None => continue,
             };
 
+            let target = BatchTarget {
+                collection: &rel.collection,
+                def: &rel_def,
+                visited,
+            };
+
             if rel.has_many {
-                nonpoly::batch_nonpoly_has_many(
-                    &pctx,
-                    docs,
-                    &field.name,
-                    &rel.collection,
-                    &rel_def,
-                    visited,
-                )?;
+                nonpoly::batch_nonpoly_has_many(&pctx, docs, &field.name, &target)?;
             } else {
-                nonpoly::batch_nonpoly_has_one(
-                    &pctx,
-                    docs,
-                    &field.name,
-                    &rel.collection,
-                    &rel_def,
-                    visited,
-                )?;
+                nonpoly::batch_nonpoly_has_one(&pctx, docs, &field.name, &target)?;
             }
         }
     }

@@ -28,17 +28,33 @@ pub(super) fn resolve_snapshot_value<'a>(
 /// Where a localized value sits in a snapshot: its flat column name
 /// (`group__field`), the group prefix (`group`, empty at the top level) and the
 /// field's own name.
-pub(super) type SnapshotKey<'k> = (&'k str, &'k str, &'k str);
+pub(crate) type SnapshotKey<'k> = (&'k str, &'k str, &'k str);
 
 /// A snapshot's per-locale values.
-pub(super) struct LocaleSnapshot<'a> {
+///
+/// The ONE resolver for "what does this snapshot hold for that locale", shared
+/// by everything that writes a snapshot back over a row and by the validation
+/// that judges what such a write will land — so the gate and the write can
+/// never disagree about which locales a snapshot carries.
+pub(crate) struct LocaleSnapshot<'a> {
     obj: &'a Map<String, Value>,
-    pub(super) config: &'a LocaleConfig,
+    pub(crate) config: &'a LocaleConfig,
 }
 
 impl<'a> LocaleSnapshot<'a> {
-    pub(super) fn new(obj: &'a Map<String, Value>, config: &'a LocaleConfig) -> Self {
+    pub(crate) fn new(obj: &'a Map<String, Value>, config: &'a LocaleConfig) -> Self {
         Self { obj, config }
+    }
+
+    /// The join rows (array / blocks / has-many) of `key` for `locale`:
+    /// strictly the decorated `{key}__{locale}` entry, with no bare-key
+    /// fallback. A snapshot records every configured locale's rows under its
+    /// own key, so one that carries none for a locale predates that recording
+    /// and the live rows are left alone — the bare key holds whichever locale
+    /// the snapshotted write was made under, and taking it would copy those
+    /// rows into another locale.
+    pub(crate) fn rows(&self, key: &str, locale: &str) -> Result<Option<&'a Value>> {
+        Ok(self.obj.get(&locale_column(key, locale)?))
     }
 
     /// The value of `key` for `locale`. EVERY locale prefers the decorated key
@@ -47,7 +63,7 @@ impl<'a> LocaleSnapshot<'a> {
     /// written before snapshots recorded every locale: it holds whichever
     /// locale the write that produced it was made under, so preferring it would
     /// copy (say) a German edit into the English column on restore.
-    pub(super) fn value(
+    pub(crate) fn value(
         &self,
         (base, prefix, field): SnapshotKey<'_>,
         locale: &str,

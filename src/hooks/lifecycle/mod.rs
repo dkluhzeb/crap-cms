@@ -18,7 +18,7 @@ pub use context::{
 pub(crate) use runner::run_effects_on_vm;
 pub use runner::{
     EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
-    PublishEventInput, RenderCrud, RenderInfo, RenderParams,
+    PublishEventInput, RenderCrud, RenderInfo, RenderParams, VmPoolExhausted,
 };
 pub use types::{
     DisplayConditionResult, FieldHookEvent, FileCleanupQueue, HookEvent, InitPhase, LuaCrudInfra,

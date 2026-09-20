@@ -1,272 +1,43 @@
-//! Post-registry validation of hook and access references (BUG-5).
+//! Whole-registry boot gates: the checks that fail the server rather than
+//! strand a definition at runtime.
 //!
-//! Operators write hook/access refs as plain strings in collection, global,
-//! and field definitions. Without this pass, a typo like
-//! `"hooks.field_hooks.slugifyy"` only surfaces at the first request that
-//! triggers the hook. This module walks the registry at startup, attempts
-//! to resolve every statically-known ref against the init-time Lua VM, and
-//! returns a single aggregated error listing every unresolved ref with its
-//! source location.
+//! - `hook_refs` — every statically-known hook/access/filter/validator ref
+//!   must resolve in the init-time Lua VM.
+//! - `routes` — custom routes registered via `crap.routes.register`.
+//! - `auth_methods` — per-collection `auth.methods` shape.
+//! - `default_sort` — admin default-sort fields.
+//! - This file — locale/field-name collisions, table-name collisions, job
+//!   cron schedules, `required_locales`, and the advisory warnings
+//!   (public lifecycle views, MCP reserved-argument shadowing).
 //!
-//! Scope: every statically-known ref — collection + global + field hooks,
-//! access rules, field display conditions, job handler/access refs, auth
-//! method refs (strategy `authenticate`, `mfa_deliver`), and the
-//! `[admin] access` config gate. Only dynamic registrations (via
-//! `crap.hooks.register`, which passes a live function rather than a
-//! string ref) have nothing to validate here.
-//!
-//! The module also hosts the other whole-registry boot gates that fail the
-//! server rather than strand a definition at runtime — locale/field-name
-//! collisions, table-name collisions, auth-method shape, and job cron
-//! schedules.
+//! Distinct from `lifecycle/validation/`, which runs per-write field
+//! validation.
 
+mod auth_methods;
 mod default_sort;
+mod hook_refs;
+mod pages;
+mod routes;
 
+pub use auth_methods::validate_auth_methods;
 pub use default_sort::validate_admin_default_sorts;
+pub use hook_refs::{validate_admin_access_ref, validate_hook_references};
+pub use pages::validate_pages;
+pub use routes::validate_routes;
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
 
 use anyhow::{Result, bail};
-use mlua::{Lua, LuaSerdeExt as _, Table, Value};
 use tracing::warn;
 
-use crate::admin::custom_routes::is_reserved_path;
 use crate::core::{
-    Access, FieldDefinition, FieldType, HookRef, Hooks, Registry, RequiredLocales, SchemaStep,
-    Slug,
-    collection::{Activation, AuthMethod, MfaMode, Surface},
-    walk_all_fields,
+    FieldDefinition, FieldType, Registry, RequiredLocales, SchemaStep, walk_all_fields,
 };
 use crate::db::query::helpers::{
     global_table, join_table, locale_column, prefixed_name, walk_leaf_fields,
 };
-use crate::hooks::lifecycle::resolve_hook_function;
-use crate::hooks::lua_api::routes::ROUTES_KEY;
 use crate::scheduler::parse_cron;
 use crate::service::op::wire::{self, WireSurfaces};
-
-/// Validate every statically-known hook and access reference in the registry.
-///
-/// Returns `Ok(())` when every ref resolves cleanly. Returns `Err` with a
-/// single aggregated message listing every unresolved ref and its source.
-///
-/// Must be called after `init_lua` so `require(...)` can locate modules
-/// under `{config_dir}/hooks/` (path configured by `setup_package_paths`).
-pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
-    let mut missing: Vec<String> = Vec::new();
-
-    for (slug, def) in &registry.collections {
-        check_hooks(
-            lua,
-            &def.hooks,
-            &format!("collection '{slug}'"),
-            &mut missing,
-        );
-        check_access(
-            lua,
-            &def.access,
-            &format!("collection '{slug}'"),
-            &mut missing,
-        );
-        check_field_list(
-            lua,
-            &def.fields,
-            &format!("collection '{slug}'"),
-            &mut missing,
-        );
-    }
-
-    for (slug, def) in &registry.globals {
-        check_hooks(lua, &def.hooks, &format!("global '{slug}'"), &mut missing);
-        check_access(lua, &def.access, &format!("global '{slug}'"), &mut missing);
-        check_field_list(lua, &def.fields, &format!("global '{slug}'"), &mut missing);
-    }
-
-    // Job handler + access refs resolve through the same
-    // `resolve_hook_function` mechanism as collection hooks, and jobs are
-    // init-only (the registry is immutable post-boot) — so a typo'd
-    // handler would otherwise only surface at the first scheduled run.
-    for (slug, def) in &registry.jobs {
-        if resolve_hook_function(lua, def.handler.reference()).is_err() {
-            missing.push(format!(
-                "job '{slug}': handler: '{}'",
-                def.handler.reference()
-            ));
-        }
-        if let Some(r) = &def.access
-            && resolve_hook_function(lua, r.reference()).is_err()
-        {
-            missing.push(format!("job '{slug}': access: '{}'", r.reference()));
-        }
-    }
-
-    // Auth method refs: a strategy's `authenticate` function and the
-    // `mfa_deliver` hook. `validate_auth_methods` checks their *shape*;
-    // this resolves them, so a typo fails to boot instead of stranding
-    // every login / MFA attempt at runtime.
-    for (slug, def) in &registry.collections {
-        let Some(auth) = &def.auth else { continue };
-        check_auth_method_refs(
-            lua,
-            &auth.methods,
-            &format!("collection '{slug}'"),
-            &mut missing,
-        );
-    }
-
-    if missing.is_empty() {
-        return Ok(());
-    }
-
-    let body = missing.join("\n  - ");
-    bail!(
-        "Unresolved hook/access references at startup:\n  - {body}\n\n\
-         Each line shows `source: kind: 'ref'`. Either create the Lua module/function, \
-         fix the typo, or remove the reference from the definition."
-    );
-}
-
-/// Validate custom routes registered via `crap.routes.register`: every handler
-/// and gated-access ref must resolve, no two routes may claim the same
-/// (method, path) — a collision would panic at router assembly — and the
-/// **mounted** path (`prefix` + `path`) must not fall under a reserved built-in
-/// prefix (a reserved `prefix` would otherwise crash router assembly even though
-/// each individual `path` passed the per-route check at registration). Runs on
-/// the init VM after `init.lua`.
-///
-/// Returns `Ok(())` when the registry is clean (or empty). Returns `Err` with an
-/// aggregated message otherwise.
-pub fn validate_routes(lua: &Lua, prefix: &str) -> Result<()> {
-    let Ok(routes): mlua::Result<Table> = lua.named_registry_value(ROUTES_KEY) else {
-        return Ok(());
-    };
-
-    let prefix = prefix.trim_end_matches('/');
-    let mut errors: Vec<String> = Vec::new();
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-
-    // A non-empty prefix must be a clean absolute path, else `Router::route`
-    // panics at assembly (e.g. `routes.prefix = "api"` → `"api/x"`).
-    if !prefix.is_empty()
-        && (!prefix.starts_with('/') || prefix.contains("..") || prefix.contains("//"))
-    {
-        errors.push(format!(
-            "routes.prefix {prefix:?} must be an absolute path with no '..' or '//' segments"
-        ));
-    }
-
-    for entry in routes.sequence_values::<Table>() {
-        let Ok(entry) = entry else { continue };
-        let path: String = entry.get("path").unwrap_or_default();
-        let methods = entry
-            .get::<Table>("methods")
-            .map(|t| t.sequence_values::<String>().flatten().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let label = format!("{} {path}", methods.join(","));
-
-        // The mounted path (prefix + path) must not land under a reserved
-        // built-in prefix — a reserved `prefix` slips past the per-route check
-        // and would panic at router assembly.
-        if !prefix.is_empty() && is_reserved_path(&format!("{prefix}{path}")) {
-            errors.push(format!(
-                "route '{label}': mounted path '{prefix}{path}' collides with a reserved prefix \
-                 (change routes.prefix or the route path)"
-            ));
-        }
-
-        // A GET route also answers HEAD (mount ORs it in), so GET occupies the
-        // HEAD slot too. Account for that here so a separate HEAD registration
-        // on the same path is reported as a duplicate instead of panicking at
-        // router assembly when the two MethodRouters merge.
-        let mut occupied: Vec<String> = methods.clone();
-        if methods.iter().any(|m| m == "GET") && !methods.iter().any(|m| m == "HEAD") {
-            occupied.push("HEAD".to_string());
-        }
-        for m in &occupied {
-            if !seen.insert((m.clone(), path.clone())) {
-                errors.push(format!(
-                    "duplicate route: {m} {path} (note: a GET route also answers HEAD)"
-                ));
-            }
-        }
-
-        check_route_ref(lua, &entry, "handler", &label, &mut errors);
-
-        // `access` is a ref only when gated (not nil / true / false).
-        if let Ok(v @ (Value::String(_) | Value::Table(_))) = entry.get::<Value>("access") {
-            check_resolvable(lua, v, "access", &label, &mut errors);
-        }
-    }
-
-    if errors.is_empty() {
-        return Ok(());
-    }
-
-    let body = errors.join("\n  - ");
-    bail!(
-        "Custom route problems at startup:\n  - {body}\n\n\
-         Create the Lua handler/access module, fix the typo, or remove the route."
-    );
-}
-
-/// Resolve a required ref field (`handler`) on a route entry.
-fn check_route_ref(lua: &Lua, entry: &Table, field: &str, label: &str, out: &mut Vec<String>) {
-    match entry.get::<Value>(field) {
-        Ok(v) => check_resolvable(lua, v, field, label, out),
-        Err(_) => out.push(format!("route '{label}': missing {field}")),
-    }
-}
-
-/// Decode a value as a `HookRef` and confirm it resolves to a Lua function.
-fn check_resolvable(lua: &Lua, value: Value, field: &str, label: &str, out: &mut Vec<String>) {
-    match lua.from_value::<HookRef>(value) {
-        Ok(hook_ref) => {
-            if resolve_hook_function(lua, hook_ref.reference()).is_err() {
-                out.push(format!(
-                    "route '{label}': {field} '{}'",
-                    hook_ref.reference()
-                ));
-            }
-        }
-        Err(e) => out.push(format!("route '{label}': invalid {field} ref: {e}")),
-    }
-}
-
-/// Collect any unresolved refs in a `Hooks` struct.
-fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
-    // Exhaustive destructuring: a new hook slot on
-    // `Hooks` fails to compile HERE until this validator learns it.
-    let Hooks {
-        before_validate,
-        before_change,
-        after_change,
-        before_read,
-        after_read,
-        before_delete,
-        after_delete,
-        before_broadcast,
-    } = hooks;
-
-    let pairs: [(&str, &[HookRef]); 8] = [
-        ("before_validate", before_validate),
-        ("before_change", before_change),
-        ("after_change", after_change),
-        ("before_read", before_read),
-        ("after_read", after_read),
-        ("before_delete", before_delete),
-        ("after_delete", after_delete),
-        ("before_broadcast", before_broadcast),
-    ];
-
-    for (kind, refs) in pairs {
-        for r in refs {
-            if resolve_hook_function(lua, r.reference()).is_err() {
-                out.push(format!("{source}: {kind}: '{}'", r.reference()));
-            }
-        }
-    }
-}
 
 /// Validate every job's cron `schedule`.
 ///
@@ -302,196 +73,6 @@ pub fn validate_job_schedules(registry: &Registry) -> Result<()> {
          with Sunday = 0 (7 also means Sunday); names such as MON-FRI also work.",
         errors.join("\n  - ")
     );
-}
-
-/// Validate per-collection `auth.methods` configurations.
-///
-/// Hard errors (boot fails):
-/// - `enabled = true` with no methods listed.
-/// - Duplicate `password_login` or `bearer` on one collection.
-/// - Any method with an empty `surfaces` set — would silently
-///   never fire on any request, almost certainly a config mistake.
-/// - Strategy with `activates_on = { header = "" }` — would
-///   silently never match (no HTTP header has an empty name).
-/// - Strategy with empty `authenticate` — no Lua hook to invoke.
-///
-/// Soft warnings (logged, boot continues):
-/// - `Always`-activated strategies (potential footgun — fires on
-///   every request that reaches the surface).
-/// - Multiple `Always` strategies sharing a surface (request-
-///   authentication outcome depends on registration order).
-pub fn validate_auth_methods(registry: &Registry) -> Result<()> {
-    let mut errors: Vec<String> = Vec::new();
-    let mut always_by_surface: HashMap<Surface, Vec<(String, String)>> = HashMap::new();
-
-    for (slug, def) in &registry.collections {
-        let Some(auth) = def.auth.as_ref() else {
-            continue;
-        };
-        if !auth.enabled {
-            continue;
-        }
-        if auth.methods.is_empty() {
-            errors.push(format!(
-                "collection '{slug}': auth.enabled is true but auth.methods is empty. \
-                 Use crap.auth.default_methods() for the standard set."
-            ));
-            continue;
-        }
-        check_one_collection_methods(slug, &auth.methods, &mut errors, &mut always_by_surface);
-    }
-
-    warn_on_always_cross_collection_collisions(&always_by_surface);
-
-    if errors.is_empty() {
-        return Ok(());
-    }
-    bail!(
-        "Auth method configuration errors:\n  - {}",
-        errors.join("\n  - ")
-    );
-}
-
-/// Walk a single collection's methods, collecting per-method shape
-/// errors and tracking `Always`-active strategies for the cross-
-/// collection collision warning emitted by the caller.
-fn check_one_collection_methods(
-    slug: &Slug,
-    methods: &[AuthMethod],
-    errors: &mut Vec<String>,
-    always_by_surface: &mut HashMap<Surface, Vec<(String, String)>>,
-) {
-    let mut password_count = 0;
-    let mut bearer_count = 0;
-    for m in methods {
-        if let Some(s) = method_surfaces(m)
-            && s.is_empty()
-        {
-            errors.push(format!(
-                "collection '{slug}': method has empty `surfaces` list — \
-                 it can never fire. Drop the method or list at least one surface."
-            ));
-        }
-        match m {
-            AuthMethod::PasswordLogin {
-                mfa, mfa_deliver, ..
-            } => {
-                password_count += 1;
-
-                // `custom` MFA and its delivery hook come as a PAIR — a custom
-                // mode with no hook strands every login (no code delivered), a
-                // hook without the mode is silently dead config.
-                if *mfa == MfaMode::Custom && mfa_deliver.is_none() {
-                    errors.push(format!(
-                        "Collection '{slug}': mfa = \"custom\" requires an mfa_deliver hook"
-                    ));
-                }
-                if *mfa != MfaMode::Custom && mfa_deliver.is_some() {
-                    errors.push(format!(
-                        "Collection '{slug}': mfa_deliver is only valid with mfa = \"custom\" (got mfa = \"{}\")",
-                        match mfa {
-                            MfaMode::Email => "email",
-                            MfaMode::Off => "false",
-                            MfaMode::Custom => unreachable!(),
-                            MfaMode::Totp => "totp",
-                        }
-                    ));
-                }
-            }
-            AuthMethod::Bearer { .. } => bearer_count += 1,
-            AuthMethod::Strategy {
-                name,
-                authenticate,
-                activates_on,
-                surfaces,
-            } => check_strategy_shape(
-                slug,
-                name,
-                authenticate.reference(),
-                activates_on,
-                surfaces,
-                errors,
-                always_by_surface,
-            ),
-            AuthMethod::SessionCookie { .. } => {}
-        }
-    }
-    if password_count > 1 {
-        errors.push(format!(
-            "collection '{slug}': multiple password_login methods declared (one is enough)."
-        ));
-    }
-    if bearer_count > 1 {
-        errors.push(format!(
-            "collection '{slug}': multiple bearer methods declared (one is enough)."
-        ));
-    }
-}
-
-fn method_surfaces(m: &AuthMethod) -> Option<&crate::core::collection::SurfaceSet> {
-    match m {
-        AuthMethod::PasswordLogin { .. } => None,
-        AuthMethod::Bearer { surfaces }
-        | AuthMethod::SessionCookie { surfaces }
-        | AuthMethod::Strategy { surfaces, .. } => Some(surfaces),
-    }
-}
-
-fn check_strategy_shape(
-    slug: &Slug,
-    name: &str,
-    authenticate: &str,
-    activates_on: &Activation,
-    surfaces: &crate::core::collection::SurfaceSet,
-    errors: &mut Vec<String>,
-    always_by_surface: &mut HashMap<Surface, Vec<(String, String)>>,
-) {
-    if authenticate.trim().is_empty() {
-        errors.push(format!(
-            "collection '{slug}': strategy '{name}' has empty `authenticate` \
-             — no Lua hook to invoke."
-        ));
-    }
-    if let Activation::Header { header } = activates_on
-        && header.trim().is_empty()
-    {
-        errors.push(format!(
-            "collection '{slug}': strategy '{name}' has empty \
-             `activates_on.header` — no HTTP header has an empty \
-             name, so the strategy could never fire."
-        ));
-    }
-    if matches!(activates_on, Activation::Always { .. }) {
-        warn!(
-            "collection '{slug}': strategy '{name}' is always-active on every request. \
-             Consider a header discriminator for safer scoping."
-        );
-        for surface in surfaces {
-            always_by_surface
-                .entry(*surface)
-                .or_default()
-                .push((slug.to_string(), name.to_string()));
-        }
-    }
-}
-
-fn warn_on_always_cross_collection_collisions(
-    always_by_surface: &HashMap<Surface, Vec<(String, String)>>,
-) {
-    for (surface, owners) in always_by_surface {
-        if owners.len() > 1 {
-            let list = owners
-                .iter()
-                .map(|(s, n)| format!("'{s}'.'{n}'"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            warn!(
-                "multiple always-active strategies on surface {surface:?}: {list}. \
-                 Request authentication may depend on registration order — prefer \
-                 header discriminators."
-            );
-        }
-    }
 }
 
 /// Warn when `default_deny = false` leaves a draft or trash view ungated. With
@@ -579,6 +160,10 @@ pub fn warn_mcp_reserved_field_shadowing(registry: &Registry, mcp_enabled: bool)
 /// pattern `{field}__{locale}`. If a user defines a literal field named
 /// `title__en` while `en` is a configured locale, the generated localized
 /// column for `title` would be `title__en` — a silent collision. Fail startup.
+///
+/// # Errors
+///
+/// Returns an aggregated error naming every colliding field.
 pub fn validate_locale_field_collisions(registry: &Registry, locales: &[String]) -> Result<()> {
     if locales.is_empty() {
         return Ok(());
@@ -646,6 +231,8 @@ fn walk_fields_for_collisions(
 /// through groups, blocks, tabs). `All` is always valid (it expands to the
 /// configured set). A `List` code must be a configured locale; setting any
 /// `required_locales` while localization is disabled is also rejected.
+///
+/// # Errors
 ///
 /// Returns `Err` with a single aggregated message listing every offending
 /// setting and its source.
@@ -775,6 +362,10 @@ fn walk_fields_for_required_locales(
 /// slugged `posts_tags` collides with the `tags` array field of a `posts`
 /// collection — and the migration layer would then silently ALTER one table as
 /// if it were the other. Reject the collision up front instead.
+///
+/// # Errors
+///
+/// Returns an aggregated error naming every colliding table name.
 pub fn validate_table_name_collisions(registry: &Registry) -> Result<()> {
     let mut owners: HashMap<String, String> = HashMap::new();
     let mut conflicts: Vec<String> = Vec::new();
@@ -877,258 +468,11 @@ fn collect_field_tables(
     });
 }
 
-/// Collect any unresolved refs in an `Access` struct.
-fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>) {
-    // Exhaustive destructuring: a new access key on
-    // `Access` fails to compile HERE until this validator learns it.
-    let Access {
-        read,
-        create,
-        update,
-        delete,
-        trash,
-        draft,
-        versions,
-        unlock,
-        admin,
-        mcp,
-    } = access;
-
-    let pairs: [(&str, Option<&str>); 10] = [
-        ("access.read", read.as_ref().map(HookRef::reference)),
-        ("access.create", create.as_ref().map(HookRef::reference)),
-        ("access.update", update.as_ref().map(HookRef::reference)),
-        ("access.delete", delete.as_ref().map(HookRef::reference)),
-        ("access.trash", trash.as_ref().map(HookRef::reference)),
-        ("access.draft", draft.as_ref().map(HookRef::reference)),
-        ("access.versions", versions.as_ref().map(HookRef::reference)),
-        ("access.unlock", unlock.as_ref().map(HookRef::reference)),
-        ("access.admin", admin.as_ref().map(HookRef::reference)),
-        ("access.mcp", mcp.as_ref().map(HookRef::reference)),
-    ];
-
-    for (kind, maybe_ref) in pairs {
-        let Some(r) = maybe_ref else { continue };
-        if resolve_hook_function(lua, r).is_err() {
-            out.push(format!("{source}: {kind}: '{r}'"));
-        }
-    }
-}
-
-/// Render the `{source} field 'a' block 'b' …` source label for a field from
-/// its [`SchemaStep`] ancestor chain.
-/// Resolve the Lua refs carried by auth methods: `Strategy.authenticate`
-/// and `PasswordLogin.mfa_deliver`. The other method kinds carry no refs.
-fn check_auth_method_refs(lua: &Lua, methods: &[AuthMethod], source: &str, out: &mut Vec<String>) {
-    for m in methods {
-        match m {
-            AuthMethod::Strategy {
-                name, authenticate, ..
-            } if resolve_hook_function(lua, authenticate.reference()).is_err() => {
-                out.push(format!(
-                    "{source}: auth strategy '{name}' authenticate: '{}'",
-                    authenticate.reference()
-                ));
-            }
-            AuthMethod::PasswordLogin {
-                mfa_deliver: Some(r),
-                ..
-            } if resolve_hook_function(lua, r.reference()).is_err() => {
-                out.push(format!("{source}: mfa_deliver: '{}'", r.reference()));
-            }
-            // Exhaustive on purpose: a new AuthMethod
-            // variant fails to compile HERE until this validator decides
-            // whether it carries resolvable refs.
-            AuthMethod::Strategy { .. }
-            | AuthMethod::PasswordLogin { .. }
-            | AuthMethod::Bearer { .. }
-            | AuthMethod::SessionCookie { .. } => {}
-        }
-    }
-}
-
-/// Resolve the `[admin] access` config gate ref. The runtime gate fails
-/// CLOSED on an unresolvable ref — correct, but that means a typo locks
-/// every user (the operator included) out of the admin panel. Failing the
-/// boot with the ref named is the BUG-5 standard.
-///
-/// # Errors
-///
-/// Returns `Err` naming the ref when it does not resolve.
-pub fn validate_admin_access_ref(lua: &Lua, admin_access: Option<&HookRef>) -> Result<()> {
-    let Some(r) = admin_access else {
-        return Ok(());
-    };
-
-    if resolve_hook_function(lua, r.reference()).is_err() {
-        bail!(
-            "[admin] access = '{}' does not resolve to a Lua function — \
-             the admin gate fails closed, so this would lock everyone out \
-             of the admin panel. Fix the ref or remove the setting.",
-            r.reference()
-        );
-    }
-
-    Ok(())
-}
-
-fn field_source_label(source: &str, path: &[SchemaStep<'_>], field: &FieldDefinition) -> String {
-    let mut label = String::from(source);
-
-    for step in path {
-        match step {
-            SchemaStep::Field(f) => {
-                let _ = write!(label, " field '{}'", f.name);
-            }
-            SchemaStep::Block(b) => {
-                let _ = write!(label, " block '{}'", b.block_type);
-            }
-            SchemaStep::Tab { index, tab } => {
-                let _ = write!(label, " tab #{} ('{}')", index, tab.label);
-            }
-        }
-    }
-
-    let _ = write!(label, " field '{}'", field.name);
-    label
-}
-
-/// Walk a field list (including layout wrappers, groups, arrays, blocks, tabs)
-/// and collect every unresolved field hook / access reference.
-fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &mut Vec<String>) {
-    walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
-        let field_src = field_source_label(source, path, f);
-
-        // field-level hooks — exhaustively destructured: a new field-hook slot fails to compile here.
-        let crate::core::FieldHooks {
-            before_validate,
-            before_change,
-            after_change,
-            after_read,
-        } = &f.hooks;
-        let hook_pairs: [(&str, &[HookRef]); 4] = [
-            ("before_validate", before_validate),
-            ("before_change", before_change),
-            ("after_change", after_change),
-            ("after_read", after_read),
-        ];
-        for (kind, refs) in hook_pairs {
-            for r in refs {
-                if resolve_hook_function(lua, r.reference()).is_err() {
-                    out.push(format!("{field_src}: {kind}: '{}'", r.reference()));
-                }
-            }
-        }
-
-        // field-level access
-        let access_pairs: [(&str, Option<&str>); 3] = [
-            (
-                "access.read",
-                f.access.read.as_ref().map(HookRef::reference),
-            ),
-            (
-                "access.create",
-                f.access.create.as_ref().map(HookRef::reference),
-            ),
-            (
-                "access.update",
-                f.access.update.as_ref().map(HookRef::reference),
-            ),
-        ];
-        for (kind, maybe_ref) in access_pairs {
-            let Some(r) = maybe_ref else { continue };
-            if resolve_hook_function(lua, r).is_err() {
-                out.push(format!("{field_src}: {kind}: '{r}'"));
-            }
-        }
-
-        // display condition — always a function ref (inline tables are
-        // not accepted on `admin.condition`)
-        if let Some(r) = &f.admin.condition
-            && resolve_hook_function(lua, r.reference()).is_err()
-        {
-            out.push(format!("{field_src}: admin.condition: '{}'", r.reference()));
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use mlua::{Lua, LuaOptions, StdLib};
-
-    use crate::core::{
-        Access, CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition, Hooks,
-        Registry, job::JobDefinition,
-    };
+    use crate::core::{CollectionDefinition, GlobalDefinition, job::JobDefinition};
 
     use super::*;
-
-    fn sandboxed_lua() -> Lua {
-        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
-        crate::hooks::sandbox_lua(&lua).unwrap();
-        lua
-    }
-
-    /// Missing ref surfaces at startup with collection + kind in the message.
-    #[test]
-    fn validate_hook_references_reports_missing_collection_hook() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("posts");
-        def.hooks = Hooks::builder()
-            .before_change(vec![HookRef::new("hooks.missing.module")])
-            .build();
-
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("posts"), "expected slug in msg: {msg}");
-        assert!(msg.contains("before_change"), "expected kind in msg: {msg}");
-        assert!(
-            msg.contains("hooks.missing.module"),
-            "expected ref in msg: {msg}"
-        );
-    }
-
-    /// Missing field-level access ref surfaces with the field name too.
-    #[test]
-    fn validate_hook_references_reports_missing_field_access() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("posts");
-        let mut field = FieldDefinition::builder("title", FieldType::Text).build();
-        field.access.read = Some(HookRef::new("hooks.never.exists"));
-        def.fields = vec![field];
-
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("title"), "expected field name: {msg}");
-        assert!(msg.contains("access.read"), "expected kind: {msg}");
-        assert!(msg.contains("hooks.never.exists"), "expected ref: {msg}");
-    }
-
-    /// A job whose handler ref does not resolve fails the boot with the
-    /// job slug and ref named. (Jobs previously escaped validation on the
-    /// stale assumption that they resolve through a different mechanism —
-    /// they use the same `resolve_hook_function` as collection hooks.)
-    #[test]
-    fn validate_hook_references_reports_missing_job_handler() {
-        let lua = sandboxed_lua();
-        let registry = Registry::shared();
-        registry
-            .write()
-            .unwrap()
-            .register_job(JobDefinition::builder("cleanup", "jobs.cleanup.runn").build());
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("job 'cleanup'"), "expected job slug: {msg}");
-        assert!(msg.contains("handler"), "expected kind: {msg}");
-        assert!(msg.contains("jobs.cleanup.runn"), "expected ref: {msg}");
-    }
 
     /// Regression: an unparseable `schedule` used to be a per-tick `warn!`
     /// only — the job silently never ran for the life of the deployment.
@@ -1168,119 +512,6 @@ mod tests {
         }
 
         validate_job_schedules(&registry.read().unwrap()).expect("crontab schedules must parse");
-    }
-
-    /// A job access ref that does not resolve is reported too.
-    #[test]
-    fn validate_hook_references_reports_missing_job_access() {
-        let lua = sandboxed_lua();
-        let mut job = JobDefinition::builder("cleanup", "jobs.cleanup.runn").build();
-        job.access = Some(HookRef::new("hooks.access.adminz"));
-        let registry = Registry::shared();
-        registry.write().unwrap().register_job(job);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("job 'cleanup': access: 'hooks.access.adminz'"),
-            "expected job access line: {msg}"
-        );
-    }
-
-    /// A strategy `authenticate` ref that does not resolve fails the boot.
-    #[test]
-    fn validate_hook_references_reports_missing_strategy_authenticate() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("users");
-        let mut auth = Auth::enabled();
-        auth.methods.push(AuthMethod::Strategy {
-            name: "api-key".to_string(),
-            authenticate: HookRef::new("hooks.auth.api_keyy"),
-            activates_on: Activation::Always { always: true },
-            surfaces: SurfaceSet::all(),
-        });
-        def.auth = Some(auth);
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("auth strategy 'api-key'"),
-            "expected strategy name: {msg}"
-        );
-        assert!(msg.contains("hooks.auth.api_keyy"), "expected ref: {msg}");
-    }
-
-    /// An `mfa_deliver` ref that does not resolve fails the boot.
-    #[test]
-    fn validate_hook_references_reports_missing_mfa_deliver() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("users");
-        let mut auth = Auth::enabled();
-        for m in &mut auth.methods {
-            if let AuthMethod::PasswordLogin {
-                mfa, mfa_deliver, ..
-            } = m
-            {
-                *mfa = MfaMode::Custom;
-                *mfa_deliver = Some(HookRef::new("hooks.send_smss"));
-            }
-        }
-        def.auth = Some(auth);
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("mfa_deliver"), "expected kind: {msg}");
-        assert!(msg.contains("hooks.send_smss"), "expected ref: {msg}");
-    }
-
-    /// A field display-condition ref that does not resolve fails the boot.
-    #[test]
-    fn validate_hook_references_reports_missing_condition() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("posts");
-        let mut field = FieldDefinition::builder("url", FieldType::Text).build();
-        field.admin.condition = Some(HookRef::new("hooks.conditions.show_urll"));
-        def.fields = vec![field];
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("admin.condition"), "expected kind: {msg}");
-        assert!(
-            msg.contains("hooks.conditions.show_urll"),
-            "expected ref: {msg}"
-        );
-    }
-
-    /// A typo'd `[admin] access` ref fails the boot instead of locking
-    /// everyone out at runtime (the gate fails closed).
-    #[test]
-    fn validate_admin_access_ref_reports_missing_ref() {
-        let lua = sandboxed_lua();
-        let r = HookRef::new("access.admin_panle");
-
-        let err = validate_admin_access_ref(&lua, Some(&r)).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("access.admin_panle"), "expected ref: {msg}");
-        assert!(msg.contains("lock"), "expected consequence: {msg}");
-
-        validate_admin_access_ref(&lua, None).expect("absent gate is fine");
-    }
-
-    /// A clean registry (no hook refs) validates without error.
-    #[test]
-    fn validate_hook_references_passes_when_no_refs() {
-        let lua = sandboxed_lua();
-        let def = CollectionDefinition::new("posts");
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        validate_hook_references(&lua, &registry.read().unwrap()).expect("no refs means no errors");
     }
 
     /// A field literally named `{name}__{locale}` collides with the generated
@@ -1438,174 +669,6 @@ mod tests {
 
         validate_table_name_collisions(&registry.read().unwrap())
             .expect("distinct names must not collide");
-    }
-
-    /// Access refs on the collection are checked too.
-    #[test]
-    fn validate_hook_references_reports_missing_collection_access() {
-        let lua = sandboxed_lua();
-        let mut def = CollectionDefinition::new("posts");
-        def.access = Access::builder()
-            .read(Some(HookRef::new("hooks.gone")))
-            .build();
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(def);
-
-        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("access.read"), "expected kind: {msg}");
-        assert!(msg.contains("hooks.gone"), "expected ref: {msg}");
-    }
-
-    // ── validate_auth_methods footgun tests ────────────────────────
-
-    use crate::core::collection::{Activation, Auth, AuthMethod, SurfaceSet};
-
-    fn auth_def(slug: &str, methods: Vec<AuthMethod>) -> CollectionDefinition {
-        let mut def = CollectionDefinition::new(slug);
-        def.auth = Some(Auth {
-            enabled: true,
-            methods,
-            ..Default::default()
-        });
-        def
-    }
-
-    /// The `mfa = "custom"` mode and its `mfa_deliver` hook come as a pair —
-    /// both halves of the pairing are startup errors on their own.
-    #[test]
-    fn validate_auth_methods_enforces_custom_mfa_deliver_pairing() {
-        use crate::core::collection::MfaMode;
-
-        // custom without deliver → error
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login_builder()
-                    .mfa(MfaMode::Custom)
-                    .build(),
-                AuthMethod::bearer(),
-            ],
-        ));
-        let msg = format!(
-            "{:#}",
-            validate_auth_methods(&registry.read().unwrap()).unwrap_err()
-        );
-        assert!(msg.contains("requires an mfa_deliver hook"), "{msg}");
-
-        // deliver without custom → error
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login_builder()
-                    .mfa(MfaMode::Email)
-                    .mfa_deliver(Some(HookRef::new("hooks.mfa.send")))
-                    .build(),
-                AuthMethod::bearer(),
-            ],
-        ));
-        let msg = format!(
-            "{:#}",
-            validate_auth_methods(&registry.read().unwrap()).unwrap_err()
-        );
-        assert!(msg.contains("only valid with mfa = \"custom\""), "{msg}");
-
-        // the valid pair passes
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login_builder()
-                    .mfa(MfaMode::Custom)
-                    .mfa_deliver(Some(HookRef::new("hooks.mfa.send")))
-                    .build(),
-                AuthMethod::bearer(),
-            ],
-        ));
-        validate_auth_methods(&registry.read().unwrap()).expect("valid pairing passes");
-    }
-
-    #[test]
-    fn validate_auth_methods_rejects_empty_surfaces() {
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login(),
-                AuthMethod::Bearer {
-                    surfaces: SurfaceSet::from_list(vec![]),
-                },
-            ],
-        ));
-        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("empty `surfaces`"),
-            "expected empty-surfaces error: {msg}"
-        );
-    }
-
-    #[test]
-    fn validate_auth_methods_rejects_empty_header_activation() {
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login(),
-                AuthMethod::bearer(),
-                AuthMethod::Strategy {
-                    name: "bogus".to_string(),
-                    authenticate: HookRef::new("hooks.auth.bogus"),
-                    activates_on: Activation::Header {
-                        header: "  ".to_string(),
-                    },
-                    surfaces: SurfaceSet::admin_only(),
-                },
-            ],
-        ));
-        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("empty") && msg.contains("activates_on.header"),
-            "expected empty-header error: {msg}"
-        );
-    }
-
-    #[test]
-    fn validate_auth_methods_rejects_empty_authenticate_ref() {
-        let registry = Registry::shared();
-        registry.write().unwrap().register_collection(auth_def(
-            "users",
-            vec![
-                AuthMethod::password_login(),
-                AuthMethod::bearer(),
-                AuthMethod::Strategy {
-                    name: "incomplete".to_string(),
-                    authenticate: HookRef::new(""),
-                    activates_on: Activation::always(),
-                    surfaces: SurfaceSet::admin_only(),
-                },
-            ],
-        ));
-        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("empty `authenticate`"),
-            "expected empty-authenticate error: {msg}"
-        );
-    }
-
-    #[test]
-    fn validate_auth_methods_accepts_well_formed_default_set() {
-        let registry = Registry::shared();
-        registry
-            .write()
-            .unwrap()
-            .register_collection(auth_def("users", Auth::default_methods()));
-        validate_auth_methods(&registry.read().unwrap())
-            .expect("default methods should pass validation");
     }
 
     // ── required_locales validation ──────────────────────────────────────

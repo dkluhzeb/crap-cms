@@ -208,6 +208,9 @@ pub(crate) fn update_document_in_conn(
         .ui_locale(ui_locale)
         .build();
 
+    // A publish writes the draft's other locales back over the row after this
+    // validation, so the completeness gate judges that snapshot rather than the
+    // locales it is about to replace.
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(id))
         .draft(is_draft)
@@ -216,6 +219,7 @@ pub(crate) fn update_document_in_conn(
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
         .ui_locale(input.ui_locale.as_deref())
+        .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;

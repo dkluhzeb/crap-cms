@@ -9,10 +9,10 @@ use crate::{
     core::{DocumentFields, flatten_group_fields},
     db::query::{
         LocaleContext, LocaleMode,
-        helpers::locale_column,
         join::save_join_table_data,
         versions::{
-            localized_join_keys, restore::row::RestoreRow,
+            localized_join_keys,
+            restore::{locale_snapshot::LocaleSnapshot, row::RestoreRow},
             snapshot::collect_join_data_from_snapshot,
         },
     },
@@ -64,11 +64,13 @@ fn restore_localized_join_rows(
     locale_config: &LocaleConfig,
     keys: &[String],
 ) -> Result<()> {
+    let snapshot = LocaleSnapshot::new(obj, locale_config);
+
     for locale in &locale_config.locales {
         let mut data = DocumentFields::new();
 
         for key in keys {
-            if let Some(rows) = obj.get(&locale_column(key, locale)?) {
+            if let Some(rows) = snapshot.rows(key, locale)? {
                 data.insert(key.clone(), rows.clone());
             }
         }

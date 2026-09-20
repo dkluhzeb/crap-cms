@@ -84,6 +84,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
 
     // Custom route handler/access refs must resolve and not collide — fail to
     // boot rather than 500 (or panic at router assembly) on first request.
+    super::startup_checks::validate_pages(&lua).context("Custom page validation failed")?;
     super::startup_checks::validate_routes(&lua, &config.routes.prefix)
         .context("Custom route validation failed")?;
 

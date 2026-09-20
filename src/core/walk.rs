@@ -55,6 +55,8 @@
 //! `serde_json::Map`, or an event payload; nested composites are always
 //! `serde_json::Map`.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
@@ -374,6 +376,25 @@ pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinit
         }
     }
     result
+}
+
+/// The top-level keys a write may address on a document of `fields`.
+///
+/// The flatten above answers "which names are addressable at the top level"
+/// (layout wrappers are transparent, so their sub-fields count); this narrows
+/// that to the names a write can actually store, by dropping the virtual
+/// [`FieldType::Join`] fields — a `Join` has no column and no join table, so a
+/// value sent for one is discarded by the write pipeline. Surfaces that reject
+/// unknown keys share this ONE predicate so a `Join`-named key is reported as
+/// unknown instead of being silently dropped on one surface and rejected on
+/// another.
+#[must_use]
+pub fn writable_field_names(fields: &[FieldDefinition]) -> HashSet<&str> {
+    flatten_array_sub_fields(fields)
+        .into_iter()
+        .filter(|f| f.field_type.is_writable())
+        .map(|f| f.name.as_str())
+        .collect()
 }
 
 /// Build a prefixed column name: `"prefix__name"`, or just `"name"` when prefix

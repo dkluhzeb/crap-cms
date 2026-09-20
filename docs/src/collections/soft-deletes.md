@@ -181,10 +181,11 @@ All read queries automatically append `AND _deleted_at IS NULL` to exclude trash
 ## Notes
 
 - Soft-deleted documents retain all join table data (arrays, blocks, relationships) — nothing is cascaded
-- FTS index entries are removed on soft-delete and re-synced on restore
+- A soft-deleted document keeps its full-text index entry (the trash view is searchable); search on the live view excludes trashed rows by their `_deleted_at`, and a restore needs no re-index
 - Upload files are kept on disk until the document is permanently purged
 - Version history is preserved through soft-delete and restore
 - Back-reference warnings still appear on the delete confirmation for upload/media collections
+- Restoring from the trash runs the lifecycle hooks like every other write — `before_change`/`after_change` with `ctx.operation = "undelete"` and `ctx.data` = the stored document; a `before_change` error keeps the document trashed.
 
 ## Enabling soft deletes on an existing collection
 

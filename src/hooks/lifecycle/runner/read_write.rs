@@ -386,6 +386,7 @@ impl HookRunner {
             collection_required_locales: ctx.collection_required_locales,
             user: ctx.user,
             ui_locale: ctx.ui_locale,
+            locale_overlay: ctx.locale_overlay,
         };
         validate_fields_inner(&lua, fields, data, &enriched_ctx)
     }

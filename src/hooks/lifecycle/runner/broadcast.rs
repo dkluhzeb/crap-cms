@@ -224,8 +224,10 @@ impl HookRunner {
     }
 
     /// Publish a mutation event: check live setting → run `before_broadcast` hooks → `transport.publish()`.
-    /// Spawns into a background task (non-blocking, like `fire_after_event`).
-    /// Untestable: spawns `tokio::task::spawn_blocking` for async event dispatch.
+    ///
+    /// Runs INLINE on the calling thread — callers are already on a blocking
+    /// thread (`spawn_blocking` in the gRPC/admin handlers), so a nested
+    /// blocking task would only compete for the same pool.
     #[cfg(not(tarpaulin_include))]
     pub fn publish_event(
         &self,
@@ -245,7 +247,7 @@ impl HookRunner {
     }
 }
 
-/// Background worker for [`HookRunner::publish_event`]:
+/// The body of [`HookRunner::publish_event`], run on the caller's thread:
 /// check live setting → run `before_broadcast` hooks → `transport.publish()`.
 fn publish_event_blocking(
     runner: &HookRunner,

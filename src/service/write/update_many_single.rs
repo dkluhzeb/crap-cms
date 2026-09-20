@@ -56,6 +56,9 @@ pub(crate) fn update_many_single_in_conn(
         .ui_locale(input.ui_locale.as_deref())
         .build();
 
+    // Same rule as the single-document update: a publish writes the draft's
+    // other locales back after validation, so completeness judges that
+    // snapshot and not the locales it replaces.
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(id))
         .draft(is_draft)
@@ -64,6 +67,7 @@ pub(crate) fn update_many_single_in_conn(
         .collection_required_locales(def.required_locales.as_ref())
         .user(ctx.user)
         .ui_locale(input.ui_locale.as_deref())
+        .locale_overlay(publishing_draft.as_ref().and_then(Value::as_object))
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;

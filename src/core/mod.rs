@@ -48,6 +48,7 @@ pub mod email;
 pub mod event;
 pub mod field;
 pub mod field_denial;
+pub mod fs;
 pub mod group_repr;
 pub mod hex;
 pub mod hook_ref;
@@ -92,6 +93,7 @@ pub use field::{
 };
 pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
+pub use fs::write_atomically;
 pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
@@ -117,6 +119,7 @@ pub(crate) use walk::{
 };
 pub use walk::{
     NestStep, VisitAction, any_field, flatten_array_sub_fields, walk_nested, walk_nested_mut,
+    writable_field_names,
 };
 
 // Namespace-module exception: `Shared*` handle types (Arc-wrapped

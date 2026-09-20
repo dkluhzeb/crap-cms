@@ -1061,6 +1061,7 @@ function crap.collections.unpublish(collection, id, opts) end
 --- Optional options for `crap.collections.undelete`.
 --- @class crap.UndeleteOptions
 --- @field override_access? boolean Skip access control checks (default: `false`).
+--- @field hooks? boolean Run lifecycle hooks (default: `true`), as on `unpublish`.
 --- @field events? boolean Emit a live-update event for the restored document (default: `true`). Set `false` for a quiet restore. Parity with the gRPC/MCP undelete.
 
 --- Restore a soft-deleted document. Only available on collections with

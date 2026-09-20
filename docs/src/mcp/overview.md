@@ -90,7 +90,8 @@ header; a missing or wrong key is answered with a JSON-RPC error (code `-32600`,
 "Invalid or missing API key") over HTTP `200`, not an HTTP `401`.
 
 Request bodies are capped at `[mcp] http_max_body_bytes` (default **1 MiB**;
-larger bodies get a JSON-RPC parse error). Raise it when clients push large
+larger bodies get a JSON-RPC parse error); the stdio transport caps a request
+line at the same value. Raise it when clients push large
 payloads — bulk creates, or `write_config_file` with big assets. A JSON-RPC
 **notification** (a request without an `id`) is executed and answered with
 HTTP `204 No Content`, per the JSON-RPC convention of not responding to
@@ -176,8 +177,8 @@ Input schemas are generated from your field definitions. Required fields, select
 options, and relationship types are all reflected in the JSON Schema.
 
 Write tools are **strict about data keys**: an argument that is neither a declared
-top-level field (layout wrappers like Row/Collapsible/Tabs are transparent — their
-sub-fields count as top-level) nor a reserved argument (see below) is **rejected**
+**writable** top-level field (layout wrappers like Row/Collapsible/Tabs are transparent — their
+sub-fields count as top-level; a read-only `join` field is not writable) nor a reserved argument (see below) is **rejected**
 with an error, rather than silently ignored. A misspelled field name fails loudly
 instead of quietly writing nothing. `update_many` additionally **rejects a
 `password` key** (it applies one value to many rows); `create_many` **accepts** a
@@ -192,17 +193,32 @@ covers reads as well as writes:
 <!-- GENERATED:mcp-reserved-args BEGIN -->
 | Argument | Tools | Description |
 |----------|-------|-------------|
+| `where` | `find_*`, `count_*`, `update_many_*`, `delete_many_*` | Filter conditions as a JSON object (`{"status": {"equals": "draft"}}`), not the JSON-encoded string the gRPC field uses. |
+| `order_by` | `find_*` | Sort field; prefix with `-` for descending. |
+| `limit` | `find_*`, `list_versions_*` | Maximum results per page. |
+| `page` | `find_*` | Page number, 1-indexed (page mode only). |
+| `after_cursor` | `find_*` | Forward cursor (cursor mode only; mutually exclusive with `page` and `before_cursor`). |
+| `before_cursor` | `find_*` | Backward cursor (cursor mode only; mutually exclusive with `page` and `after_cursor`). |
+| `depth` | `find_*`, `find_by_id_*` | How deep to populate relationships. |
+| `search` | `find_*`, `count_*` | Full-text search query. |
 | `locale` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `list_versions_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields — selects the locale on reads, targets it on writes. |
 | `draft` | `find_*`, `find_by_id_*`, `count_*`, `create_*`, `update_*`, `validate_*`, `create_many_*`, `update_many_*`, `global_read_*`, `global_update_*`, `global_validate_*` | On writes: save as a draft version. On reads: include the draft overlay. |
+| `trash` | `find_*`, `find_by_id_*`, `count_*` | Read the soft-deleted documents instead of the live ones (the trash view). |
+| `select` | `find_*`, `find_by_id_*` | Field names to return (projection); omit for all fields. |
+| `id` | `find_by_id_*`, `update_*`, `validate_*`, `delete_*`, `undelete_*`, `unpublish_*`, `list_versions_*`, `restore_version_*` | Target document ID — addressed as its own argument, never as field data. |
 | `events` | `create_*`, `update_*`, `delete_*`, `undelete_*`, `unpublish_*`, `create_many_*`, `update_many_*`, `delete_many_*`, `global_update_*` | Publish live events for this write. Defaults to `true` on single-document tools and `false` on the bulk (`*_many_*`) tools. |
-| `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
+| `documents` | `create_many_*` | The array of documents to create — each item carries that document's own field data. |
+| `hooks` | `create_many_*`, `update_many_*`, `delete_many_*` | Run lifecycle hooks per item (default `true`). Bulk-only; single-document tools always run hooks. |
 | `queue` | `create_many_*`, `update_many_*`, `delete_many_*` | Run as a queued background job: returns a `job_id` instead of results; poll it with the `get_job_run` tool. Advertised and accepted only when `[mcp] job_tools` is `"read"` or `"all"`. |
+| `data` | `update_many_*` | The field values to apply to every matching document. |
+| `offset` | `list_versions_*` | Number of versions to skip |
+| `version_id` | `restore_version_*` | The version snapshot to restore from. |
 <!-- GENERATED:mcp-reserved-args END -->
 
-> A collection with a field literally named `locale`, `draft`, `events`, or
-> `force_hard_delete`, or `queue` would have it shadowed by the reserved argument — the
-> same caveat that already applies to `id` and `password`.
+> A collection with a field literally named like any reserved argument in the
+> table above would have it shadowed by that argument — the same caveat that
+> already applies to `id` and `password`.
 
 **`null` clears a field.** A field set to `null` in a write tool's arguments
 is written as null (the same contract gRPC and Lua have), which is how a

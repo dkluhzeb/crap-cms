@@ -2,8 +2,6 @@
 
 use std::{
     collections::HashMap,
-    ffi::OsStr,
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -19,7 +17,10 @@ use crate::{
         open_project,
     },
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, Registry, flatten_group_fields, nest_group_fields},
+    core::{
+        CollectionDefinition, Document, Registry, flatten_group_fields, nest_group_fields,
+        write_atomically,
+    },
     db::{DbConnection, LocaleContext, query},
 };
 
@@ -133,35 +134,6 @@ fn export_slugs(registry: &Registry, collection_filter: Option<&str>) -> Result<
     Ok(slugs)
 }
 
-/// The sibling `path` is staged under while being written: `<name>.tmp` in
-/// the same directory, so the final rename never crosses a filesystem.
-fn staged_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(OsStr::to_os_string)
-        .unwrap_or_default();
-    name.push(".tmp");
-
-    path.with_file_name(name)
-}
-
-/// Write `content` to `path` through a staged sibling renamed into place only
-/// once it is complete. A kill mid-write leaves the stage behind, never a
-/// truncated file under the final name that reads as a valid export.
-fn write_atomically(path: &Path, content: &str) -> Result<()> {
-    let staged = staged_path(path);
-
-    fs::write(&staged, content).with_context(|| format!("Failed to write {}", staged.display()))?;
-
-    if let Err(e) = fs::rename(&staged, path) {
-        let _ = fs::remove_file(&staged);
-
-        return Err(e).with_context(|| format!("Failed to write {}", path.display()));
-    }
-
-    Ok(())
-}
-
 /// Write the export to `output`, or print it when there is none.
 fn write_export(export_file: &ExportFile, output: Option<PathBuf>) -> Result<()> {
     let content = to_string_pretty(export_file)?;
@@ -229,9 +201,12 @@ pub fn export(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::from_str;
 
     use super::*;
+    use crate::core::fs::staged_path;
 
     fn empty_export() -> ExportFile {
         ExportFile {
@@ -242,16 +217,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_stage_is_a_sibling_of_the_final_file() {
-        assert_eq!(
-            staged_path(Path::new("/out/data/export.json")),
-            PathBuf::from("/out/data/export.json.tmp")
-        );
-    }
-
-    /// The export lands under its final name, complete, and the stage it was
-    /// written through is gone.
+    /// Regression: the export was written straight to its final name, so a
+    /// kill mid-write left a truncated file that looked like a valid export.
+    /// It lands under its final name complete, through a stage that is gone
+    /// afterwards. (The staging mechanics themselves are pinned in
+    /// `core::fs`.)
     #[test]
     fn write_export_renames_a_complete_stage_into_place() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -264,24 +234,5 @@ mod tests {
         assert_eq!(written.format_version, EXPORT_FORMAT_VERSION);
         assert_eq!(written.crap_version, "test");
         assert!(!staged_path(&path).exists(), "the stage is renamed away");
-    }
-
-    /// Regression: the export was written straight to its final name, so a
-    /// kill mid-write left a truncated file that looked like a valid export.
-    /// The final name is only ever the renamed, complete stage: an existing
-    /// file keeps its full content until the replacement is whole.
-    #[test]
-    fn a_failed_write_leaves_the_previous_export_intact() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("export.json");
-        fs::write(&path, "previous").expect("seed");
-
-        // Staging into a directory that does not exist fails before the
-        // rename, the way an interrupted write never reaches it.
-        let missing = tmp.path().join("missing").join("export.json");
-        assert!(write_atomically(&missing, "partial").is_err());
-
-        assert_eq!(fs::read_to_string(&path).expect("read"), "previous");
-        assert!(!staged_path(&missing).exists());
     }
 }

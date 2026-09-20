@@ -38,6 +38,19 @@ struct GlobalPersist<'a> {
     pending_draft: Option<&'a Map<String, Value>>,
 }
 
+/// What the before-write hook chain needs beyond the definition: the request,
+/// the table it lands in, whether it is a draft save, the admin UI locale, and
+/// the pending-draft snapshot a publish writes back afterwards. Every field is
+/// required and it is built at the one call site, so a plain literal stands in
+/// for a builder.
+struct GlobalBeforeWrite<'a> {
+    input: &'a WriteInput<'a>,
+    gtable: &'a str,
+    is_draft: bool,
+    ui_locale: Option<&'a str>,
+    locale_overlay: Option<&'a Map<String, Value>>,
+}
+
 /// Load the stored global that field-level `access.update` rules judge as
 /// `ctx.document` — the global twin of
 /// [`stored_fields_for_update_rules`](crate::service::stored_fields_for_update_rules).
@@ -168,8 +181,18 @@ pub fn update_global_in_conn(
         );
     }
 
-    let final_ctx =
-        run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
+    let final_ctx = run_global_before_write_hooks(
+        write_hooks,
+        ctx,
+        def,
+        &GlobalBeforeWrite {
+            input: &input,
+            gtable: &gtable,
+            is_draft,
+            ui_locale,
+            locale_overlay: publishing_draft.as_ref().and_then(Value::as_object),
+        },
+    )?;
 
     // Both reported shapes carry their rows for the write's locale before
     // after-change hooks see them: a draft save its snapshot, a published write
@@ -252,28 +275,31 @@ fn run_global_before_write_hooks(
     write_hooks: &dyn WriteHooks,
     ctx: &ServiceContext,
     def: &GlobalDefinition,
-    input: &WriteInput<'_>,
-    gtable: &str,
-    is_draft: bool,
-    ui_locale: Option<&str>,
+    call: &GlobalBeforeWrite<'_>,
 ) -> Result<HookContext> {
+    let input = call.input;
+
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
         .document_id("default")
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
-        .draft(is_draft)
+        .draft(call.is_draft)
         .user(ctx.user)
-        .ui_locale(ui_locale)
+        .ui_locale(call.ui_locale)
         .build();
 
+    // A publish writes the draft's other locales back over the row after this
+    // validation, so the completeness gate judges that snapshot rather than the
+    // locales it is about to replace.
     let conn = ctx.resolve_conn()?;
-    let val_ctx = ValidationCtx::builder(conn.as_ref(), gtable)
+    let val_ctx = ValidationCtx::builder(conn.as_ref(), call.gtable)
         .exclude_id(Some("default"))
-        .draft(is_draft)
+        .draft(call.is_draft)
         .locale_ctx(input.locale_ctx)
         .user(ctx.user)
         .ui_locale(input.ui_locale.as_deref())
+        .locale_overlay(call.locale_overlay)
         .build();
 
     Ok(write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?)

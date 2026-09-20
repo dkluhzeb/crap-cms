@@ -1,5 +1,7 @@
 //! Validation context bundling DB + request parameters consumed by every check.
 
+use serde_json::{Map, Value};
+
 use crate::{
     core::{Document, RequiredLocales, registry::Registry},
     db::{DbConnection, LocaleContext},
@@ -25,6 +27,16 @@ pub struct ValidationCtx<'a> {
     /// The admin UI locale, exposed to custom `validate` functions as
     /// `ctx.ui_locale`.
     pub ui_locale: Option<&'a str>,
+    /// The snapshot a later step of this same write lands over the row, in
+    /// snapshot key form (`field__xx`, groups as the snapshot keeps them) — a
+    /// publish's pending draft, or the version being restored.
+    ///
+    /// The localized-completeness gate judges the document's post-write state,
+    /// so it reads the locales this request does not target from here instead
+    /// of from the live row; a locale the snapshot does not carry stays as
+    /// stored, which is the write-back's own rule. `None` when the write lands
+    /// nothing beyond its own data.
+    pub locale_overlay: Option<&'a Map<String, Value>>,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -46,6 +58,7 @@ pub struct ValidationCtxBuilder<'a> {
     collection_required_locales: Option<&'a RequiredLocales>,
     user: Option<&'a Document>,
     ui_locale: Option<&'a str>,
+    locale_overlay: Option<&'a Map<String, Value>>,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -61,7 +74,15 @@ impl<'a> ValidationCtxBuilder<'a> {
             collection_required_locales: None,
             user: None,
             ui_locale: None,
+            locale_overlay: None,
         }
+    }
+
+    /// Set the snapshot this write lands over the row after validation — see
+    /// [`ValidationCtx::locale_overlay`].
+    pub fn locale_overlay(mut self, locale_overlay: Option<&'a Map<String, Value>>) -> Self {
+        self.locale_overlay = locale_overlay;
+        self
     }
 
     pub fn user(mut self, user: Option<&'a Document>) -> Self {
@@ -117,6 +138,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             collection_required_locales: self.collection_required_locales,
             user: self.user,
             ui_locale: self.ui_locale,
+            locale_overlay: self.locale_overlay,
         }
     }
 }
@@ -137,6 +159,26 @@ mod tests {
         assert!(!ctx.soft_delete);
         assert!(ctx.locale_ctx.is_none());
         assert!(ctx.registry.is_none());
+        assert!(ctx.locale_overlay.is_none());
+    }
+
+    /// The overlay is the snapshot a publish or a restore writes back after
+    /// validation; the builder must carry it through to the context the
+    /// completeness gate reads.
+    #[test]
+    fn builder_carries_the_locale_overlay() {
+        let conn = InMemoryConn::open();
+        let mut overlay = Map::new();
+        overlay.insert("title__de".to_string(), Value::String("Hallo".into()));
+
+        let ctx = ValidationCtx::builder(&conn, "posts")
+            .locale_overlay(Some(&overlay))
+            .build();
+
+        assert_eq!(
+            ctx.locale_overlay.and_then(|o| o.get("title__de")),
+            Some(&Value::String("Hallo".into()))
+        );
     }
 
     /// `is_draft` and `soft_delete` are both `bool` — distinct values catch a

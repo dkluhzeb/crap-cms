@@ -13,4 +13,5 @@ mod test_support;
 
 pub use collection::{restore_version, write_snapshot_base};
 pub use global::{restore_global_version, write_global_snapshot_base};
+pub(crate) use locale_snapshot::{LocaleSnapshot, SnapshotKey};
 pub use write_base::snapshot_write_fields;
