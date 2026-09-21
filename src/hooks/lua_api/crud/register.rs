@@ -220,16 +220,20 @@ fn register_job_functions(
     // Snapshot the queue-level retries defaults — only queues with an
     // explicit `Some(N)` make it into the map. Lookups in
     // `effective_max_attempts` use `HashMap::get(...).copied()`.
-    let queue_retries = jobs_config
-        .queues
-        .iter()
-        .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
-        .collect();
+    let queue_retries = jobs_config.queue_retries();
 
     jobs::runs::register_jobs_runs(
         lua,
         jobs::runs::JobsRunsState {
             registry: Arc::clone(&registry),
+        },
+    )?;
+
+    jobs::catalog::register_jobs_catalog(
+        lua,
+        jobs::catalog::JobsCatalogState {
+            registry: Arc::clone(&registry),
+            queue_retries: queue_retries.clone(),
         },
     )?;
 

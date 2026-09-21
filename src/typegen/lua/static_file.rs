@@ -81,6 +81,7 @@ use crate::hooks::lua_api::{
             update::{GlobalUpdateOptions, render_crap_globals_update_lua},
             validate::{GlobalValidateOptions, render_crap_globals_validate_lua},
         },
+        jobs::catalog::render_crap_jobs_catalog_lua,
         jobs::queue::render_crap_jobs_queue_lua,
         jobs::runs::render_crap_jobs_runs_lua,
     },
@@ -106,7 +107,7 @@ use crate::hooks::lua_api::{
     utils::{render_crap_json_lua, render_crap_util_lua},
     validation::render_crap_validation_lua,
 };
-use crate::service::{CreateManyResult, UpdateManyResult};
+use crate::service::{CreateManyResult, UpdateManyResult, jobs::JobDefinitionInfo};
 
 /// Signature for a function that appends one section to the output buffer.
 type BlockRender = fn(&mut String);
@@ -612,6 +613,8 @@ fn render_crap_jobs(out: &mut String) {
     JobInfo::render_lua_annotation(out);
     render_crap_jobs_queue_lua(out);
     render_crap_jobs_runs_lua(out);
+    JobDefinitionInfo::render_lua_annotation(out);
+    render_crap_jobs_catalog_lua(out);
 }
 fn render_crap_pages(out: &mut String) {
     render_crap_pages_lua(out);

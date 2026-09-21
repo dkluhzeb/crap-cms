@@ -12,11 +12,15 @@ mod access;
 pub mod bulk_queue;
 mod cancel;
 mod get_run;
+mod health;
+mod list;
 mod list_runs;
 mod queue;
 
 pub use access::readable_job_slugs;
 pub use cancel::{cancel_job_run, cancel_pending_jobs};
 pub use get_run::get_job_run;
+pub use health::{JobHealthReport, JobHealthStatus, check_job_health, stale_threshold_secs};
+pub use list::{JobDefinitionInfo, job_definitions, list_jobs};
 pub use list_runs::{ListJobRunsInput, list_job_runs};
 pub use queue::{QueueJobInput, conceal_denied_trigger, job_not_found, queue_job};

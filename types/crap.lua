@@ -2010,6 +2010,23 @@ function crap.jobs.list_runs(opts) end
 --- @return boolean # True when a pending run was cancelled; false when it does not exist, is not visible, or has already been claimed.
 function crap.jobs.cancel_run(id) end
 
+--- One defined job: its schedule, queue, and the retry, timeout and
+--- concurrency settings it runs with.
+--- @class crap.JobDefinitionInfo
+--- @field slug string The slug that triggers and identifies the job.
+--- @field queue string Queue the job runs on.
+--- @field schedule? string Cron expression, absent for manually triggered jobs.
+--- @field timeout integer Seconds before a running job is considered timed out.
+--- @field priority integer Default scheduling priority; higher is claimed sooner.
+--- @field retries integer Retries after a failure, resolved against the queue's setting.
+--- @field concurrency integer Maximum simultaneous runs of this job.
+--- @field skip_if_running boolean Whether a scheduled run is skipped while another is active.
+--- @field label? string Human-readable label from the Lua definition.
+
+--- List the defined jobs this caller may see.
+--- @return crap.JobDefinitionInfo[] # The defined jobs this caller may see, in slug order. A job whose access rule denies the caller is absent.
+function crap.jobs.list() end
+
 -- ── crap.pages ───────────────────────────────────────────────
 
 --- Declare custom admin pages and their sidebar metadata. The page

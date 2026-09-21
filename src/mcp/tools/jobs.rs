@@ -287,23 +287,26 @@ fn exec_list_jobs(ctx: &ToolExecCtx<'_>) -> Result<String> {
     let registry = ctx.infra.registry.as_ref();
 
     // The visibility gate gRPC `ListJobs` applies: a job whose access rule
-    // denies this caller is absent, matching the run-read gate.
-    let readable = service::jobs::readable_job_slugs(&svc, &conn, registry)
-        .map_err(ServiceError::into_anyhow_scrubbed)?;
-
-    let jobs: Vec<Value> = readable
-        .iter()
-        .filter_map(|slug| registry.get_job(slug))
-        .map(|def| {
-            json!({
-                "slug": def.slug.as_ref(),
-                "queue": def.queue,
-                "schedule": def.schedule,
-                "timeout": def.timeout,
-                "priority": def.priority,
+    // denies this caller is absent, matching the run-read gate. The
+    // description is the same one every surface renders.
+    let jobs: Vec<Value> =
+        service::jobs::list_jobs(&svc, &conn, registry, &ctx.config.jobs.queue_retries())
+            .map_err(ServiceError::into_anyhow_scrubbed)?
+            .into_iter()
+            .map(|job| {
+                json!({
+                    "slug": job.slug,
+                    "queue": job.queue,
+                    "schedule": job.schedule,
+                    "timeout": job.timeout,
+                    "priority": job.priority,
+                    "retries": job.retries,
+                    "concurrency": job.concurrency,
+                    "skip_if_running": job.skip_if_running,
+                    "label": job.label,
+                })
             })
-        })
-        .collect();
+            .collect();
 
     Ok(to_string_pretty(&json!({ "jobs": jobs }))?)
 }

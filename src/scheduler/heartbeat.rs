@@ -9,31 +9,22 @@ use tracing::{error, warn};
 use crate::{
     core::Registry,
     db::{DbPool, query::jobs as job_query},
+    service,
 };
 
 use super::{runner::recover_stale_jobs, types::DbTimeouts};
 
-/// A `running` job is treated as dead (its worker stopped heartbeating) once
-/// its `heartbeat_at` is older than `heartbeat_interval * this`, plus the
-/// write-delay allowance of [`stale_threshold_secs`]. Must be > 1 so a
-/// single missed heartbeat tick doesn't reclaim a live job.
-const STALE_HEARTBEAT_MULTIPLIER: u64 = 3;
-
-/// Seconds without a heartbeat after which a `running` job counts as dead.
+/// Seconds without a heartbeat after which a `running` job counts as dead,
+/// with this module's timeout bundle unpacked for the shared rule.
 ///
-/// Three intervals of slack (two missed beats), plus the longest a single
-/// heartbeat write can legitimately take on a healthy node: waiting for a
-/// write-pool connection (`connection_timeout`), then for the database's
-/// write lock (`busy_timeout`, `SQLite`). Without that allowance a heartbeat
-/// merely held up behind a long write — a bulk batch, a `crap.transaction`
-/// block — crossed the bare three-interval threshold, and the stale recovery
-/// (on this node or a peer) requeued a job that was still running: a second
-/// execution of the same run.
+/// The arithmetic lives in [`service::jobs::stale_threshold_secs`] because
+/// the health check reports against the same line the reclaim acts on.
 pub(super) fn stale_threshold_secs(heartbeat_interval: u64, timeouts: &DbTimeouts) -> u64 {
-    heartbeat_interval
-        .saturating_mul(STALE_HEARTBEAT_MULTIPLIER)
-        .saturating_add(timeouts.connection_timeout_secs)
-        .saturating_add(timeouts.busy_timeout_ms.div_ceil(1000))
+    service::jobs::stale_threshold_secs(
+        heartbeat_interval,
+        timeouts.connection_timeout_secs,
+        timeouts.busy_timeout_ms,
+    )
 }
 
 /// What one heartbeat tick needs; owned so it can move to the blocking pool.

@@ -250,13 +250,7 @@ impl ContentService {
             .map(|(header, _)| header.clone())
             .collect();
 
-        let queue_retries = deps
-            .config
-            .jobs
-            .queues
-            .iter()
-            .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
-            .collect();
+        let queue_retries = deps.config.jobs.queue_retries();
 
         Self {
             default_depth,

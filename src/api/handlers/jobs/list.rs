@@ -1,9 +1,6 @@
 //! `ListJobs` handler — list all defined jobs.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -14,17 +11,36 @@ use crate::{
         content,
         handlers::{ContentService, content_service::pool_error_status},
     },
-    service::{self, AppInfra, ServiceContext},
+    service::{self, AppInfra, ServiceContext, jobs::JobDefinitionInfo},
 };
 
-/// Resolve the auth user, reject anonymous callers, and return the set of job
-/// slugs whose definitions this caller may see (those whose runs they may
-/// read). Keeps `ListJobs` consistent with the run-read access gate.
-fn readable_job_slugs_blocking(
+/// Project one described job onto the wire message. A field added to
+/// [`JobDefinitionInfo`] shows up here as a missing-field compile error, which is the
+/// point: the wire cannot quietly describe less than the other surfaces.
+fn job_definition_wire(job: JobDefinitionInfo) -> content::JobDefinitionInfo {
+    content::JobDefinitionInfo {
+        slug: job.slug,
+        schedule: job.schedule,
+        queue: job.queue,
+        retries: job.retries,
+        timeout: job.timeout,
+        concurrency: job.concurrency,
+        skip_if_running: job.skip_if_running,
+        label: job.label,
+        priority: job.priority,
+    }
+}
+
+/// Resolve the auth user, reject anonymous callers, and describe the jobs
+/// this caller may see (those whose runs they may read). Keeps `ListJobs`
+/// consistent with the run-read access gate, and the description itself with
+/// every other surface that lists jobs.
+fn list_jobs_blocking(
     infra: &AppInfra,
     token: Option<&str>,
     headers: &HashMap<String, String>,
-) -> Result<HashSet<String>, Status> {
+    queue_retries: &HashMap<String, u32>,
+) -> Result<Vec<JobDefinitionInfo>, Status> {
     let kind = infra.pool.kind();
     let conn = infra
         .pool
@@ -52,10 +68,8 @@ fn readable_job_slugs_blocking(
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
-    let allowed = service::jobs::readable_job_slugs(&ctx, &conn, &infra.registry)
-        .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))?;
-
-    Ok(allowed.into_iter().collect())
+    service::jobs::list_jobs(&ctx, &conn, &infra.registry, queue_retries)
+        .map_err(|e| Status::from(e.reclassify(infra.pool.kind())))
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -70,38 +84,17 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
 
         let infra = Arc::clone(&self.infra);
+        let queue_retries = self.queue_retries.clone();
 
-        let allowed = task::spawn_blocking(move || {
-            readable_job_slugs_blocking(&infra, token.as_deref(), &headers)
+        let jobs = task::spawn_blocking(move || {
+            list_jobs_blocking(&infra, token.as_deref(), &headers, &queue_retries)
         })
         .await
         .inspect_err(|e| error!("ListJobs task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        let jobs: Vec<content::JobDefinitionInfo> = self
-            .infra
-            .registry
-            .jobs
-            .iter()
-            .filter(|(slug, _)| allowed.contains(&***slug))
-            .map(|(slug, def)| content::JobDefinitionInfo {
-                slug: slug.to_string(),
-                schedule: def.schedule.clone(),
-                queue: def.queue.clone(),
-                // Surface the effective retry count: explicit
-                // `JobDefinition.retries` wins, else the queue's
-                // `[jobs.queues.<queue>] retries`, else `0`. Consumers
-                // (admin UI, ops tooling) get the same number that the
-                // scheduler actually uses on queue-time.
-                retries: def
-                    .retries
-                    .unwrap_or_else(|| self.queue_retries.get(&def.queue).copied().unwrap_or(0)),
-                timeout: def.timeout,
-                concurrency: def.concurrency,
-                skip_if_running: def.skip_if_running,
-                label: def.labels.singular.clone(),
-            })
-            .collect();
+        let jobs: Vec<content::JobDefinitionInfo> =
+            jobs.into_iter().map(job_definition_wire).collect();
 
         Ok(Response::new(content::ListJobsResponse { jobs }))
     }

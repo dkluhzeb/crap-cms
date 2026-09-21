@@ -372,11 +372,7 @@ fn build_queue_maps(config: &JobsConfig) -> QueueMaps {
         })
         .collect();
 
-    let queue_retries = config
-        .queues
-        .iter()
-        .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
-        .collect();
+    let queue_retries = config.queue_retries();
 
     QueueMaps {
         queue_concurrency,

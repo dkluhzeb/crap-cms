@@ -2195,6 +2195,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`jobs healthcheck` reported dead workers that were alive.** It used its own idea of when a running job is stale — three heartbeat intervals — while the scheduler, which actually reclaims the work, allows those three intervals plus the longest a single heartbeat write can legitimately take (the write pool's connection timeout and the database's busy timeout). A heartbeat held up behind a long write therefore failed the healthcheck, exiting 1, for a job the scheduler was correctly leaving alone. Both now read one rule.
 - **`admin.readonly` on a Group, Array, Blocks, Row, Collapsible or Tabs
   field now applies to everything inside it.** A read-only container
   rendered fully editable sub-fields, and the array/blocks row controls —
@@ -5152,6 +5153,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`crap.jobs.list()`** returns the defined jobs the caller may see, in slug order, with each job's queue, schedule, timeout, priority, retries, concurrency, `skip_if_running` and label. Lua could read job runs but had no way to enumerate the jobs that produce them, so anything building on the job system had to hardcode a list of slugs that drifted from the definitions. The job's `access` rule gates it: a job the caller may not read is absent, the same visibility rule `crap.jobs.list_runs` applies.
+- **`ListJobs` and the MCP `list_jobs` tool describe a job identically.** The gRPC response gained the job's default `priority`, and the MCP tool gained `retries`, `concurrency`, `skip_if_running` and `label`. Both now render one shared description, so the same job cannot describe itself differently depending on which surface is asked. `crap-cms jobs list` shows the resolved retry count as a new column.
 - **The version restore confirmation lists the version's files that storage no
   longer holds**, next to the relationships it can no longer resolve.
 - **`locale` on the MCP `list_versions` tool.** A version snapshot is returned

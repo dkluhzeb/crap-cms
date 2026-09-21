@@ -1573,6 +1573,10 @@ message JobDefinitionInfo {
 
   // Human-readable label for the job (from Lua definition labels.singular).
   optional string label = 8;
+
+  // Default scheduling priority applied to runs queued without an explicit
+  // one. Higher is claimed sooner; negative runs only when otherwise idle.
+  int32 priority = 9;
 }
 
 // TriggerJobRequest queues a job for immediate execution.

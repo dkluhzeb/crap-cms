@@ -124,6 +124,36 @@ crap.jobs.define("analytics_rollup", {
 -- inherits priority = -5 unless the queue site explicitly overrides.
 ```
 
+## crap.jobs.list()
+
+List the defined jobs the caller may see, in slug order. Returns an array of
+job tables. A job whose `access` rule denies the caller is absent entirely, so
+a listing never reveals that it exists — the same visibility gate
+`crap.jobs.list_runs` applies to runs.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `slug` | string | The slug that triggers and identifies the job |
+| `queue` | string | Queue the job runs on |
+| `schedule` | string? | Cron expression; `nil` for manually triggered jobs |
+| `timeout` | integer | Seconds before a running job is considered timed out |
+| `priority` | integer | Default scheduling priority; higher is claimed sooner |
+| `retries` | integer | Retries after a failure, resolved against `[jobs.queues.<queue>] retries` |
+| `concurrency` | integer | Maximum simultaneous runs of this job |
+| `skip_if_running` | boolean | Whether a scheduled run is skipped while another is active |
+| `label` | string? | Human-readable label from the definition's `labels.singular` |
+
+```lua
+for _, job in ipairs(crap.jobs.list()) do
+    if job.schedule then
+        crap.log.info(job.slug .. " runs on " .. job.schedule)
+    end
+end
+```
+
+This is the same description the gRPC `ListJobs` RPC and the MCP `list_jobs`
+tool return, so a page built on it cannot drift from the other surfaces.
+
 ## crap.jobs.get_run(id)
 
 Look up one run by the id `crap.jobs.queue` returned. Returns the run table

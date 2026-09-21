@@ -236,6 +236,23 @@ impl Default for JobsConfig {
 }
 
 impl JobsConfig {
+    /// The operator's per-queue `retries`, keyed by queue name.
+    ///
+    /// Only queues that set the key appear — a queue without one leaves
+    /// [`JobDefinition::effective_retries`] to fall back. Every consumer that
+    /// resolves a job's retry count (the scheduler, the gRPC service, the Lua
+    /// job API) derives its map here, so they cannot disagree about which
+    /// queues carry an override.
+    ///
+    /// [`JobDefinition::effective_retries`]: crate::core::job::JobDefinition::effective_retries
+    #[must_use]
+    pub fn queue_retries(&self) -> HashMap<String, u32> {
+        self.queues
+            .iter()
+            .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+            .collect()
+    }
+
     /// Apply framework defaults for queues the operator didn't set.
     ///
     /// Currently seeds only the `images` queue with a conservative

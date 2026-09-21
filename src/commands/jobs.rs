@@ -17,6 +17,10 @@ use crate::{
         job::{JobRun, JobStatus, is_system_job_slug},
     },
     db::{DbPool, pool, query},
+    service::{
+        self,
+        jobs::{JobHealthReport, JobHealthStatus},
+    },
 };
 
 /// Summarize a batch of recent job runs as a compact `Nok/Mfail/Ppend/Qrun`
@@ -58,27 +62,35 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 }
 
 /// List all defined jobs with recent run status summary.
-fn run_list(registry: &Registry, pool: &DbPool) -> Result<()> {
+///
+/// The operator view: no access gate, because the CLI has no user to gate on.
+fn run_list(registry: &Registry, pool: &DbPool, jobs_config: &JobsConfig) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    if registry.jobs.is_empty() {
+    let jobs = service::jobs::job_definitions(registry, &jobs_config.queue_retries());
+
+    if jobs.is_empty() {
         cli::info("No jobs defined.");
 
         return Ok(());
     }
 
-    let mut table = Table::new(vec!["Job", "Schedule", "Queue", "Recent Runs"]);
+    let mut table = Table::new(vec!["Job", "Schedule", "Queue", "Retries", "Recent Runs"]);
 
-    let mut slugs: Vec<_> = registry.jobs.keys().collect();
-    slugs.sort();
-
-    for slug in slugs {
-        let def = &registry.jobs[slug];
-        let schedule = def.schedule.as_deref().unwrap_or("-").to_string();
-        let recent = query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0).unwrap_or_default();
+    for job in &jobs {
+        let schedule = job.schedule.as_deref().unwrap_or("-").to_string();
+        let retries = job.retries.to_string();
+        let recent =
+            query::jobs::list_job_runs(&conn, Some(&job.slug), None, 5, 0).unwrap_or_default();
         let status_summary = summarize_recent_runs(&recent);
 
-        table.row(vec![slug, &schedule, &def.queue, &status_summary]);
+        table.row(vec![
+            &job.slug,
+            &schedule,
+            &job.queue,
+            &retries,
+            &status_summary,
+        ]);
     }
 
     table.print();
@@ -156,113 +168,67 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
     Ok(())
 }
 
-/// Overall job-system health, in ascending severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobHealth {
-    Healthy,
-    Warning,
-    Unhealthy,
-}
-
-impl JobHealth {
-    /// Human label printed in the `Status` line.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Healthy => "healthy",
-            Self::Warning => "warning",
-            Self::Unhealthy => "unhealthy",
-        }
-    }
-
-    /// Process exit code. Mirrors `status --check` (2 = warnings) and
-    /// `update check` (1 = action needed) so CI can gate on the result:
-    /// 0 healthy, 2 warning, 1 unhealthy.
-    fn exit_code(self) -> i32 {
-        match self {
-            Self::Healthy => 0,
-            Self::Warning => 2,
-            Self::Unhealthy => 1,
-        }
+/// Process exit code for a health verdict. Mirrors `status --check`
+/// (2 = warnings) and `update check` (1 = action needed) so CI can gate on
+/// the result: 0 healthy, 2 warning, 1 unhealthy.
+fn health_exit_code(status: JobHealthStatus) -> i32 {
+    match status {
+        JobHealthStatus::Healthy => 0,
+        JobHealthStatus::Warning => 2,
+        JobHealthStatus::Unhealthy => 1,
     }
 }
 
-/// Classify the health probes: any stale (heartbeat-expired) running job
-/// is `Unhealthy`; recent failures, long-pending jobs, or scheduled jobs
-/// that never completed a run are `Warning`.
-fn classify_health(
-    stale: usize,
-    failed_24h: i64,
-    pending_long: i64,
-    never_ran: usize,
-) -> JobHealth {
-    if stale > 0 {
-        return JobHealth::Unhealthy;
+/// Print the health report; the stale runs get named so an operator can go
+/// look at them.
+fn print_health(report: &JobHealthReport) {
+    cli::header("Job system health");
+    cli::kv("Defined", &report.defined.to_string());
+    cli::kv("Stale", &report.stale.len().to_string());
+    cli::kv("Failed 24h", &report.failed_recently.to_string());
+    cli::kv("Pending 5m", &report.pending_long.to_string());
+
+    if !report.never_ran.is_empty() {
+        cli::kv("No runs", &report.never_ran.join(", "));
     }
 
-    if failed_24h > 0 || pending_long > 0 || never_ran > 0 {
-        return JobHealth::Warning;
+    cli::kv_status(
+        "Status",
+        report.status.as_str(),
+        report.status == JobHealthStatus::Healthy,
+    );
+
+    if report.stale.is_empty() {
+        return;
     }
 
-    JobHealth::Healthy
+    cli::header("Stale jobs");
+
+    for job in &report.stale {
+        cli::warning(&format!(
+            "{} ({}): started {}, last heartbeat {}",
+            job.id,
+            job.slug,
+            job.started_at.as_deref().unwrap_or("-"),
+            job.heartbeat_at.as_deref().unwrap_or("never")
+        ));
+    }
 }
 
-fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Result<JobHealth> {
+/// Probe the job system and report. The verdict — and the line at which a
+/// running job counts as dead — come from the service layer, so this agrees
+/// with what the scheduler actually reclaims.
+fn run_healthcheck(
+    cfg: &CrapConfig,
+    registry: &Registry,
+    pool: &DbPool,
+) -> Result<JobHealthStatus> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    let defined_count = registry.jobs.len();
+    let report = service::jobs::check_job_health(&conn, registry, cfg)?;
+    print_health(&report);
 
-    // Stale jobs: running but heartbeat expired (heartbeat_interval * 3)
-    let stale_threshold = cfg.jobs.heartbeat_interval * 3;
-    let stale_jobs = query::jobs::find_stale_jobs(&conn, stale_threshold)?;
-    let stale_count = stale_jobs.len();
-
-    // Failed jobs in the last 24 hours
-    let failed_24h = query::jobs::count_failed_since(&conn, 86400)?;
-
-    // Pending jobs waiting longer than 5 minutes
-    let pending_long = query::jobs::count_pending_older_than(&conn, 300)?;
-
-    // Check for scheduled jobs with no recent runs
-    let mut no_recent_runs = Vec::new();
-    for (slug, def) in &registry.jobs {
-        if def.schedule.is_some() {
-            let last = query::jobs::last_completed_run(&conn, slug)?;
-
-            if last.is_none() {
-                no_recent_runs.push(slug.to_string());
-            }
-        }
-    }
-
-    let health = classify_health(stale_count, failed_24h, pending_long, no_recent_runs.len());
-
-    cli::header("Job system health");
-    cli::kv("Defined", &defined_count.to_string());
-    cli::kv("Stale", &stale_count.to_string());
-    cli::kv("Failed 24h", &failed_24h.to_string());
-    cli::kv("Pending 5m", &pending_long.to_string());
-
-    if !no_recent_runs.is_empty() {
-        no_recent_runs.sort();
-        cli::kv("No runs", &no_recent_runs.join(", "));
-    }
-    cli::kv_status("Status", health.label(), health == JobHealth::Healthy);
-
-    if stale_count > 0 {
-        cli::header("Stale jobs");
-
-        for job in &stale_jobs {
-            cli::warning(&format!(
-                "{} ({}): started {}, last heartbeat {}",
-                job.id,
-                job.slug,
-                job.started_at.as_deref().unwrap_or("-"),
-                job.heartbeat_at.as_deref().unwrap_or("never")
-            ));
-        }
-    }
-
-    Ok(health)
+    Ok(report.status)
 }
 
 /// Trigger a job manually by slug, queuing it for the scheduler.
@@ -386,11 +352,11 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
         JobsAction::List => {
             let Project {
                 lock: _instance_lock,
-                config: _cfg,
+                config: cfg,
                 registry,
                 pool,
             } = open_project(config_dir)?;
-            run_list(&registry, &pool)
+            run_list(&registry, &pool, &cfg.jobs)
         }
         JobsAction::Trigger {
             slug,
@@ -433,9 +399,9 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let health = run_healthcheck(&cfg, &registry, &pool)?;
 
             // CI usability: a non-healthy result must be distinguishable
-            // from a healthy one by exit code (see `JobHealth::exit_code`).
-            if health != JobHealth::Healthy {
-                std::process::exit(health.exit_code());
+            // from a healthy one by exit code.
+            if health != JobHealthStatus::Healthy {
+                std::process::exit(health_exit_code(health));
             }
 
             Ok(())
@@ -452,20 +418,14 @@ mod tests {
     }
 
     /// Regression: `jobs healthcheck` used to exit 0 regardless of the
-    /// result, so a CI gate on it never fired.
+    /// result, so a CI gate on it never fired. The classification itself is
+    /// pinned next to the probes in the service layer.
     #[test]
-    fn healthcheck_classification_and_exit_codes() {
-        assert_eq!(classify_health(0, 0, 0, 0), JobHealth::Healthy);
-        assert_eq!(classify_health(0, 1, 0, 0), JobHealth::Warning);
-        assert_eq!(classify_health(0, 0, 3, 0), JobHealth::Warning);
-        assert_eq!(classify_health(0, 0, 0, 2), JobHealth::Warning);
-        // Stale wins over every warning signal.
-        assert_eq!(classify_health(1, 5, 5, 5), JobHealth::Unhealthy);
-
-        assert_eq!(JobHealth::Healthy.exit_code(), 0);
-        assert_eq!(JobHealth::Warning.exit_code(), 2);
-        assert_eq!(JobHealth::Unhealthy.exit_code(), 1);
-        assert_eq!(JobHealth::Unhealthy.label(), "unhealthy");
+    fn healthcheck_exit_codes_separate_the_verdicts() {
+        assert_eq!(health_exit_code(JobHealthStatus::Healthy), 0);
+        assert_eq!(health_exit_code(JobHealthStatus::Warning), 2);
+        assert_eq!(health_exit_code(JobHealthStatus::Unhealthy), 1);
+        assert_eq!(JobHealthStatus::Unhealthy.as_str(), "unhealthy");
     }
 
     #[test]

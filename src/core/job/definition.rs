@@ -42,21 +42,28 @@ impl JobDefinition {
         JobDefinitionBuilder::new(slug, handler)
     }
 
-    /// Total attempts (initial + retries) for a job in this definition.
-    /// Resolution order: explicit `JobDefinition.retries` wins, then
-    /// the queue's `[jobs.queues.<queue>] retries`, then `0` (one
-    /// attempt, no retries).
+    /// The retry count this job actually runs with. Resolution order:
+    /// explicit `JobDefinition.retries` wins, then the queue's
+    /// `[jobs.queues.<queue>] retries`, then `0` (no retries).
     ///
     /// `queue_retries` is the operator's `Option<u32>` from
     /// `JobsConfig.queues.get(&self.queue).and_then(|q| q.retries)` —
     /// pass `None` from contexts that don't have config access (the
     /// definition's `retries` still applies; the fallback is `0`).
+    ///
+    /// This is the number to *report*; the scheduler wants
+    /// [`Self::effective_max_attempts`], which is this plus the first run.
+    #[must_use]
+    pub fn effective_retries(&self, queue_retries: Option<u32>) -> u32 {
+        self.retries.or(queue_retries).unwrap_or(0)
+    }
+
+    /// Total attempts (initial + retries) for a job in this definition.
+    /// Never compute `retries + 1` at a call site — the two numbers must
+    /// come from one resolution.
     #[must_use]
     pub fn effective_max_attempts(&self, queue_retries: Option<u32>) -> u32 {
-        self.retries
-            .or(queue_retries)
-            .unwrap_or(0)
-            .saturating_add(1)
+        self.effective_retries(queue_retries).saturating_add(1)
     }
 }
 
