@@ -9,6 +9,7 @@ use crate::{
         handlers::{
             field_context::{
                 builder::visible_field_defs,
+                cascaded_readonly,
                 enrich::{
                     EnrichCtx, EnrichOptions, gated_find_by_id, nested::enrich_nested_fields, types,
                 },
@@ -88,6 +89,17 @@ pub fn enrich_polymorphic_selected(
         .collect()
 }
 
+/// The enrichment context for the fields inside `field_def`: its own
+/// `admin.readonly` joins whatever the container already inherited, so a
+/// read-only container locks everything it contains. Everything else carries
+/// over — one pooled connection for the whole tree.
+fn ctx_inside<'a>(ctx: &EnrichCtx<'a>, field_def: &FieldDefinition) -> EnrichCtx<'a> {
+    EnrichCtx {
+        ancestor_readonly: cascaded_readonly(field_def, ctx.ancestor_readonly),
+        ..*ctx
+    }
+}
+
 /// Dispatch enrichment for a single typed field context based on its variant.
 fn enrich_single_field(
     fc: &mut FieldContext,
@@ -117,7 +129,7 @@ fn enrich_single_field(
                 &field_def.fields,
                 doc_fields,
                 opts,
-                enrich_ctx,
+                &ctx_inside(enrich_ctx, field_def),
             );
         }
         FieldContext::Collapsible(cf) => {
@@ -126,11 +138,15 @@ fn enrich_single_field(
                 &field_def.fields,
                 doc_fields,
                 opts,
-                enrich_ctx,
+                &ctx_inside(enrich_ctx, field_def),
             );
         }
         FieldContext::Group(gf) => {
-            enrich_nested_fields(&mut gf.sub_fields, &field_def.fields, enrich_ctx);
+            enrich_nested_fields(
+                &mut gf.sub_fields,
+                &field_def.fields,
+                &ctx_inside(enrich_ctx, field_def),
+            );
         }
         FieldContext::Tabs(tf) => {
             enrich_tabs(tf, field_def, doc_fields, opts, enrich_ctx);
@@ -153,13 +169,15 @@ fn enrich_tabs(
     opts: &EnrichOptions,
     enrich_ctx: &EnrichCtx,
 ) {
+    let inner = ctx_inside(enrich_ctx, field_def);
+
     for (tab_panel, tab_def) in tf.tabs.iter_mut().zip(field_def.tabs.iter()) {
         enrich_nested_aligned(
             &mut tab_panel.sub_fields,
             &tab_def.fields,
             doc_fields,
             opts,
-            enrich_ctx,
+            &inner,
         );
     }
 }
@@ -220,6 +238,7 @@ pub fn enrich_field_contexts(
         reg,
         rel_locale_ctx: rel_locale_ctx.as_ref(),
         user: opts.user,
+        ancestor_readonly: false,
     };
 
     // Filter the top-level defs through the SAME single source of truth as

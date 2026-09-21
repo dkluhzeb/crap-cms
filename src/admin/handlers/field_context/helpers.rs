@@ -75,6 +75,38 @@ pub fn locale_locked_display(non_default_locale: bool, field: &FieldDefinition) 
     non_default_locale && !field.localized
 }
 
+/// What a container hands to the fields inside it as their
+/// `ancestor_readonly`: its own `admin.readonly`, plus whatever it inherited
+/// from its own ancestors. `admin.readonly` **cascades downward** — a
+/// read-only Group/Array/Blocks/Row/Collapsible/Tabs renders every field
+/// inside it read-only, whatever that field's own `admin.readonly` says.
+///
+/// Deliberately **not** the container's rendered `readonly`: that folds in the
+/// locale lock, which is already recomputed per field from the locale (see
+/// [`locale_locked_display`]). A localized field inside a non-localized —
+/// therefore locale-locked — group stays editable, and cascading the
+/// container's rendered `readonly` would lock it.
+#[must_use]
+pub fn cascaded_readonly(field: &FieldDefinition, ancestor_readonly: bool) -> bool {
+    ancestor_readonly || field.admin.readonly
+}
+
+/// Whether a field renders read-only in the admin editor: its own
+/// `admin.readonly` is set, an enclosing container is read-only, or the locale
+/// locks it. One definition shared by every field-context builder so the call
+/// sites can't drift.
+///
+/// `locale_locked` stays the narrower per-field flag — a merely read-only
+/// field is never locale-locked.
+#[must_use]
+pub fn readonly_display(
+    field: &FieldDefinition,
+    ancestor_readonly: bool,
+    locale_locked: bool,
+) -> bool {
+    cascaded_readonly(field, ancestor_readonly) || locale_locked
+}
+
 /// Make a template-ID-safe string from a field name (replaces `[`, `]` with `-`).
 pub fn safe_template_id(name: &str) -> String {
     name.replace('[', "-").replace(']', "")
@@ -553,6 +585,83 @@ mod tests {
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].0, 1, "the second field, not the first");
         assert_eq!(slots[0].1.reference(), "hooks.conditions.show_when_online");
+    }
+
+    // ── readonly_display ──────────────────────────────────────────────
+
+    fn readonly_text(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .admin(FieldAdmin::builder().readonly(true).build())
+            .build()
+    }
+
+    /// A field renders read-only for any of three independent reasons — its
+    /// own `admin.readonly`, a read-only container around it, or the locale
+    /// lock — and stays editable only when none of them holds.
+    #[test]
+    fn readonly_display_covers_own_ancestor_and_locale() {
+        let plain = FieldDefinition::builder("title", FieldType::Text).build();
+
+        assert!(
+            readonly_display(&readonly_text("title"), false, false),
+            "the field's own admin.readonly"
+        );
+        assert!(
+            readonly_display(&plain, true, false),
+            "an enclosing container is read-only"
+        );
+        assert!(
+            readonly_display(&plain, false, true),
+            "the locale locks the field"
+        );
+        assert!(
+            !readonly_display(&plain, false, false),
+            "nothing makes this field read-only"
+        );
+    }
+
+    /// A read-only container locks a field the locale leaves editable, and the
+    /// two flags stay independent: `locale_locked` is never inferred from
+    /// `readonly`.
+    #[test]
+    fn an_ancestor_lock_is_not_a_locale_lock() {
+        let localized = FieldDefinition::builder("title", FieldType::Text)
+            .localized(true)
+            .build();
+
+        let locale_locked = locale_locked_display(true, &localized);
+        assert!(
+            !locale_locked,
+            "a localized field is editable in any locale"
+        );
+        assert!(readonly_display(&localized, true, locale_locked));
+    }
+
+    /// Only `admin.readonly` cascades. A container that renders read-only
+    /// *because the locale locks it* must not pass that down: the locale lock
+    /// is recomputed per field, and a localized field inside a non-localized
+    /// container stays editable.
+    #[test]
+    fn a_locale_lock_does_not_cascade_as_an_ancestor_lock() {
+        let plain = FieldDefinition::builder("meta", FieldType::Group).build();
+
+        assert!(
+            locale_locked_display(true, &plain),
+            "a non-localized group is locked in a non-default locale"
+        );
+        assert!(
+            !cascaded_readonly(&plain, false),
+            "its lock is the locale's, not an ancestor read-only lock"
+        );
+
+        assert!(
+            cascaded_readonly(&readonly_text("meta"), false),
+            "its own admin.readonly does cascade"
+        );
+        assert!(
+            cascaded_readonly(&plain, true),
+            "and so does an inherited one"
+        );
     }
 
     // ── tag values ────────────────────────────────────────────────────

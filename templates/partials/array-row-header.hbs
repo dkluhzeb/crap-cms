@@ -3,25 +3,32 @@
      optional validation error badge, and four action buttons (move-up,
      move-down, duplicate, remove).
 
+     The drag handle and the four action buttons mutate the row set, so they
+     are rendered only when the field is editable. Collapsing is not editing —
+     the toggle button stays available read-only.
+
      Params:
        expanded (bool)   — initial aria-expanded value (true = expanded)
        has_errors (bool) — render the validation error badge
+       readonly (bool)   — hide every row-mutating control
 
      Slot: row title content (rendered inside form__array-row-title) --}}
 <div
   class="form__array-row-header"
   data-action="toggle-array-row"
 >
-  <span
-    class="form__array-row-drag"
-    draggable="true"
-    data-drag
-    data-action="noop"
-    title='{{t "drag_to_reorder"}}'
-    aria-hidden="true"
-  >
-    <span class="material-symbols-outlined icon--sm">drag_indicator</span>
-  </span>
+  {{#unless readonly}}
+    <span
+      class="form__array-row-drag"
+      draggable="true"
+      data-drag
+      data-action="noop"
+      title='{{t "drag_to_reorder"}}'
+      aria-hidden="true"
+    >
+      <span class="material-symbols-outlined icon--sm">drag_indicator</span>
+    </span>
+  {{/unless}}
   <button
     type="button"
     class="form__array-row-toggle"
@@ -49,56 +56,58 @@
       </span>
     </span>
   {{/if}}
-  <button
-    type="button"
-    class="form__array-row-btn"
-    data-action="move-row-up"
-    aria-label='{{t "move_up"}}'
-  >
-    <span
-      class="material-symbols-outlined icon--sm"
-      aria-hidden="true"
+  {{#unless readonly}}
+    <button
+      type="button"
+      class="form__array-row-btn"
+      data-action="move-row-up"
+      aria-label='{{t "move_up"}}'
     >
-      arrow_upward
-    </span>
-  </button>
-  <button
-    type="button"
-    class="form__array-row-btn"
-    data-action="move-row-down"
-    aria-label='{{t "move_down"}}'
-  >
-    <span
-      class="material-symbols-outlined icon--sm"
-      aria-hidden="true"
+      <span
+        class="material-symbols-outlined icon--sm"
+        aria-hidden="true"
+      >
+        arrow_upward
+      </span>
+    </button>
+    <button
+      type="button"
+      class="form__array-row-btn"
+      data-action="move-row-down"
+      aria-label='{{t "move_down"}}'
     >
-      arrow_downward
-    </span>
-  </button>
-  <button
-    type="button"
-    class="form__array-row-btn"
-    data-action="duplicate-row"
-    aria-label='{{t "duplicate"}}'
-  >
-    <span
-      class="material-symbols-outlined icon--sm"
-      aria-hidden="true"
+      <span
+        class="material-symbols-outlined icon--sm"
+        aria-hidden="true"
+      >
+        arrow_downward
+      </span>
+    </button>
+    <button
+      type="button"
+      class="form__array-row-btn"
+      data-action="duplicate-row"
+      aria-label='{{t "duplicate"}}'
     >
-      content_copy
-    </span>
-  </button>
-  <button
-    type="button"
-    class="form__array-row-btn"
-    data-action="remove-array-row"
-    aria-label='{{t "remove"}}'
-  >
-    <span
-      class="material-symbols-outlined icon--sm"
-      aria-hidden="true"
+      <span
+        class="material-symbols-outlined icon--sm"
+        aria-hidden="true"
+      >
+        content_copy
+      </span>
+    </button>
+    <button
+      type="button"
+      class="form__array-row-btn"
+      data-action="remove-array-row"
+      aria-label='{{t "remove"}}'
     >
-      close
-    </span>
-  </button>
+      <span
+        class="material-symbols-outlined icon--sm"
+        aria-hidden="true"
+      >
+        close
+      </span>
+    </button>
+  {{/unless}}
 </div>

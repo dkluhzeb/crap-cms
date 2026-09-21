@@ -11,6 +11,12 @@ use crate::core::Builder;
 pub struct SubFieldOpts<'a> {
     pub locale_locked: bool,
     pub non_default_locale: bool,
+    /// Whether a container around these sub-fields declares `admin.readonly`.
+    /// It cascades downward, so every field built with this set renders
+    /// read-only whatever its own `admin.readonly` says. A container locked
+    /// only by the locale does not set it — the locale lock is recomputed per
+    /// field from `non_default_locale`.
+    pub ancestor_readonly: bool,
     pub depth: usize,
     #[builder(required)]
     pub errors: &'a HashMap<String, String>,
@@ -26,7 +32,22 @@ mod tests {
         let opts = SubFieldOpts::builder(&errors).build();
         assert!(!opts.locale_locked);
         assert!(!opts.non_default_locale);
+        assert!(!opts.ancestor_readonly);
         assert_eq!(opts.depth, 0);
+    }
+
+    /// A container's read-only state is its own slot — it must not be read
+    /// back as the locale lock, which stays the narrower per-field flag.
+    #[test]
+    fn builder_keeps_ancestor_readonly_distinct_from_the_locale_lock() {
+        let errors = HashMap::new();
+        let opts = SubFieldOpts::builder(&errors)
+            .ancestor_readonly(true)
+            .build();
+
+        assert!(opts.ancestor_readonly);
+        assert!(!opts.locale_locked);
+        assert!(!opts.non_default_locale);
     }
 
     /// `locale_locked` and `non_default_locale` are both `bool` — set them to

@@ -187,6 +187,10 @@ fn field_schema(field: &FieldDefinition, relational: bool) -> Value {
         FieldType::Number if field.has_many => {
             json!({ "type": "array", "items": { "type": "number" } })
         }
+        // A rich text field stored as a JSON document takes and returns the
+        // document, not its serialized text — the same predicate the column
+        // decoding uses.
+        FieldType::Richtext if field.parses_json() => json!({ "type": "object" }),
         FieldType::Text
         | FieldType::Textarea
         | FieldType::Email
@@ -335,7 +339,7 @@ fn push_required(schema: &mut Value, name: &str) {
 fn wire_prop(field: &WireField) -> Value {
     let mut prop = match field.kind {
         WireKind::Bool => json!({ "type": "boolean" }),
-        WireKind::Int => json!({ "type": "integer" }),
+        WireKind::Int | WireKind::Int32 => json!({ "type": "integer" }),
         WireKind::Str | WireKind::Id | WireKind::Locale => json!({ "type": "string" }),
         WireKind::FilterMap | WireKind::JsonData => json!({ "type": "object" }),
         WireKind::Select => json!({ "type": "array", "items": { "type": "string" } }),
@@ -1405,5 +1409,18 @@ mod tests {
             required.contains(&Value::String("password".to_string())),
             "password should be in required even when no other fields are required"
         );
+    }
+
+    /// A rich text field stored as a JSON document takes and returns the
+    /// document; only the default (HTML) format is a string.
+    #[test]
+    fn json_rich_text_is_an_object_and_html_rich_text_a_string() {
+        let json_body = FieldDefinition::builder("body", FieldType::Richtext)
+            .admin(FieldAdmin::builder().richtext_format("json").build())
+            .build();
+        let html_body = FieldDefinition::builder("teaser", FieldType::Richtext).build();
+
+        assert_eq!(field_schema(&json_body, false)["type"], "object");
+        assert_eq!(field_schema(&html_body, false)["type"], "string");
     }
 }

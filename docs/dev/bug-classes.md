@@ -322,6 +322,23 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R22 (2026-09-21)**
+  - *Generated descriptions:* the wire-model → proto → MCP-schema → Lua-option
+    chain agrees on every one of the 17 messages once `Int32` and proto3
+    presence are expressible (pinned by two new `tests/wire_parity.rs` cases);
+    the client type printers' relationship/select/polymorphic/localized
+    handling; the `read_shape_fields` boundary — every read-describing surface
+    uses it and no write, validation, migration or column-name path does.
+  - *Readonly cascade:* every `SubFieldOpts` / `ChildEnrichOpts` / `EnrichCtx`
+    construction in production threads `ancestor_readonly`; no copy of
+    `field.admin.readonly || locale_locked` survives outside the shared
+    helper; the locale lock is never inferred from readonly or vice versa.
+  - *Templates:* the `../readonly` depth at all four row-header call sites in
+    `fields/array.hbs` and `fields/blocks.hbs`, including the two differently
+    nested new-row `<template>` blocks.
+  - *Export/import:* round-trip fidelity re-checked; the only finding was a
+    documentation gap (export bypasses `access` and read hooks by design).
+
 - **R18 (2026-09-19, commit b86a3f9e)**
   - *Atomicity:* pool write envelope (`service/orchestrate.rs`) release-
     before-effects on both paths; scoped Lua tx per-tx queues handed up only
@@ -1195,6 +1212,75 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-21 (32) — **CONVERGENCE ROUND 22** (budget mode, Opus orchestrator:
+  3 Sonnet lenses — export/import fidelity, generated descriptions & typegen,
+  admin rendering layer — 2 Opus fix batches, 1 reviewer).
+  **~9 confirmed — 4 HIGH, 3 MED, 2 LOW — NOT quiet; no new class.**
+  - **The round's shape: three separate instances of one thing — a truth that
+    lives in a chokepoint and an outward description that never learned it.**
+    Every read of an upload collection folds the per-size columns
+    (`{size}_url`, `_width`, `_height`, `{size}_{format}_url`) into a nested
+    `sizes` object, but the client type generators, the Lua type definitions
+    and the Rust proto decoder all walked the stored field list, so every
+    generated document type declared four-plus columns per size that no read
+    returns. Fixed at a new chokepoint, `core::upload::read_shape_fields`,
+    with the column names themselves hoisted to `CollectionUpload::
+    size_columns()` so the schema injection, the system/derived name sets and
+    the read shape can no longer disagree. Adjacent find: a user field named
+    `sizes` was silently clobbered on every read — now a reserved name. (D1.)
+  - **A JSON rich text field was described as a string** by the generators and
+    the MCP tool schema, and the Rust proto decoder dropped it. One predicate,
+    `FieldDefinition::parses_json()`, now answers for all three. The decoder
+    needed more than the predicate: the JSON kinds fell into a fallback that
+    always returned `None`, so the fix alone would have traded one data loss
+    for another — the generated client gained real `StructValue`/`ListValue`
+    conversion, which also restores `json` fields, empty groups and blocks.
+  - **`admin.dev_mode`'s per-request template reload was inert.** Every
+    template was registered with `register_template_string`, and
+    handlebars-rust only re-reads templates registered from a path, so an
+    edited overlay did nothing until restart while six doc locations promised
+    live editing. Config-dir overlays now register by path. (D10 — an upstream
+    option relied on without checking what enables it; D3 in effect.)
+  - **`admin.readonly` never cascaded into a container.** A child's readonly
+    was its own flag or the locale lock; the parent's was not consulted, so a
+    read-only Group/Array/Blocks rendered fully editable sub-fields — and the
+    array/blocks row controls (move, duplicate, remove, drag) were gated by
+    *nothing*, so even a locale-locked array could be reordered and emptied.
+    The codebase's own pin at `builder/single.rs` documents that this exact
+    shape was fixed for Checkbox/Select and never extended to containers.
+    (M2.) Two helpers, not one: only `admin.readonly` cascades
+    (`cascaded_readonly`), because cascading the rendered flag would fold in
+    the locale lock and break the rule that a *localized* field inside a
+    non-localized group stays editable in a non-default locale.
+  - MED: the relationship/upload "create new" link was gated on the locale
+    lock alone, so a read-only field still offered a raw `<a href>` into the
+    create form; export is an operator tool that reads the database directly
+    (no `access` rules, no read hooks) and the CLI reference did not say so.
+    LOWs: `strip_option` stopped at the first layer; wire-parity spellings
+    needed `WireKind::Int32` + `grpc_optional` to be expressible at all.
+  - Deliberate non-fix, recorded: `force_hard_delete` is a plain `bool` on the
+    wire while every sibling flag is `optional bool`. The wire model now
+    *describes* that rather than hiding it; flipping it is source-breaking for
+    generated clients. Follow-ups left open: the generated *input* types
+    declare server-derived upload keys (a pre-existing overclaim — the real
+    fix is a write shape mirroring the read shape, which needs a per-field
+    read-only flag in the client IR and regenerated goldens), and the
+    generated Rust proto file emits unconditional helpers that warn as dead
+    code in a consuming crate.
+    Post-fix review of this round's diff (1 Sonnet reviewer): **no HIGH, no
+    MED, no regression** — the second round in the program with a clean
+    post-fix pass. It traced every `ancestor_readonly` construction site, the
+    read/write boundary of `read_shape_fields`, the generated decoder against
+    `proto/content.proto` field by field, and the `../readonly` depth at each
+    template call site. Test fallout was three pinned assertions that the
+    intended changes invalidated: two on the generated proto import line, one
+    on the upgrade-guide parity gate demanding entries for the two new
+    Breaking bullets.
+    Gates (2026-09-21): clippy clean in both forms; unit 6,119 + integration
+    ~1,800 green; e2e 322 green (80 binaries, per binary); doc tests, all five
+    `gen-*` checks, `fmt --check`, `crap-cms fmt --check` and the mdbook build
+    clean. Postgres harness NOT run (no `TEST_DATABASE_URL`).
+    Cost: ~1.5M agent tokens. Streak: 0 quiet rounds.
 - 2026-09-21 (31) — **CONVERGENCE ROUND 21** (budget mode, Opus orchestrator:
   3 Sonnet lenses — concurrent writers/races, storage backends & upload
   serving, live events & transports — 2 Opus fix batches, 1 reviewer).

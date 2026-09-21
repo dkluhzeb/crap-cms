@@ -91,12 +91,14 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
                 continue;
             };
             let name = relative.with_extension("").to_string_lossy().to_string();
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read template: {}", path.display()))?;
 
             debug!("Overlay template: {}", name);
 
-            hbs.register_template_string(&name, &content)
+            // Register by path, not by string: that keeps the file as the
+            // template's source, which is what makes dev mode re-read it from
+            // disk on every render. Compiled-in defaults stay strings — they
+            // have no file to watch.
+            hbs.register_template_file(&name, &path)
                 .with_context(|| format!("Failed to register overlay template: {name}"))?;
         }
     }
@@ -657,6 +659,41 @@ mod tests {
         assert!(html.contains(r#"data-action="remove-array-row""#), "{html}");
     }
 
+    /// With `readonly` the row header drops every control that changes the row
+    /// set — drag handle, move up, move down, duplicate, remove — and keeps
+    /// the collapse toggle, which is not an edit.
+    #[test]
+    fn array_row_header_partial_drops_row_controls_when_readonly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            "{{#> partials/array-row-header expanded=true has_errors=false readonly=true}}\
+             Title 0{{/partials/array-row-header}}",
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        for control in [
+            r#"data-action="move-row-up""#,
+            r#"data-action="move-row-down""#,
+            r#"data-action="duplicate-row""#,
+            r#"data-action="remove-array-row""#,
+            r#"class="form__array-row-drag""#,
+        ] {
+            assert!(!html.contains(control), "{control} must not render: {html}");
+        }
+
+        assert!(html.contains(r#"data-action="toggle-array-row""#), "{html}");
+        assert!(
+            html.contains(r#"<span class="form__array-row-title">Title 0</span>"#),
+            "{html}"
+        );
+    }
+
     #[test]
     fn array_row_header_partial_collapsed_no_errors() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -866,5 +903,161 @@ mod tests {
                 "documented slot `{slot}` missing from `{file}` — built-in slot names are a stable API"
             );
         }
+    }
+
+    /// The compiled-in source of `file`.
+    fn template_source(file: &str) -> &'static str {
+        TEMPLATES_DIR
+            .get_file(file)
+            .unwrap_or_else(|| panic!("template `{file}` missing"))
+            .contents_utf8()
+            .unwrap_or_else(|| panic!("template `{file}` not UTF-8"))
+    }
+
+    /// Byte offset of the `{{/…}}` closing the block whose body `body` starts,
+    /// counting nested `{{#…}}` blocks so an inner close doesn't end it early.
+    fn block_body_end(body: &str) -> Option<usize> {
+        let mut depth = 1_usize;
+
+        for (idx, _) in body.match_indices("{{") {
+            let tail = &body[idx..];
+
+            if tail.starts_with("{{#") {
+                depth += 1;
+            } else if tail.starts_with("{{/") {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Every `{{#unless readonly}}` body in `file`, concatenated — the part of
+    /// the template that renders only when the field is editable.
+    fn readonly_guarded_source(file: &str) -> String {
+        const OPEN: &str = "{{#unless readonly}}";
+
+        let mut guarded = String::new();
+        let mut rest = template_source(file);
+
+        while let Some(at) = rest.find(OPEN) {
+            let body = &rest[at + OPEN.len()..];
+            let Some(end) = block_body_end(body) else {
+                break;
+            };
+
+            guarded.push_str(&body[..end]);
+            rest = &body[end..];
+        }
+
+        guarded
+    }
+
+    /// Every control that changes an array/blocks row set must sit behind a
+    /// read-only guard: `admin.readonly` (its own, or a container's) and the
+    /// locale lock both reach the template as `readonly`, and a read-only
+    /// field must not offer add, remove, reorder, or duplicate. Collapsing a
+    /// row is not editing — the toggle button deliberately stays outside the
+    /// guard.
+    #[test]
+    fn row_mutating_controls_sit_behind_a_readonly_guard() {
+        let guarded = [
+            (
+                "partials/array-row-header.hbs",
+                &[
+                    "data-action=\"move-row-up\"",
+                    "data-action=\"move-row-down\"",
+                    "data-action=\"duplicate-row\"",
+                    "data-action=\"remove-array-row\"",
+                    "form__array-row-drag",
+                ][..],
+            ),
+            ("fields/array.hbs", &["data-action=\"add-array-row\""][..]),
+            ("fields/blocks.hbs", &["data-action=\"add-block-row\""][..]),
+        ];
+
+        for (file, controls) in guarded {
+            let guard = readonly_guarded_source(file);
+            assert!(
+                !guard.is_empty(),
+                "`{file}` has no read-only guard around its row controls"
+            );
+
+            for control in controls {
+                assert!(
+                    guard.contains(control),
+                    "`{control}` in `{file}` must sit behind the read-only guard"
+                );
+            }
+        }
+    }
+
+    /// The collapse toggle is the deliberate exception: it must stay reachable
+    /// when the field is read-only, so it lives outside the guard.
+    #[test]
+    fn the_row_collapse_toggle_stays_available_when_readonly() {
+        let file = "partials/array-row-header.hbs";
+        let guard = readonly_guarded_source(file);
+
+        assert!(
+            !guard.contains("data-action=\"toggle-array-row\""),
+            "collapsing a row is not editing — the toggle must not be gated"
+        );
+        assert!(template_source(file).contains("data-action=\"toggle-array-row\""));
+    }
+
+    /// Write `<config_dir>/templates/<name>.hbs` and return the config dir's
+    /// handlebars registry for the given dev-mode setting.
+    fn overlay_dir(body: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("templates")).expect("templates dir");
+        fs::write(tmp.path().join("templates/overlay-probe.hbs"), body).expect("write overlay");
+        tmp
+    }
+
+    fn probe(dir: &Path, dev_mode: bool) -> Arc<Handlebars<'static>> {
+        let translations = Arc::new(Translations::load(dir));
+        create_handlebars(dir, dev_mode, translations, None).expect("create_handlebars")
+    }
+
+    /// Regression: dev mode promises "templates are reloaded from disk on
+    /// every request". That only holds for templates registered by path —
+    /// a template registered from a string has no source to re-read, so the
+    /// edited file was silently ignored until the process restarted.
+    #[test]
+    fn dev_mode_rerenders_an_edited_overlay_template() {
+        let tmp = overlay_dir("first");
+        let hbs = probe(tmp.path(), true);
+
+        assert_eq!(
+            hbs.render("overlay-probe", &json!({})).expect("first"),
+            "first"
+        );
+
+        fs::write(tmp.path().join("templates/overlay-probe.hbs"), "second").expect("rewrite");
+
+        assert_eq!(
+            hbs.render("overlay-probe", &json!({})).expect("second"),
+            "second",
+            "dev mode must re-read the overlay file"
+        );
+    }
+
+    /// The production counterpart: without dev mode the overlay is parsed
+    /// once at startup and later edits are not picked up.
+    #[test]
+    fn non_dev_mode_caches_the_overlay_template() {
+        let tmp = overlay_dir("first");
+        let hbs = probe(tmp.path(), false);
+
+        fs::write(tmp.path().join("templates/overlay-probe.hbs"), "second").expect("rewrite");
+
+        assert_eq!(
+            hbs.render("overlay-probe", &json!({})).expect("cached"),
+            "first"
+        );
     }
 }

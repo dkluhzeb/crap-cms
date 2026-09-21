@@ -4,6 +4,9 @@
  * Handles add/remove/reorder/duplicate rows, drag-and-drop sorting,
  * index rewriting, live row label watchers, empty state, and max_rows.
  *
+ * A fieldset marked `data-readonly` refuses every row mutation; only
+ * collapsing and expanding rows stay available.
+ *
  * @module array-fields
  * @category form-field
  * @stability experimental
@@ -189,6 +192,19 @@ class CrapArrayField extends HTMLElement {
   }
 
   /**
+   * Whether this field renders read-only. The server stamps `data-readonly`
+   * on the fieldset when the field, or a container around it, is read-only or
+   * the locale locks it; the row-mutating controls are then not rendered at
+   * all, and this refuses the actions they would have triggered. Collapsing a
+   * row is not editing and stays available.
+   *
+   * @returns {boolean}
+   */
+  get _readonly() {
+    return this._fieldset?.hasAttribute('data-readonly') ?? false;
+  }
+
+  /**
    * Whether this fieldset is at its `data-max-rows` cap. Returns `false`
    * when no cap is set, the cap is non-numeric, or required nodes are missing.
    */
@@ -370,6 +386,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {HTMLElement} btn */
   _moveRowUp(btn) {
+    if (this._readonly) return;
     const row = btn.closest('.form__array-row');
     if (!row?.previousElementSibling || !row.parentElement) return;
     row.parentElement.insertBefore(row, row.previousElementSibling);
@@ -378,6 +395,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {HTMLElement} btn */
   _moveRowDown(btn) {
+    if (this._readonly) return;
     const row = btn.closest('.form__array-row');
     if (!row?.nextElementSibling || !row.parentElement) return;
     row.parentElement.insertBefore(row.nextElementSibling, row);
@@ -386,6 +404,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {HTMLElement} btn */
   _duplicateRow(btn) {
+    if (this._readonly) return;
     const row = btn.closest('.form__array-row');
     if (!row) return;
     if (this._isAtMax()) return;
@@ -409,6 +428,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {HTMLElement} btn */
   _removeRow(btn) {
+    if (this._readonly) return;
     const row = btn.closest('.form__array-row');
     if (!row) return;
     row.remove();
@@ -445,6 +465,7 @@ class CrapArrayField extends HTMLElement {
    *   to the fieldset-level `data-label-field`.
    */
   _addRow(template, labelOverride) {
+    if (this._readonly) return;
     const fs = this._fieldset;
     if (!fs) return;
     if (this._isAtMax()) return;
@@ -506,6 +527,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {DragEvent} e */
   _onDragStart(e) {
+    if (this._readonly) return;
     const handle = /** @type {HTMLElement|null} */ (
       e.target instanceof Element ? e.target.closest('[draggable][data-drag]') : null
     );
@@ -527,6 +549,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {DragEvent} e */
   _onDragOver(e) {
+    if (this._readonly) return;
     const container = this._findRowsContainer(e.target);
     if (!container) return;
     e.preventDefault();
@@ -539,6 +562,7 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {DragEvent} e */
   _onDrop(e) {
+    if (this._readonly) return;
     const container = this._findRowsContainer(e.target);
     if (!container) return;
     e.preventDefault();

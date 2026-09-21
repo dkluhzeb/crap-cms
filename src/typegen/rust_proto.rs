@@ -6,7 +6,7 @@
 
 use crate::core::{
     CollectionDefinition, FieldDefinition, Registry, collection::GlobalDefinition,
-    flatten_array_sub_fields,
+    flatten_array_sub_fields, upload::read_shape_fields,
 };
 
 use super::client::{FieldTy, resolve_ty};
@@ -31,13 +31,14 @@ pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
     );
     w!(out, "");
     w!(out, "use {}::field_value::Kind;", proto_mod);
-    w!(out, "use {}::{{DataMap, Document}};", proto_mod);
+    w!(out, "use {}::{{DataMap, Document, FieldValue}};", proto_mod);
     w!(out, "");
     w!(out, "use super::generated::*;");
     w!(out, "");
 
     render_from_document_trait(&mut out);
     render_helpers(&mut out);
+    render_json_helpers(&mut out);
     render_rel_helpers(&mut out);
 
     for slug in sorted_collection_slugs(registry) {
@@ -254,12 +255,69 @@ fn render_rel_helpers(out: &mut String) {
     out.push('\n');
 }
 
+/// Hand-written helpers for the wire values that carry no fixed shape: a
+/// `json` field, a rich text field stored as a JSON document, an empty group,
+/// a blocks or join list. The wire does carry structured JSON — the encoder
+/// spells an object as `StructValue` and an array as `ListValue` — so these
+/// convert the value instead of dropping it. The recursion is bounded by
+/// prost's decode recursion limit, which no decoded message can exceed.
+const JSON_HELPERS_SOURCE: &str = r"
+// ── JSON helpers ──────────────────────────────────────────
+
+fn field_value_to_json(v: &FieldValue) -> serde_json::Value {
+    match &v.kind {
+        Some(Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
+        Some(Kind::IntValue(n)) => serde_json::Value::from(*n),
+        Some(Kind::DoubleValue(n)) => serde_json::Number::from_f64(*n)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Some(Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
+        Some(Kind::ListValue(list)) => serde_json::Value::Array(
+            list.values.iter().map(field_value_to_json).collect()
+        ),
+        Some(Kind::StructValue(s)) => serde_json::Value::Object(
+            s.fields.iter()
+                .map(|(k, v)| (k.clone(), field_value_to_json(v)))
+                .collect()
+        ),
+        Some(Kind::NullValue(_)) | None => serde_json::Value::Null,
+    }
+}
+
+fn get_json(doc: &Document, name: &str) -> Option<serde_json::Value> {
+    doc.fields.as_ref()
+        .and_then(|f| f.fields.get(name))
+        .map(field_value_to_json)
+}
+
+fn get_json_list(doc: &Document, name: &str) -> Option<Vec<serde_json::Value>> {
+    doc.fields.as_ref()
+        .and_then(|f| f.fields.get(name))
+        .and_then(|v| match &v.kind {
+            Some(Kind::ListValue(list)) => Some(
+                list.values.iter().map(field_value_to_json).collect()
+            ),
+            _ => None,
+        })
+}
+";
+
+/// Render the JSON-value helpers.
+fn render_json_helpers(out: &mut String) {
+    out.push_str(JSON_HELPERS_SOURCE);
+    out.push('\n');
+}
+
 /// Render `from_document` impl for a collection.
 fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     let pascal = idents::rust_type(&to_pascal_case(&col.slug));
 
+    // The READ shape, the same one `client/rust.rs` types the structs from: an
+    // upload collection's per-size columns arrive folded into one `sizes`
+    // object, never as the stored columns.
+    let fields = read_shape_fields(col);
+
     // Sub-type from_struct impls for arrays
-    for stf in collect_sub_type_fields(&col.fields, &pascal) {
+    for stf in collect_sub_type_fields(&fields, &pascal) {
         let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields, stf.row_id);
     }
@@ -269,7 +327,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     w!(out, "        Self {{");
     w!(out, "            id: doc.id.clone(),");
 
-    render_field_extractions(out, &col.fields, &pascal, "doc");
+    render_field_extractions(out, &fields, &pascal, "doc");
     render_system_extractions(out, col.has_drafts(), col.soft_delete);
 
     if col.timestamps {
@@ -486,11 +544,13 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
         FieldTy::Num => scalar("get_num", doc_var, name),
         FieldTy::Bool => scalar("get_bool", doc_var, name),
         FieldTy::NumList => opt_list("get_num_list", doc_var, name),
+        // Shapeless JSON — a `json` field, a JSON rich text document, an empty
+        // group, a blocks/join list — arrives as a structured wire value.
+        FieldTy::Json | FieldTy::Map => format!("get_json({doc_var}, \"{name}\")"),
+        FieldTy::JsonList => format!("get_json_list({doc_var}, \"{name}\")"),
         // `resolve_ty` never produces the `locale = "all"` shape; the decoders
         // target the single-locale structs.
-        FieldTy::Json | FieldTy::Map | FieldTy::JsonList | FieldTy::Localized(_) => {
-            COMPLEX_FALLBACK.to_string()
-        }
+        FieldTy::Localized(_) => COMPLEX_FALLBACK.to_string(),
 
         // Typed relationship/upload — `get_rel(_list)` decode both the id string
         // and the populated document; `T` is inferred from the struct field type.
@@ -522,8 +582,8 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
     }
 }
 
-/// The proto wire carries no structured JSON/blocks/join, so these decode to
-/// `None`.
+/// The `locale = "all"` read shape has no counterpart in the single-locale
+/// structs, so it decodes to `None`.
 const COMPLEX_FALLBACK: &str = "None /* complex field */";
 
 /// Render a `from_struct` impl for an array/group sub-type. `pascal` is the
@@ -633,11 +693,17 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
         FieldTy::NumList => get(
             "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
         ),
+        // Shapeless JSON — a `json` field, a JSON rich text document, an empty
+        // group, nested blocks — arrives as a structured wire value.
+        FieldTy::Json | FieldTy::Map => {
+            format!("s.fields.get(\"{name}\").map(field_value_to_json)")
+        }
+        FieldTy::JsonList => get(
+            "Some(Kind::ListValue(l)) => Some(l.values.iter().map(field_value_to_json).collect())",
+        ),
         // `resolve_ty` never produces the `locale = "all"` shape; the decoders
         // target the single-locale structs.
-        FieldTy::Json | FieldTy::Map | FieldTy::JsonList | FieldTy::Localized(_) => {
-            COMPLEX_FALLBACK.to_string()
-        }
+        FieldTy::Localized(_) => COMPLEX_FALLBACK.to_string(),
 
         // Typed relationship — id string OR populated document. Decoding the
         // `StructValue` form is what closes the nested-populated-relationship gap.
@@ -684,7 +750,10 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldAdmin, FieldType, LocalizedString, RelationshipConfig, SelectOption};
+    use crate::core::{
+        FieldAdmin, FieldType, LocalizedString, RelationshipConfig, SelectOption,
+        upload::{CollectionUpload, ImageSizeBuilder},
+    };
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
@@ -1181,7 +1250,7 @@ mod tests {
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
         let out = render(&registry, "crate::proto");
 
-        assert!(out.contains("use crate::proto::{DataMap, Document};"));
+        assert!(out.contains("use crate::proto::{DataMap, Document, FieldValue};"));
         assert!(out.contains("use crate::proto::field_value::Kind;"));
         assert!(out.contains("impl Posts {"));
     }
@@ -1208,7 +1277,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("use crate::proto::{DataMap, Document};"),
+            out.contains("use crate::proto::{DataMap, Document, FieldValue};"),
             "{out}"
         );
         assert!(
@@ -1256,5 +1325,74 @@ mod tests {
             !out.contains("row:"),
             "row field itself should not appear: {out}"
         );
+    }
+
+    /// A rich text field stored as a JSON document decodes to the document.
+    /// Matching only `StringValue` (what the string typing produced) dropped
+    /// the object the encoder sends, silently decoding the field to `None`.
+    #[test]
+    fn json_rich_text_decodes_the_document_and_html_stays_a_string() {
+        let json_body = FieldDefinition::builder("body", FieldType::Richtext)
+            .admin(FieldAdmin::builder().richtext_format("json").build())
+            .build();
+        let html_body = FieldDefinition::builder("teaser", FieldType::Richtext).build();
+
+        let col = make_col("pages", vec![json_body, html_body]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(out.contains("body: get_json(doc, \"body\")"), "{out}");
+        assert!(
+            out.contains("teaser: get_str_opt(doc, \"teaser\")"),
+            "{out}"
+        );
+    }
+
+    /// The emitted JSON helper accepts the structured wire forms, not just
+    /// scalars — an object arrives as `StructValue`, an array as `ListValue`.
+    #[test]
+    fn the_json_helper_accepts_structured_wire_values() {
+        let mut reg = Registry::new();
+        reg.register_collection(make_col("pages", vec![text_field("title", true)]));
+
+        let out = render(&reg, "crate::proto");
+
+        assert!(
+            out.contains("fn field_value_to_json(v: &FieldValue)"),
+            "{out}"
+        );
+        assert!(out.contains("Some(Kind::StructValue(s)) => serde_json::Value::Object("));
+        assert!(out.contains("Some(Kind::ListValue(list)) => serde_json::Value::Array("));
+        assert!(out.contains("use crate::proto::{DataMap, Document, FieldValue};"));
+    }
+
+    /// An upload collection's per-size columns never arrive: the read folds
+    /// them into one `sizes` object, so the decoder must read that instead.
+    #[test]
+    fn upload_size_columns_decode_as_the_assembled_object() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumbnail")
+                .width(200)
+                .height(200)
+                .build(),
+        ];
+
+        let mut col = make_col("media", vec![text_field("filename", true)]);
+        col.fields.extend(
+            upload
+                .size_columns()
+                .into_iter()
+                .map(|(name, ty)| FieldDefinition::builder(name, ty).build()),
+        );
+        col.upload = Some(upload);
+
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(!out.contains("thumbnail_url"), "{out}");
+        assert!(!out.contains("thumbnail_width"), "{out}");
+        assert!(out.contains("sizes: "), "{out}");
+        assert!(out.contains("MediaSizesThumbnail::from_struct"), "{out}");
     }
 }

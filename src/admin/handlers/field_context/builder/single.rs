@@ -19,9 +19,10 @@ use crate::{
         },
         handlers::{
             field_context::{
-                MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-                count_errors_in_field_contexts, date_picker_values, json_textarea_value,
-                locale_locked_display, picker_step, safe_template_id, tag_values, tags_input_value,
+                MAX_FIELD_DEPTH, builder::build_select_options, cascaded_readonly,
+                collect_node_attr_errors, count_errors_in_field_contexts, date_picker_values,
+                json_textarea_value, locale_locked_display, picker_step, readonly_display,
+                safe_template_id, tag_values, tags_input_value,
             },
             shared::admin_form_fields,
         },
@@ -56,6 +57,7 @@ fn build_base_field_data(
     errors: &HashMap<String, String>,
     name_prefix: &str,
     non_default_locale: bool,
+    ancestor_readonly: bool,
 ) -> (BaseFieldData, String, String) {
     let full_name = resolve_full_name(field, name_prefix);
     let value_str = values.get(&full_name).cloned().unwrap_or_default();
@@ -89,7 +91,7 @@ fn build_base_field_data(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: field.admin.readonly || locale_locked,
+        readonly: readonly_display(field, ancestor_readonly, locale_locked),
         localized: field.localized,
         locale_locked,
         position: field.admin.position.clone(),
@@ -110,6 +112,12 @@ fn build_base_field_data(
 /// `"content[0]"` for a field inside a blocks row at index 0). Top-level
 /// fields use an empty prefix.
 ///
+/// `ancestor_readonly`: whether a container enclosing this field declares
+/// `admin.readonly`. It cascades downward, so a field inside a read-only
+/// Group/Array/Blocks/Row/Collapsible/Tabs renders read-only too. Top-level
+/// fields pass `false`. A container locked only by the locale does NOT set
+/// this — the locale lock is recomputed per field from `non_default_locale`.
+///
 /// `depth`: current nesting depth (0 = top-level). At
 /// [`MAX_FIELD_DEPTH`] the recursion stops and the field is rendered as a
 /// minimal text-style fallback (matches the existing behavior of bailing
@@ -120,10 +128,17 @@ pub fn build_single_field_context(
     errors: &HashMap<String, String>,
     name_prefix: &str,
     non_default_locale: bool,
+    ancestor_readonly: bool,
     depth: usize,
 ) -> FieldContext {
-    let (base, full_name, value_str) =
-        build_base_field_data(field, values, errors, name_prefix, non_default_locale);
+    let (base, full_name, value_str) = build_base_field_data(
+        field,
+        values,
+        errors,
+        name_prefix,
+        non_default_locale,
+        ancestor_readonly,
+    );
 
     let fc = SingleFieldCtx {
         field,
@@ -133,6 +148,7 @@ pub fn build_single_field_context(
         name_prefix,
         full_name: &full_name,
         non_default_locale,
+        cascade_readonly: cascaded_readonly(field, ancestor_readonly),
         depth,
     };
 
@@ -148,6 +164,10 @@ struct SingleFieldCtx<'a> {
     name_prefix: &'a str,
     full_name: &'a str,
     non_default_locale: bool,
+    /// What every field inside this one inherits: this field's own
+    /// `admin.readonly` plus whatever it inherited. Not the rendered
+    /// `readonly` — the locale lock is recomputed per field.
+    cascade_readonly: bool,
     depth: usize,
 }
 
@@ -496,24 +516,24 @@ fn construct_join(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext 
 ///
 /// Only the fields the form renders become contexts ([`admin_form_fields`]),
 /// so the enrichment and display-condition passes pair the same entries.
-fn build_layout_sub_fields(
-    fields: &[FieldDefinition],
-    values: &HashMap<String, String>,
-    errors: &HashMap<String, String>,
-    name_prefix: &str,
-    full_name: &str,
-    non_default_locale: bool,
-    depth: usize,
-) -> Vec<FieldContext> {
-    let prefix = if name_prefix.is_empty() {
+fn build_layout_sub_fields(fields: &[FieldDefinition], fc: &SingleFieldCtx) -> Vec<FieldContext> {
+    let prefix = if fc.name_prefix.is_empty() {
         ""
     } else {
-        full_name
+        fc.full_name
     };
 
     admin_form_fields(fields)
         .map(|sf| {
-            build_single_field_context(sf, values, errors, prefix, non_default_locale, depth + 1)
+            build_single_field_context(
+                sf,
+                fc.values,
+                fc.errors,
+                prefix,
+                fc.non_default_locale,
+                fc.cascade_readonly,
+                fc.depth + 1,
+            )
         })
         .collect()
 }
@@ -551,6 +571,7 @@ fn construct_group(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
                     fc.errors,
                     &prefix,
                     child_non_default_locale,
+                    fc.cascade_readonly,
                     fc.depth + 1,
                 )
             })
@@ -568,15 +589,7 @@ fn construct_row(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let sub_fields = if fc.depth >= MAX_FIELD_DEPTH {
         Vec::new()
     } else {
-        build_layout_sub_fields(
-            &fc.field.fields,
-            fc.values,
-            fc.errors,
-            fc.name_prefix,
-            fc.full_name,
-            fc.non_default_locale,
-            fc.depth,
-        )
+        build_layout_sub_fields(&fc.field.fields, fc)
     };
 
     FieldContext::Row(RowField { base, sub_fields })
@@ -586,15 +599,7 @@ fn construct_collapsible(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldConte
     let sub_fields = if fc.depth >= MAX_FIELD_DEPTH {
         Vec::new()
     } else {
-        build_layout_sub_fields(
-            &fc.field.fields,
-            fc.values,
-            fc.errors,
-            fc.name_prefix,
-            fc.full_name,
-            fc.non_default_locale,
-            fc.depth,
-        )
+        build_layout_sub_fields(&fc.field.fields, fc)
     };
 
     FieldContext::Collapsible(GroupField {
@@ -612,15 +617,7 @@ fn construct_tabs(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
             .tabs
             .iter()
             .map(|tab| {
-                let sub_fields = build_layout_sub_fields(
-                    &tab.fields,
-                    fc.values,
-                    fc.errors,
-                    fc.name_prefix,
-                    fc.full_name,
-                    fc.non_default_locale,
-                    fc.depth,
-                );
+                let sub_fields = build_layout_sub_fields(&tab.fields, fc);
 
                 let error_count = count_errors_in_field_contexts(&sub_fields);
                 let error_count_opt = if error_count > 0 {
@@ -655,6 +652,7 @@ fn construct_array(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
                     &HashMap::new(),
                     &template_prefix,
                     fc.non_default_locale,
+                    fc.cascade_readonly,
                     fc.depth + 1,
                 )
             })
@@ -699,6 +697,7 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
                             &HashMap::new(),
                             &template_prefix,
                             fc.non_default_locale,
+                            fc.cascade_readonly,
                             fc.depth + 1,
                         )
                     })
@@ -793,7 +792,7 @@ mod tests {
                 .admin(FieldAdmin::builder().readonly(true).build())
                 .build();
 
-            let fc = build_single_field_context(&field, &empty, &empty, "", false, 0);
+            let fc = build_single_field_context(&field, &empty, &empty, "", false, false, 0);
 
             assert!(fc.base().readonly, "{label} must render readonly");
             assert!(
@@ -803,13 +802,93 @@ mod tests {
         }
     }
 
+    /// Build a container of `field_type` holding one text sub-field, with
+    /// `admin.readonly` set as asked.
+    fn readonly_container(field_type: FieldType, readonly: bool) -> FieldDefinition {
+        FieldDefinition::builder("meta", field_type)
+            .fields(vec![text_field("title")])
+            .admin(FieldAdmin::builder().readonly(readonly).build())
+            .build()
+    }
+
+    /// A read-only container locks what it contains: `admin.readonly` on a
+    /// Group cascades to every sub-field. A plain Group leaves its children
+    /// editable, and neither case is a locale lock.
+    #[test]
+    fn a_readonly_group_cascades_readonly_to_its_children() {
+        let empty = HashMap::new();
+
+        let locked = readonly_container(FieldType::Group, true);
+        let ctx =
+            build_single_field_context(&locked, &empty, &empty, "", false, false, 0).to_value();
+
+        assert_eq!(ctx["readonly"], true);
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], true,
+            "a read-only group locks the fields inside it"
+        );
+        assert_eq!(
+            ctx["sub_fields"][0]["locale_locked"], false,
+            "read-only is not the same as locale-locked"
+        );
+
+        let open = readonly_container(FieldType::Group, false);
+        let ctx = build_single_field_context(&open, &empty, &empty, "", false, false, 0).to_value();
+
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], false,
+            "a plain group leaves its children editable"
+        );
+    }
+
+    /// A layout wrapper is transparent for naming but is still a field with
+    /// its own `admin.readonly`, so it locks the fields it wraps.
+    #[test]
+    fn a_readonly_layout_wrapper_locks_the_fields_it_wraps() {
+        let empty = HashMap::new();
+
+        for field_type in [FieldType::Row, FieldType::Collapsible] {
+            let label = format!("{field_type:?}");
+            let wrapper = readonly_container(field_type, true);
+
+            let ctx = build_single_field_context(&wrapper, &empty, &empty, "", false, false, 0)
+                .to_value();
+
+            assert_eq!(
+                ctx["sub_fields"][0]["readonly"], true,
+                "{label}: a read-only wrapper locks the fields it wraps"
+            );
+        }
+    }
+
+    /// The same cascade reaches an array's new-row `<template>`: a row added
+    /// in a read-only array would otherwise render editable inputs.
+    #[test]
+    fn a_readonly_array_cascades_readonly_into_its_row_template() {
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![text_field("label")])
+            .admin(FieldAdmin::builder().readonly(true).build())
+            .build();
+        let empty = HashMap::new();
+
+        let ctx =
+            build_single_field_context(&items, &empty, &empty, "", false, false, 0).to_value();
+
+        assert_eq!(ctx["readonly"], true);
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], true,
+            "a template sub-field of a read-only array renders read-only"
+        );
+    }
+
     #[test]
     fn non_localized_group_in_non_default_locale_locks_children() {
         let field = group_field("meta", false, vec![text_field("title")]);
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", true, false, 0).to_value();
 
         // The group itself should be locale-locked
         assert_eq!(ctx["locale_locked"], true);
@@ -823,13 +902,39 @@ mod tests {
         assert_eq!(sub["readonly"], true);
     }
 
+    /// A locale lock is not an ancestor read-only lock. A non-localized group
+    /// renders read-only in a non-default locale, but a *localized* field
+    /// inside it is edited in that locale and must stay editable — only
+    /// `admin.readonly` cascades.
+    #[test]
+    fn a_localized_child_of_a_locale_locked_group_stays_editable() {
+        let mut title = text_field("title");
+        title.localized = true;
+        let field = group_field("meta", false, vec![title]);
+        let empty = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &empty, &empty, "", true, false, 0).to_value();
+
+        assert_eq!(ctx["locale_locked"], true, "the group itself is locked");
+        assert_eq!(ctx["readonly"], true);
+        assert_eq!(
+            ctx["sub_fields"][0]["locale_locked"], false,
+            "a localized child is edited in this locale"
+        );
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], false,
+            "the group's locale lock must not cascade as a read-only lock"
+        );
+    }
+
     #[test]
     fn localized_group_in_non_default_locale_unlocks_children() {
         let field = group_field("meta", true, vec![text_field("title")]);
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", true, false, 0).to_value();
 
         // The localized group itself should NOT be locale-locked
         assert_eq!(ctx["locale_locked"], false);
@@ -853,9 +958,16 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx =
-            build_single_field_context(&field, &values, &errors, "items[__INDEX__]", false, 1)
-                .to_value();
+        let ctx = build_single_field_context(
+            &field,
+            &values,
+            &errors,
+            "items[__INDEX__]",
+            false,
+            false,
+            1,
+        )
+        .to_value();
 
         assert_eq!(
             ctx["sub_fields"][0]["name"], "items[__INDEX__][meta][0][author]",
@@ -880,7 +992,8 @@ mod tests {
         );
         let empty = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &empty, &empty, "", false, false, 0).to_value();
 
         let names: Vec<&str> = ctx["sub_fields"]
             .as_array()
@@ -909,7 +1022,8 @@ mod tests {
             .build();
         let empty = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &empty, &empty, "", false, false, 0).to_value();
 
         let subs = ctx["sub_fields"]
             .as_array()
@@ -930,7 +1044,8 @@ mod tests {
             .build();
         let empty = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &empty, &empty, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &empty, &empty, "", false, false, 0).to_value();
 
         let subs = ctx["sub_fields"]
             .as_array()
@@ -946,7 +1061,8 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
 
         assert_eq!(ctx["sub_fields"][0]["name"], "meta__author");
     }
@@ -967,7 +1083,8 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         assert_eq!(ctx["language"], "javascript");
     }
 
@@ -977,7 +1094,8 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         assert_eq!(ctx["language"], "json");
     }
 
@@ -1006,8 +1124,8 @@ mod tests {
 
         let values = HashMap::new();
         let errors = HashMap::new();
-        let ctx =
-            build_single_field_context(&blocks_field, &values, &errors, "", false, 0).to_value();
+        let ctx = build_single_field_context(&blocks_field, &values, &errors, "", false, false, 0)
+            .to_value();
 
         let sub_field = &ctx["block_definitions"][0]["fields"][0];
         assert_eq!(
@@ -1033,7 +1151,8 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         assert_eq!(ctx["language"], "javascript");
         assert_eq!(
             ctx["languages"],
@@ -1047,7 +1166,8 @@ mod tests {
         let values = HashMap::new();
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         // No `languages` key when the operator hasn't opted into the picker.
         assert!(ctx.get("languages").is_none());
     }
@@ -1062,7 +1182,8 @@ mod tests {
         values.insert("snippet_lang".to_string(), "python".to_string());
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         assert_eq!(
             ctx["language"], "python",
             "per-document _lang value should win over the operator default"
@@ -1077,7 +1198,8 @@ mod tests {
         values.insert("snippet_lang".to_string(), String::new());
         let errors = HashMap::new();
 
-        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "", false, false, 0).to_value();
         assert_eq!(ctx["language"], "javascript");
     }
 
@@ -1106,8 +1228,8 @@ mod tests {
 
         let values = HashMap::new();
         let errors = HashMap::new();
-        let ctx =
-            build_single_field_context(&blocks_field, &values, &errors, "", false, 0).to_value();
+        let ctx = build_single_field_context(&blocks_field, &values, &errors, "", false, false, 0)
+            .to_value();
 
         let sub_field = &ctx["block_definitions"][0]["fields"][0];
         assert_eq!(sub_field["language"], "javascript");

@@ -15,6 +15,8 @@
 //!   regenerated from the pinned entries, and `--check` diffs it;
 //! - tags are append-only: remove a field only by reserving its tag.
 
+use crate::service::op::wire::{WireField, WireKind};
+
 /// One pinned proto field: wire spelling, proto type, tag, and the exact
 /// comment block rendered above it (lines joined by `\n`; empty = none).
 pub struct ProtoField {
@@ -768,6 +770,45 @@ pub static PROTO_MESSAGES: &[ProtoMessage] = &[
 #[must_use]
 pub fn proto_message(op: &str) -> Option<&'static ProtoMessage> {
     PROTO_MESSAGES.iter().find(|m| m.op == op)
+}
+
+/// The proto type spelling a wire field must carry: the base type its
+/// [`WireKind`] names, plus the cardinality and presence proto3 gives it.
+///
+/// This is what turns the hand-typed [`ProtoField::ty`] from a trusted string
+/// into a checked one — the wire-parity test compares every pinned `ty` against
+/// it, so a field pinned as `optional string` while the model calls it a
+/// boolean fails CI instead of shipping a request message no client can fill.
+#[must_use]
+pub fn expected_proto_ty(field: &WireField) -> String {
+    let base = match field.kind {
+        // Repeated and message fields carry proto3's own presence rules and
+        // never take the `optional` keyword.
+        WireKind::Select => return "repeated string".to_string(),
+        WireKind::DocumentsArray => return "repeated DataMap".to_string(),
+        WireKind::DataFields | WireKind::DataObject => return "DataMap".to_string(),
+        // The enum's UNSPECIFIED zero value is the "any status" sentinel, so it
+        // needs no presence of its own.
+        WireKind::JobStatus => return "JobRunStatus".to_string(),
+
+        WireKind::Bool => "bool",
+        // A duration is seconds on the gRPC wire; the string spelling exists
+        // only where the type system allows the union.
+        WireKind::Int | WireKind::Duration => "int64",
+        WireKind::Int32 => "int32",
+        // A where filter and a job payload travel as JSON strings on gRPC.
+        WireKind::Str
+        | WireKind::Id
+        | WireKind::Locale
+        | WireKind::FilterMap
+        | WireKind::JsonData => "string",
+    };
+
+    if field.grpc_optional {
+        format!("optional {base}")
+    } else {
+        base.to_string()
+    }
 }
 
 /// Render one message's body (the text between `message X {` and `}`).

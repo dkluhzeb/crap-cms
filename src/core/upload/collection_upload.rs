@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::upload::{FormatOptions, ImageSize};
+use crate::core::{
+    FieldType,
+    upload::{FormatOptions, ImageSize, SIZES_FIELD},
+};
 use crate::typegen::lua::LuaAnnotation;
 
 /// Per-collection upload configuration (MIME filtering, image sizes, format options).
@@ -45,6 +48,48 @@ impl CollectionUpload {
         }
     }
 
+    /// The configured format-variant names, in the order their columns are
+    /// generated. The one place `webp`/`avif` are spelled as wire names.
+    #[must_use]
+    pub fn format_variants(&self) -> Vec<&'static str> {
+        let mut variants = Vec::new();
+
+        if self.format_options.webp.is_some() {
+            variants.push("webp");
+        }
+        if self.format_options.avif.is_some() {
+            variants.push("avif");
+        }
+
+        variants
+    }
+
+    /// Every per-size column the schema injection generates, paired with the
+    /// type its column holds, in injection order: per image size `{name}_url`,
+    /// `{name}_width`, `{name}_height`, then `{name}_{format}_url` for each
+    /// configured format variant.
+    ///
+    /// The single place these names are spelled — the schema injection, the
+    /// system/derived field sets, and the read shape that folds them into the
+    /// nested `sizes` object all derive from it, so a new per-size column lands
+    /// on every one of them at once.
+    #[must_use]
+    pub fn size_columns(&self) -> Vec<(String, FieldType)> {
+        let mut columns = Vec::new();
+
+        for size in &self.image_sizes {
+            columns.push((format!("{}_url", size.name), FieldType::Text));
+            columns.push((format!("{}_width", size.name), FieldType::Number));
+            columns.push((format!("{}_height", size.name), FieldType::Number));
+
+            for format in self.format_variants() {
+                columns.push((format!("{}_{format}_url", size.name), FieldType::Text));
+            }
+        }
+
+        columns
+    }
+
     /// Return the set of system-injected field names that are auto-populated
     /// by the upload processing system (not user input).
     /// Mirrors the fields created by `inject_upload_fields()` in the Lua parser.
@@ -64,17 +109,21 @@ impl CollectionUpload {
         .map(std::string::ToString::to_string)
         .collect();
 
-        for size in &self.image_sizes {
-            names.insert(format!("{}_url", size.name));
-            names.insert(format!("{}_width", size.name));
-            names.insert(format!("{}_height", size.name));
+        names.extend(self.size_columns().into_iter().map(|(name, _)| name));
 
-            if self.format_options.webp.is_some() {
-                names.insert(format!("{}_webp_url", size.name));
-            }
-            if self.format_options.avif.is_some() {
-                names.insert(format!("{}_avif_url", size.name));
-            }
+        names
+    }
+
+    /// The field names a user schema may not define on this upload collection:
+    /// the injected columns, plus the `sizes` key a read assembles from the
+    /// per-size columns. A user field named `sizes` would be overwritten on
+    /// every read, so it is rejected at load instead.
+    #[must_use]
+    pub fn reserved_field_names(&self) -> HashSet<String> {
+        let mut names = self.system_field_names();
+
+        if !self.image_sizes.is_empty() {
+            names.insert(SIZES_FIELD.to_string());
         }
 
         names
@@ -194,5 +243,74 @@ mod tests {
 
         // Exactly system_field_names minus the two focal columns.
         assert_eq!(derived.len(), upload.system_field_names().len() - 2);
+    }
+
+    /// The per-size columns are generated in injection order and carry the
+    /// column type each holds — the schema injection types its fields from
+    /// this, so a URL column must never be typed as a number.
+    #[test]
+    fn size_columns_list_every_column_in_injection_order() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(300)
+                .height(300)
+                .build(),
+        ];
+        upload.format_options.webp = Some(FormatQuality::new(80, false));
+        upload.format_options.avif = Some(FormatQuality::new(60, false));
+
+        let columns = upload.size_columns();
+        let names: Vec<&str> = columns.iter().map(|(n, _)| n.as_str()).collect();
+
+        assert_eq!(
+            names,
+            [
+                "thumb_url",
+                "thumb_width",
+                "thumb_height",
+                "thumb_webp_url",
+                "thumb_avif_url",
+            ]
+        );
+        assert_eq!(columns[0].1, FieldType::Text);
+        assert_eq!(columns[1].1, FieldType::Number);
+        assert_eq!(columns[2].1, FieldType::Number);
+        assert_eq!(columns[3].1, FieldType::Text);
+    }
+
+    #[test]
+    fn format_variants_follow_the_configured_options() {
+        let mut upload = CollectionUpload::new();
+        assert!(upload.format_variants().is_empty());
+
+        upload.format_options.avif = Some(FormatQuality::new(60, false));
+        assert_eq!(upload.format_variants(), ["avif"]);
+
+        upload.format_options.webp = Some(FormatQuality::new(80, false));
+        assert_eq!(upload.format_variants(), ["webp", "avif"]);
+    }
+
+    /// `sizes` is the key a read assembles, so a user field of that name is
+    /// reserved — but only where per-size columns exist to assemble it from.
+    #[test]
+    fn reserved_names_add_sizes_only_when_image_sizes_exist() {
+        let plain = CollectionUpload::new();
+        assert!(!plain.reserved_field_names().contains("sizes"));
+        assert_eq!(
+            plain.reserved_field_names().len(),
+            plain.system_field_names().len()
+        );
+
+        let mut sized = CollectionUpload::new();
+        sized.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(300)
+                .height(300)
+                .build(),
+        ];
+
+        assert!(sized.reserved_field_names().contains("sizes"));
+        assert!(sized.reserved_field_names().contains("thumb_url"));
     }
 }

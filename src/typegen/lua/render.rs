@@ -13,7 +13,7 @@ use crate::{
     },
     core::{
         CollectionDefinition, FieldDefinition, FieldType, Registry, Slug,
-        collection::GlobalDefinition,
+        collection::GlobalDefinition, upload::read_shape_fields,
     },
     db::query::get_column_names,
     hooks::lifecycle::RenderInfo,
@@ -137,7 +137,12 @@ fn render_sub_type_classes(out: &mut String, fields: &[FieldDefinition], pascal:
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    render_sub_type_classes(out, &col.fields, &pascal);
+    // A read folds an upload collection's per-size columns into one nested
+    // `sizes` object, so the returned-document class is generated from the read
+    // shape. `data` and `partial` describe input and stay on the stored fields.
+    let read_fields = read_shape_fields(col);
+
+    render_sub_type_classes(out, &read_fields, &pascal);
 
     // crap.data.* — hook ctx.data (mutable input). `id` and timestamps
     // are emitted as OPTIONAL because the table is reused across hooks
@@ -178,7 +183,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // field read access and `select` drop keys.
     w!(out, "---@class crap.doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
-    for f in &col.fields {
+    for f in read_fields.iter() {
         write_field_partial(out, f, &pascal);
     }
     write_system_fields(out, col.has_drafts(), col.soft_delete);
@@ -809,6 +814,7 @@ mod tests {
     use super::*;
     use crate::core::{
         FieldAdmin, FieldDefinition, FieldTab, FieldType, RelationshipConfig, VersionsConfig,
+        upload::{CollectionUpload, ImageSizeBuilder},
     };
 
     /// One `---@class` annotation block, from its header to the blank line after it.
@@ -1398,6 +1404,46 @@ mod tests {
         assert!(
             out.contains("---@class crap.array_row.PostsTabItems"),
             "array inside Tabs should emit sub-type with collection prefix: {out}"
+        );
+    }
+
+    /// A read of an upload collection folds the per-size columns into one
+    /// nested `sizes` object, so the returned-document class must describe
+    /// `sizes` and never the columns it replaced. The input classes keep
+    /// describing what a writer may send.
+    #[test]
+    fn upload_read_class_describes_sizes_not_the_per_size_columns() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(200)
+                .height(200)
+                .build(),
+        ];
+
+        let mut col = CollectionDefinition::new("media");
+        col.fields = upload
+            .size_columns()
+            .into_iter()
+            .map(|(name, ty)| FieldDefinition::builder(name, ty).build())
+            .collect();
+        col.fields.push(text_field("alt", false));
+        col.upload = Some(upload);
+
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        let doc = class_block(&out, "---@class crap.doc.Media");
+        assert!(doc.contains("---@field sizes?"), "{doc}");
+        assert!(
+            !doc.contains("thumb_url"),
+            "a read never carries the per-size columns: {doc}"
+        );
+
+        let data = class_block(&out, "---@class crap.data.Media");
+        assert!(
+            data.contains("thumb_url"),
+            "the input class still describes the stored columns: {data}"
         );
     }
 }

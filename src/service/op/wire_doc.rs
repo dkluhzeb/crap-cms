@@ -16,7 +16,7 @@ use crate::service::op::wire::{
 fn kind_label(kind: WireKind) -> &'static str {
     match kind {
         WireKind::Bool => "boolean",
-        WireKind::Int => "integer",
+        WireKind::Int | WireKind::Int32 => "integer",
         WireKind::Str => "string",
         WireKind::Id => "id (string)",
         WireKind::Locale => "locale (string)",

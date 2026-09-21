@@ -18,14 +18,15 @@ use crate::{
             field_context::{
                 MAX_FIELD_DEPTH,
                 builder::{build_select_options, build_single_field_context},
-                count_errors_in_field_contexts,
+                cascaded_readonly, count_errors_in_field_contexts,
                 enrich::{
-                    SubFieldOpts, children::build_enriched_children_from_data,
+                    SubFieldOpts,
+                    children::{ChildEnrichOpts, build_enriched_children_from_data},
                     nested::build_enriched_sub_field_context,
                 },
                 inject_lang_values_from_row, inject_timezone_values_from_row,
-                locale_locked_display, safe_template_id, set_date_picker_values, tag_values,
-                tags_input_value,
+                locale_locked_display, readonly_display, safe_template_id, set_date_picker_values,
+                tag_values, tags_input_value,
             },
             shared::admin_form_fields,
         },
@@ -212,6 +213,7 @@ fn build_nested_template_sub_fields(
                 &HashMap::new(),
                 &template_prefix,
                 opts.non_default_locale,
+                opts.ancestor_readonly,
                 opts.depth + 1,
             )
         })
@@ -257,6 +259,7 @@ pub(super) fn sub_array(
     let nested_opts = SubFieldOpts::builder(opts.errors)
         .locale_locked(opts.locale_locked)
         .non_default_locale(opts.non_default_locale)
+        .ancestor_readonly(opts.ancestor_readonly)
         .depth(opts.depth + 1)
         .build();
 
@@ -352,6 +355,7 @@ fn build_block_def_template(
                 &HashMap::new(),
                 &template_prefix,
                 opts.non_default_locale,
+                opts.ancestor_readonly,
                 opts.depth + 1,
             )
         })
@@ -380,6 +384,7 @@ pub(super) fn sub_blocks(
     let nested_opts = SubFieldOpts::builder(opts.errors)
         .locale_locked(opts.locale_locked)
         .non_default_locale(opts.non_default_locale)
+        .ancestor_readonly(opts.ancestor_readonly)
         .depth(opts.depth + 1)
         .build();
 
@@ -458,6 +463,17 @@ fn build_group_child(
     group_obj: Option<&Value>,
     opts: &SubFieldOpts,
 ) -> FieldContext {
+    let base = build_group_child_base(nested_sf, nested_name, nested_val, opts);
+
+    if opts.depth + 1 >= MAX_FIELD_DEPTH {
+        // Beyond max depth — return a base-only Text variant.
+        return FieldContext::Text(TextField {
+            base,
+            has_many: None,
+            tags: None,
+        });
+    }
+
     // Fold the locale scope exactly like the build phase
     // (`builder::single`): a localized composite is a locale boundary, so
     // its children are edited in the field's own locale — reset
@@ -470,22 +486,15 @@ fn build_group_child(
     } else {
         opts.non_default_locale
     };
+
+    // `admin.readonly` cascades: a read-only composite locks everything inside
+    // it. The locale lock is not carried here — it is recomputed per field.
     let nested_opts = SubFieldOpts::builder(opts.errors)
         .locale_locked(locale_locked_display(opts.non_default_locale, nested_sf))
         .non_default_locale(child_non_default_locale)
+        .ancestor_readonly(cascaded_readonly(nested_sf, opts.ancestor_readonly))
         .depth(opts.depth + 1)
         .build();
-
-    let base = build_group_child_base(nested_sf, nested_name, nested_val, opts);
-
-    if opts.depth + 1 >= MAX_FIELD_DEPTH {
-        // Beyond max depth — return a base-only Text variant.
-        return FieldContext::Text(TextField {
-            base,
-            has_many: None,
-            tags: None,
-        });
-    }
 
     match nested_sf.field_type {
         FieldType::Group => {
@@ -569,6 +578,7 @@ fn build_group_child_base(
     opts: &SubFieldOpts,
 ) -> BaseFieldData {
     let nested_label = nested_sf.resolved_label();
+    let locale_locked = locale_locked_display(opts.non_default_locale, nested_sf);
 
     BaseFieldData {
         name: nested_name.to_string(),
@@ -586,10 +596,9 @@ fn build_group_child_base(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: nested_sf.admin.readonly
-            || locale_locked_display(opts.non_default_locale, nested_sf),
+        readonly: readonly_display(nested_sf, opts.ancestor_readonly, locale_locked),
         localized: nested_sf.localized,
-        locale_locked: locale_locked_display(opts.non_default_locale, nested_sf),
+        locale_locked,
         position: nested_sf.admin.position.clone(),
         template: nested_sf.admin.template.clone(),
         extra: nested_sf.admin.extra.clone(),
@@ -652,6 +661,7 @@ fn build_group_child_leaf(
         &errors,
         &prefix,
         opts.non_default_locale,
+        opts.ancestor_readonly,
         opts.depth + 1,
     )
 }
@@ -697,6 +707,18 @@ pub(super) fn sub_group(
     gf.collapsed = sf.admin.collapsed;
 }
 
+/// The child-enrichment state a layout wrapper hands to the fields it wraps:
+/// the wrapper's own `admin.readonly` cascades into them, everything else
+/// carries over unchanged.
+fn wrapper_child_opts<'a>(opts: &SubFieldOpts<'a>, sf: &FieldDefinition) -> ChildEnrichOpts<'a> {
+    ChildEnrichOpts::builder(opts.errors)
+        .locale_locked(opts.locale_locked)
+        .non_default_locale(opts.non_default_locale)
+        .ancestor_readonly(cascaded_readonly(sf, opts.ancestor_readonly))
+        .depth(opts.depth + 1)
+        .build()
+}
+
 /// Enrich a nested Row sub-field context.
 pub(super) fn sub_row_collapsible_row(
     rf: &mut RowField,
@@ -705,15 +727,10 @@ pub(super) fn sub_row_collapsible_row(
     indexed_name: &str,
     opts: &SubFieldOpts,
 ) {
-    rf.sub_fields = build_enriched_children_from_data(
-        &sf.fields,
-        raw_value,
-        indexed_name,
-        opts.locale_locked,
-        opts.non_default_locale,
-        opts.depth + 1,
-        opts.errors,
-    );
+    let child_opts = wrapper_child_opts(opts, sf);
+
+    rf.sub_fields =
+        build_enriched_children_from_data(&sf.fields, raw_value, indexed_name, &child_opts);
 }
 
 /// Enrich a nested Collapsible sub-field context.
@@ -724,15 +741,10 @@ pub(super) fn sub_row_collapsible_group(
     indexed_name: &str,
     opts: &SubFieldOpts,
 ) {
-    gf.sub_fields = build_enriched_children_from_data(
-        &sf.fields,
-        raw_value,
-        indexed_name,
-        opts.locale_locked,
-        opts.non_default_locale,
-        opts.depth + 1,
-        opts.errors,
-    );
+    let child_opts = wrapper_child_opts(opts, sf);
+
+    gf.sub_fields =
+        build_enriched_children_from_data(&sf.fields, raw_value, indexed_name, &child_opts);
     gf.collapsed = sf.admin.collapsed;
 }
 
@@ -741,17 +753,10 @@ fn build_tab_context(
     tab: &FieldTab,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &SubFieldOpts,
+    opts: &ChildEnrichOpts,
 ) -> TabPanel {
-    let tab_sub_fields = build_enriched_children_from_data(
-        &tab.fields,
-        raw_value,
-        indexed_name,
-        opts.locale_locked,
-        opts.non_default_locale,
-        opts.depth + 1,
-        opts.errors,
-    );
+    let tab_sub_fields =
+        build_enriched_children_from_data(&tab.fields, raw_value, indexed_name, opts);
 
     let error_count = count_errors_in_field_contexts(&tab_sub_fields);
 
@@ -775,10 +780,12 @@ pub(super) fn sub_tabs(
     indexed_name: &str,
     opts: &SubFieldOpts,
 ) {
+    let child_opts = wrapper_child_opts(opts, sf);
+
     tf.tabs = sf
         .tabs
         .iter()
-        .map(|tab| build_tab_context(tab, raw_value, indexed_name, opts))
+        .map(|tab| build_tab_context(tab, raw_value, indexed_name, &child_opts))
         .collect();
 }
 

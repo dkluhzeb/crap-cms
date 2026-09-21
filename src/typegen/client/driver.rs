@@ -9,6 +9,7 @@ use crate::{
     core::{
         CollectionDefinition, FieldChildren, FieldDefinition, FieldType, Registry,
         collection::GlobalDefinition, field_children, flatten_array_sub_fields,
+        upload::read_shape_fields,
     },
     typegen::{
         Language,
@@ -62,8 +63,17 @@ pub(in crate::typegen) fn drive(
 
     for slug in sorted_collection_slugs(registry) {
         let col = &registry.collections[slug];
-        let owner = (col.fields.as_slice(), to_pascal_case(&col.slug));
-        emit_owner_document(printer.as_mut(), owner, &collection_document(col), &mut aux);
+        // The READ shape: an upload collection's per-size columns are folded
+        // into one `sizes` object before they reach the wire, so the generated
+        // types describe that and not the stored columns.
+        let fields = read_shape_fields(col);
+        let owner = (&*fields, to_pascal_case(&col.slug));
+        emit_owner_document(
+            printer.as_mut(),
+            owner,
+            &collection_document(col, &fields),
+            &mut aux,
+        );
     }
 
     for slug in sorted_global_slugs(registry) {
@@ -80,10 +90,10 @@ pub(in crate::typegen) fn drive(
 
 /// Emit one collection or global — its fields and the Pascal-case name they are
 /// typed under — then its document and `locale = "all"` read shape.
-fn emit_owner_document(
+fn emit_owner_document<'a>(
     printer: &mut dyn ClientPrinter,
-    (fields, pascal): (&[FieldDefinition], String),
-    doc: &Document<'_>,
+    (fields, pascal): (&'a [FieldDefinition], String),
+    doc: &Document<'a>,
     aux: &mut Aux,
 ) {
     emit_owner(printer, fields, &pascal, aux);
@@ -160,18 +170,21 @@ fn collect_aux(fields: &[Field], aux: &mut Aux) {
     }
 }
 
-/// Build the [`Document`] for a collection.
-fn collection_document(col: &CollectionDefinition) -> Document<'_> {
+/// Build the [`Document`] for a collection from its read-shaped fields.
+fn collection_document<'a>(
+    col: &'a CollectionDefinition,
+    fields: &'a [FieldDefinition],
+) -> Document<'a> {
     let root = to_pascal_case(&col.slug);
     Document {
-        fields: resolve_fields(&col.fields, &root),
+        fields: resolve_fields(fields, &root),
         system: system_fields(col.has_drafts(), col.soft_delete),
         name: root,
         slug: &col.slug,
         timestamps: col.timestamps,
         is_global: false,
         localized: false,
-        select_options: select_field_options(&col.fields),
+        select_options: select_field_options(fields),
     }
 }
 
@@ -430,6 +443,9 @@ fn push_resolved<'a>(
 pub(in crate::typegen) fn resolve_ty(field: &FieldDefinition, parent_pascal: &str) -> FieldTy {
     match &field.field_type {
         FieldType::Text if field.has_many => FieldTy::StrList,
+        // A rich text field stored as a JSON document reads parsed, like a
+        // `json` field — the same predicate the column decoding uses.
+        FieldType::Richtext if field.parses_json() => FieldTy::Json,
         FieldType::Text
         | FieldType::Textarea
         | FieldType::Email
@@ -549,7 +565,12 @@ fn all_type_names(registry: &Registry, lang: Language) -> Vec<String> {
 
     for slug in sorted_collection_slugs(registry) {
         let col = &registry.collections[slug];
-        collect_type_names(&col.fields, &to_pascal_case(&col.slug), lang, &mut names);
+        collect_type_names(
+            &read_shape_fields(col),
+            &to_pascal_case(&col.slug),
+            lang,
+            &mut names,
+        );
     }
     for slug in sorted_global_slugs(registry) {
         let global = &registry.globals[slug];
@@ -909,4 +930,167 @@ mod golden {
     );
     golden_test!(golden_go, Language::Go, "testdata/kitchen_sink.go");
     golden_test!(golden_python, Language::Python, "testdata/kitchen_sink.py");
+}
+
+/// The generated types must describe the shape a READ carries, not the stored
+/// columns: an upload collection's per-size columns never reach a client (the
+/// read folds them into one `sizes` object), and a JSON-format rich text field
+/// is a JSON document rather than a string. Every language is checked, because
+/// a declared-but-never-sent key is a hard decode failure in the strict ones.
+#[cfg(test)]
+mod read_shape {
+    use crate::core::{
+        CollectionDefinition, FieldAdmin, FieldDefinition, FieldType, Registry,
+        upload::{CollectionUpload, FormatQuality, ImageSizeBuilder},
+    };
+    use crate::typegen::Language;
+
+    use super::generate;
+
+    /// A `media` collection with one image size and a WebP variant — the
+    /// columns `inject_upload_fields` would add, and the upload config that
+    /// makes the read fold them away.
+    fn media_with_sizes() -> Registry {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumbnail")
+                .width(200)
+                .height(200)
+                .build(),
+        ];
+        upload.format_options.webp = Some(FormatQuality::new(80, false));
+
+        let mut media = CollectionDefinition::new("media");
+        media.fields = vec![
+            FieldDefinition::builder("filename", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
+        media.fields.extend(
+            upload
+                .size_columns()
+                .into_iter()
+                .map(|(name, ty)| FieldDefinition::builder(name, ty).build()),
+        );
+        media.upload = Some(upload);
+
+        let mut reg = Registry::new();
+        reg.register_collection(media);
+        reg
+    }
+
+    /// The per-size columns `assemble_sizes_object` removes from every read.
+    const STRIPPED: [&str; 4] = [
+        "thumbnail_url",
+        "thumbnail_width",
+        "thumbnail_height",
+        "thumbnail_webp_url",
+    ];
+
+    /// The first generated line mentioning a wire key — every language keeps
+    /// the raw key somewhere on the declaring line (a property name, a JSON
+    /// tag, a serde rename), so this reads the declaration without depending
+    /// on a printer's column alignment.
+    fn decl_line<'a>(out: &'a str, key: &str) -> &'a str {
+        out.lines()
+            .find(|line| line.contains(key))
+            .unwrap_or_else(|| panic!("nothing declares `{key}` in:\n{out}"))
+    }
+
+    fn assert_folds_sizes(lang: Language) {
+        let out = generate(&media_with_sizes(), lang).expect("generate");
+
+        for column in STRIPPED {
+            assert!(
+                !out.contains(column),
+                "{lang:?} declares `{column}`, which no read ever carries:\n{out}"
+            );
+        }
+
+        let sizes = decl_line(&out, "sizes");
+        assert!(
+            sizes.contains("MediaSizes"),
+            "{lang:?} must declare the assembled object, got `{sizes}`"
+        );
+        assert!(
+            out.contains("MediaSizesThumbnailFormatsWebp"),
+            "{lang:?} must describe the per-format nesting:\n{out}"
+        );
+    }
+
+    #[test]
+    fn typescript_folds_upload_sizes() {
+        assert_folds_sizes(Language::Typescript);
+    }
+
+    #[test]
+    fn go_folds_upload_sizes() {
+        assert_folds_sizes(Language::Go);
+    }
+
+    #[test]
+    fn python_folds_upload_sizes() {
+        assert_folds_sizes(Language::Python);
+    }
+
+    #[test]
+    fn rust_folds_upload_sizes() {
+        assert_folds_sizes(Language::Rust);
+    }
+
+    /// A rich text field with `admin.richtext_format = "json"` and a default
+    /// (HTML) one beside it.
+    fn richtext_registry() -> Registry {
+        let mut pages = CollectionDefinition::new("pages");
+        pages.fields = vec![
+            FieldDefinition::builder("body", FieldType::Richtext)
+                .admin(FieldAdmin::builder().richtext_format("json").build())
+                .build(),
+            FieldDefinition::builder("teaser", FieldType::Richtext).build(),
+        ];
+
+        let mut reg = Registry::new();
+        reg.register_collection(pages);
+        reg
+    }
+
+    fn assert_json_richtext(lang: Language, json_ty: &str, html_ty: &str) {
+        let out = generate(&richtext_registry(), lang).expect("generate");
+
+        let body = decl_line(&out, "body");
+        assert!(
+            body.contains(json_ty),
+            "{lang:?} must type JSON rich text as a JSON document, got `{body}`"
+        );
+
+        let teaser = decl_line(&out, "teaser");
+        assert!(
+            teaser.contains(html_ty),
+            "{lang:?} must keep HTML rich text a string, got `{teaser}`"
+        );
+    }
+
+    #[test]
+    fn typescript_types_json_richtext_as_a_document() {
+        assert_json_richtext(Language::Typescript, "unknown", "string");
+    }
+
+    #[test]
+    fn go_types_json_richtext_as_a_document() {
+        assert_json_richtext(Language::Go, "interface{}", "*string");
+    }
+
+    #[test]
+    fn python_types_json_richtext_as_a_document() {
+        assert_json_richtext(Language::Python, "Optional[Any]", "Optional[str]");
+    }
+
+    #[test]
+    fn rust_types_json_richtext_as_a_document() {
+        assert_json_richtext(
+            Language::Rust,
+            "Option<serde_json::Value>",
+            "Option<String>",
+        );
+    }
 }

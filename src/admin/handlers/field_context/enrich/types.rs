@@ -14,6 +14,7 @@ use crate::{
         },
         handlers::{
             field_context::{
+                cascaded_readonly,
                 enrich::{
                     EnrichCtx, SubFieldOpts, build_enriched_sub_field_context,
                     enrich_nested_fields, enrich_polymorphic_selected, field_types::row_identity,
@@ -200,8 +201,7 @@ fn build_array_row_sub_fields(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
-    locale_locked: bool,
-    enrich: &EnrichCtx,
+    sub_opts: &SubFieldOpts,
 ) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
@@ -209,13 +209,7 @@ fn build_array_row_sub_fields(
         .map(|sf| {
             let raw_value = extract_sub_field_value(sf, row, row_obj);
 
-            let sub_opts = SubFieldOpts::builder(enrich.errors)
-                .locale_locked(locale_locked)
-                .non_default_locale(enrich.non_default_locale)
-                .depth(1)
-                .build();
-
-            build_enriched_sub_field_context(sf, raw_value, &field_def.name, idx, &sub_opts)
+            build_enriched_sub_field_context(sf, raw_value, &field_def.name, idx, sub_opts)
         })
         .collect();
 
@@ -229,10 +223,10 @@ fn build_array_row(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
-    locale_locked: bool,
+    sub_opts: &SubFieldOpts,
     enrich: &EnrichCtx,
 ) -> ArrayRow {
-    let sub_fields = build_array_row_sub_fields(field_def, row, idx, locale_locked, enrich);
+    let sub_fields = build_array_row_sub_fields(field_def, row, idx, sub_opts);
     let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
 
     let custom_label = compute_row_label(
@@ -261,13 +255,20 @@ pub(super) fn enrich_array(
     doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
-    let locale_locked = locale_locked_display(enrich.non_default_locale, field_def);
+    // `admin.readonly` cascades: a read-only array locks every field in its
+    // rows. The locale lock is not carried here — it is recomputed per field.
+    let sub_opts = SubFieldOpts::builder(enrich.errors)
+        .locale_locked(locale_locked_display(enrich.non_default_locale, field_def))
+        .non_default_locale(enrich.non_default_locale)
+        .ancestor_readonly(cascaded_readonly(field_def, enrich.ancestor_readonly))
+        .depth(1)
+        .build();
 
     let rows: Vec<ArrayRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .enumerate()
-            .map(|(idx, row)| build_array_row(field_def, row, idx, locale_locked, enrich))
+            .map(|(idx, row)| build_array_row(field_def, row, idx, &sub_opts, enrich))
             .collect(),
         _ => Vec::new(),
     };
@@ -443,8 +444,7 @@ fn build_blocks_row_sub_fields(
     row: &Value,
     field_name: &str,
     idx: usize,
-    locale_locked: bool,
-    enrich: &EnrichCtx,
+    sub_opts: &SubFieldOpts,
 ) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
@@ -452,13 +452,7 @@ fn build_blocks_row_sub_fields(
         .map(|sf| {
             let raw_value = extract_sub_field_value(sf, row, row_obj);
 
-            let sub_opts = SubFieldOpts::builder(enrich.errors)
-                .locale_locked(locale_locked)
-                .non_default_locale(enrich.non_default_locale)
-                .depth(1)
-                .build();
-
-            build_enriched_sub_field_context(sf, raw_value, field_name, idx, &sub_opts)
+            build_enriched_sub_field_context(sf, raw_value, field_name, idx, sub_opts)
         })
         .collect();
 
@@ -472,7 +466,7 @@ fn build_blocks_row(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
-    locale_locked: bool,
+    sub_opts: &SubFieldOpts,
     enrich: &EnrichCtx,
 ) -> BlockRow {
     let row_obj = row.as_object();
@@ -491,7 +485,7 @@ fn build_blocks_row(
         .unwrap_or_else(|| block_type.to_string());
 
     let sub_fields = block_def
-        .map(|bd| build_blocks_row_sub_fields(bd, row, &field_def.name, idx, locale_locked, enrich))
+        .map(|bd| build_blocks_row_sub_fields(bd, row, &field_def.name, idx, sub_opts))
         .unwrap_or_default();
 
     let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
@@ -525,13 +519,20 @@ pub(super) fn enrich_blocks(
     doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
-    let locale_locked = locale_locked_display(enrich.non_default_locale, field_def);
+    // `admin.readonly` cascades: a read-only blocks field locks every field in
+    // its rows. The locale lock is not carried here — it is recomputed per field.
+    let sub_opts = SubFieldOpts::builder(enrich.errors)
+        .locale_locked(locale_locked_display(enrich.non_default_locale, field_def))
+        .non_default_locale(enrich.non_default_locale)
+        .ancestor_readonly(cascaded_readonly(field_def, enrich.ancestor_readonly))
+        .depth(1)
+        .build();
 
     let rows: Vec<BlockRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .enumerate()
-            .map(|(idx, row)| build_blocks_row(field_def, row, idx, locale_locked, enrich))
+            .map(|(idx, row)| build_blocks_row(field_def, row, idx, &sub_opts, enrich))
             .collect(),
         _ => Vec::new(),
     };

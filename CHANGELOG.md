@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Generated client types now describe an upload read as it actually arrives.** The Rust/Go/TypeScript/Python generators, the Lua type definitions and the Rust proto decoder walked the stored columns, so an upload collection's document type declared `thumbnail_url`, `thumbnail_width`, `thumbnail_height` and one field per format variant — none of which a read returns. Every read assembles those columns into a nested `sizes` object, and the generated types now say so. Regenerate your client after upgrading and read sizes as `sizes.thumbnail.url`.
+- **`sizes` is a reserved field name on an upload collection with `image_sizes`.** A user field of that name was silently overwritten by the assembled sizes object on every read; it is now rejected at definition time with the other reserved names. Rename such a field before upgrading.
 - **A changed field `type` on a column that holds data fails the boot.** It
   used to log a warning and continue: on SQLite the column kept its old
   affinity, so a field changed from text to number stored and read numbers
@@ -2193,6 +2195,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`admin.readonly` on a Group, Array, Blocks, Row, Collapsible or Tabs
+  field now applies to everything inside it.** A read-only container
+  rendered fully editable sub-fields, and the array/blocks row controls —
+  add row, remove row, move up, move down, duplicate, drag-to-reorder —
+  had no read-only gating at all, so they stayed live even in a
+  locale-locked array. Read-only now carries down to every nested field at
+  any depth, the row controls and the block picker are rendered only when
+  the field is editable, and the repeater component refuses those actions
+  client-side. Collapsing and expanding rows stays available — it is not an
+  edit. A read-only `relationship` or `upload` field no longer offers its
+  "Create new" / "Upload new" link, and a read-only single upload renders
+  its picker read-only instead of editable. If you override
+  `templates/partials/array-row-header.hbs`, `templates/fields/array.hbs`
+  or `templates/fields/blocks.hbs`, re-copy the shipped template: the row
+  header now takes a `readonly` partial parameter, and without it your rows
+  keep offering the controls a read-only field must not have.
+- **A JSON rich text field is no longer typed as a string.** With `admin.richtext_format = "json"` the value on the wire is a JSON document, but the client type generators and the MCP tool schema both described it as a string, and the Rust proto decoder dropped it entirely. All three now describe and decode a JSON value. The decoder fix also restores `json` fields, empty groups and blocks, which previously decoded as absent.
+- **Admin dev mode now actually reloads templates.** `admin.dev_mode = true` documented per-request template reload, but every template was registered from a string, which leaves Handlebars with no file to re-read — editing an overlay template did nothing until the process restarted. Config-directory overlay templates are now registered by path, so dev mode picks up edits on the next request. Adding a new overlay file still requires a restart, and compiled-in defaults never reload.
 - **Publishing could silently bury a draft saved at the same moment**
   (Postgres only). The publish read the pending draft before taking the
   document's row lock, so a draft saved in between was overwritten by a

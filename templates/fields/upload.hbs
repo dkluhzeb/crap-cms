@@ -13,7 +13,7 @@
         selected="{{json selected_items}}"
       >
       </crap-relationship-search>
-      {{#unless locale_locked}}
+      {{#unless readonly}}
         <div class="upload-field__actions">
           <a
             class="relationship-field__action"
@@ -49,7 +49,7 @@
           <span class="upload-field__filename">{{selected_filename}}</span>
         {{/if}}
       </div>
-      {{#if locale_locked}}
+      {{#if readonly}}
         <input
           type="hidden"
           name="{{name}}"

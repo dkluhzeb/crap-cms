@@ -13,7 +13,7 @@
       selected="{{json selected_items}}"
     >
     </crap-relationship-search>
-    {{#unless locale_locked}}
+    {{#unless readonly}}
       <div class="relationship-field__actions">
         {{#if polymorphic}}
           {{#each collections}}

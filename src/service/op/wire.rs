@@ -62,6 +62,11 @@ pub enum WireKind {
     Bool,
     /// Integer (i64 on the wire).
     Int,
+    /// Small integer (i32 on the wire) — a bounded knob such as a population
+    /// depth or a scheduling priority. Separate from [`WireKind::Int`] because
+    /// the gRPC spelling differs, and only the model can say which width a
+    /// field was shipped with.
+    Int32,
     /// Plain string.
     Str,
     /// A document id.
@@ -107,6 +112,13 @@ pub struct WireField {
     /// Proto spelling when it differs from `name` (e.g. `restore_version`'s
     /// `id` is `document_id` on the wire). `None` = same as `name`.
     pub grpc_name: Option<&'static str>,
+    /// Whether the gRPC field carries explicit presence (the proto3 `optional`
+    /// keyword). Option fields do, so an absent one is distinguishable from a
+    /// false/zero one; an identifying argument does not, and neither does
+    /// `force_hard_delete`, which shipped as a plain `bool` whose absence
+    /// simply means "false". Repeated and message fields ignore it — proto3
+    /// gives them their own presence rules.
+    pub grpc_optional: bool,
 }
 
 impl WireField {
@@ -126,6 +138,7 @@ const fn f(name: &'static str, kind: WireKind, doc: &'static str) -> WireField {
         doc,
         surfaces: WireSurfaces::ALL,
         grpc_name: None,
+        grpc_optional: true,
     }
 }
 
@@ -137,11 +150,21 @@ const fn req(name: &'static str, kind: WireKind, doc: &'static str) -> WireField
         doc,
         surfaces: WireSurfaces::ALL,
         grpc_name: None,
+        grpc_optional: false,
     }
 }
 
 const fn on(surfaces: WireSurfaces, field: WireField) -> WireField {
     WireField { surfaces, ..field }
+}
+
+/// A gRPC field spelled without the proto3 `optional` keyword — absence is
+/// indistinguishable from the zero value, which is what the field means.
+const fn no_presence(field: WireField) -> WireField {
+    WireField {
+        grpc_optional: false,
+        ..field
+    }
 }
 
 /// One operation's wire description.
@@ -195,7 +218,7 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                 WireKind::Str,
                 "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)",
             ),
-            f("depth", WireKind::Int, DEPTH_DOC),
+            f("depth", WireKind::Int32, DEPTH_DOC),
             f("search", WireKind::Str, SEARCH_DOC),
             f("locale", WireKind::Locale, LOCALE_READ_DOC),
             f(
@@ -215,7 +238,7 @@ pub static COLLECTION_OPS: &[OpWire] = &[
         op: "find_by_id",
         fields: &[
             req("id", WireKind::Id, ""),
-            f("depth", WireKind::Int, DEPTH_DOC),
+            f("depth", WireKind::Int32, DEPTH_DOC),
             f("locale", WireKind::Locale, LOCALE_READ_DOC),
             f(
                 "draft",
@@ -314,11 +337,11 @@ pub static COLLECTION_OPS: &[OpWire] = &[
         op: "delete",
         fields: &[
             req("id", WireKind::Id, ""),
-            f(
+            no_presence(f(
                 "force_hard_delete",
                 WireKind::Bool,
                 "Bypass soft-delete and remove the row permanently (default: false)",
-            ),
+            )),
             on(
                 WireSurfaces::LUA_ONLY,
                 f("hooks", WireKind::Bool, HOOKS_DOC),
@@ -426,11 +449,11 @@ pub static COLLECTION_OPS: &[OpWire] = &[
                     "Locale code. Validated but not used for matching (delete_many spans locales)",
                 ),
             ),
-            f(
+            no_presence(f(
                 "force_hard_delete",
                 WireKind::Bool,
                 "Force hard delete even on soft-delete collections (default: false)",
-            ),
+            )),
             // `trash` (empty-the-trash) is deliberately NOT on the gRPC/MCP
             // wire yet — Lua + the admin empty-trash codec expose it.
             on(
@@ -557,7 +580,7 @@ pub static JOB_OPS: &[OpWire] = &[
             ),
             f(
                 "priority",
-                WireKind::Int,
+                WireKind::Int32,
                 "Scheduling priority; higher runs sooner",
             ),
             f(

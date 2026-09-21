@@ -13,13 +13,27 @@ If a file exists in the config directory, it's used. Otherwise, the compiled def
 
 ## Dev Mode
 
-When `admin.dev_mode = true` in `crap.toml`, templates are reloaded from disk on every request. This enables live editing without restarting.
+When `admin.dev_mode = true` in `crap.toml`, the overlay templates in
+`<config_dir>/templates/` are re-read from disk on every request. This enables
+live editing without restarting. Compiled defaults are built into the binary
+and have no file to re-read, so an overlay is the only way to live-edit a
+template.
+
+Adding a *new* overlay file still needs a restart: the config directory is
+scanned once at startup, and only the files found there are wired to disk.
+Editing a file that was present at startup takes effect on the next request.
 
 When `dev_mode = false`, templates are cached after first load (production mode).
 
 ### Template Errors in Dev Mode
 
-If an operator-provided template in `<config_dir>/templates/` has a Handlebars syntax error while `admin.dev_mode = true`, the request returns a **500 Internal Server Error**. Crap CMS does **not** automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.
+A syntax error that is already in the file when crap-cms starts aborts
+startup, in both modes — the overlay fails to register and `serve` exits with
+the template error.
+
+If you introduce a Handlebars syntax error by editing an overlay template
+while `admin.dev_mode = true`, the request returns a **500 Internal Server
+Error**. Crap CMS does **not** automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.
 
 To recover:
 

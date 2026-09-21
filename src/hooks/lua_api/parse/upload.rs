@@ -218,18 +218,21 @@ pub(super) fn parse_format_options(tbl: &Table) -> LuaResult<FormatOptions> {
     Ok(FormatOptions { webp, avif })
 }
 
-/// Helper to create a hidden text field definition.
-fn hidden_text_field(name: &str) -> FieldDefinition {
-    FieldDefinition::builder(name, FieldType::Text)
+/// Helper to create a hidden field definition of a given column type.
+fn hidden_field(name: &str, field_type: FieldType) -> FieldDefinition {
+    FieldDefinition::builder(name, field_type)
         .admin(FieldAdmin::builder().hidden(true).build())
         .build()
 }
 
+/// Helper to create a hidden text field definition.
+fn hidden_text_field(name: &str) -> FieldDefinition {
+    hidden_field(name, FieldType::Text)
+}
+
 /// Helper to create a hidden number field definition.
 fn hidden_number_field(name: &str) -> FieldDefinition {
-    FieldDefinition::builder(name, FieldType::Number)
-        .admin(FieldAdmin::builder().hidden(true).build())
-        .build()
+    hidden_field(name, FieldType::Number)
 }
 
 /// Auto-inject upload metadata fields at position 0 (before user fields).
@@ -249,19 +252,10 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
         hidden_number_field("focal_y"),
     ];
 
-    // Per-size typed fields: {size}_url, {size}_width, {size}_height
-    // Plus format variants: {size}_webp_url, {size}_avif_url
-    for size in &upload.image_sizes {
-        upload_fields.push(hidden_text_field(&format!("{}_url", size.name)));
-        upload_fields.push(hidden_number_field(&format!("{}_width", size.name)));
-        upload_fields.push(hidden_number_field(&format!("{}_height", size.name)));
-
-        if upload.format_options.webp.is_some() {
-            upload_fields.push(hidden_text_field(&format!("{}_webp_url", size.name)));
-        }
-        if upload.format_options.avif.is_some() {
-            upload_fields.push(hidden_text_field(&format!("{}_avif_url", size.name)));
-        }
+    // Per-size typed fields, named and typed by the upload config itself so
+    // the injected columns can never drift from the sets derived off them.
+    for (column, field_type) in upload.size_columns() {
+        upload_fields.push(hidden_field(&column, field_type));
     }
 
     // Insert at position 0, before user-defined fields

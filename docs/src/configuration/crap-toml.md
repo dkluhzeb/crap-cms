@@ -343,7 +343,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request, Lua/hook types are regenerated on every `serve`, the session cookie drops its `Secure` flag, and the default log filter becomes `crap_cms=debug,info`. The scaffold writes `dev_mode = false`; flip it to `true` while developing. |
+| `dev_mode` | boolean | `false` | When true, config-dir overlay templates are re-read from disk on every request (compiled defaults are in the binary and cannot change), Lua/hook types are regenerated on every `serve`, the session cookie drops its `Secure` flag, and the default log filter becomes `crap_cms=debug,info`. The scaffold writes `dev_mode = false`; flip it to `true` while developing. |
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
 | `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). The gate is boolean: a returned filter table is logged as an error and denies. |
 | `default_timezone` | string | `""` | Default IANA timezone for date fields with `timezone = true` that don't specify their own `default_timezone`. Pre-selects the timezone in the admin dropdown. Example: `"America/New_York"`. |

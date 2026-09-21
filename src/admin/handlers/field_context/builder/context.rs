@@ -96,7 +96,9 @@ pub fn build_field_contexts(
     non_default_locale: bool,
 ) -> Vec<FieldContext> {
     visible_field_defs(fields, filter_hidden)
-        .map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
+        .map(|field| {
+            build_single_field_context(field, values, errors, "", non_default_locale, false, 0)
+        })
         .collect()
 }
 

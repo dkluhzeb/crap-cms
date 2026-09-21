@@ -4,6 +4,7 @@
     data-field-type="blocks"
     data-field-name="{{name}}"
     {{#if label_field}} data-label-field="{{label_field}}"{{/if}}
+    {{#if readonly}} data-readonly{{/if}}
   >
     <legend>
       {{t label}}
@@ -47,7 +48,8 @@
         >
           {{#> partials/array-row-header
             expanded=(or (not ../init_collapsed) this.has_errors)
-            has_errors=this.has_errors}}
+            has_errors=this.has_errors
+            readonly=../readonly}}
             {{#if this.custom_label}}
               {{this.custom_label}}
             {{else}}
@@ -99,7 +101,10 @@
           class="form__array-row"
           data-row-index="__INDEX__"
         >
-          {{#> partials/array-row-header expanded=true has_errors=false}}
+          {{#> partials/array-row-header
+            expanded=true
+            has_errors=false
+            readonly=../readonly}}
             {{this.label}}__INDEX__
           {{/partials/array-row-header}}
 
@@ -124,7 +129,7 @@
       </template>
     {{/each}}
 
-    {{#unless locale_locked}}
+    {{#unless readonly}}
       <crap-block-picker
         {{#if picker}} data-picker="{{picker}}"{{/if}}
       >

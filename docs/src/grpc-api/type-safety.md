@@ -390,7 +390,8 @@ population depth, narrows selects, and types polymorphic relationships:
 
 | Schema field | Rust | Go | TypeScript | Python |
 |---|---|---|---|---|
-| `text` / `richtext` / `date` / … | `String` | `string` | `string` | `str` |
+| `text` / `richtext` (HTML) / `date` / … | `String` | `string` | `string` | `str` |
+| `richtext` with `admin.richtext_format = "json"` | `serde_json::Value` | `interface{}` | `unknown` | `Any` |
 | `number` | `f64` | `float64` | `number` | `float` |
 | `checkbox` | `bool` | `*bool` | `boolean` | `bool` |
 | `select` | `enum { …, Other(String) }` | `type X string` + consts | `"a" \| "b"` | `Literal["a", "b"]` |
@@ -399,6 +400,8 @@ population depth, narrows selects, and types polymorphic relationships:
 | polymorphic relationship | untagged `enum` + tagged ref enum | `interface{}` | `string \| ADocument \| BDocument` | `str \| A \| B` |
 
 Key semantics baked into these types:
+
+- **An upload collection's read type carries `sizes`.** The generated document describes the nested `sizes` object a read returns, not the per-size columns it is assembled from — there is no `thumbnail_url` or `thumbnail_width` on the wire. See [Uploads](../uploads/overview.md#api-response).
 
 - **Relationships follow `depth`.** `Rel<T>` (and its per-language equivalents)
   is *either* an id string (`depth = 0`) *or* the populated document

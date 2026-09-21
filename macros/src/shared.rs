@@ -275,10 +275,14 @@ fn map_scalar(ty: &Type) -> darling::Result<ScalarMap> {
 
 /// Returns `(true, inner)` if `ty` is `Option<T>`, else `(false, ty)`.
 pub(crate) fn strip_option(ty: &Type) -> (bool, &Type) {
-    match unwrap_path("Option", ty) {
-        Some(inner) => (true, inner),
-        None => (false, ty),
-    }
+    let Some(inner) = unwrap_path("Option", ty) else {
+        return (false, ty);
+    };
+
+    // Strip EVERY wrapper, not just the outer one: an `Option<Option<T>>`
+    // resolving to `Option<T>` would emit `<Option<T> as LuaAnnotation>::…`,
+    // which names no impl and fails to compile at the use site.
+    (true, strip_option(inner).1)
 }
 
 pub(crate) fn strip_ref(ty: &Type) -> &Type {
@@ -411,6 +415,42 @@ mod tests {
         assert_eq!(
             build_class_header("crap.Foo", Some("crap.Base"), &[]),
             "--- @class crap.Foo : crap.Base\n"
+        );
+    }
+
+    /// Whether an outer `Option` was stripped, and the remaining type spelled
+    /// without token spacing.
+    fn stripped(src: &str) -> (bool, String) {
+        let ty: Type = parse_str(src).expect("parse type");
+        let (optional, inner) = strip_option(&ty);
+
+        (optional, quote!(#inner).to_string().replace(' ', ""))
+    }
+
+    /// A doubly-wrapped `Option` resolves to its innermost type. Unwrapping one
+    /// level left `Option<T>` as the inner type, which the annotation emitters
+    /// then named as a class — `<Option<T> as LuaAnnotation>::CLASS_NAME` names
+    /// no impl and does not compile.
+    #[test]
+    fn strip_option_unwraps_to_the_innermost_type() {
+        assert_eq!(stripped("String"), (false, "String".to_string()));
+        assert_eq!(stripped("Option<String>"), (true, "String".to_string()));
+        assert_eq!(
+            stripped("Option<Option<String>>"),
+            (true, "String".to_string())
+        );
+        assert_eq!(
+            stripped("Option<Option<Option<u32>>>"),
+            (true, "u32".to_string())
+        );
+    }
+
+    /// An `Option` inside another generic is not an outer wrapper and stays put.
+    #[test]
+    fn strip_option_leaves_a_nested_generic_alone() {
+        assert_eq!(
+            stripped("Vec<Option<String>>"),
+            (false, "Vec<Option<String>>".to_string())
         );
     }
 }

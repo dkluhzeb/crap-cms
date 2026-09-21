@@ -105,7 +105,7 @@ markup.
 | `partials/pagination.hbs` | List-view next/previous controls. |
 | `partials/status-badge.hbs` | Document status pill (`published`, `draft`, etc.). Caller passes `status`. |
 | `partials/loading-indicator.hbs` | HTMX request indicator. Caller passes `variant` (`inline` or `sidebar`). |
-| `partials/array-row-header.hbs` | Drag-handle / move / duplicate / remove buttons for array-field rows. Caller passes `expanded`, `has_errors`. |
+| `partials/array-row-header.hbs` | Drag-handle / move / duplicate / remove buttons for array-field rows. Caller passes `expanded`, `has_errors`, `readonly`. With `readonly` the drag handle and the four action buttons are not rendered; the collapse toggle stays. |
 | `partials/error-page.hbs` | Error-page chrome (used by `errors/404.hbs`, etc.). |
 | `partials/form-actions.hbs` | Save/Publish/Cancel button row at the bottom of edit forms. |
 | `partials/htmx-nav-link.hbs` | Anchor with `hx-*` attributes for client-side nav. |

@@ -9,11 +9,11 @@
 //! red CI run. A failure names the op, the surface, and the missing/extra
 //! field.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crap_cms::service::op::{
     wire::{self, OpWire, WireField, WireKind, WireSurfaces},
-    wire_proto,
+    wire_proto::{self, expected_proto_ty},
 };
 
 const PROTO: &str = include_str!("../proto/content.proto");
@@ -204,16 +204,86 @@ fn proto_spec_covers_exactly_the_grpc_surface() {
     }
 }
 
+/// The pinned proto spec's TYPES, not just its field names. `ProtoField::ty`
+/// is a hand-typed string; [`expected_proto_ty`] derives the one spelling each
+/// field's `WireKind` allows, so a `ty` that disagrees with the model is drift
+/// and fails here.
+///
+/// The CRUD messages' tag-1 routing field (`collection`/`slug`) is structural,
+/// not a modeled field, so it is skipped; on the job ops the identifying
+/// argument IS modeled and takes part.
+#[test]
+fn proto_spec_types_match_the_wire_model() {
+    for w in wire::COLLECTION_OPS.iter().chain(wire::GLOBAL_OPS.iter()) {
+        assert_spec_types(w, 1);
+    }
+
+    for w in wire::JOB_OPS {
+        assert_spec_types(w, 0);
+    }
+}
+
+/// Compare one op's pinned proto types against the model, skipping the first
+/// `structural` spec fields (the CRUD routing field).
+fn assert_spec_types(w: &OpWire, structural: usize) {
+    let Some(msg) = wire_proto::proto_message(w.op) else {
+        return;
+    };
+
+    for field in w.fields {
+        if !field.surfaces.contains(WireSurfaces::GRPC) {
+            continue;
+        }
+
+        let name = match field.kind {
+            WireKind::DataFields | WireKind::DataObject => "data",
+            WireKind::DocumentsArray => "documents",
+            _ => field.grpc_name(),
+        };
+        let Some(pinned) = msg.fields[structural..].iter().find(|f| f.name == name) else {
+            panic!("op `{}`: no pinned proto field `{name}`", w.op);
+        };
+
+        assert_eq!(
+            pinned.ty,
+            expected_proto_ty(field),
+            "op `{}` field `{name}`: pinned proto type disagrees with the wire model — \
+             fix the pin in src/service/op/wire_proto.rs or the kind in wire.rs",
+            w.op
+        );
+    }
+}
+
 // ── Lua side ────────────────────────────────────────────────────────────
 
-/// Extract the `@field` names of one `@class` block in `types/crap.lua`.
-fn lua_class_fields(class: &str) -> BTreeSet<String> {
+/// The declared type on a `--- @field` line: everything up to the first space
+/// outside angle brackets, since a `table<string, A | B[]>` annotation carries
+/// spaces inside its type parameters.
+fn lua_field_type(rest: &str) -> String {
+    let mut depth = 0usize;
+    let mut out = String::new();
+
+    for c in rest.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ' ' if depth == 0 => break,
+            _ => {}
+        }
+        out.push(c);
+    }
+
+    out
+}
+
+/// The `@field name type` pairs of one `@class` block in `types/crap.lua`.
+fn lua_class_typed_fields(class: &str) -> BTreeMap<String, String> {
     let header = format!("--- @class {class}\n");
     let start = CRAP_LUA
         .find(&header)
         .unwrap_or_else(|| panic!("Lua class `{class}` not found in types/crap.lua"));
 
-    let mut out = BTreeSet::new();
+    let mut out = BTreeMap::new();
     for line in CRAP_LUA[start + header.len()..].lines() {
         let Some(rest) = line.strip_prefix("--- @field ") else {
             break;
@@ -221,10 +291,73 @@ fn lua_class_fields(class: &str) -> BTreeSet<String> {
         let Some(name) = rest.split_whitespace().next() else {
             break;
         };
-        out.insert(name.trim_end_matches('?').to_string());
+        let ty = lua_field_type(rest[name.len()..].trim_start());
+        out.insert(name.trim_end_matches('?').to_string(), ty);
     }
     out
 }
+
+/// Extract the `@field` names of one `@class` block in `types/crap.lua`.
+fn lua_class_fields(class: &str) -> BTreeSet<String> {
+    lua_class_typed_fields(class).into_keys().collect()
+}
+
+/// The Lua annotation spelling each wire kind takes in the generated option
+/// classes. `None` for the kinds no option class carries — document data is
+/// positional, and the job ops' payload/status/duration kinds live in tables
+/// that are key-checked against the model rather than annotated per op.
+fn expected_lua_ty(kind: WireKind) -> Option<&'static str> {
+    Some(match kind {
+        WireKind::Bool => "boolean",
+        WireKind::Int | WireKind::Int32 => "integer",
+        WireKind::Str | WireKind::Id | WireKind::Locale => "string",
+        WireKind::Select => "string[]",
+        WireKind::FilterMap => "table<string, crap.FilterValue | crap.OrCondition[]>",
+        WireKind::DataFields
+        | WireKind::DataObject
+        | WireKind::DocumentsArray
+        | WireKind::JsonData
+        | WireKind::JobStatus
+        | WireKind::Duration => return None,
+    })
+}
+
+/// (op, Lua classes to union, positional args) for every collection op.
+const COLLECTION_LUA: &[(&str, &[&str], &[&str])] = &[
+    ("find", &["crap.FindQuery"], &[]),
+    ("find_by_id", &["crap.FindByIdOptions"], &["id"]),
+    ("count", &["crap.CountQuery"], &[]),
+    ("create", &["crap.CreateOptions"], &[]),
+    ("update", &["crap.UpdateOptions"], &["id"]),
+    ("validate", &["crap.ValidateOptions"], &[]),
+    ("delete", &["crap.DeleteOptions"], &["id"]),
+    ("undelete", &["crap.UndeleteOptions"], &["id"]),
+    ("unpublish", &["crap.UnpublishOptions"], &["id"]),
+    ("create_many", &["crap.CreateManyOptions"], &[]),
+    (
+        "update_many",
+        &["crap.UpdateManyQuery", "crap.UpdateManyOptions"],
+        &[],
+    ),
+    (
+        "delete_many",
+        &["crap.DeleteManyQuery", "crap.DeleteManyOptions"],
+        &[],
+    ),
+    ("list_versions", &["crap.ListVersionsOptions"], &["id"]),
+    (
+        "restore_version",
+        &["crap.RestoreVersionOptions"],
+        &["id", "version_id"],
+    ),
+];
+
+/// (op, Lua options class) for every global op.
+const GLOBAL_LUA: &[(&str, &str)] = &[
+    ("get_global", "crap.GlobalGetOptions"),
+    ("update_global", "crap.GlobalUpdateOptions"),
+    ("validate_global", "crap.GlobalValidateOptions"),
+];
 
 /// The model's expected Lua option/query fields for one op.
 ///
@@ -259,37 +392,7 @@ fn expected_lua_fields(w: &OpWire, positional: &[&str]) -> BTreeSet<String> {
 /// structs against the model.
 #[test]
 fn lua_option_classes_match_wire_model() {
-    // (op, classes to union, positional args)
-    let collection: &[(&str, &[&str], &[&str])] = &[
-        ("find", &["crap.FindQuery"], &[]),
-        ("find_by_id", &["crap.FindByIdOptions"], &["id"]),
-        ("count", &["crap.CountQuery"], &[]),
-        ("create", &["crap.CreateOptions"], &[]),
-        ("update", &["crap.UpdateOptions"], &["id"]),
-        ("validate", &["crap.ValidateOptions"], &[]),
-        ("delete", &["crap.DeleteOptions"], &["id"]),
-        ("undelete", &["crap.UndeleteOptions"], &["id"]),
-        ("unpublish", &["crap.UnpublishOptions"], &["id"]),
-        ("create_many", &["crap.CreateManyOptions"], &[]),
-        (
-            "update_many",
-            &["crap.UpdateManyQuery", "crap.UpdateManyOptions"],
-            &[],
-        ),
-        (
-            "delete_many",
-            &["crap.DeleteManyQuery", "crap.DeleteManyOptions"],
-            &[],
-        ),
-        ("list_versions", &["crap.ListVersionsOptions"], &["id"]),
-        (
-            "restore_version",
-            &["crap.RestoreVersionOptions"],
-            &["id", "version_id"],
-        ),
-    ];
-
-    for (op, classes, positional) in collection {
+    for (op, classes, positional) in COLLECTION_LUA {
         let w = wire::collection_op(op).expect("wire model covers every op");
         let mut actual = BTreeSet::new();
         for class in *classes {
@@ -298,19 +401,58 @@ fn lua_option_classes_match_wire_model() {
         assert_same(op, "Lua", &expected_lua_fields(w, positional), &actual);
     }
 
-    let globals: &[(&str, &str)] = &[
-        ("get_global", "crap.GlobalGetOptions"),
-        ("update_global", "crap.GlobalUpdateOptions"),
-        ("validate_global", "crap.GlobalValidateOptions"),
-    ];
-
-    for (op, class) in globals {
+    for (op, class) in GLOBAL_LUA {
         let w = wire::global_op(op).expect("wire model covers every global op");
         assert_same(
             op,
             "Lua",
             &expected_lua_fields(w, &[]),
             &lua_class_fields(class),
+        );
+    }
+}
+
+/// Every Lua option field's annotation carries the type its `WireKind` names.
+/// The classes are generated from the Rust opts structs, so this checks the
+/// CODE's types against the model — the name-level check above cannot tell a
+/// `limit` typed `string` from one typed `integer`.
+#[test]
+fn lua_option_class_types_match_wire_model() {
+    for (op, classes, _) in COLLECTION_LUA {
+        let w = wire::collection_op(op).expect("wire model covers every op");
+        assert_lua_types(w, classes);
+    }
+
+    for (op, class) in GLOBAL_LUA {
+        let w = wire::global_op(op).expect("wire model covers every global op");
+        assert_lua_types(w, &[*class]);
+    }
+}
+
+/// Compare one op's Lua annotations against the model. A field the classes do
+/// not declare is the name checker's business, not this one's.
+fn assert_lua_types(w: &OpWire, classes: &[&str]) {
+    let mut declared = BTreeMap::new();
+    for class in classes {
+        declared.extend(lua_class_typed_fields(class));
+    }
+
+    for field in w.fields {
+        if !field.surfaces.contains(WireSurfaces::LUA) {
+            continue;
+        }
+
+        let (Some(expected), Some(actual)) =
+            (expected_lua_ty(field.kind), declared.get(field.name))
+        else {
+            continue;
+        };
+
+        assert_eq!(
+            actual, expected,
+            "op `{}` field `{}`: the Lua annotation type disagrees with the wire model — \
+             fix the opts struct in the code or the kind in src/service/op/wire.rs",
+            w.op, field.name
         );
     }
 }

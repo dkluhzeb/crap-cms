@@ -16,9 +16,9 @@ use crate::{
         },
         handlers::{
             field_context::{
-                MAX_FIELD_DEPTH, collect_node_attr_errors,
+                MAX_FIELD_DEPTH, cascaded_readonly, collect_node_attr_errors,
                 enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
-                json_textarea_value, locale_locked_display, safe_template_id,
+                json_textarea_value, locale_locked_display, readonly_display, safe_template_id,
             },
             shared::admin_form_fields,
         },
@@ -99,7 +99,7 @@ fn build_sub_field_base(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: sf.admin.readonly || locale_locked,
+        readonly: readonly_display(sf, opts.ancestor_readonly, locale_locked),
         localized: sf.localized,
         locale_locked,
         position: sf.admin.position.clone(),
@@ -237,10 +237,21 @@ pub fn build_enriched_sub_field_context(
     let indexed_name = sub_field_indexed_name(sf, parent_name, idx);
     let val = stringify_sub_field_value(raw_value, sf);
     let base = build_sub_field_base(sf, &indexed_name, &val, opts);
+
+    // `admin.readonly` cascades: everything nested inside a read-only
+    // container renders read-only too. The locale lock is not carried here —
+    // it is recomputed per field from `non_default_locale`.
+    let inner_opts = SubFieldOpts::builder(opts.errors)
+        .locale_locked(opts.locale_locked)
+        .non_default_locale(opts.non_default_locale)
+        .ancestor_readonly(cascaded_readonly(sf, opts.ancestor_readonly))
+        .depth(opts.depth)
+        .build();
+
     let mut fc = construct_sub_variant(sf, base, &indexed_name);
 
     if opts.depth < MAX_FIELD_DEPTH {
-        dispatch_sub_field_type(&mut fc, sf, &val, raw_value, &indexed_name, opts);
+        dispatch_sub_field_type(&mut fc, sf, &val, raw_value, &indexed_name, &inner_opts);
     }
 
     fc
@@ -593,6 +604,88 @@ mod tests {
             "localized field inside layout wrapper must be unlocked in non-default locale"
         );
         assert_eq!(title_ctx["readonly"], false);
+    }
+
+    /// A read-only Array locks every field in every row it holds, and in the
+    /// new-row template. `admin.readonly` on a container is not a label on the
+    /// container alone — it cascades into what the container contains.
+    #[test]
+    fn a_readonly_array_cascades_readonly_into_its_rows() {
+        let mut items = make_field("items", FieldType::Array);
+        items.admin.readonly = true;
+        items.fields = vec![make_field("title", FieldType::Text)];
+
+        let rows = json!([{ "title": "Hello" }]);
+
+        let ctx = build_enriched_sub_field_value(
+            &items,
+            Some(&rows),
+            "page",
+            0,
+            &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+        );
+
+        assert_eq!(ctx["readonly"], true);
+
+        let row_field = &ctx["rows"][0]["sub_fields"][0];
+        assert_eq!(
+            row_field["readonly"], true,
+            "a row's field inherits the array's read-only state"
+        );
+        assert_eq!(
+            row_field["locale_locked"], false,
+            "read-only is not the same as locale-locked"
+        );
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], true,
+            "the new-row template inherits it too"
+        );
+    }
+
+    /// The control: a plain Array leaves the fields in its rows editable.
+    #[test]
+    fn a_plain_array_leaves_its_row_fields_editable() {
+        let mut items = make_field("items", FieldType::Array);
+        items.fields = vec![make_field("title", FieldType::Text)];
+
+        let rows = json!([{ "title": "Hello" }]);
+
+        let ctx = build_enriched_sub_field_value(
+            &items,
+            Some(&rows),
+            "page",
+            0,
+            &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+        );
+
+        assert_eq!(ctx["readonly"], false);
+        assert_eq!(ctx["rows"][0]["sub_fields"][0]["readonly"], false);
+    }
+
+    /// The same for a Group: a read-only group locks its sub-fields, however
+    /// deep the nesting goes.
+    #[test]
+    fn a_readonly_group_cascades_readonly_to_its_sub_fields() {
+        let mut meta = make_field("meta", FieldType::Group);
+        meta.admin.readonly = true;
+        meta.fields = vec![make_field("author", FieldType::Text)];
+
+        let value = json!({ "author": "Alice" });
+
+        let ctx = build_enriched_sub_field_value(
+            &meta,
+            Some(&value),
+            "items",
+            0,
+            &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+        );
+
+        assert_eq!(ctx["readonly"], true);
+        assert_eq!(
+            ctx["sub_fields"][0]["readonly"], true,
+            "a read-only group locks the fields inside it"
+        );
+        assert_eq!(ctx["sub_fields"][0]["locale_locked"], false);
     }
 
     #[test]

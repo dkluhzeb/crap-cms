@@ -1521,7 +1521,44 @@ changed `default_value` needs no migration; `unique` fields are enforced by a
 managed unique index, created on the next start for a field that became
 `unique` later.
 
+### 54. Schema authors: `sizes` is a reserved field name on an upload collection
+
+Every read of an upload collection assembles the per-size columns
+(`{size}_url`, `{size}_width`, `{size}_height` and each format variant) into
+one nested `sizes` object. A user field of that name was overwritten by it on
+the way out, so `sizes` is a reserved field name on an upload collection with
+`image_sizes` configured, rejected at definition time like `id` and the other
+generated columns.
+
+**Action:** rename such a field before upgrading. Only upload collections with
+image sizes are affected; the name stays free everywhere else.
+
 ## Admin UI behavior
+
+### Template overrides: array and blocks row controls are gated on `readonly`
+
+`admin.readonly` now cascades from a container field to everything inside it,
+and the row-mutating controls honour it. The `partials/array-row-header`
+partial takes a new `readonly` parameter and hides the drag handle and the
+move, duplicate and remove buttons when it is set; the collapse toggle stays.
+`fields/array.hbs` and `fields/blocks.hbs` gate the add-row control on
+`readonly` instead of `locale_locked` and stamp `data-readonly` on the
+fieldset, which is what the client component checks before acting.
+
+**Action:** if you override `partials/array-row-header.hbs`, take the new
+parameter and gate the controls on it; if you override `fields/array.hbs` or
+`fields/blocks.hbs`, pass `readonly=` into the partial and copy the fieldset
+attribute. An override that does nothing renders the controls as before, so a
+read-only container would stay editable.
+
+### Dev mode reloads overlay templates for real
+
+`admin.dev_mode = true` documented per-request template reload, but every
+template was registered from a string, which leaves Handlebars with no file to
+re-read: editing an overlay template did nothing until the process restarted.
+Config-directory overlay templates are now registered by path, so dev mode
+picks up edits on the next request. Adding a *new* overlay file still needs a
+restart, and compiled-in defaults never reload.
 
 ### Template overrides: the duplicate locale-picker keys are gone
 
@@ -2104,6 +2141,24 @@ What changed:
   would generate the same type name — e.g. a collection slugged `posts_status`
   and the `status` select of `posts`) instead of silently emitting one wrong
   type. If generation fails with a collision error, rename one construct.
+
+- **Generated client types now describe an upload read as it actually
+  arrives.** The generators walked the stored columns, so an upload
+  collection's document type declared `thumbnail_url`, `thumbnail_width`,
+  `thumbnail_height` and one field per format variant — none of which a read
+  returns. The document type now carries the nested `sizes` object instead:
+  read a size as `sizes.thumbnail.url`, its dimensions as
+  `sizes.thumbnail.width` / `.height`, and a format variant as
+  `sizes.thumbnail.formats.webp.url`. The Lua type definitions describe the
+  same shape on `crap.doc.*`; the input classes still describe the stored
+  columns, because that is what a writer may send.
+
+- **A JSON rich text field is no longer typed as a string.** With
+  `admin.richtext_format = "json"` the value on the wire is a JSON document.
+  It now generates `serde_json::Value` in Rust, `interface{}` in Go,
+  `unknown` in TypeScript and `Any` in Python, and the Rust proto decoder
+  decodes it instead of dropping it. The same decoder fix restores `json`
+  fields, empty groups and blocks, which previously decoded as absent.
 
 - **Rust `typegen proto` and `typegen client -l rs` compile together again.**
   The proto decoder had drifted — `select`/polymorphic fields stayed `String`,

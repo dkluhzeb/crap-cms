@@ -218,9 +218,10 @@ pub fn parse_collection_definition(
     {
         // Reject a user field whose name collides with an auto-generated
         // upload column (filename/mime_type/filesize/width/height/url/
-        // focal_x/focal_y + per-size/format variants) — it would otherwise be
-        // silently overwritten by the injected field.
-        let reserved = u.system_field_names();
+        // focal_x/focal_y + per-size/format variants) or with the `sizes`
+        // object a read assembles from them — it would otherwise be silently
+        // overwritten by the injected field or by the read shape.
+        let reserved = u.reserved_field_names();
         if let Some(f) = fields.iter().find(|f| reserved.contains(&f.name)) {
             bail!(
                 "Field name '{}' is reserved on an upload collection — it collides with an \

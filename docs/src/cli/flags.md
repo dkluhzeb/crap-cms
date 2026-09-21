@@ -736,6 +736,8 @@ Every document is exported, trashed ones included (with their `_deleted_at`), al
 
 Without `--include-credentials` an export carries no credentials, and importing an auth collection from it leaves new accounts without a password (an account that already exists keeps its stored one). With the flag, each account carries a `_credentials` object. One-time tokens (password reset, email verification, MFA codes) are never exported. Treat a file exported with the flag like a database dump.
 
+Export is an **operator tool that reads the database directly**: it dumps every document of every selected collection — published, draft and trashed alike — and neither collection nor field `access` rules nor read hooks run (the same trust model `import` states for the write direction). Treat an export file like a database dump.
+
 Export covers **collections only** — globals are not part of the envelope. For a complete copy of a deployment (globals, versions, uploads) use `backup` / `restore`.
 
 ```bash

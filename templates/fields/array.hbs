@@ -4,6 +4,7 @@
     data-field-type="array"
     data-field-name="{{name}}"
     {{#if label_field}} data-label-field="{{label_field}}"{{/if}}
+    {{#if readonly}} data-readonly{{/if}}
   >
     <legend>
       {{t label}}
@@ -54,7 +55,8 @@
           {{/if}}
           {{#> partials/array-row-header
             expanded=(or (not ../init_collapsed) this.has_errors)
-            has_errors=this.has_errors}}
+            has_errors=this.has_errors
+            readonly=../readonly}}
             {{#if this.custom_label}}
               {{this.custom_label}}
             {{else}}
@@ -90,7 +92,10 @@
         class="form__array-row"
         data-row-index="__INDEX__"
       >
-        {{#> partials/array-row-header expanded=true has_errors=false}}
+        {{#> partials/array-row-header
+          expanded=true
+          has_errors=false
+          readonly=readonly}}
           {{label}}__INDEX__
         {{/partials/array-row-header}}
 
@@ -109,7 +114,7 @@
       </crap-array-row>
     </template>
 
-    {{#unless locale_locked}}
+    {{#unless readonly}}
       <button
         type="button"
         class="button button--ghost button--small"

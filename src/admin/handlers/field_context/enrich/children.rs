@@ -29,23 +29,49 @@ use crate::{
             field_context::{
                 MAX_FIELD_DEPTH,
                 builder::build_single_field_context,
-                count_errors_in_field_contexts,
+                cascaded_readonly, count_errors_in_field_contexts,
                 enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
-                locale_locked_display, localize_date_display, safe_template_id,
+                locale_locked_display, localize_date_display, readonly_display, safe_template_id,
             },
             shared::admin_form_fields,
         },
     },
-    core::field::{FieldDefinition, FieldType},
+    core::{
+        Builder,
+        field::{FieldDefinition, FieldType},
+    },
     db::query::helpers::{lang_column, tz_column},
 };
 
 /// Inheritance state passed down through recursion in this module.
-struct ChildEnrichOpts<'a> {
-    locale_locked: bool,
-    non_default_locale: bool,
+#[derive(Builder)]
+pub struct ChildEnrichOpts<'a> {
+    pub locale_locked: bool,
+    pub non_default_locale: bool,
+    /// Whether a container around these children declares `admin.readonly`.
+    /// It cascades downward, so every child built with this set renders
+    /// read-only whatever its own `admin.readonly` says. A container locked
+    /// only by the locale does not set it — the locale lock is recomputed per
+    /// child from `non_default_locale`.
+    pub ancestor_readonly: bool,
+    pub depth: usize,
+    #[builder(required)]
+    pub errors: &'a HashMap<String, String>,
+}
+
+/// The same inheritance state with `ancestor_readonly` and `depth` replaced —
+/// what a container hands to the fields inside it.
+fn inherited_opts<'a>(
+    opts: &ChildEnrichOpts<'a>,
+    ancestor_readonly: bool,
     depth: usize,
-    errors: &'a HashMap<String, String>,
+) -> ChildEnrichOpts<'a> {
+    ChildEnrichOpts::builder(opts.errors)
+        .locale_locked(opts.locale_locked)
+        .non_default_locale(opts.non_default_locale)
+        .ancestor_readonly(ancestor_readonly)
+        .depth(depth)
+        .build()
 }
 
 /// Resolve the child's form name and raw JSON value.
@@ -90,17 +116,17 @@ fn resolve_child_name_and_value<'a>(
 /// Build the typed shared base data for a child field. `locale_locked` is
 /// recomputed per child as `non_default_locale && !child.localized`, matching
 /// the build-phase semantics. A localized field inside a non-localized layout
-/// wrapper must stay editable in non-default locales.
+/// wrapper must stay editable in non-default locales. `readonly` is the
+/// broader flag: it also carries down from a read-only container.
 fn build_child_base(
     child: &FieldDefinition,
     child_name: &str,
     child_val: &str,
-    non_default_locale: bool,
-    errors: &HashMap<String, String>,
+    opts: &ChildEnrichOpts,
 ) -> BaseFieldData {
     let label = child.resolved_label();
 
-    let locale_locked = locale_locked_display(non_default_locale, child);
+    let locale_locked = locale_locked_display(opts.non_default_locale, child);
 
     BaseFieldData {
         name: child_name.to_string(),
@@ -118,13 +144,13 @@ fn build_child_base(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: child.admin.readonly || locale_locked,
+        readonly: readonly_display(child, opts.ancestor_readonly, locale_locked),
         localized: child.localized,
         locale_locked,
         position: child.admin.position.clone(),
         template: child.admin.template.clone(),
         extra: child.admin.extra.clone(),
-        error: errors.get(child_name).cloned(),
+        error: opts.errors.get(child_name).cloned(),
         validation: ValidationAttrs::default(),
         condition: ConditionData::default(),
     }
@@ -149,6 +175,7 @@ fn apply_array_template(
                 &HashMap::new(),
                 &template_prefix,
                 opts.non_default_locale,
+                opts.ancestor_readonly,
                 opts.depth + 1,
             )
         })
@@ -191,6 +218,7 @@ fn apply_blocks_template(
                         &HashMap::new(),
                         &template_prefix,
                         opts.non_default_locale,
+                        opts.ancestor_readonly,
                         opts.depth + 1,
                     )
                 })
@@ -317,15 +345,9 @@ fn enrich_container_children(
     parent_prefix: &str,
     opts: &ChildEnrichOpts,
 ) -> Vec<FieldContext> {
-    build_enriched_children_from_data(
-        &child.fields,
-        child_raw,
-        parent_prefix,
-        opts.locale_locked,
-        opts.non_default_locale,
-        opts.depth + 1,
-        opts.errors,
-    )
+    let deeper = inherited_opts(opts, opts.ancestor_readonly, opts.depth + 1);
+
+    build_enriched_children_from_data(&child.fields, child_raw, parent_prefix, &deeper)
 }
 
 /// Build the per-tab [`TabPanel`] list for a `Tabs` field — each tab's
@@ -337,19 +359,14 @@ fn enrich_tab_panels(
     child_name: &str,
     opts: &ChildEnrichOpts,
 ) -> Vec<TabPanel> {
+    let deeper = inherited_opts(opts, opts.ancestor_readonly, opts.depth + 1);
+
     child
         .tabs
         .iter()
         .map(|tab| {
-            let tab_sub_fields = build_enriched_children_from_data(
-                &tab.fields,
-                child_raw,
-                child_name,
-                opts.locale_locked,
-                opts.non_default_locale,
-                opts.depth + 1,
-                opts.errors,
-            );
+            let tab_sub_fields =
+                build_enriched_children_from_data(&tab.fields, child_raw, child_name, &deeper);
             let error_count = count_errors_in_field_contexts(&tab_sub_fields);
             TabPanel {
                 label: tab.label.clone(),
@@ -416,12 +433,15 @@ fn build_child(
     let (child_name, child_raw, child_val) =
         resolve_child_name_and_value(child, data, data_obj, parent_name);
 
-    let base = build_child_base(
-        child,
-        &child_name,
-        &child_val,
-        opts.non_default_locale,
-        opts.errors,
+    let base = build_child_base(child, &child_name, &child_val, opts);
+
+    // `admin.readonly` cascades: everything nested inside a read-only
+    // container renders read-only too. The locale lock is not carried here —
+    // it is recomputed per field from `non_default_locale`.
+    let inner_opts = inherited_opts(
+        opts,
+        cascaded_readonly(child, opts.ancestor_readonly),
+        opts.depth,
     );
 
     let mut fc = construct_sub_variant(child, base, &child_name);
@@ -433,7 +453,7 @@ fn build_child(
         data_obj,
         &child_name,
         &child_val,
-        opts,
+        &inner_opts,
     );
 
     fc
@@ -451,26 +471,16 @@ pub fn build_enriched_children_from_data(
     fields: &[FieldDefinition],
     data: Option<&Value>,
     parent_name: &str,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &ChildEnrichOpts,
 ) -> Vec<FieldContext> {
-    if depth >= MAX_FIELD_DEPTH {
+    if opts.depth >= MAX_FIELD_DEPTH {
         return Vec::new();
     }
 
     let data_obj = data.and_then(|v| v.as_object());
 
-    let opts = ChildEnrichOpts {
-        locale_locked,
-        non_default_locale,
-        depth,
-        errors,
-    };
-
     admin_form_fields(fields)
-        .map(|child| build_child(child, data, data_obj, parent_name, &opts))
+        .map(|child| build_child(child, data, data_obj, parent_name, opts))
         .collect()
 }
 
@@ -498,14 +508,12 @@ mod tests {
 
         let row = json!({ "snippet": "print(1)", "snippet_lang": "python" });
 
+        let errors = HashMap::new();
         let children = build_enriched_children_from_data(
             &[snippet],
             Some(&row),
             "items[0]",
-            false,
-            false,
-            0,
-            &HashMap::new(),
+            &ChildEnrichOpts::builder(&errors).build(),
         );
 
         let FieldContext::Code(cf) = &children[0] else {
@@ -533,14 +541,12 @@ mod tests {
 
         let row = json!({ "snippet": "print(1)", "snippet_lang": "" });
 
+        let errors = HashMap::new();
         let children = build_enriched_children_from_data(
             &[snippet],
             Some(&row),
             "items[0]",
-            false,
-            false,
-            0,
-            &HashMap::new(),
+            &ChildEnrichOpts::builder(&errors).build(),
         );
 
         let FieldContext::Code(cf) = &children[0] else {
@@ -548,6 +554,89 @@ mod tests {
         };
         assert_eq!(cf.language, "javascript");
         assert!(cf.languages.is_some());
+    }
+
+    /// Build the children of a Group with `admin.readonly` set as asked.
+    fn group_children(readonly: bool) -> Vec<FieldContext> {
+        let meta = FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .admin(FieldAdmin::builder().readonly(readonly).build())
+            .build();
+
+        let data = json!({ "meta": { "title": "Hello" } });
+        let errors = HashMap::new();
+
+        build_enriched_children_from_data(
+            &[meta],
+            Some(&data),
+            "items[0]",
+            &ChildEnrichOpts::builder(&errors).build(),
+        )
+    }
+
+    /// A read-only Group locks every field inside it — `admin.readonly` on a
+    /// container cascades downward — while a plain Group leaves its children
+    /// editable. Neither is a locale lock.
+    #[test]
+    fn a_readonly_group_cascades_readonly_to_its_children() {
+        let locked = group_children(true);
+        let FieldContext::Group(gf) = &locked[0] else {
+            panic!("expected a group context")
+        };
+
+        assert!(gf.base.readonly);
+        assert!(
+            gf.sub_fields[0].base().readonly,
+            "a read-only group locks the fields inside it"
+        );
+        assert!(
+            !gf.sub_fields[0].base().locale_locked,
+            "read-only is not the same as locale-locked"
+        );
+
+        let open = group_children(false);
+        let FieldContext::Group(gf) = &open[0] else {
+            panic!("expected a group context")
+        };
+
+        assert!(
+            !gf.sub_fields[0].base().readonly,
+            "a plain group leaves its children editable"
+        );
+    }
+
+    /// A layout wrapper is transparent for naming but still carries its own
+    /// `admin.readonly`, so it locks the fields it wraps.
+    #[test]
+    fn a_readonly_layout_wrapper_locks_the_fields_it_wraps() {
+        let row = FieldDefinition::builder("layout", FieldType::Row)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .admin(FieldAdmin::builder().readonly(true).build())
+            .build();
+
+        let data = json!({ "title": "Hello" });
+        let errors = HashMap::new();
+
+        let children = build_enriched_children_from_data(
+            &[row],
+            Some(&data),
+            "items[0]",
+            &ChildEnrichOpts::builder(&errors).build(),
+        );
+
+        let FieldContext::Row(rf) = &children[0] else {
+            panic!("expected a row context")
+        };
+
+        assert!(rf.base.readonly);
+        assert!(
+            rf.sub_fields[0].base().readonly,
+            "a read-only wrapper locks the fields it wraps"
+        );
     }
 
     /// Resolve a leaf field's (name, raw, value) from a parent data object.

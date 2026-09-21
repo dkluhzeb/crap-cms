@@ -10,6 +10,7 @@ pub mod process;
 mod processed_upload;
 mod queue;
 mod queued_conversion;
+mod read_shape;
 mod resize;
 mod size_result;
 pub mod storage;
@@ -32,6 +33,7 @@ pub use queue::{
     delete_image_jobs_for_document, queue_image_conversion,
 };
 pub use queued_conversion::QueuedConversion;
+pub use read_shape::{SIZES_FIELD, read_shape_fields};
 pub use resize::process_image_entry_with_storage;
 pub use size_result::SizeResult;
 pub use storage::{

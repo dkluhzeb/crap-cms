@@ -75,6 +75,10 @@ automatically generated column:
   for group-field column nesting (`group__subfield`).
 - **Must not be `id`, `parent_id`, `created_at`, or `updated_at`** — these are
   the primary key, join-table foreign key, and timestamp columns.
+- **On an upload collection: must not be an upload system column, nor `sizes`
+  when `image_sizes` are configured.** Every read assembles the per-size
+  columns into a `sizes` object, so a field of that name would be overwritten
+  on the way out. See [Uploads](../uploads/overview.md#api-response).
 
 Collection slugs are likewise checked for collisions with generated join-table
 names at startup: a collection slugged `posts_tags` conflicts with the `tags`
@@ -112,7 +116,7 @@ of the tables.
 | `placeholder` | string \| table | `nil` | Input placeholder text. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `hidden` | boolean | `false` | Hide from the admin edit form (collections and globals, at every nesting depth). The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it, and an admin save never overwrites it — a hidden checkbox or multi-value list keeps its stored value. For full API stripping, use the top-level `hidden` field property instead. |
-| `readonly` | boolean | `false` | Display but don't allow editing. Honoured by every editable field type, including checkbox, select, radio and a timezone date's zone picker, which render disabled with a hidden input carrying the stored value (a password input is never rendered readonly). Enforced by the form only: an API write is not restricted by it. |
+| `readonly` | boolean | `false` | Display but don't allow editing. Honoured by every editable field type, including checkbox, select, radio and a timezone date's zone picker, which render disabled with a hidden input carrying the stored value (a password input is never rendered readonly). **Cascades into containers:** set on a `group`, `array`, `blocks`, `row`, `collapsible` or `tabs` field it applies to every field nested inside, at any depth, and an array/blocks field also drops its row controls (add, remove, move, duplicate, drag-to-reorder) and its block picker — collapsing a row stays available. A readonly `relationship` or `upload` field also drops its "Create new" / "Upload new" link. Enforced by the form only: an API write is not restricted by it. |
 | `width` | string | `nil` | Field width: `"full"` (default), `"half"`, `"third"`, or any CSS width string (`"50%"`, `"200px"`) |
 | `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |
 | `condition` | string | `nil` | Lua function ref for conditional visibility (see [Conditions](../hooks/conditions.md)) |

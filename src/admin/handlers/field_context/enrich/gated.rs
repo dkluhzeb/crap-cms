@@ -167,6 +167,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            ancestor_readonly: false,
         };
 
         let doc = gated_find_by_id(&ctx, "posts", &def, "p1").expect("a readable target");
@@ -206,6 +207,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            ancestor_readonly: false,
         };
 
         let docs = gated_find(&ctx, "posts", &def, Vec::new());
@@ -247,6 +249,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            ancestor_readonly: false,
         };
         assert!(
             gated_find_by_id(&ctx_deny, "posts", &def, "p1").is_none(),
@@ -263,6 +266,7 @@ mod tests {
             reg: &reg,
             rel_locale_ctx: None,
             user: None,
+            ancestor_readonly: false,
         };
         assert!(
             gated_find_by_id(&ctx_allow, "posts", &def, "p1").is_some(),
