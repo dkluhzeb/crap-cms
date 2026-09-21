@@ -103,6 +103,16 @@ fn update_inner(
     locale_ctx: Option<&LocaleContext>,
     mut col: UpdateCollector,
 ) -> Result<Document> {
+    // Lock the document row for the whole write, whether or not this data
+    // produces a SET clause: the caller follows the scalar write with the
+    // join-table diff (read the parent's rows, delete the ones the incoming
+    // set drops, insert/update the rest), and a write that changes only an
+    // Array or Blocks field owns that diff while issuing no UPDATE at all.
+    // Unlocked, two such writers interleave and one deletes the rows the other
+    // just committed, working from a stale snapshot. No-op on SQLite, whose
+    // IMMEDIATE transaction serializes writers already.
+    conn.lock_row(slug, id)?;
+
     collect_update_params(&def.fields, data, locale_ctx, &mut col, conn)?;
 
     if def.timestamps {
@@ -269,7 +279,9 @@ mod tests {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::db::query::{LocaleMode, write::create};
+    use crate::db::query::{
+        LocaleMode, save_join_table_data, test_helpers::CountingConn, write::create,
+    };
     use crate::db::{BoxedConnection, pool};
 
     fn setup_db(ddl: &str) -> (TempDir, BoxedConnection) {
@@ -436,6 +448,59 @@ mod tests {
         let empty_data = DocumentFields::new();
         let result = update(&conn, "posts", &no_ts_def, &id, &empty_data, None).unwrap();
         assert_eq!(result.get_str("title"), Some("MyTitle"));
+    }
+
+    /// A write on a collection without timestamps whose only changed field is
+    /// an Array collects no SET clause, so it issues no UPDATE statement — and
+    /// still has to lock the document row. The join-table diff the caller runs
+    /// next reads the parent's junction rows and deletes the ones the incoming
+    /// set drops, so two unlocked writers delete each other's committed rows
+    /// from a stale snapshot.
+    #[test]
+    fn an_update_without_set_clauses_locks_the_row_before_the_join_diff() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY
+            );
+            CREATE TABLE events_slides (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                caption TEXT
+            );
+            INSERT INTO events (id) VALUES ('e1');",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.timestamps = false;
+        def.fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("caption", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("slides".to_string(), json!([{ "caption": "one" }]));
+
+        let spy = CountingConn::new(&conn);
+
+        update(&spy, "events", &def, "e1", &data, None).unwrap();
+        save_join_table_data(&spy, "events", &def.fields, "e1", &data, None).unwrap();
+
+        assert_eq!(spy.locks(), vec![("events".to_string(), "e1".to_string())]);
+        assert_eq!(
+            spy.reads_at_locks(),
+            vec![0],
+            "the lock precedes every read this write builds on, the join \
+             diff's existing-row snapshot included"
+        );
+        let executed = spy.executed();
+        assert!(
+            !executed.iter().any(|sql| sql.starts_with("UPDATE")),
+            "no SET clause means no UPDATE statement: {executed:?}"
+        );
     }
 
     #[test]

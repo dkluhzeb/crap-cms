@@ -124,6 +124,22 @@ On startup, Crap CMS compares Lua definitions against the database schema:
 
 Schema sync runs in a single transaction. If anything fails, all changes are rolled back. The one exception to "nothing outside the transaction" is a [soft-delete transition](../collections/soft-deletes.md#enabling-soft-deletes-on-an-existing-collection) on SQLite, which switches foreign-key enforcement off around that sync and verifies every reference before committing.
 
+### Concurrent writers
+
+On **SQLite** every write opens `BEGIN IMMEDIATE` — a database-wide write
+lock — so writes are fully serialised and the per-row lock below is a
+deliberate no-op there.
+
+On **PostgreSQL** the same transaction is a plain `BEGIN` under MVCC, so two
+writers of the same document run at once. The write path therefore locks the
+document's row (`SELECT 1 … FOR UPDATE`) at the very start of the update —
+before the pending draft, the stored row the access rules judge, the files
+the write may drop and the outgoing-reference snapshot are read — and holds
+it until commit. A write that changes only an array or blocks field takes
+the lock too, even though it issues no `UPDATE`. Globals lock the `default`
+row of their table the same way. Lock order is always the parent document
+row first, then relationship targets.
+
 ## Changing a definition that has data
 
 Schema sync only ever adds; what it does with each kind of change on a

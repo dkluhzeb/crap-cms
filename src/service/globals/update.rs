@@ -126,6 +126,16 @@ pub fn update_global_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
+    let gtable = global_table(ctx.slug);
+
+    // Serialize concurrent writers of the global's single row before the write
+    // reads anything it builds on: the pending draft below and the
+    // outgoing-ref snapshot at persist time are both plain SELECTs, so without
+    // the lock a publisher can write back a draft a concurrent draft save has
+    // already superseded, and two writers can double-apply a ref-count delta.
+    // No-op on SQLite, whose IMMEDIATE transaction serializes writers already.
+    conn.lock_row(&gtable, "default")?;
+
     // Canonicalize incoming data up front: nested groups, canonical email and
     // text values.
     input.data = nest_group_fields(&input.data, &def.fields);
@@ -151,7 +161,6 @@ pub fn update_global_in_conn(
     )?;
 
     let is_draft = input.draft && def.has_drafts();
-    let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
 
     // Data-aware write strip (each `access.update` rule sees `ctx.data` = its
@@ -364,11 +373,8 @@ fn persist_global_published_update(
     // Final post-hook data (see the collection persist path).
     reject_locale_locked_fields(&def.fields, &final_ctx.data, locale_ctx)?;
 
-    // Lock the row BEFORE the (unlocked) outgoing-ref snapshot — parity with
-    // `persist_update`: on Postgres two concurrent global updates could both
-    // read the stale `old_refs` and double-apply a ref-count delta.
-    conn.lock_row(gtable, "default")?;
-
+    // The row lock this snapshot needs is already held: `update_global_in_conn`
+    // takes it at the top of the write, before anything is read.
     let old_refs = query::ref_count::snapshot_outgoing_refs(
         conn,
         gtable,

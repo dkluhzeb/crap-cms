@@ -14,7 +14,34 @@ use crate::{
 
 use super::helpers::{get_bool, get_string, get_table};
 
-pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<CollectionUpload>> {
+/// Reject two image sizes sharing a name.
+///
+/// Both would resolve to the same stored key (`{stem}_{name}.{ext}`) and the
+/// same `{name}_url` column, so the second silently overwrites the first —
+/// one of the two definitions would never produce a file.
+fn reject_duplicate_size_names(collection: &str, sizes: &[ImageSize]) -> LuaResult<()> {
+    let mut seen: Vec<&str> = Vec::with_capacity(sizes.len());
+
+    for size in sizes {
+        if seen.contains(&size.name.as_str()) {
+            return Err(RuntimeError(format!(
+                "collection '{collection}': duplicate image size name '{}'. \
+                 Each image_sizes entry needs its own name — two entries with \
+                 the same name write the same file and the same _url column.",
+                size.name
+            )));
+        }
+
+        seen.push(&size.name);
+    }
+
+    Ok(())
+}
+
+pub(super) fn parse_collection_upload(
+    collection: &str,
+    config: &Table,
+) -> LuaResult<Option<CollectionUpload>> {
     let val: Value = match config.get("upload") {
         Ok(v) => v,
         Err(_) => return Ok(None),
@@ -44,6 +71,8 @@ pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<Collec
             } else {
                 Vec::new()
             };
+
+            reject_duplicate_size_names(collection, &image_sizes)?;
 
             let admin_thumbnail = get_string(&tbl, "admin_thumbnail");
             let format_options = parse_format_options(&tbl)?;
@@ -453,7 +482,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("upload", true).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap();
         assert!(upload.is_some());
         assert!(upload.unwrap().enabled);
     }
@@ -463,7 +492,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("upload", false).unwrap();
-        assert!(parse_collection_upload(&tbl).unwrap().is_none());
+        assert!(parse_collection_upload("media", &tbl).unwrap().is_none());
     }
 
     #[test]
@@ -487,13 +516,67 @@ mod tests {
         upload_tbl.set("image_sizes", sizes).unwrap();
 
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
         assert!(upload.enabled);
         assert_eq!(upload.mime_types, vec!["image/png", "image/jpeg"]);
         assert_eq!(upload.max_file_size, Some(5000000));
         assert_eq!(upload.admin_thumbnail.as_deref(), Some("thumb"));
         assert_eq!(upload.image_sizes.len(), 1);
         assert_eq!(upload.image_sizes[0].name, "thumb");
+    }
+
+    /// Regression: two `image_sizes` entries with the same name resolved to
+    /// the same stored key and the same `{name}_url` column, so the second
+    /// silently overwrote the first's file.
+    #[test]
+    fn duplicate_image_size_names_are_rejected_at_parse_time() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+
+        let sizes = lua.create_table().unwrap();
+        for (index, (width, height)) in [(200u32, 200u32), (400, 400)].iter().enumerate() {
+            let size = lua.create_table().unwrap();
+            size.set("name", "thumb").unwrap();
+            size.set("width", *width).unwrap();
+            size.set("height", *height).unwrap();
+            sizes.set(index + 1, size).unwrap();
+        }
+
+        upload_tbl.set("image_sizes", sizes).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+
+        let err = parse_collection_upload("media", &tbl)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("media"), "{err}");
+        assert!(err.contains("thumb"), "{err}");
+        assert!(err.contains("duplicate image size name"), "{err}");
+    }
+
+    /// Distinct names are the normal case and must keep parsing.
+    #[test]
+    fn distinct_image_size_names_are_accepted() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+
+        let sizes = lua.create_table().unwrap();
+        for (index, name) in ["thumb", "card"].iter().enumerate() {
+            let size = lua.create_table().unwrap();
+            size.set("name", *name).unwrap();
+            size.set("width", 200u32).unwrap();
+            size.set("height", 200u32).unwrap();
+            sizes.set(index + 1, size).unwrap();
+        }
+
+        upload_tbl.set("image_sizes", sizes).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
+
+        assert_eq!(upload.image_sizes.len(), 2);
     }
 
     #[test]
@@ -505,7 +588,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("enabled", false).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        assert!(parse_collection_upload(&tbl).unwrap().is_none());
+        assert!(parse_collection_upload("media", &tbl).unwrap().is_none());
     }
 
     #[test]
@@ -515,7 +598,12 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("enabled", true).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        assert!(parse_collection_upload(&tbl).unwrap().unwrap().enabled);
+        assert!(
+            parse_collection_upload("media", &tbl)
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
@@ -525,7 +613,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", 1048576i64).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
         assert_eq!(upload.max_file_size, Some(1048576));
     }
 
@@ -536,7 +624,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", "10MB").unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
         assert_eq!(upload.max_file_size, Some(10 * 1024 * 1024));
     }
 
@@ -547,7 +635,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let upload_tbl = lua.create_table().unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
         assert_eq!(upload.max_file_size, None);
     }
 
@@ -560,7 +648,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", "10MBB").unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let err = parse_collection_upload(&tbl).unwrap_err();
+        let err = parse_collection_upload("media", &tbl).unwrap_err();
         assert!(err.to_string().contains("max_file_size"), "{err}");
     }
 
@@ -573,7 +661,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", -1i64).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let err = parse_collection_upload(&tbl).unwrap_err();
+        let err = parse_collection_upload("media", &tbl).unwrap_err();
         assert!(err.to_string().contains("max_file_size"), "{err}");
     }
 
@@ -585,7 +673,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", true).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let err = parse_collection_upload(&tbl).unwrap_err();
+        let err = parse_collection_upload("media", &tbl).unwrap_err();
         assert!(err.to_string().contains("max_file_size"), "{err}");
     }
 
@@ -595,7 +683,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let func = lua.create_function(|_, ()| Ok(())).unwrap();
         tbl.set("upload", func).unwrap();
-        assert!(parse_collection_upload(&tbl).unwrap().is_none());
+        assert!(parse_collection_upload("media", &tbl).unwrap().is_none());
     }
 
     #[test]
@@ -672,7 +760,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let upload_tbl = lua.create_table().unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        let upload = parse_collection_upload("media", &tbl).unwrap().unwrap();
         assert!(upload.mime_types.is_empty());
         assert!(upload.max_file_size.is_none());
     }

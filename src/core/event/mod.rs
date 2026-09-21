@@ -11,6 +11,7 @@
 //! The same two-variant shape (in-process default + Redis) also applies to
 //! the user-invalidation stream via [`InvalidationTransport`].
 
+mod channels;
 mod coalesce;
 mod factory;
 mod in_process;
@@ -21,6 +22,9 @@ mod sequence;
 mod transport;
 mod types;
 
+pub use channels::{
+    DEFAULT_LIVE_CHANNEL_PREFIX, event_channel, invalidation_channel, live_channels,
+};
 pub use coalesce::{DrainOutcome, MAX_DRAIN, coalesce_events, drain_and_coalesce};
 pub use factory::{create_event_transport, create_invalidation_transport};
 pub use in_process::{InProcessEventBus, InProcessInvalidationBus};

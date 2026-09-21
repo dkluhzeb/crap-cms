@@ -123,7 +123,9 @@ path_style = false                       # true for MinIO
 | `prefix` | No | Key prefix prepended to all storage keys |
 | `path_style` | No | Use path-style URLs (required for MinIO) |
 
-Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage.
+Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage: range requests (`206` with `Content-Range`, `416` for an unsatisfiable range), strong ETags and conditional `304` responses behave the same on every backend. A ranged request against S3 fetches only the requested bytes (a suffix range such as `bytes=-500` costs one extra `HEAD`); a custom Lua handler returns whole objects by contract, so its ranges are sliced in the CMS.
+
+An uploaded filename is capped at 200 characters after sanitising (the stored key adds the id prefix and any size suffix), and two `image_sizes` entries may not share a name — they would resolve to the same stored key.
 
 > **Tip:** Use `queue: true` on image format options (WebP, AVIF) when using S3. Deferred processing avoids upload latency from the extra S3 round trips.
 

@@ -203,7 +203,7 @@ pub fn parse_collection_definition(
     let mut fields = parse_fields_section(lua, config)?;
     let hooks = parse_hooks_section(config)?;
     let auth = parse_collection_auth(config);
-    let upload = parse_collection_upload(config)?;
+    let upload = parse_collection_upload(slug, config)?;
     let access = parse_access_config(config)?;
     let live = parse_live_setting(config)?;
     let versions = parse_versions_config(config)?;

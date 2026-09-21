@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::{
     config::{CacheBackend, CrapConfig, DatabaseBackend, LiveTransport, RateLimitBackend},
-    core::cache::cache_namespace,
+    core::{cache::cache_namespace, event::live_channels},
 };
 
 /// Minimum character length for `mcp.api_key` when `mcp.http` is enabled.
@@ -50,6 +50,24 @@ fn same_redis_instance(a: &str, b: &str) -> bool {
         (Some(a), Some(b)) => a == b,
         _ => a == b,
     }
+}
+
+/// Reject a pub/sub channel that falls inside `namespace`, or the reverse.
+/// An empty namespace is exempt — every name starts with it.
+fn reject_channel_overlap(channel: &str, namespace: &str, owner: &str) -> Result<()> {
+    if namespace.is_empty() {
+        return Ok(());
+    }
+
+    if !channel.starts_with(namespace) && !namespace.starts_with(channel) {
+        return Ok(());
+    }
+
+    bail!(
+        "live.channel_prefix produces the pub/sub channel {channel:?}, which overlaps {owner} \
+         ({namespace:?}) on the same Redis. Choose a live channel prefix that neither contains \
+         nor is contained by it, so the two namespaces stay apart."
+    )
 }
 
 impl CrapConfig {
@@ -497,6 +515,51 @@ impl CrapConfig {
             || self.auth.rate_limit_backend == RateLimitBackend::Redis
     }
 
+    /// The Redis a rate limiter addresses: its own URL when one is set, the
+    /// cache's otherwise. One reader, so every namespace check judges the
+    /// same instance the limiter will actually use.
+    fn rate_limit_redis_url(&self) -> &str {
+        if self.auth.rate_limit_redis_url.is_empty() {
+            return self.cache.redis_url.as_str();
+        }
+
+        self.auth.rate_limit_redis_url.as_str()
+    }
+
+    /// Reject a live channel prefix that overlaps the cache or rate-limit
+    /// namespace on the same Redis.
+    ///
+    /// Redis pub/sub is not scoped by the selected database, so the channel
+    /// names are the only thing keeping two deployments on one instance
+    /// apart — and a prefix that contains, or is contained by, another
+    /// subsystem's namespace is the same naming collision the rate-limit
+    /// check already refuses. The live transport reuses `[cache] redis_url`,
+    /// so a Redis cache is by definition on the same instance.
+    pub(super) fn validate_live_channel_namespace(&self) -> Result<()> {
+        if self.live.transport != LiveTransport::Redis {
+            return Ok(());
+        }
+
+        let cache_shared = self.cache.backend == CacheBackend::Redis;
+        let cache_ns = cache_namespace(&self.cache.prefix);
+
+        let rl_shared = self.auth.rate_limit_backend == RateLimitBackend::Redis
+            && same_redis_instance(self.rate_limit_redis_url(), self.cache.redis_url.as_str());
+        let rl_ns = self.auth.rate_limit_prefix.as_str();
+
+        for channel in live_channels(&self.live.channel_prefix) {
+            if cache_shared {
+                reject_channel_overlap(&channel, &cache_ns, "the cache namespace")?;
+            }
+
+            if rl_shared {
+                reject_channel_overlap(&channel, rl_ns, "the rate-limit namespace")?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Reject a rate-limit prefix that overlaps the cache's key namespace on
     /// the same Redis.
     ///
@@ -513,12 +576,7 @@ impl CrapConfig {
             return Ok(());
         }
 
-        let rl_url = if self.auth.rate_limit_redis_url.is_empty() {
-            &self.cache.redis_url
-        } else {
-            &self.auth.rate_limit_redis_url
-        };
-        if !same_redis_instance(rl_url.as_str(), self.cache.redis_url.as_str()) {
+        if !same_redis_instance(self.rate_limit_redis_url(), self.cache.redis_url.as_str()) {
             return Ok(());
         }
 
@@ -1102,6 +1160,63 @@ mod tests {
         ));
         assert!(!same_redis_instance("redis://h:6379/0", "redis://h:6379/1"));
         assert!(!same_redis_instance("redis://h", "redis://other"));
+    }
+
+    /// The default live channels sit outside both key namespaces, so a
+    /// Redis-everything deployment still boots untouched.
+    #[test]
+    fn validate_accepts_the_default_live_channels_on_a_shared_redis() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.live.transport = LiveTransport::Redis;
+
+        config
+            .validate()
+            .expect("the default channel prefix collides with nothing");
+    }
+
+    /// A live channel prefix that swallows the cache namespace is the same
+    /// naming collision an overlapping rate-limit prefix is: refused at boot.
+    #[test]
+    fn validate_rejects_a_live_channel_prefix_overlapping_the_cache_namespace() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.live.transport = LiveTransport::Redis;
+        config.live.channel_prefix = "crap:cache:".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("an overlapping channel prefix must be refused");
+        assert!(err.to_string().contains("channel_prefix"), "{err}");
+        assert!(err.to_string().contains("cache namespace"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_a_live_channel_prefix_overlapping_the_rate_limit_namespace() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.live.transport = LiveTransport::Redis;
+        config.live.channel_prefix = "crap:rl:".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("an overlapping channel prefix must be refused");
+        assert!(err.to_string().contains("rate-limit namespace"), "{err}");
+    }
+
+    /// A memory transport publishes nothing to Redis, so its prefix is inert.
+    #[test]
+    fn validate_ignores_the_channel_prefix_without_a_redis_transport() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.live.channel_prefix = "crap:cache:".to_string();
+
+        config.validate().expect("an in-process transport is inert");
     }
 
     /// An overlapping prefix is refused even when the two URLs differ only in

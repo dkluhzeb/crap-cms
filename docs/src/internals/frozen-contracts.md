@@ -311,6 +311,10 @@ changing a representation is a breaking change to every consumer.
   with enforcement off for that sync and `PRAGMA foreign_key_check` before
   commit. Postgres drops the `UNIQUE` constraints in place and never
   rebuilds.
+- **Every document (and global) update holds that row's lock from before the
+  first read the write builds on until commit.** On `SQLite` that is
+  subsumed by `BEGIN IMMEDIATE`; on Postgres it is `FOR UPDATE` on the
+  document row. Acquisition order is parent row → relationship targets.
 - **A driver error is classified in one place, by type.** `db::constraint_kind`
   and `db::is_transient` downcast to the driver's error (SQLite extended
   result codes, Postgres SQLSTATE) — never to its message text, which is

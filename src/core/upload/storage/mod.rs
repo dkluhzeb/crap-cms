@@ -12,6 +12,7 @@ mod backend;
 mod custom;
 mod factory;
 mod local;
+mod range;
 #[cfg(feature = "s3-storage")]
 mod s3;
 
@@ -24,6 +25,7 @@ pub use backend::{SharedStorage, StorageBackend, StorageNotFound};
 pub use custom::CustomStorage;
 pub use factory::{create_storage, create_storage_with_lease};
 pub use local::LocalStorage;
+pub use range::{ByteRange, RangedObject, RangedObjectBuilder};
 
 /// URL path prefix of the built-in upload-serve proxy route.
 ///

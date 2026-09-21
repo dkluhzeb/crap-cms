@@ -2193,6 +2193,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Publishing could silently bury a draft saved at the same moment**
+  (Postgres only). The publish read the pending draft before taking the
+  document's row lock, so a draft saved in between was overwritten by a
+  published version built from the older content. The lock is taken before
+  the draft is read, on single, bulk and global publishes.
+- **Two concurrent writes to the same array or blocks field could lose
+  rows** (Postgres only, on a collection with `timestamps = false`): a write
+  touching no scalar column issued no UPDATE and therefore took no row lock,
+  so one writer's committed rows were deleted by the other's stale snapshot.
+  The row lock no longer depends on whether a scalar column changed.
+- **Two concurrent file replacements could leak a stored file** (Postgres
+  only): the "files referenced now" snapshot was read before the lock, so
+  neither writer recognised the other's new file as unreferenced.
+- **Serving an upload from S3 or a custom storage handler read the whole
+  object into memory and ignored `Range`**, while serving from local storage
+  streamed and supported ranges, ETags and conditional requests — the docs
+  claimed the two behaved identically. Range, `Accept-Ranges`, `416`, strong
+  ETags and `304` now work on every backend from one shared header path, and
+  a ranged request against S3 fetches only the requested bytes.
+- **A downloaded file's suggested name lost its first characters** whenever
+  the generated id contained an underscore (about one upload in seven): the
+  name was recovered by splitting at the first `_` instead of stripping the
+  known id prefix.
+- **Two deployments sharing one Redis cross-delivered live events.** The
+  event and invalidation channels were hardcoded, with none of the prefix
+  configuration and overlap validation the cache and rate limiter have —
+  and Redis pub/sub ignores the selected database. The channels take a
+  configurable prefix (defaulting to today's names) that is validated
+  against the other Redis namespaces at startup.
+- **A `full`-mode live event with an oversized payload is published as a
+  metadata event** instead of pushing an unbounded message into Redis.
+- **Two `image_sizes` entries with the same name silently overwrote each
+  other's file**; a duplicate name is rejected when the collection is
+  defined. An over-long upload filename is refused with a validation error
+  instead of a raw filesystem error.
 - **`crap-cms work --queues` and `--no-cron` did nothing.** Both flags were
   logged and forwarded to a detached child but never reached the scheduler:
   a worker started with `--queues heavy` claimed every queue, and one

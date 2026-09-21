@@ -129,7 +129,7 @@ transport = "redis"
 
 Both transports use the same Redis URL configured under `[cache] redis_url` (single source of truth — no separate `[live] redis_url` key). `transport = "redis"` requires `--features redis` at build time; if the feature is missing, startup aborts with an explicit error.
 
-Events are JSON-encoded and published to the `crap:events` / `crap:invalidations` channels. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can't keep up is force-dropped with `RecvError::Lagged`.
+Events are JSON-encoded and published to the `crap:events` / `crap:invalidations` channels — the defaults of `[live] channel_prefix`. **Two deployments sharing one Redis must set different prefixes**: pub/sub is not scoped by the selected database, so identical channel names cross-deliver events between them. A prefix that overlaps the cache or rate-limit namespace on the same Redis is refused at startup. A full-mode event whose payload exceeds 512 KiB is published as a metadata event instead. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can't keep up is force-dropped with `RecvError::Lagged`.
 
 Each node numbers the events it publishes independently. An event's `publisher`
 identifies the node and `sequence` increases per publisher, so detect gaps on the

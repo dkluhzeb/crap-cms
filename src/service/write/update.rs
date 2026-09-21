@@ -312,6 +312,141 @@ pub(crate) fn update_document_in_conn(
     Ok((doc, after_ctx))
 }
 
+#[cfg(all(test, feature = "sqlite"))]
+mod write_lock_tests {
+    use anyhow::Result as AnyResult;
+    use rusqlite::Connection;
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        core::{FieldType, Hooks, upload::CollectionUpload},
+        db::query::test_helpers::CountingConn,
+        hooks::HookEvent,
+        service::FieldReadStrip,
+    };
+
+    /// Write hooks that run nothing and allow every access check.
+    struct NoopWriteHooks;
+
+    impl WriteHooks for NoopWriteHooks {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> AnyResult<HookContext> {
+            Ok(ctx)
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    impl FieldReadStrip for NoopWriteHooks {}
+
+    /// An upload collection with one editable field beside the file columns.
+    fn media() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload::new());
+        def.fields = vec![
+            FieldDefinition::builder("url", FieldType::Text).build(),
+            FieldDefinition::builder("filename", FieldType::Text).build(),
+            FieldDefinition::builder("caption", FieldType::Text).build(),
+        ];
+
+        def
+    }
+
+    /// One stored upload document pointing at one stored file.
+    fn media_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                url TEXT,
+                filename TEXT,
+                caption TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO media (id, url, filename)
+                VALUES ('m1', '/uploads/media/a.png', 'a.png');",
+        )
+        .unwrap();
+
+        conn
+    }
+
+    /// The write locks the document row before it reads the files the document
+    /// references. That snapshot decides which stored files the write leaves
+    /// unreferenced, so two unlocked replacements of the same document's file
+    /// each miss the other's new key and one uploaded file is never recognised
+    /// as droppable — its bytes stay in storage forever.
+    #[test]
+    fn an_update_locks_the_row_before_it_reads_the_files_it_may_drop() {
+        let conn = media_db();
+        let spy = CountingConn::new(&conn);
+        let def = media();
+        let hooks = NoopWriteHooks;
+        let ctx = ServiceContext::collection("media", &def)
+            .conn(&spy)
+            .write_hooks(&hooks)
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("caption".to_string(), json!("new"));
+
+        let (doc, _) =
+            update_document_in_conn(&ctx, "m1", WriteInput::builder(data).build()).unwrap();
+
+        assert_eq!(doc.get_str("caption"), Some("new"));
+        assert_eq!(
+            spy.locks().first(),
+            Some(&("media".to_string(), "m1".to_string()))
+        );
+        assert_eq!(
+            spy.reads_at_locks().first(),
+            Some(&0),
+            "the write reads nothing before it locks the row — the file \
+             snapshot included"
+        );
+        assert!(spy.reads() > 1, "the write read the row and its files");
+    }
+}
+
 #[cfg(test)]
 mod locale_lock_tests {
     use serde_json::json;

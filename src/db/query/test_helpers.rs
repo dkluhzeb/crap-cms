@@ -77,6 +77,7 @@ pub(crate) struct CountingConn<'a> {
     inner: &'a dyn DbConnection,
     pub(crate) reads: Cell<usize>,
     locks: RefCell<Vec<(String, String)>>,
+    reads_at_lock: RefCell<Vec<usize>>,
     executed: RefCell<Vec<String>>,
 }
 
@@ -86,6 +87,7 @@ impl<'a> CountingConn<'a> {
             inner,
             reads: Cell::new(0),
             locks: RefCell::new(Vec::new()),
+            reads_at_lock: RefCell::new(Vec::new()),
             executed: RefCell::new(Vec::new()),
         }
     }
@@ -102,6 +104,13 @@ impl<'a> CountingConn<'a> {
     /// The `(table, id)` pairs this connection was asked to row-lock, in order.
     pub(crate) fn locks(&self) -> Vec<(String, String)> {
         self.locks.borrow().clone()
+    }
+
+    /// How many reads this connection had served when each `lock_row` call
+    /// arrived, in order. A leading `0` proves the write locked the row before
+    /// it read anything it builds on.
+    pub(crate) fn reads_at_locks(&self) -> Vec<usize> {
+        self.reads_at_lock.borrow().clone()
     }
 }
 
@@ -129,6 +138,7 @@ impl DbConnection for CountingConn<'_> {
         self.locks
             .borrow_mut()
             .push((table.to_string(), id.to_string()));
+        self.reads_at_lock.borrow_mut().push(self.reads.get());
 
         self.inner.lock_row(table, id)
     }

@@ -97,6 +97,7 @@ Unknown keys anywhere in the file are fatal (`deny_unknown_fields`), so a typo n
 | `[mcp]` | `enabled = true` with `http = true` requires `api_key`, and the key must be at least **32 characters** |
 | `[mcp]` | `max_batch_members <= 500` (`0` refuses batches) |
 | `[live]` | `channel_capacity > 0` when `enabled = true` |
+| `[live]` | `channel_prefix` must not overlap the cache key namespace (`cache.prefix` + `cache:`) or `auth.rate_limit_prefix` when they address the same Redis |
 | `[auth]` | `secret` must be set explicitly when `rate_limit_backend = "redis"`, `cache.backend = "redis"` or `live.transport = "redis"` (more than one node can run) |
 | `[auth]` | `rate_limit_prefix` must neither contain nor be contained by the cache key namespace (`cache.prefix` + `cache:`) when `rate_limit_backend = "redis"` and `cache.backend = "redis"` address the same Redis (`rate_limit_redis_url` / `cache.redis_url`) |
 | `[locale]` | `default_locale` and every `locales` entry must be non-empty ASCII alphanumeric plus `-`/`_` with at least one alphanumeric character; no two `locales` entries may map to the same column (`pt-BR`/`pt_BR`, and `pt-BR`/`pt-br` — column names are compared case-insensitively); `default_locale` must be listed in `locales` when the list is non-empty |
@@ -239,6 +240,7 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 transport = "memory"     # Event transport: "memory" (default, in-process) or "redis" (cross-node fanout)
 channel_capacity = 1024  # Broadcast channel buffer size
+# channel_prefix = "crap:"  # Redis pub/sub channel prefix; differentiate per deployment
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
 # subscriber_send_timeout_ms = 1000 # Drop subscribers whose outbound send exceeds this (ms)
@@ -507,6 +509,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
 | `transport` | string | `"memory"` | Event transport. `"memory"` keeps events in-process (does not cross nodes). `"redis"` fans events out across all servers subscribed to the same Redis instance — requires the `redis` feature and reuses `[cache] redis_url`. |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
+| `channel_prefix` | string | `"crap:"` | Prefix of the Redis pub/sub channels (`{prefix}events`, `{prefix}invalidations`) when `transport = "redis"`. Two deployments sharing one Redis must differ — pub/sub ignores the selected database. Must not overlap the cache or rate-limit namespaces on the same Redis. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
 | `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
 | `subscriber_send_timeout_ms` | integer | `1000` | Per-subscriber outbound send timeout (ms). If forwarding an event to a specific live-update client (SSE or gRPC) takes longer than this, that subscriber is dropped to protect other subscribers from head-of-line blocking. |

@@ -25,7 +25,7 @@ pub use metadata::{
     inject_upload_metadata, shape_read_document, snapshot_file_keys, upload_file_entries,
     upload_file_keys,
 };
-pub use process::{CleanupGuard, process_upload};
+pub use process::{CleanupGuard, STORED_ID_LEN, original_filename, process_upload};
 pub use processed_upload::ProcessedUpload;
 pub use queue::{
     FALLBACK_MAX_ATTEMPTS, IMAGE_CONVERT_QUEUE, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
@@ -35,8 +35,9 @@ pub use queued_conversion::QueuedConversion;
 pub use resize::process_image_entry_with_storage;
 pub use size_result::SizeResult;
 pub use storage::{
-    SharedStorage, StorageBackend, StorageNotFound, create_storage, create_storage_with_lease,
-    key_from_served_url, served_url, sign_upload_path, signed_upload_url, verify_upload_sig,
+    ByteRange, RangedObject, SharedStorage, StorageBackend, StorageNotFound, create_storage,
+    create_storage_with_lease, key_from_served_url, served_url, sign_upload_path,
+    signed_upload_url, verify_upload_sig,
 };
 pub use uploaded_file::UploadedFile;
 pub use validate::format_filesize;

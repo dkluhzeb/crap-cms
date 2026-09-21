@@ -162,9 +162,9 @@ mod tests {
     use crate::{
         core::{
             CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Hooks,
-            ValidationError, collection::VersionsConfig,
+            ValidationError, collection::VersionsConfig, upload::CollectionUpload,
         },
-        db::{AccessResult, DbConnection, query},
+        db::{AccessResult, DbConnection, query, query::test_helpers::CountingConn},
         hooks::{AccessCheckInput, HookContext, HookEvent, ValidationCtx},
         service::{FieldReadStrip, hooks::WriteHooks},
     };
@@ -288,6 +288,40 @@ mod tests {
         assert_eq!(
             versions[0].snapshot.get("title").and_then(|v| v.as_str()),
             Some("Edited")
+        );
+    }
+
+    /// The bulk path is admitted through the same gate as the single-document
+    /// update, so it locks the document row before it reads anything the write
+    /// builds on: the pending draft it publishes and the files it may drop.
+    #[test]
+    fn bulk_update_locks_the_row_before_it_reads_anything() {
+        let (conn, mut def) = versioned_collection();
+        def.upload = Some(CollectionUpload::new());
+
+        let spy = CountingConn::new(&conn);
+        let wh = NoopWriteHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&spy)
+            .write_hooks(&wh)
+            .build();
+
+        update_many_single_in_conn(
+            &ctx,
+            "p1",
+            WriteInput::builder(DocumentFields::new()).build(),
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            spy.locks().first(),
+            Some(&("posts".to_string(), "p1".to_string()))
+        );
+        assert_eq!(
+            spy.reads_at_locks().first(),
+            Some(&0),
+            "the row is locked before the first read, not after it"
         );
     }
 

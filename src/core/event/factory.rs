@@ -47,7 +47,10 @@ pub fn create_event_transport(
             info!(url = %redis_url, "Using Redis event transport");
 
             Ok(Some(Arc::new(
-                super::redis_transport::RedisEventTransport::new(redis_url.as_str())?,
+                super::redis_transport::RedisEventTransport::new(
+                    redis_url.as_str(),
+                    &live.channel_prefix,
+                )?,
             )))
         }
         #[cfg(not(feature = "redis"))]
@@ -76,7 +79,10 @@ pub fn create_invalidation_transport(
         LiveTransport::Memory => Ok(Arc::new(InProcessInvalidationBus::new())),
         #[cfg(feature = "redis")]
         LiveTransport::Redis => Ok(Arc::new(
-            super::redis_transport::RedisInvalidationTransport::new(redis_url.as_str())?,
+            super::redis_transport::RedisInvalidationTransport::new(
+                redis_url.as_str(),
+                &live.channel_prefix,
+            )?,
         )),
         #[cfg(not(feature = "redis"))]
         LiveTransport::Redis => {

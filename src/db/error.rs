@@ -149,7 +149,15 @@ fn pg_error_is_transient(err: &PgError) -> bool {
     err.code().is_some_and(|code| {
         let sqlstate = code.code();
 
-        sqlstate.starts_with("08") || sqlstate.starts_with("53") || sqlstate.starts_with("57")
+        // 40: transaction rollback — a serialization failure or a deadlock
+        // the server broke by aborting us. Both are retryable by definition,
+        // and a write holds its row lock across the before-write hooks, so a
+        // hook that writes a second document can deadlock with a concurrent
+        // write taking those rows in the other order.
+        sqlstate.starts_with("08")
+            || sqlstate.starts_with("40")
+            || sqlstate.starts_with("53")
+            || sqlstate.starts_with("57")
     })
 }
 

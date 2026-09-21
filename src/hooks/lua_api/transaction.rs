@@ -504,7 +504,9 @@ mod tests {
         let mut config = CrapConfig::test_default();
         config.database.path = "test.db".to_string();
         config.database.write_pool_max_size = 1;
-        config.database.connection_timeout = 1;
+        // Long enough that building the pool never times out when the whole
+        // suite runs in parallel; the single write slot is what this pins.
+        config.database.connection_timeout = 5;
 
         let (db_pool, registry, runner) = setup(&config, &tmp);
 
@@ -540,7 +542,9 @@ mod tests {
         let mut config = CrapConfig::test_default();
         config.database.path = "test.db".to_string();
         config.database.write_pool_max_size = 1;
-        config.database.connection_timeout = 1;
+        // Long enough that building the pool never times out when the whole
+        // suite runs in parallel; the single write slot is what this pins.
+        config.database.connection_timeout = 5;
 
         let (db_pool, registry, runner) = setup(&config, &tmp);
 

@@ -1,26 +1,22 @@
 //! Serves uploaded files with access-control-aware caching.
 
-use std::sync::Arc;
+use std::{path, sync::Arc};
 
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{
-        HeaderValue, Request, StatusCode,
-        header::{
-            ACCEPT, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
-            IF_MODIFIED_SINCE, IF_NONE_MATCH, RANGE, VARY,
-        },
-    },
+    http::{Request, StatusCode, header::ACCEPT},
     response::{IntoResponse, Response},
 };
 use tokio::task;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use std::{fmt::Write as _, path};
-
 use crate::admin::handlers::shared::{db_error_status, response::on_blocking_section};
+use crate::admin::handlers::uploads::{
+    headers::{ConditionalHeaders, ServeHeaders, build_serve_request, extract_conditional_headers},
+    remote::serve_remote,
+};
 use crate::{
     admin::{
         AdminState,
@@ -29,7 +25,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         AuthUser, CollectionDefinition, Document,
-        upload::{SharedStorage, StorageNotFound, served_url, verify_upload_sig},
+        upload::{served_url, verify_upload_sig},
     },
     db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::HookRunner,
@@ -38,15 +34,6 @@ use crate::{
         find_documents,
     },
 };
-
-/// Read a key off the async runtime. Local storage never reaches here (it
-/// serves via `local_path` + `ServeFile`); S3 and custom backends do
-/// blocking work — network I/O for S3, a pooled Lua VM call for custom —
-/// so the read must run on a blocking thread, never on a tokio worker.
-async fn storage_get_blocking(storage: &SharedStorage, key: String) -> anyhow::Result<Vec<u8>> {
-    let storage = storage.clone();
-    task::spawn_blocking(move || storage.get(&key)).await?
-}
 
 /// Check if a path segment contains traversal characters.
 fn has_path_traversal(segment: &str) -> bool {
@@ -311,16 +298,15 @@ pub async fn serve_upload(
         cache.to_string()
     };
 
-    serve_file(
-        &state,
-        &collection_slug,
-        &filename,
-        &cache_control,
-        accept.contains("image/avif"),
-        accept.contains("image/webp"),
-        request,
-    )
-    .await
+    let serve = ServeRequest {
+        collection_slug: &collection_slug,
+        filename: &filename,
+        cache_control: &cache_control,
+        accepts_avif: accept.contains("image/avif"),
+        accepts_webp: accept.contains("image/webp"),
+    };
+
+    serve_file(&state, &serve, request).await
 }
 
 /// Resolve the viewer of an upload through the shared auth evaluator (admin
@@ -349,63 +335,93 @@ fn extract_auth_user(
     })
 }
 
-async fn serve_file(
-    state: &AdminState,
-    collection_slug: &str,
-    filename: &str,
-    cache_control: &str,
+/// What one resolved serve request asks for: which file, under which cache
+/// policy, and which negotiated image formats the viewer accepts.
+struct ServeRequest<'a> {
+    collection_slug: &'a str,
+    filename: &'a str,
+    cache_control: &'a str,
     accepts_avif: bool,
     accepts_webp: bool,
-    original_request: Request<Body>,
-) -> Response {
-    let storage = &*state.infra.storage;
+}
 
-    // Extract conditional headers from original request for ServeFile forwarding
-    let conditional_headers = extract_conditional_headers(&original_request);
+/// Whether a negotiated-variant response actually served the variant. A miss
+/// or a backend failure falls through to the next candidate — and finally to
+/// the original file — rather than failing the whole request.
+fn variant_served(status: StatusCode) -> bool {
+    !status.is_server_error() && status != StatusCode::NOT_FOUND
+}
 
-    // Content negotiation: try serving a more efficient format variant
-    for (variant_name, variant_mime) in negotiate_variants(filename, accepts_avif, accepts_webp) {
-        let variant_key = format!("{collection_slug}/{variant_name}");
+/// Serve the best negotiated variant of `req`, or `None` when none of them is
+/// available on this backend.
+async fn serve_variant(
+    state: &AdminState,
+    req: &ServeRequest<'_>,
+    conditional: &ConditionalHeaders,
+) -> Option<Response> {
+    let storage = &state.infra.storage;
 
-        if let Some(local_path) = storage.local_path(&variant_key) {
-            if local_path.exists() {
-                let req = build_serve_request(&conditional_headers);
+    for (variant_name, variant_mime) in
+        negotiate_variants(req.filename, req.accepts_avif, req.accepts_webp)
+    {
+        let variant_key = format!("{}/{variant_name}", req.collection_slug);
 
-                return serve_with_headers(&local_path, req, cache_control, true, variant_mime)
-                    .await;
+        let headers = ServeHeaders::new(variant_mime, req.cache_control)
+            .varied(true)
+            .stored_name(Some(&variant_name));
+
+        let Some(local_path) = storage.local_path(&variant_key) else {
+            let response = serve_remote(storage, &variant_key, conditional, &headers).await;
+
+            if variant_served(response.status()) {
+                return Some(response);
             }
-        } else if let Ok(data) = storage_get_blocking(&state.infra.storage, variant_key).await {
-            return serve_bytes(data, cache_control, true, variant_mime);
+
+            continue;
+        };
+
+        if local_path.exists() {
+            return Some(serve_local(&local_path, conditional, &headers).await);
         }
     }
 
-    // Serve the original file
-    let original_key = format!("{collection_slug}/{filename}");
+    None
+}
 
-    let requested_mime = mime_guess::from_path(filename)
+async fn serve_file(
+    state: &AdminState,
+    req: &ServeRequest<'_>,
+    original_request: Request<Body>,
+) -> Response {
+    // Conditional / range headers are answered by `ServeFile` on the local
+    // path and by the remote path itself; both need them off the original.
+    let conditional = extract_conditional_headers(&original_request);
+
+    if let Some(response) = serve_variant(state, req, &conditional).await {
+        return response;
+    }
+
+    let storage = &state.infra.storage;
+    let original_key = format!("{}/{}", req.collection_slug, req.filename);
+
+    let requested_mime = mime_guess::from_path(req.filename)
         .first_or_octet_stream()
         .to_string();
     let is_image = requested_mime.starts_with("image/");
 
-    if let Some(local_path) = storage.local_path(&original_key) {
-        if !local_path.exists() {
-            return StatusCode::NOT_FOUND.into_response();
-        }
+    let headers = ServeHeaders::new(&requested_mime, req.cache_control)
+        .varied(is_image)
+        .stored_name(Some(req.filename));
 
-        let req = build_serve_request(&conditional_headers);
-        serve_with_headers(&local_path, req, cache_control, is_image, &requested_mime).await
-    } else {
-        match storage_get_blocking(&state.infra.storage, original_key).await {
-            Ok(data) => serve_bytes(data, cache_control, is_image, &requested_mime),
-            Err(e) if e.downcast_ref::<StorageNotFound>().is_some() => {
-                StatusCode::NOT_FOUND.into_response()
-            }
-            // Transient / infrastructure failure (remote network error,
-            // VM-pool-acquire timeout under load, …): a retryable 503, not
-            // a cacheable 404 for a file that exists.
-            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        }
+    let Some(local_path) = storage.local_path(&original_key) else {
+        return serve_remote(storage, &original_key, &conditional, &headers).await;
+    };
+
+    if !local_path.exists() {
+        return StatusCode::NOT_FOUND.into_response();
     }
+
+    serve_local(&local_path, &conditional, &headers).await
 }
 
 /// Given a filename and accepted formats, return candidate variant filenames to try.
@@ -439,198 +455,22 @@ fn negotiate_variants(
     variants
 }
 
-/// Conditional headers extracted from the original request, forwarded to `ServeFile`.
-struct ConditionalHeaders {
-    range: Option<HeaderValue>,
-    if_none_match: Option<HeaderValue>,
-    if_modified_since: Option<HeaderValue>,
-}
-
-fn extract_conditional_headers(req: &Request<Body>) -> ConditionalHeaders {
-    ConditionalHeaders {
-        range: req.headers().get(RANGE).cloned(),
-        if_none_match: req.headers().get(IF_NONE_MATCH).cloned(),
-        if_modified_since: req.headers().get(IF_MODIFIED_SINCE).cloned(),
-    }
-}
-
-fn build_serve_request(headers: &ConditionalHeaders) -> Request<Body> {
-    let mut builder = Request::builder().uri("/");
-
-    if let Some(ref v) = headers.range {
-        builder = builder.header(RANGE, v);
-    }
-
-    if let Some(ref v) = headers.if_none_match {
-        builder = builder.header(IF_NONE_MATCH, v);
-    }
-
-    if let Some(ref v) = headers.if_modified_since {
-        builder = builder.header(IF_MODIFIED_SINCE, v);
-    }
-
-    builder.body(Body::empty()).expect("static request builder")
-}
-
-/// Invisible format characters that reorder or hide text: bidi embeddings,
-/// overrides and isolates, zero-width characters, and the byte-order mark.
-fn is_invisible_format(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061C}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206F}'
-            | '\u{FEFF}'
-    )
-}
-
-/// Percent-encode a value for an RFC 5987 `ext-value`: `attr-char`s stay, every
-/// other UTF-8 byte becomes `%XX`.
-fn encode_rfc5987(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-
-    for b in value.bytes() {
-        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
-            out.push(char::from(b));
-        } else {
-            let _ = write!(out, "%{b:02X}");
-        }
-    }
-
-    out
-}
-
-/// Determine Content-Disposition for a file based on its MIME type.
-///
-/// Images (except SVG) are inline. SVGs and non-image files get attachment
-/// to prevent stored XSS. If a filename is provided, it's included for
-/// download naming (nanoid prefix is stripped).
-fn content_disposition(mime: &str, filename: Option<&str>) -> String {
-    if mime.starts_with("image/") && mime != "image/svg+xml" {
-        return "inline".to_string();
-    }
-
-    let original = filename
-        .and_then(|n| n.find('_').map(|pos| &n[pos + 1..]))
-        .filter(|n| !n.is_empty());
-
-    let Some(name) = original else {
-        return "attachment".to_string();
-    };
-
-    let visible = visible_name(name);
-    let fallback = ascii_fallback(&visible);
-
-    if fallback == visible {
-        return format!("attachment; filename=\"{fallback}\"");
-    }
-
-    format!(
-        "attachment; filename=\"{fallback}\"; filename*=UTF-8''{}",
-        encode_rfc5987(&visible)
-    )
-}
-
-/// `name` with every character that could break the header or disguise the name
-/// replaced: a control character (the extension is not sanitized upstream, so a
-/// crafted upload can smuggle a CRLF here) or an invisible bidi override, which
-/// can disguise the extension the user sees.
-fn visible_name(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_control() || is_invisible_format(c) {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-/// The ASCII form of `name` the quoted `filename` parameter carries; a name that
-/// isn't ASCII travels in full in RFC 6266 `filename*`.
-fn ascii_fallback(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii() && c != '"' && c != '\\' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Apply shared security/caching headers to a response.
-fn apply_response_headers(response: &mut Response, cache_control: &str, mime: &str, varied: bool) {
-    response.headers_mut().insert(
-        CACHE_CONTROL,
-        cache_control.parse().expect("valid cache-control"),
-    );
-
-    if mime == "image/svg+xml" {
-        response.headers_mut().insert(
-            CONTENT_SECURITY_POLICY,
-            "sandbox; default-src 'none'".parse().expect("valid csp"),
-        );
-    }
-
-    if varied {
-        response
-            .headers_mut()
-            .insert(VARY, "Accept".parse().expect("valid vary"));
-    }
-}
-
-/// Serve a file via `tower_http::services::ServeFile` with custom headers.
-/// Provides Range, `ETag`, Last-Modified, and conditional GET support for free.
-async fn serve_with_headers(
+/// Serve a local file via `tower_http::services::ServeFile`, which answers
+/// Range, `ETag`, `Last-Modified` and conditional GETs itself, and then apply
+/// the headers every served upload carries.
+async fn serve_local(
     path: &path::Path,
-    request: Request<Body>,
-    cache_control: &str,
-    varied: bool,
-    mime: &str,
+    conditional: &ConditionalHeaders,
+    headers: &ServeHeaders<'_>,
 ) -> Response {
     let service = ServeFile::new(path);
-    let mut response = match service.oneshot(request).await {
+
+    let mut response = match service.oneshot(build_serve_request(conditional)).await {
         Ok(r) => r.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let filename = path.file_name().and_then(|n| n.to_str());
-    let disposition = content_disposition(mime, filename);
-
-    // Never `.expect` on a data-derived header value. `content_disposition`
-    // sanitizes control chars, but fall back to a bare `attachment` rather than
-    // panic the request task if any unexpected byte survives.
-    let disposition = disposition
-        .parse()
-        .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
-    response
-        .headers_mut()
-        .insert(CONTENT_DISPOSITION, disposition);
-
-    apply_response_headers(&mut response, cache_control, mime, varied);
-    response
-}
-
-/// Build a response from in-memory bytes (for non-local storage backends).
-fn serve_bytes(data: Vec<u8>, cache_control: &str, varied: bool, mime: &str) -> Response {
-    let disposition = content_disposition(mime, None);
-
-    let builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(CONTENT_TYPE, mime)
-        .header(CACHE_CONTROL, cache_control)
-        .header(CONTENT_DISPOSITION, disposition);
-
-    let mut response = builder
-        .body(Body::from(data))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-
-    apply_response_headers(&mut response, cache_control, mime, varied);
+    headers.apply(&mut response);
     response
 }
 
@@ -639,9 +479,29 @@ mod tests {
     use std::fs;
 
     use anyhow::anyhow;
-    use axum::{body::Body, http::Request};
+    use axum::http::header::{
+        ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_RANGE, CONTENT_SECURITY_POLICY, VARY,
+    };
 
     use super::*;
+
+    /// A request that carries no range and no validators.
+    fn no_conditions() -> ConditionalHeaders {
+        ConditionalHeaders {
+            range: None,
+            if_none_match: None,
+            if_modified_since: None,
+        }
+    }
+
+    fn disposition_of(response: &Response) -> &str {
+        response
+            .headers()
+            .get(CONTENT_DISPOSITION)
+            .expect("a disposition is always set")
+            .to_str()
+            .expect("a valid header value")
+    }
 
     /// Regression: a database error while resolving the owning document answered
     /// 404, telling a signed-in viewer under load that the file doesn't exist.
@@ -733,101 +593,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_with_headers_image_disposition_inline() {
+    async fn serve_local_image_disposition_inline() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.png");
         fs::write(&path, b"fake png").unwrap();
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let resp = serve_with_headers(&path, req, "public", false, "image/png").await;
-        let disposition = resp
-            .headers()
-            .get(CONTENT_DISPOSITION)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert_eq!(disposition, "inline");
+
+        let headers = ServeHeaders::new("image/png", "public");
+        let resp = serve_local(&path, &no_conditions(), &headers).await;
+
+        assert_eq!(disposition_of(&resp), "inline");
     }
 
     #[tokio::test]
-    async fn serve_with_headers_pdf_disposition_attachment() {
+    async fn serve_local_pdf_disposition_attachment() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.pdf");
         fs::write(&path, b"fake pdf").unwrap();
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let resp = serve_with_headers(&path, req, "public", false, "application/pdf").await;
-        let disposition = resp
-            .headers()
-            .get(CONTENT_DISPOSITION)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert_eq!(disposition, "attachment");
-    }
 
-    /// Regression: a stored filename carrying control bytes (the extension is
-    /// not sanitized upstream, so a crafted upload can smuggle a CRLF here) must
-    /// not produce an unparseable header value — previously `.expect` panicked
-    /// the request task on any such file.
-    #[test]
-    fn content_disposition_sanitizes_control_chars() {
-        let disposition = content_disposition("application/pdf", Some("nano123_photo.pd\r\nf"));
-        assert_eq!(disposition, "attachment; filename=\"photo.pd__f\"");
-        // Must be a valid header value (no panic on insert).
-        assert!(disposition.parse::<HeaderValue>().is_ok());
-    }
+        let headers =
+            ServeHeaders::new("application/pdf", "public").stored_name(Some("abcdefghij_test.pdf"));
+        let resp = serve_local(&path, &no_conditions(), &headers).await;
 
-    /// A non-ASCII download name travels in RFC 6266 `filename*`, with an
-    /// ASCII fallback; invisible bidi controls (U+202E can make `fdp.exe` read
-    /// as `exe.pdf`) are replaced like control characters.
-    #[test]
-    fn content_disposition_encodes_unicode_and_neutralizes_bidi_controls() {
-        let disposition = content_disposition(
-            "application/pdf",
-            Some("nano123_Bericht über\u{202E}fdp.exe"),
-        );
-
-        assert_eq!(
-            disposition,
-            "attachment; filename=\"Bericht _ber_fdp.exe\"; filename*=UTF-8''Bericht%20%C3%BCber_fdp.exe"
-        );
-        assert!(disposition.parse::<HeaderValue>().is_ok());
+        assert_eq!(disposition_of(&resp), "attachment; filename=\"test.pdf\"");
     }
 
     #[tokio::test]
-    async fn serve_with_headers_varied_sets_vary() {
+    async fn serve_local_varied_sets_vary() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.jpg");
         fs::write(&path, b"fake jpg").unwrap();
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let resp = serve_with_headers(&path, req, "public", true, "image/jpeg").await;
+
+        let headers = ServeHeaders::new("image/jpeg", "public").varied(true);
+        let resp = serve_local(&path, &no_conditions(), &headers).await;
+
         assert_eq!(resp.headers().get(VARY).unwrap(), "Accept");
     }
 
     #[tokio::test]
-    async fn serve_with_headers_no_vary_when_not_set() {
+    async fn serve_local_no_vary_when_not_set() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.txt");
         fs::write(&path, b"hello").unwrap();
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let resp = serve_with_headers(&path, req, "no-cache", false, "text/plain").await;
+
+        let resp = serve_local(
+            &path,
+            &no_conditions(),
+            &ServeHeaders::new("text/plain", "no-cache"),
+        )
+        .await;
+
         // ServeFile may set Vary internally, but we don't set it
         assert!(!resp.headers().get_all(VARY).iter().any(|v| v == "Accept"));
     }
 
     #[tokio::test]
-    async fn serve_with_headers_svg_attachment_and_csp() {
+    async fn serve_local_svg_attachment_and_csp() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.svg");
         fs::write(&path, b"<svg></svg>").unwrap();
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let resp = serve_with_headers(&path, req, "public", false, "image/svg+xml").await;
-        let disposition = resp
-            .headers()
-            .get(CONTENT_DISPOSITION)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert_eq!(disposition, "attachment");
+
+        let resp = serve_local(
+            &path,
+            &no_conditions(),
+            &ServeHeaders::new("image/svg+xml", "public"),
+        )
+        .await;
+
+        assert_eq!(disposition_of(&resp), "attachment");
         let csp = resp
             .headers()
             .get(CONTENT_SECURITY_POLICY)
@@ -837,29 +669,58 @@ mod tests {
         assert_eq!(csp, "sandbox; default-src 'none'");
     }
 
-    #[test]
-    fn extract_conditional_headers_captures_range() {
-        let req = Request::builder()
-            .uri("/")
-            .header(RANGE, "bytes=0-99")
-            .header(IF_NONE_MATCH, "\"abc\"")
-            .body(Body::empty())
-            .unwrap();
-        let headers = extract_conditional_headers(&req);
-        assert_eq!(headers.range.unwrap().to_str().unwrap(), "bytes=0-99");
-        assert_eq!(headers.if_none_match.unwrap().to_str().unwrap(), "\"abc\"");
-        assert!(headers.if_modified_since.is_none());
+    /// Every backend advertises ranged reads now, the local one included.
+    #[tokio::test]
+    async fn serve_local_advertises_range_support() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.bin");
+        fs::write(&path, b"0123456789").unwrap();
+
+        let resp = serve_local(
+            &path,
+            &no_conditions(),
+            &ServeHeaders::new("application/octet-stream", "public"),
+        )
+        .await;
+
+        assert_eq!(resp.headers().get(ACCEPT_RANGES).unwrap(), "bytes");
     }
 
-    #[test]
-    fn build_serve_request_forwards_headers() {
-        let cond = ConditionalHeaders {
-            range: Some("bytes=0-99".parse().unwrap()),
+    /// The local backend answers a range itself; the shared headers must not
+    /// disturb the `206` it produced.
+    #[tokio::test]
+    async fn serve_local_answers_a_range_with_206() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.bin");
+        fs::write(&path, b"0123456789").unwrap();
+
+        let conditional = ConditionalHeaders {
+            range: Some("bytes=2-4".parse().unwrap()),
             if_none_match: None,
             if_modified_since: None,
         };
-        let req = build_serve_request(&cond);
-        assert_eq!(req.headers().get(RANGE).unwrap(), "bytes=0-99");
-        assert!(req.headers().get(IF_NONE_MATCH).is_none());
+
+        let resp = serve_local(
+            &path,
+            &conditional,
+            &ServeHeaders::new("application/octet-stream", "public"),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(resp.headers().get(CONTENT_RANGE).unwrap(), "bytes 2-4/10");
+    }
+
+    /// A variant that is missing (404) or whose backend failed (503) must fall
+    /// through to the next candidate, never end the request.
+    #[test]
+    fn only_a_real_variant_response_ends_negotiation() {
+        assert!(variant_served(StatusCode::OK));
+        assert!(variant_served(StatusCode::PARTIAL_CONTENT));
+        assert!(variant_served(StatusCode::NOT_MODIFIED));
+        assert!(variant_served(StatusCode::RANGE_NOT_SATISFIABLE));
+
+        assert!(!variant_served(StatusCode::NOT_FOUND));
+        assert!(!variant_served(StatusCode::SERVICE_UNAVAILABLE));
     }
 }

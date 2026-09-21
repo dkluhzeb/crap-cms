@@ -112,6 +112,26 @@ vm_pool_size = 8       # Lua VMs pre-warmed at startup (default: CPU cores)
 
 The pool is **elastic**: `vm_pool_size` VMs are pre-warmed at startup, and further VMs are built on demand up to `max_vm_pool_size` as concurrency rises (each with the same full initialization: package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load. When every VM is busy for longer than the acquire timeout, the request fails as a *transient* error — HTTP 503 / gRPC `UNAVAILABLE` — like a database-pool timeout, so clients retry it; raise `max_vm_pool_size` if it recurs.
 
+### Before-write hooks hold the document's lock
+
+A `before_validate` or `before_change` hook runs inside the write's
+transaction **and inside the document's row lock**, which the write takes
+before it reads anything it builds on (the pending draft, the stored row the
+access rules judge, the files it may drop). A concurrent save of the *same*
+document therefore waits for the hook to finish — other documents, and every
+reader, are unaffected.
+
+Keep slow work out of before-write hooks: an external `crap.http.request`
+holds that row for the duration of the call. On `SQLite` this is not new —
+its writes take a database-wide lock for the whole transaction — but on
+Postgres the wait is now per document rather than absent.
+
+A hook that writes a *second* document takes that document's row lock too.
+Two writes that touch the same pair in the opposite order can deadlock;
+Postgres breaks the cycle by aborting one side, which surfaces as a
+retryable `503` / `UNAVAILABLE`, so a client that retries succeeds. Take
+rows in a consistent order in hooks that write more than one document.
+
 ## Resource Limits
 
 Lua VMs have configurable instruction, memory, and recursion limits to prevent runaway hooks:

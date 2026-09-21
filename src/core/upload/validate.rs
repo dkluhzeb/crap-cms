@@ -6,12 +6,39 @@ use regex::{Captures, Regex};
 
 use crate::core::upload::{CollectionUpload, UploadedFile};
 
+/// Longest sanitised filename an upload may carry.
+///
+/// What reaches the filesystem is longer than what the user typed: the write
+/// path stores `{id}_{sanitized}` (11 characters of prefix) and a resized
+/// variant inserts `_{size_name}` before the extension. A single path
+/// component is capped at 255 bytes on every filesystem we target, so this
+/// leaves room for the prefix plus a size name of up to 40 characters.
+/// Without the cap an over-long name reaches the local backend and fails with
+/// a raw OS error instead of a message the uploader can act on.
+const MAX_SANITIZED_FILENAME_LEN: usize = 200;
+
+/// Reject a filename that cannot fit the stored-name budget.
+fn validate_filename_length(filename: &str) -> Result<()> {
+    let length = sanitize_filename(filename).len();
+
+    if length <= MAX_SANITIZED_FILENAME_LEN {
+        return Ok(());
+    }
+
+    bail!(
+        "File name is too long ({length} bytes once sanitized, maximum \
+         {MAX_SANITIZED_FILENAME_LEN}). Rename the file before uploading.",
+    );
+}
+
 /// Validate MIME type, magic bytes, and file size of an uploaded file.
 pub(super) fn validate_upload(
     file: &UploadedFile,
     upload_config: &CollectionUpload,
     global_max_file_size: u64,
 ) -> Result<()> {
+    validate_filename_length(&file.filename)?;
+
     if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
         bail!("File type '{}' is not allowed", file.content_type);
     }
@@ -450,6 +477,7 @@ pub fn format_filesize(bytes: u64) -> String {
 )]
 mod tests {
     use super::*;
+    use crate::core::upload::STORED_ID_LEN;
 
     /// Regression: dimensions that can't be read must FAIL the bomb check, not
     /// fall through to a full decode. A valid PNG signature with no IHDR is
@@ -557,6 +585,44 @@ mod tests {
         assert_eq!(sanitize_filename("x.a&b#c"), "x.abc");
         assert_eq!(sanitize_filename("evil.???"), "evil");
         assert_eq!(sanitize_filename("archive.tar.gz"), "archive-tar.gz");
+    }
+
+    /// Regression: an over-long name used to travel all the way to the local
+    /// backend, which failed with a raw OS error. It is refused at the upload
+    /// boundary now, with room left for the id prefix and a size suffix.
+    #[test]
+    fn an_over_long_filename_is_refused_with_a_clear_message() {
+        let long = format!("{}.png", "a".repeat(MAX_SANITIZED_FILENAME_LEN));
+
+        let err = validate_filename_length(&long).unwrap_err().to_string();
+
+        assert!(err.contains("too long"), "{err}");
+        assert!(
+            err.contains(&MAX_SANITIZED_FILENAME_LEN.to_string()),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_name_within_the_budget_is_accepted() {
+        let at_cap = format!("{}.png", "a".repeat(MAX_SANITIZED_FILENAME_LEN - 4));
+
+        assert_eq!(sanitize_filename(&at_cap).len(), MAX_SANITIZED_FILENAME_LEN);
+        assert!(validate_filename_length(&at_cap).is_ok());
+        assert!(validate_filename_length("holiday-photo.jpg").is_ok());
+    }
+
+    /// The cap leaves room for what the write path adds: the id prefix and a
+    /// resized variant's `_{size}` suffix must still fit one path component.
+    #[test]
+    fn the_cap_leaves_room_for_the_stored_name_and_a_size_suffix() {
+        const MAX_PATH_COMPONENT: usize = 255;
+
+        // `{id}_{sanitized}`, then `_{size_name}` for a resized variant.
+        let stored = STORED_ID_LEN + 1 + MAX_SANITIZED_FILENAME_LEN;
+        let with_suffix = stored + 1 + 40;
+
+        assert!(with_suffix <= MAX_PATH_COMPONENT, "{with_suffix}");
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::event::DEFAULT_LIVE_CHANNEL_PREFIX;
+
 /// Live event transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +28,13 @@ pub struct LiveConfig {
     /// feature); events fan out to all server nodes subscribed to the same
     /// Redis instance. The Redis URL is reused from `[cache] redis_url`.
     pub transport: LiveTransport,
+    /// Prefix for both Redis pub/sub channels (`{prefix}events` and
+    /// `{prefix}invalidations`). Default: `"crap:"`, which is exactly the
+    /// channel naming used before this setting existed. Pub/sub is not scoped
+    /// by the Redis database, so two deployments sharing one Redis must each
+    /// set their own prefix or they will receive each other's mutation
+    /// events. Only applies to `transport = "redis"`.
+    pub channel_prefix: String,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
     /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
@@ -45,6 +54,7 @@ impl Default for LiveConfig {
         Self {
             enabled: true,
             transport: LiveTransport::default(),
+            channel_prefix: DEFAULT_LIVE_CHANNEL_PREFIX.to_string(),
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
@@ -63,6 +73,7 @@ mod tests {
         let live = LiveConfig::default();
         assert!(live.enabled);
         assert_eq!(live.transport, LiveTransport::Memory);
+        assert_eq!(live.channel_prefix, "crap:");
         assert_eq!(live.channel_capacity, 1024);
         assert_eq!(live.max_sse_connections, 1000);
         assert_eq!(live.max_subscribe_connections, 1000);

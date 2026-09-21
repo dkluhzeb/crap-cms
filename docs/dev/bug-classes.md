@@ -1195,6 +1195,55 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-21 (31) — **CONVERGENCE ROUND 21** (budget mode, Opus orchestrator:
+  3 Sonnet lenses — concurrent writers/races, storage backends & upload
+  serving, live events & transports — 2 Opus fix batches, 1 reviewer).
+  **~10 confirmed — 4 HIGH, 2 MED, 4 LOW — NOT quiet; no new class.**
+  - **Structural framing that made the race lens pay: every pool write opens
+    `transaction_immediate`, which is `BEGIN IMMEDIATE` on SQLite (full
+    serialisation) but a plain `BEGIN` on Postgres (MVCC).** Every race found
+    is therefore Postgres-only, and every fix is "take the existing
+    `lock_row` earlier" rather than a new mechanism: the publish path read
+    the pending draft *before* any lock (a concurrent draft save was buried
+    silently), the update path skipped its UPDATE — and with it the row lock
+    — when a write had no scalar SET clauses, leaving an Array/Blocks
+    diff-write unlocked, and the upload file-key snapshot was read unlocked
+    (a replaced file leaked).
+  - **The remote serve path had drifted from the local one**: local goes
+    through `ServeFile` (streamed, Range, ETag, conditional GET); S3 and
+    custom buffered whole objects and ignored `Range`, while the docs
+    claimed parity. One header path for both now, plus a ranged read on the
+    trait (default = get-and-slice, real ranged GET on S3).
+  - **F-class — the Redis event channels were hardcoded and unvalidated**
+    while the cache and rate limiter both carry configurable, overlap-checked
+    prefixes; pub/sub ignores the selected DB, so two deployments on one
+    Redis cross-delivered full document payloads.
+  - Lesson: a lens that first establishes *what already serialises* (and on
+    which backend) turns an open-ended race hunt into a short list — state
+    the invariant before enumerating the interleavings.
+    Post-fix review of this round's diff (1 Sonnet reviewer): 2 MED, 3 LOW,
+    no HIGH and no regression. MED 1 was the price of the race fix, not a
+    mistake: the row lock now spans the before-write hook pipeline, so a hook
+    that writes a second document can deadlock with a concurrent write taking
+    those rows in the other order — kept (Postgres cannot release a row lock
+    mid-transaction), documented at the lock, and SQLSTATE class 40
+    (serialization failure / deadlock detected) added to the transient
+    classifier so the aborted side answers 503 and clients retry instead of
+    seeing a 500. MED 2: an S3-compatible provider that ignores `Range` and
+    answers 200 was served whole — the slice is taken locally now. LOWs: the
+    416-before-304 ordering documented as deliberate (evaluating freshness
+    would cost the round trip the range avoids), a byte/character wording fix,
+    and redundant re-locking left as the harmless no-op it is. Test fallout
+    was two pre-existing load-sensitive fixtures (a 1-second pool timeout
+    under a full parallel run) and the new `[live] channel_prefix` key, which
+    the config-doc and scaffold-template pins demanded.
+    Gates (2026-09-21): clippy clean in both forms; unit 6,076 + integration
+    ~1,790 + macros/xtask green; e2e 322 green (per binary); all five `gen-*`
+    checks and `fmt --check` clean. Postgres harness NOT run (no
+    `TEST_DATABASE_URL`) — note that every race fixed this round is
+    Postgres-only, so the harness is the only place they could be proven end
+    to end; the tests added pin the lock ORDERING instead (`CountingConn`).
+    Cost: ~1.52M agent tokens. Streak: 0 quiet rounds.
 - 2026-09-20 (30) — **CONVERGENCE ROUND 20** (budget mode: 3 Sonnet lenses —
   definition-change schema sync, auth state machine, job-queue semantics —
   one Opus fix batch, one reviewer). **PENDING TOTALS — see the post-fix

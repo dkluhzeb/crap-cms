@@ -2,17 +2,17 @@
 //!
 //! Enabled via `--features s3-storage`.
 
-use std::{future::Future, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use s3::creds::Credentials;
-use s3::{Bucket, Region};
+use s3::{Bucket, Region, request::ResponseData};
 use tokio::{runtime::Handle, task::block_in_place};
 
 use crate::config::S3Config;
 
 use super::backend::validate_key;
-use super::{SharedStorage, StorageBackend, StorageNotFound};
+use super::{ByteRange, RangedObject, SharedStorage, StorageBackend, StorageNotFound};
 
 /// S3-compatible storage backend.
 pub struct S3Storage {
@@ -78,6 +78,178 @@ fn check_status(op: &str, key: &str, status: u16, missing: Missing) -> Result<()
     }
 }
 
+/// The bounds of one ranged read, in the form the bucket client puts on the
+/// wire: `Range: bytes=<start>-<end>`, open-ended when `end` is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RangeBounds {
+    start: u64,
+    end: Option<u64>,
+}
+
+impl RangeBounds {
+    /// The exact `Range` header value the request carries.
+    fn header_value(self) -> String {
+        match self.end {
+            Some(end) => format!("bytes={}-{end}", self.start),
+            None => format!("bytes={}-", self.start),
+        }
+    }
+}
+
+/// Look a response header up case-insensitively — header names reach us as
+/// whatever casing the provider sent.
+fn header<'a>(headers: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// An S3 entity tag with its transport quoting removed, so it can be re-quoted
+/// once by whoever emits an HTTP `ETag`.
+fn unquoted_etag(headers: &HashMap<String, String>) -> Option<String> {
+    let raw = header(headers, "etag")?.trim();
+    let value = raw.trim_start_matches('"').trim_end_matches('"');
+
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Parse `Content-Range: bytes <first>-<last>/<total>` into the inclusive
+/// offsets served and the object's total size (`None` for an unknown `*`).
+fn parse_content_range(value: &str) -> Option<((u64, u64), Option<u64>)> {
+    let spec = value.trim().strip_prefix("bytes ")?.trim();
+    let (offsets, total) = spec.split_once('/')?;
+    let (first, last) = offsets.split_once('-')?;
+
+    let first: u64 = first.trim().parse().ok()?;
+    let last: u64 = last.trim().parse().ok()?;
+
+    if first > last {
+        return None;
+    }
+
+    Some(((first, last), total.trim().parse().ok()))
+}
+
+/// Turn a ranged bucket response into the storage contract's read result.
+///
+/// A provider that ignored the `Range` header and answered `200` is reported
+/// as a whole-object read, so the caller slices locally instead of serving the
+/// whole object under a `Content-Range` that claims a slice.
+fn ranged_object(response: &ResponseData, bounds: RangeBounds) -> Option<RangedObject> {
+    let headers = response.headers();
+    let data = response.as_slice().to_vec();
+    let len = u64::try_from(data.len()).unwrap_or(0);
+    let etag = unquoted_etag(&headers);
+    let last_modified = header(&headers, "last-modified").map(str::to_string);
+    let described = |bytes: Vec<u8>| {
+        RangedObject::whole(bytes)
+            .etag(etag.clone())
+            .last_modified(last_modified.clone())
+    };
+
+    if let Some((offsets, total)) = header(&headers, "content-range").and_then(parse_content_range)
+    {
+        return Some(
+            described(data)
+                .range(Some(offsets))
+                .total_size(total)
+                .build(),
+        );
+    }
+
+    // A provider that answered `206` without a `Content-Range` still sent the
+    // slice that was asked for; place it from the bounds the request carried.
+    if response.status_code() == 206 && len > 0 {
+        let placed = (bounds.start, bounds.start + len - 1);
+
+        return Some(described(data).range(Some(placed)).build());
+    }
+
+    // The provider ignored the `Range` header and answered with the whole
+    // object: cut the requested window out here, so a ranged request never
+    // serves more than it asked for. `None` when the window lies outside the
+    // object, which the serve route answers with `416`.
+    let last_byte = len.checked_sub(1)?;
+    let last = bounds.end.map_or(last_byte, |end| end.min(last_byte));
+
+    if bounds.start > last {
+        return None;
+    }
+
+    let from = usize::try_from(bounds.start).ok()?;
+    let to = usize::try_from(last).ok()?;
+    let slice = data.get(from..=to)?.to_vec();
+
+    Some(
+        described(slice)
+            .range(Some((bounds.start, last)))
+            .total_size(Some(len))
+            .build(),
+    )
+}
+
+impl S3Storage {
+    /// Read a whole object, carrying its validators (`ETag`, `Last-Modified`)
+    /// back so a conditional request can be answered against them. `full_key`
+    /// is already prefixed and validated.
+    fn get_whole(&self, full_key: &str) -> Result<RangedObject> {
+        let response = block_on_s3(self.bucket.get_object(full_key))
+            .with_context(|| format!("S3 get failed: {full_key}"))?;
+
+        check_status("get", full_key, response.status_code(), Missing::NotFound)?;
+
+        let headers = response.headers();
+
+        Ok(RangedObject::whole(response.to_vec())
+            .etag(unquoted_etag(&headers))
+            .last_modified(header(&headers, "last-modified").map(str::to_string))
+            .build())
+    }
+
+    /// Turn a requested range into wire bounds. A suffix range needs the
+    /// object's size, which only a `HEAD` can tell us — that costs one extra
+    /// round trip on the rare suffix request, and still never transfers the
+    /// object. `Ok(None)` means the range cannot be satisfied.
+    fn bounds_for(&self, full_key: &str, range: ByteRange) -> Result<Option<RangeBounds>> {
+        let n = match range {
+            // An inverted range (`bytes=5-2`) is unsatisfiable, and would trip
+            // the bucket client's own `start <= end` assertion.
+            ByteRange::Offset { start, end } if end.is_some_and(|end| start > end) => {
+                return Ok(None);
+            }
+            ByteRange::Offset { start, end } => return Ok(Some(RangeBounds { start, end })),
+            ByteRange::Suffix(n) => n,
+        };
+
+        let (head, status) = block_on_s3(self.bucket.head_object(full_key))
+            .with_context(|| format!("S3 head failed: {full_key}"))?;
+
+        check_status("head", full_key, status, Missing::NotFound)?;
+
+        let Some(total) = head
+            .content_length
+            .and_then(|bytes| u64::try_from(bytes).ok())
+        else {
+            // Without a size we cannot place a suffix range; fall back to the
+            // whole object rather than guess an offset.
+            return Ok(Some(RangeBounds {
+                start: 0,
+                end: None,
+            }));
+        };
+
+        let Some((first, last)) = ByteRange::Suffix(n).resolve(total) else {
+            return Ok(None);
+        };
+
+        Ok(Some(RangeBounds {
+            start: first,
+            end: Some(last),
+        }))
+    }
+}
+
 impl StorageBackend for S3Storage {
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()> {
         validate_key(key)?;
@@ -95,14 +267,43 @@ impl StorageBackend for S3Storage {
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
         validate_key(key)?;
+
+        Ok(self.get_whole(&self.full_key(key))?.data)
+    }
+
+    fn get_range(&self, key: &str, range: Option<ByteRange>) -> Result<Option<RangedObject>> {
+        validate_key(key)?;
         let full_key = self.full_key(key);
 
-        let response = block_on_s3(self.bucket.get_object(&full_key))
-            .with_context(|| format!("S3 get failed: {full_key}"))?;
+        let Some(range) = range else {
+            return self.get_whole(&full_key).map(Some);
+        };
+
+        let Some(bounds) = self.bounds_for(&full_key, range)? else {
+            return Ok(None);
+        };
+
+        let response = block_on_s3(self.bucket.get_object_range(
+            &full_key,
+            bounds.start,
+            bounds.end,
+        ))
+        .with_context(|| {
+            format!(
+                "S3 ranged get failed: {full_key} ({})",
+                bounds.header_value()
+            )
+        })?;
+
+        // The provider answers 416 for a range that starts past the end of the
+        // object; that is the caller's `Ok(None)`, not a failure.
+        if response.status_code() == 416 {
+            return Ok(None);
+        }
 
         check_status("get", &full_key, response.status_code(), Missing::NotFound)?;
 
-        Ok(response.to_vec())
+        Ok(ranged_object(&response, bounds))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
@@ -341,6 +542,82 @@ mod tests {
 
         // exists() maps an invalid key to "not present", matching LocalStorage.
         assert!(!storage.exists("../escape.txt").unwrap());
+    }
+
+    /// A backend pointed at a custom endpoint: enough to exercise everything
+    /// that happens before a request leaves the process.
+    fn offline_storage() -> S3Storage {
+        let region = Region::Custom {
+            region: "eu-west-1".into(),
+            endpoint: "https://s3.example.invalid".into(),
+        };
+        let credentials =
+            Credentials::new(Some("AKIA..."), Some("secret"), None, None, None).unwrap();
+
+        S3Storage {
+            bucket: Bucket::new("test-bucket", region, credentials).unwrap(),
+            prefix: String::new(),
+        }
+    }
+
+    /// Regression: a remote read used to pull the whole object for every
+    /// request. A ranged read must put the requested slice on the wire as an
+    /// HTTP `Range` header — asserted on the bounds the request is built
+    /// from, so no live bucket is needed.
+    #[test]
+    fn a_ranged_read_asks_the_bucket_for_only_the_requested_slice() {
+        let storage = offline_storage();
+
+        let closed = storage
+            .bounds_for("media/a.bin", ByteRange::inclusive(10, 19))
+            .unwrap()
+            .expect("a closed range is satisfiable");
+        assert_eq!(closed.header_value(), "bytes=10-19");
+
+        let open = storage
+            .bounds_for("media/a.bin", ByteRange::from_start(64))
+            .unwrap()
+            .expect("an open range is satisfiable");
+        assert_eq!(open.header_value(), "bytes=64-");
+    }
+
+    /// An inverted range is unsatisfiable — and must be caught before the
+    /// bucket client's own `start <= end` assertion panics the request task.
+    #[test]
+    fn an_inverted_range_is_unsatisfiable_and_never_reaches_the_client() {
+        let storage = offline_storage();
+
+        assert!(
+            storage
+                .bounds_for("media/a.bin", ByteRange::inclusive(5, 2))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn content_range_parsing_yields_the_offsets_and_the_total() {
+        assert_eq!(
+            parse_content_range("bytes 10-19/100"),
+            Some(((10, 19), Some(100)))
+        );
+        assert_eq!(parse_content_range("bytes 0-9/*"), Some(((0, 9), None)));
+
+        assert!(parse_content_range("items 0-9/100").is_none());
+        assert!(parse_content_range("bytes 19-10/100").is_none());
+        assert!(parse_content_range("garbage").is_none());
+    }
+
+    #[test]
+    fn the_entity_tag_is_reported_without_its_transport_quoting() {
+        let mut headers = HashMap::new();
+        headers.insert("ETag".to_string(), "\"abc123\"".to_string());
+
+        assert_eq!(unquoted_etag(&headers), Some("abc123".to_string()));
+        assert_eq!(header(&headers, "etag"), Some("\"abc123\""));
+
+        headers.insert("ETag".to_string(), "\"\"".to_string());
+        assert!(unquoted_etag(&headers).is_none());
     }
 
     fn s3_config_with_region(region: &str) -> S3Config {
