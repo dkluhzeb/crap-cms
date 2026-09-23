@@ -184,9 +184,8 @@ fn collections_delete_many(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete_many");
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 

@@ -20,12 +20,13 @@ use tracing::{info, warn};
 #[cfg(unix)]
 use crate::config::JobsConfig;
 use crate::{
-    config::CrapConfig,
+    config::{CrapConfig, LocaleConfig},
     core::{
-        Registry, SharedEventTransport, SharedInvalidationTransport,
+        CollectionDefinition, Document, Registry, SharedEventTransport,
+        SharedInvalidationTransport,
         event::{create_event_transport, create_invalidation_transport},
     },
-    db::{DbPool, migrate, pool},
+    db::{DbConnection, DbPool, FindQuery, LocaleContext, migrate, pool, query},
     hooks::{self, HookRunner},
 };
 
@@ -78,6 +79,25 @@ pub fn open_project(config_dir: &Path) -> Result<Project> {
         pool,
         lock,
     })
+}
+
+/// Find documents of `def` for a CLI read, under the configured default
+/// locale. Every CLI read of documents goes through here: a read without a
+/// locale context names bare columns, which don't exist on a collection with
+/// localized fields (`title` vs `title__en`), so the query fails.
+///
+/// # Errors
+///
+/// Returns an error if a filter or sort field is invalid or the query fails.
+pub fn cli_find(
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+    find_query: &FindQuery,
+    locale: &LocaleConfig,
+) -> Result<Vec<Document>> {
+    let locale_ctx = LocaleContext::default_for(locale);
+
+    query::find(conn, &def.slug, def, find_query, locale_ctx.as_ref())
 }
 
 /// Load a config and put it into service, check version, and prune old log

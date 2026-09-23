@@ -492,3 +492,36 @@ fn user_change_password() {
         "should confirm password change, got: {stdout}"
     );
 }
+
+/// Regression: `user create`, `user list` and `bench queries` read and wrote
+/// without a locale context, so on an auth collection with a localized field
+/// they named the bare column (`name`, not `name__en`) and failed — or, for
+/// `bench queries`, reported the failure as "0 rows".
+#[test]
+fn user_commands_and_bench_queries_handle_a_localized_auth_collection() {
+    let (_tmp, config_dir) = setup();
+    let users_lua = config_dir.join("collections").join("users.lua");
+    let localized = std::fs::read_to_string(&users_lua).unwrap().replacen(
+        "required = true,",
+        "required = true,\n            localized = true,",
+        1,
+    );
+    std::fs::write(&users_lua, localized).unwrap();
+
+    create_test_user(&config_dir);
+
+    let list_out = run_ok_in(&config_dir, &["user", "list"]);
+    assert!(
+        list_out.contains("test@example.com"),
+        "user list should show the user, got: {list_out}"
+    );
+
+    let bench = run_in(&config_dir, &["bench", "queries", "--collection", "users"]);
+    let bench_out = String::from_utf8_lossy(&bench.stdout);
+    let bench_err = String::from_utf8_lossy(&bench.stderr);
+    assert!(bench.status.success(), "bench queries failed: {bench_err}");
+    assert!(
+        !bench_out.contains("ERR") && !bench_err.contains("Query failed"),
+        "bench queries should read the collection, got: {bench_out}\n{bench_err}"
+    );
+}

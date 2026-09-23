@@ -16,14 +16,14 @@ use crate::{
         AdminState,
         handlers::{
             forms::FormData,
-            shared::{get_user_doc, parse_request_locale},
+            shared::{get_user_doc, parse_request_locale, strip_locale_locked_form_fields},
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
                 values_to_string_map,
             },
         },
     },
-    core::{DocumentFields, auth::AuthUser},
+    core::auth::AuthUser,
     service::op::{self, Principal, TargetRef, ValidateArgs, ValidateGlobal},
 };
 
@@ -45,15 +45,21 @@ pub async fn validate_global(
 
     let form_data = values_to_string_map(&payload.data);
 
-    // Field write access stripping is now handled inside service::validate_document
-    // via WriteHooks::field_write_denied.
-
-    let data: DocumentFields = FormData::from_raw(form_data, &def.fields).into();
+    // Field write access stripping is handled inside the shared operation body.
 
     let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return validation_error_response_simple(&msg),
     };
+
+    // The form echoes shared fields read-only under a non-default locale; the
+    // admin write drops them before the service's locale lock, so the dry-run
+    // it previews does too.
+    let data = strip_locale_locked_form_fields(
+        FormData::from_raw(form_data, &def.fields).into(),
+        &def.fields,
+        locale_ctx.as_ref(),
+    );
 
     // Shared dry-run body — globals always validate as an update against the
     // singleton `default` row of `_global_<slug>`.

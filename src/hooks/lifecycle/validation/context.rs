@@ -14,7 +14,9 @@ pub struct ValidationCtx<'a> {
     pub exclude_id: Option<&'a str>,
     pub is_draft: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
-    /// Registry for looking up richtext node definitions during node attr validation.
+    /// Registry for looking up richtext node definitions during node attr
+    /// validation. Write paths never set it by hand: `validate_write_fields`
+    /// fills it from its required registry argument.
     pub registry: Option<&'a Registry>,
     /// When true, unique constraint checks exclude soft-deleted documents.
     pub soft_delete: bool,

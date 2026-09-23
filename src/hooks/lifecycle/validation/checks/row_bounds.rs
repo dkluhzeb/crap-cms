@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, validate::FieldError};
+use crate::core::{FieldDefinition, FieldType, reference_items, validate::FieldError};
 
 /// Validate `min_rows` / `max_rows` for Array, Blocks, and has-many Relationship fields.
 ///
@@ -28,11 +28,7 @@ pub(crate) fn check_row_bounds(
         return;
     }
 
-    let row_count = match value {
-        Some(Value::Array(arr)) => arr.len(),
-        Some(Value::String(s)) => serde_json::from_str::<Vec<Value>>(s).map_or(0, |arr| arr.len()),
-        _ => 0,
-    };
+    let row_count = value.map_or(0, |v| count_rows(field, v));
 
     if let Some(min) = field.min_rows
         && row_count < min
@@ -63,12 +59,76 @@ pub(crate) fn check_row_bounds(
     }
 }
 
+/// The number of rows/items a value carries. Array/Blocks rows arrive as an
+/// array or a JSON-array string; has-many relationship/upload items decode
+/// through [`reference_items`], the writer's own decoder, so the admin form's
+/// comma list counts what gets stored.
+fn count_rows(field: &FieldDefinition, value: &Value) -> usize {
+    if matches!(field.field_type, FieldType::Array | FieldType::Blocks) {
+        return match value {
+            Value::Array(arr) => arr.len(),
+            Value::String(s) => serde_json::from_str::<Vec<Value>>(s).map_or(0, |arr| arr.len()),
+            _ => 0,
+        };
+    }
+
+    reference_items(value).len()
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::core::DocumentFields;
-    use crate::core::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
-    use serde_json::json;
+    use serde_json::{Value, json};
+
+    /// Validate one has-many relationship value against `min_rows`/`max_rows`.
+    fn has_many_rel_result(min: usize, max: usize, value: Value) -> bool {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .min_rows(min)
+                .max_rows(max)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), value);
+
+        validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        )
+        .is_ok()
+    }
+
+    /// Regression: the admin form sends has-many relationship ids as a comma
+    /// list; row bounds counted only JSON arrays, so `min_rows` was
+    /// unsatisfiable from the admin and `max_rows` never fired.
+    #[test]
+    fn has_many_relationship_comma_list_counts_its_ids() {
+        assert!(
+            has_many_rel_result(1, 5, json!("a")),
+            "one id meets min_rows=1"
+        );
+        assert!(
+            !has_many_rel_result(0, 2, json!("a,b,c,d")),
+            "four ids exceed max_rows=2"
+        );
+        assert!(has_many_rel_result(2, 2, json!("a, b")));
+    }
+
+    #[test]
+    fn has_many_relationship_json_array_string_still_counts() {
+        assert!(has_many_rel_result(2, 2, json!(r#"["a","b"]"#)));
+        assert!(!has_many_rel_result(3, 5, json!(r#"["a","b"]"#)));
+    }
 
     #[test]
     fn test_validate_min_rows() {

@@ -16,7 +16,9 @@ use crate::{
     },
 };
 
-use super::extract::{NodeInstance, extract_nodes_from_html, extract_nodes_from_json};
+use super::extract::{
+    NodeInstance, extract_nodes_from_html, extract_nodes_from_json, json_document,
+};
 
 /// Bundled context for richtext node attr validation.
 pub(crate) struct RichtextValidationCtx<'a> {
@@ -100,37 +102,37 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
 /// Validate all custom node attrs within a richtext field's content.
 ///
 /// Extracts custom nodes from the content (JSON or HTML format), then runs
-/// the same validation checks used for regular fields on each node attr.
+/// the same validation checks used for regular fields on each node attr. A
+/// JSON-format value may be the document's text or the document object; one
+/// that is neither (unparseable, too deep, another type) is refused, since its
+/// nodes cannot be checked.
 ///
 /// Error field names use the format `"{field_name}[{node_type}#{index}].{attr_name}"`
 /// to make errors identifiable (e.g., `"content[cta#0].url"`).
 pub(crate) fn validate_richtext_node_attrs(
     ctx: &RichtextValidationCtx<'_>,
-    content: &str,
+    content: &Value,
     field_name: &str,
     field: &FieldDefinition,
     errors: &mut Vec<FieldError>,
 ) {
-    let format = field.admin.richtext_format.as_deref().unwrap_or("html");
-
-    // Build a map of node_name → attr definitions for nodes used by this field
-    let mut known_nodes: HashMap<&str, &[FieldDefinition]> = HashMap::new();
-    for node_name in &field.admin.nodes {
-        if let Some(node_def) = ctx.registry.get_richtext_node(node_name)
-            && !node_def.attrs.is_empty()
-        {
-            known_nodes.insert(&node_def.name, &node_def.attrs);
-        }
-    }
+    let known_nodes = known_nodes_with_attrs(ctx.registry, field);
 
     if known_nodes.is_empty() {
         return;
     }
 
-    let instances = if format == "json" {
-        extract_nodes_from_json(content, &known_nodes)
+    let instances = if field.parses_json() {
+        let Some(doc) = json_document(content) else {
+            errors.push(invalid_document_error(field_name, field));
+            return;
+        };
+        extract_nodes_from_json(&doc, &known_nodes)
     } else {
-        extract_nodes_from_html(content, &known_nodes)
+        let Value::String(html) = content else {
+            return;
+        };
+        extract_nodes_from_html(html, &known_nodes)
     };
 
     for inst in &instances {
@@ -141,6 +143,30 @@ pub(crate) fn validate_richtext_node_attrs(
 
         validate_node_instance(ctx, inst, attr_defs, field_name, errors);
     }
+}
+
+/// The field's declared nodes that have attrs, by node name.
+fn known_nodes_with_attrs<'r>(
+    registry: &'r Registry,
+    field: &FieldDefinition,
+) -> HashMap<&'r str, &'r [FieldDefinition]> {
+    field
+        .admin
+        .nodes
+        .iter()
+        .filter_map(|name| registry.get_richtext_node(name))
+        .filter(|node_def| !node_def.attrs.is_empty())
+        .map(|node_def| (node_def.name.as_str(), node_def.attrs.as_slice()))
+        .collect()
+}
+
+fn invalid_document_error(field_name: &str, field: &FieldDefinition) -> FieldError {
+    FieldError::with_key(
+        field_name,
+        format!("{} must be a valid rich text JSON document", field.name),
+        "validation.invalid_richtext_json",
+    )
+    .with_param("field", field.name.clone())
 }
 
 /// Validate a single node instance's attrs against their field definitions.
@@ -159,8 +185,12 @@ fn validate_node_instance(
         let value = inst.attrs.get(&attr_def.name);
         let is_empty = is_empty_value(value);
 
-        // Required check (skip for drafts)
-        if attr_def.required && is_empty && !ctx.is_draft {
+        // Required check (skip for drafts) — presence judged by the same
+        // predicate as top-level fields and array/blocks sub-fields.
+        if attr_def.required
+            && !ctx.is_draft
+            && !checks::is_value_present(attr_def, value, is_empty)
+        {
             errors.push(
                 FieldError::with_key(
                     &data_key,
@@ -171,6 +201,16 @@ fn validate_node_instance(
             );
             continue;
         }
+
+        // A `has_many` node attr (Text/Number/Select/Radio list) gets the same
+        // per-element + count validation as at the top level and in array/blocks
+        // rows — previously this leaf site skipped it. (Row-bounds and the
+        // polymorphic allowlist don't apply: a node attr can't be an
+        // array/blocks or a relationship field.)
+        checks::check_has_many_elements(
+            &checks::HasManyCheck::new(attr_def, &data_key, value, is_empty).draft(ctx.is_draft),
+            errors,
+        );
 
         if is_empty {
             continue;
@@ -184,12 +224,6 @@ fn validate_node_instance(
             errors,
         );
         checks::check_date_field(attr_def, &data_key, value, is_empty, errors);
-        // A `has_many` node attr (Text/Number/Select/Radio list) gets the same
-        // per-element + count validation as at the top level and in array/blocks
-        // rows — previously this leaf site skipped it. (Row-bounds and the
-        // polymorphic allowlist don't apply: a node attr can't be an
-        // array/blocks or a relationship field.)
-        checks::check_has_many_elements(attr_def, &data_key, value, is_empty, ctx.is_draft, errors);
 
         // Custom Lua validate function
         if let Some(ref validate) = attr_def.validate
@@ -243,12 +277,12 @@ fn validate_node_instance(
 
 #[cfg(test)]
 mod tests {
-    use super::super::before_validate::run_before_validate_on_node_attrs;
+    use serde_json::json;
+
     use super::*;
-    use crate::core::HookRef;
     use crate::core::{
-        FieldAdmin, FieldDefinition, FieldHooks, FieldType, LocalizedString, Registry,
-        SelectOption, richtext::RichtextNodeDef,
+        FieldAdmin, FieldDefinition, FieldType, LocalizedString, Registry, SelectOption,
+        richtext::RichtextNodeDef,
     };
 
     fn make_registry_with_cta() -> Registry {
@@ -281,56 +315,78 @@ mod tests {
             .build()
     }
 
-    // --- JSON extraction tests ---
-
+    /// Regression: unparseable JSON-format content found no nodes, so its
+    /// node attrs went unchecked; it is now refused.
     #[test]
-    fn extract_nodes_json_basic() {
-        let json =
-            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click","url":"/go"}}]}"#;
+    fn validate_richtext_unparseable_json_is_refused() {
+        let lua = Lua::new();
         let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-        let instances = extract_nodes_from_json(json, &known);
-        assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].node_type, "cta");
-        assert_eq!(instances[0].index, 0);
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "Click");
+        let field = make_richtext_field(vec!["cta".to_string()], "json");
+        let mut errors = Vec::new();
+
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
+            &Value::from("not json"),
+            "content",
+            &field,
+            &mut errors,
+        );
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].key.as_deref(),
+            Some("validation.invalid_richtext_json")
+        );
     }
 
+    /// Regression: a JSON-format document sent as an object (MCP, Lua tables)
+    /// skipped node-attr validation, which read only strings.
     #[test]
-    fn extract_nodes_json_multiple() {
-        let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"A","url":"/a"}},{"type":"paragraph","content":[{"type":"text","text":"hi"}]},{"type":"cta","attrs":{"text":"B","url":"/b"}}]}"#;
+    fn validate_richtext_document_object_is_checked() {
+        let lua = Lua::new();
         let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-        let instances = extract_nodes_from_json(json, &known);
-        assert_eq!(instances.len(), 2);
-        assert_eq!(instances[0].index, 0);
-        assert_eq!(instances[1].index, 1);
+        let field = make_richtext_field(vec!["cta".to_string()], "json");
+        let doc = json!({
+            "type": "doc",
+            "content": [{ "type": "cta", "attrs": { "text": "", "url": "" } }]
+        });
+        let mut errors = Vec::new();
+
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
+            &doc,
+            "content",
+            &field,
+            &mut errors,
+        );
+
+        assert_eq!(errors.len(), 2, "both required attrs are empty");
     }
 
+    /// Regression: extraction searched attribute substrings, so a decoy
+    /// `data-type` inside another attribute and entity-encoded attrs (the
+    /// editor's own serialization) escaped the check.
     #[test]
-    fn extract_nodes_json_invalid() {
-        let known = HashMap::new();
-        let instances = extract_nodes_from_json("not json", &known);
-        assert!(instances.is_empty());
-    }
-
-    // --- HTML extraction tests ---
-
-    #[test]
-    fn extract_nodes_html_basic() {
-        let html = r#"<p>Hi</p><crap-node data-type="cta" data-attrs='{"text":"Go","url":"/x"}'></crap-node>"#;
+    fn validate_richtext_html_reads_attrs_like_the_browser() {
+        let lua = Lua::new();
         let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-        let instances = extract_nodes_from_html(html, &known);
-        assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].node_type, "cta");
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "Go");
+        let field = make_richtext_field(vec!["cta".to_string()], "html");
+        let html = concat!(
+            r#"<CRAP-NODE data-x='data-type="other"' data-type="cta" "#,
+            r#"data-attrs="{&quot;text&quot;:&quot;&quot;,&quot;url&quot;:&quot;&quot;}">"#,
+            "</crap-node>",
+        );
+        let mut errors = Vec::new();
+
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
+            &Value::from(html),
+            "content",
+            &field,
+            &mut errors,
+        );
+
+        assert_eq!(errors.len(), 2, "both required attrs are empty: {errors:?}");
     }
 
     // --- Validation tests ---
@@ -345,7 +401,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -366,7 +422,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -387,7 +443,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -407,7 +463,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            html,
+            &Value::from(html),
             "content",
             &field,
             &mut errors,
@@ -426,7 +482,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -455,7 +511,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -490,7 +546,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -520,7 +576,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -547,7 +603,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -591,7 +647,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -635,7 +691,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -649,116 +705,7 @@ mod tests {
         assert_eq!(errors[0].key.as_deref(), Some("validation.custom_error"));
     }
 
-    #[test]
-    fn before_validate_hooks_transform_json() {
-        let lua = Lua::new();
-        lua.load(
-            r#"
-            package.loaded["hooks"] = {
-                trim = function(value, ctx)
-                    if type(value) == "string" then
-                        return value:match("^%s*(.-)%s*$")
-                    end
-                    return value
-                end
-            }
-        "#,
-        )
-        .exec()
-        .unwrap();
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("note", "Note")
-                .attrs(vec![
-                    FieldDefinition::builder("text", FieldType::Text)
-                        .hooks(FieldHooks {
-                            before_validate: vec![HookRef::new("hooks.trim")],
-                            ..Default::default()
-                        })
-                        .build(),
-                ])
-                .build(),
-        );
-        let field = make_richtext_field(vec!["note".to_string()], "json");
-        let content = r#"{"type":"doc","content":[{"type":"note","attrs":{"text":"  hello  "}}]}"#;
-
-        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
-
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        let text = parsed["content"][0]["attrs"]["text"].as_str().unwrap();
-        assert_eq!(text, "hello");
-    }
-
-    #[test]
-    fn before_validate_hooks_no_hooks_returns_original() {
-        let lua = Lua::new();
-        let reg = make_registry_with_cta();
-        let field = make_richtext_field(vec!["cta".to_string()], "json");
-        let content =
-            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"hi","url":"/"}}]}"#;
-
-        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
-        assert_eq!(result, content);
-    }
-
     // --- Additional edge case tests ---
-
-    #[test]
-    fn extract_nodes_html_multiple_with_correct_indexing() {
-        let html = concat!(
-            r#"<p>Start</p>"#,
-            r#"<crap-node data-type="cta" data-attrs='{"text":"A","url":"/a"}'></crap-node>"#,
-            r#"<p>Middle</p>"#,
-            r#"<crap-node data-type="cta" data-attrs='{"text":"B","url":"/b"}'></crap-node>"#,
-            r#"<p>End</p>"#,
-        );
-        let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-
-        let instances = extract_nodes_from_html(html, &known);
-        assert_eq!(instances.len(), 2);
-        assert_eq!(instances[0].index, 0);
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "A");
-        assert_eq!(instances[1].index, 1);
-        assert_eq!(instances[1].attrs.get("text").unwrap(), "B");
-    }
-
-    #[test]
-    fn extract_nodes_json_nested_deep_tree() {
-        // CTA inside a blockquote inside a list item
-        let json = r#"{
-            "type": "doc",
-            "content": [
-                {
-                    "type": "bullet_list",
-                    "content": [
-                        {
-                            "type": "list_item",
-                            "content": [
-                                {
-                                    "type": "blockquote",
-                                    "content": [
-                                        {"type": "cta", "attrs": {"text": "Deep", "url": "/deep"}}
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }"#;
-        let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-
-        let instances = extract_nodes_from_json(json, &known);
-        assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "Deep");
-    }
 
     #[test]
     fn validate_richtext_max_length_violation() {
@@ -774,7 +721,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            &json,
+            &Value::from(json.as_str()),
             "content",
             &field,
             &mut errors,
@@ -796,7 +743,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -823,7 +770,7 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -834,49 +781,6 @@ mod tests {
         assert!(errors[1].field.contains("cta#0"));
         assert!(errors[2].field.contains("cta#1"));
         assert!(errors[3].field.contains("cta#1"));
-    }
-
-    #[test]
-    fn before_validate_hooks_transform_html() {
-        let lua = Lua::new();
-        lua.load(
-            r#"
-            package.loaded["hooks"] = {
-                upper = function(value, ctx)
-                    if type(value) == "string" then
-                        return value:upper()
-                    end
-                    return value
-                end
-            }
-        "#,
-        )
-        .exec()
-        .unwrap();
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("tag", "Tag")
-                .attrs(vec![
-                    FieldDefinition::builder("label", FieldType::Text)
-                        .hooks(FieldHooks {
-                            before_validate: vec![HookRef::new("hooks.upper")],
-                            ..Default::default()
-                        })
-                        .build(),
-                ])
-                .build(),
-        );
-        let field = make_richtext_field(vec!["tag".to_string()], "html");
-        let content =
-            r#"<p>Hi</p><crap-node data-type="tag" data-attrs='{"label":"hello"}'></crap-node>"#;
-
-        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
-
-        assert!(
-            result.contains("HELLO"),
-            "hook should uppercase the label: {result}"
-        );
     }
 
     #[test]
@@ -891,7 +795,7 @@ mod tests {
             &RichtextValidationCtx::builder(&lua, &reg, "pages")
                 .draft(true)
                 .build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
@@ -900,54 +804,6 @@ mod tests {
         assert!(
             errors.is_empty(),
             "draft mode should skip required check on node attrs"
-        );
-    }
-
-    #[test]
-    fn before_validate_html_escapes_single_quotes() {
-        let lua = Lua::new();
-        lua.load(
-            r#"
-            package.loaded["hooks"] = {
-                add_quote = function(value, ctx)
-                    if type(value) == "string" then
-                        return value .. "'"
-                    end
-                    return value
-                end
-            }
-        "#,
-        )
-        .exec()
-        .unwrap();
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("note", "Note")
-                .attrs(vec![
-                    FieldDefinition::builder("text", FieldType::Text)
-                        .hooks(FieldHooks {
-                            before_validate: vec![HookRef::new("hooks.add_quote")],
-                            ..Default::default()
-                        })
-                        .build(),
-                ])
-                .build(),
-        );
-        let field = make_richtext_field(vec!["note".to_string()], "html");
-        let content =
-            r#"<p>Hi</p><crap-node data-type="note" data-attrs='{"text":"hello"}'></crap-node>"#;
-
-        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
-
-        // The single quote in the attr value must be escaped as &#39;
-        assert!(
-            result.contains("&#39;"),
-            "single quote should be escaped: {result}"
-        );
-        assert!(
-            !result.contains("data-attrs='{") || !result.contains("'}'"),
-            "unescaped quote should not break the attribute boundary"
         );
     }
 
@@ -969,61 +825,12 @@ mod tests {
 
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
-            json,
+            &Value::from(json),
             "content",
             &field,
             &mut errors,
         );
 
         assert!(errors.is_empty(), "checkbox with boolean value should pass");
-    }
-
-    #[test]
-    fn extract_nodes_html_mixed_self_closing_and_full() {
-        let html = concat!(
-            r#"<p>A</p>"#,
-            r#"<crap-node data-type="cta" data-attrs='{"text":"SC","url":"/sc"}'/>"#,
-            r#"<p>B</p>"#,
-            r#"<crap-node data-type="cta" data-attrs='{"text":"Full","url":"/full"}'></crap-node>"#,
-        );
-        let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-
-        let instances = extract_nodes_from_html(html, &known);
-        assert_eq!(
-            instances.len(),
-            2,
-            "both self-closing and full tags extracted"
-        );
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "SC");
-        assert_eq!(instances[1].attrs.get("text").unwrap(), "Full");
-    }
-
-    #[test]
-    fn extract_nodes_html_self_closing_tag() {
-        let html =
-            r#"<p>Test</p><crap-node data-type="cta" data-attrs='{"text":"Go","url":"/x"}'/>"#;
-        let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-
-        let instances = extract_nodes_from_html(html, &known);
-        assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].attrs.get("text").unwrap(), "Go");
-    }
-
-    #[test]
-    fn extract_nodes_html_unknown_node_skipped() {
-        let html = r#"<crap-node data-type="unknown" data-attrs='{"x":"y"}'></crap-node>"#;
-        let reg = make_registry_with_cta();
-        let attrs = reg.get_richtext_node("cta").unwrap();
-        let mut known = HashMap::new();
-        known.insert("cta", attrs.attrs.as_slice());
-
-        let instances = extract_nodes_from_html(html, &known);
-        assert!(instances.is_empty(), "unknown node types should be skipped");
     }
 }

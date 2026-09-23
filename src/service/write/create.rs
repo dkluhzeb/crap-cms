@@ -1,17 +1,16 @@
 //! Core create operation for collections.
 
 use crate::{
-    db::{AccessResult, LocaleContext, query},
+    db::{AccessResult, LocaleContext},
     hooks::{AccessCheckInput, HookContext, ValidationCtx},
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, persist_create,
         run_after_change_hooks,
-        write::{UploadSettle, settle_upload_write},
+        write::{UploadSettle, admit_create_input, settle_upload_write},
     },
 };
 
 use super::ServiceError;
-use super::validate::canonicalize_write_input;
 use crate::service::helpers::{
     EmptyPassword, hydrate_reported, strip_reported, validate_password_policy,
 };
@@ -80,24 +79,11 @@ pub fn create_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Canonicalize the incoming data to the nested group shape up front, so every
-    // surface (admin forms, Lua, gRPC, MCP) and the whole write pipeline (access,
-    // hooks, validation) sees one shape. Idempotent — already-nested input passes
-    // through; the DB write edge flattens back to columns.
-    canonicalize_write_input(&mut input, def);
-
-    // A document is created in its default (canonical) locale. A new row has no
-    // default-locale value to translate from, so creating under a non-default
-    // locale would write shared columns from the wrong locale AND leave the
-    // default-locale columns empty. Reject it (parity with the update path's
-    // locale-lock); create in the default locale, then translate via update.
-    if query::is_non_default_single_locale(input.locale_ctx) {
-        return Err(ServiceError::HookError(
-            "Cannot create a document in a non-default locale — create in the default locale \
-             first, then add translations with an update."
-                .into(),
-        ));
-    }
+    // The admission prefix the `validate` dry-run runs too: canonicalize the
+    // incoming data to the nested group shape (every surface and the whole
+    // pipeline sees one shape; the DB edge flattens back to columns), strip
+    // untrusted upload metadata, and refuse a non-default locale.
+    admit_create_input(def, &mut input)?;
 
     check_create_access(
         ctx,

@@ -1,11 +1,12 @@
 //! Execute `validate` — check document data against collection rules
 //! without persisting.
 //!
-//! Codec over [`op::run`] with [`Principal::Override`]: the dry-run now runs
-//! with the same trusted override as MCP's real `create`/`update`, so its
-//! outcome predicts exactly what that write would do. (It previously ran as
-//! an anonymous user WITHOUT override, so field-level access rules could
-//! strip fields in the dry-run that the actual override write kept.)
+//! Codec over [`op::run`] with [`Principal::Override`]: the dry-run runs with
+//! the same trusted override as MCP's real `create`/`update`, and the shared
+//! operation body admits the data through the same steps that write runs, so
+//! its outcome predicts what that write would do. (It once ran as an anonymous
+//! user WITHOUT override, so field-level access rules could strip fields in
+//! the dry-run that the actual override write kept.)
 
 use anyhow::Result;
 use serde_json::{Value, json, to_string_pretty};

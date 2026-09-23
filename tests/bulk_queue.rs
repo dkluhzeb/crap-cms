@@ -22,7 +22,7 @@ use crap_cms::config::CrapConfig;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::job::{JobDefinition, JobStatus, SYSTEM_BULK_JOB};
-use crap_cms::core::{Document, DocumentFields, Registry};
+use crap_cms::core::{Document, DocumentFields, Registry, ScheduledBy};
 use crap_cms::db::query::jobs as job_query;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -238,7 +238,7 @@ fn queued_create_many_executes_and_summarizes() {
         [("title".to_string(), json!("B"))].into_iter().collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     assert_eq!(run.slug, SYSTEM_BULK_JOB);
     assert!(
         find_titles(&ctx).is_empty(),
@@ -281,7 +281,7 @@ fn queued_delete_many_applies_where_clause() {
     let mut data = job_data(BulkOpKind::DeleteMany, QueuedBy::System);
     data.where_clause = Some(json!({"status": {"equals": "stale"}}).to_string());
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     execute(&ctx, &run);
 
     assert_eq!(find_titles(&ctx), vec!["keep"]);
@@ -301,7 +301,16 @@ fn invalid_payload_fails_permanently() {
 
     let run = {
         let conn = ctx.infra.pool.get().unwrap();
-        job_query::insert_job(&conn, SYSTEM_BULK_JOB, "{not json", "api", 3, "bulk", 0).unwrap()
+        job_query::insert_job(
+            &conn,
+            SYSTEM_BULK_JOB,
+            "{not json",
+            ScheduledBy::Grpc,
+            3,
+            "bulk",
+            0,
+        )
+        .unwrap()
     };
 
     execute(&ctx, &run);
@@ -341,7 +350,7 @@ fn queued_run_fires_hooks_with_the_queuer_as_ctx_user() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     execute(&ctx, &run);
 
     let def = ctx.registry.get_collection("posts").unwrap().clone();
@@ -374,7 +383,7 @@ fn queued_run_honors_hooks_false() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     execute(&ctx, &run);
 
     let def = ctx.registry.get_collection("posts").unwrap().clone();
@@ -419,7 +428,7 @@ fn locked_queuing_user_abandons_the_run() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     execute(&ctx, &run);
 
     let finished = fetch_run(&ctx, &run.id);
@@ -461,7 +470,7 @@ fn revoked_session_abandons_the_run() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
 
     // …then every live session is revoked without locking the account.
     {
@@ -493,7 +502,7 @@ fn queued_runs_are_pinned_to_one_attempt() {
     let ctx = setup();
     let data = job_data(BulkOpKind::CreateMany, QueuedBy::System);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
 
     assert_eq!(run.max_attempts, 1, "a queued bulk run must never retry");
 }
@@ -511,7 +520,7 @@ fn finished_run_payload_is_stripped() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     assert!(
         fetch_run(&ctx, &run.id).data.contains("secret-ish"),
         "the payload is stored while the run is pending"
@@ -554,7 +563,7 @@ fn failed_run_payload_is_stripped() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
 
     execute(&ctx, &run);
 
@@ -593,7 +602,7 @@ fn pending_run_is_cancellable_by_its_queuer_only() {
             .collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
 
     let conn = ctx.infra.pool.get().unwrap();
     let cancel_as = |user: Option<&Document>| {
@@ -643,7 +652,7 @@ fn queued_update_many_applies_patch() {
             .collect(),
     );
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
     execute(&ctx, &run);
 
     let finished = fetch_run(&ctx, &run.id);
@@ -682,7 +691,7 @@ fn queued_run_visibility_is_queuer_only() {
         [("title".to_string(), json!("X"))].into_iter().collect(),
     ]);
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data).expect("queue");
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
 
     let conn = ctx.infra.pool.get().unwrap();
 

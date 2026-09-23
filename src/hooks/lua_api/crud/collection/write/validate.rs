@@ -104,9 +104,8 @@ fn collections_validate(
     // dry-run itself never touches it.
     let ExtractedData { data, password: _ } = extract_data(&data, &def)?;
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(reg.as_ref()))
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)

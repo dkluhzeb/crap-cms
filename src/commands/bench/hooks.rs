@@ -7,6 +7,7 @@ use dialoguer::MultiSelect;
 
 use crate::{
     cli::{self, Table, crap_theme},
+    config::LocaleConfig,
     core::{HookRef, Registry, collection::Hooks},
     db::DbConnection,
     hooks::HookRunner,
@@ -150,6 +151,7 @@ pub(super) struct HookBenchParams<'a> {
     pub exclude: Option<&'a str>,
     pub run_all: bool,
     pub user_data: Option<&'a str>,
+    pub locale: &'a LocaleConfig,
 }
 
 /// Run the hook benchmark.
@@ -184,7 +186,7 @@ pub fn run(params: &HookBenchParams) -> Result<()> {
         // Resolve data for this hook's collection
         let def = reg.collections.get(entry.slug.as_str());
         let (data, source) = if let Some(def) = def {
-            helpers::resolve_bench_data(params.conn, &entry.slug, def, params.user_data)?
+            helpers::resolve_bench_data(params.conn, def, params.user_data, params.locale)?
         } else {
             // Global — use empty data
             (crate::core::DocumentFields::new(), DataSource::Synthetic)

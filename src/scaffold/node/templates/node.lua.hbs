@@ -7,7 +7,16 @@
 --- textarea, select, radio, checkbox, date, email, json, code.
 --- Render function returns the HTML the node serializes to; if
 --- omitted, the node falls through to a `<crap-node>` passthrough for
---- client-side rendering.
+--- client-side rendering. The returned HTML is not sanitized: escape
+--- every attr value you interpolate (see `escape_html` below).
+
+--- Escape a value for HTML text and attribute positions.
+local function escape_html(s)
+  s = tostring(s or "")
+  s = s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+  s = s:gsub('"', "&quot;"):gsub("'", "&#39;")
+  return s
+end
 
 crap.richtext.register_node("{{name}}", {
   label = "{{label}}",
@@ -32,10 +41,7 @@ crap.richtext.register_node("{{name}}", {
   },
   searchable_attrs = { "text" },
   render = function(attrs)
-    -- Server-side HTML output. Escape user-controlled strings.
-    return string.format(
-      '<span class="{{name}}">%s</span>',
-      attrs.text or ""
-    )
+    -- Server-side HTML output: every attr value goes through escape_html.
+    return '<span class="{{name}}">' .. escape_html(attrs.text) .. '</span>'
   end,
 })

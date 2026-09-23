@@ -90,9 +90,8 @@ fn collections_undelete(
     // carries no field edits to validate.
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "undelete");
 
-    let wh = LuaWriteHooks::builder(lua)
+    let wh = LuaWriteHooks::builder(lua, state.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(state.as_ref()))
         .hooks_enabled(hooks_enabled)
         .run_validation(false)
         .build();

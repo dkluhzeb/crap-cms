@@ -16,30 +16,27 @@
 
 use std::collections::BTreeMap;
 
-use schemars::JsonSchema;
-use serde::Serialize;
+use anyhow::{Result, bail};
 
 use crate::core::HookRef;
-use crate::typegen::LuaAnnotation;
 
-/// Sidebar metadata declared from Lua via `crap.pages.register`.
-#[derive(Clone, Debug, Default, Serialize, JsonSchema, LuaAnnotation)]
-#[lua(class = "crap.template.custom_page")]
+/// Custom page metadata declared from Lua via `crap.pages.register`. The
+/// sidebar renders a view of it (`NavPage` in the nav context) that
+/// leaves the access rule out.
+#[derive(Clone, Debug, Default)]
 pub struct CustomPage {
     /// Slug — the URL segment and the filename stem.
     pub slug: String,
 
-    /// Sidebar section heading. `None` → page is registered but not
-    /// grouped (renders ungrouped at the bottom).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Sidebar section heading. `None` → the page is listed with the
+    /// ungrouped pages, after every section.
     pub section: Option<String>,
 
-    /// Sidebar label. `None` → page is registered but not shown in nav.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Sidebar label. `None` → the page is registered (it routes and its
+    /// access gate runs) but not shown in the nav.
     pub label: Option<String>,
 
     /// Optional Material Symbols icon name.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
 
     /// Optional Lua function-ref name for access control. When set, the
@@ -50,9 +47,6 @@ pub struct CustomPage {
     /// function once via `crap.access.register("name", fn)`, then refer
     /// to it by name here. A bare ref string or a `{ ref, options }` table
     /// whose options reach the gate as `ctx.options`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
-    #[lua(ty = "string | crap.HookRef")]
     pub access: Option<HookRef>,
 }
 
@@ -99,6 +93,38 @@ impl CustomPageRegistry {
     pub fn all(&self) -> Vec<&CustomPage> {
         self.pages.values().collect()
     }
+
+    /// Fail when a registered page has no template. Pages are init-only
+    /// config, so a page whose `templates/pages/<slug>.hbs` is missing is a
+    /// config error — otherwise its sidebar entry would link to a 404.
+    ///
+    /// # Errors
+    ///
+    /// Names every registered page `has_template` does not find.
+    pub fn check_templates(&self, has_template: impl Fn(&str) -> bool) -> Result<()> {
+        let missing: Vec<&str> = self
+            .pages
+            .keys()
+            .filter(|slug| !has_template(&page_template_name(slug)))
+            .map(String::as_str)
+            .collect();
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        bail!(
+            "crap.pages.register: no template for page(s) {} — add \
+             templates/pages/<slug>.hbs to the config directory",
+            missing.join(", ")
+        )
+    }
+}
+
+/// The template a custom page renders: `pages/<slug>`.
+#[must_use]
+pub fn page_template_name(slug: &str) -> String {
+    format!("pages/{slug}")
 }
 
 /// Slug validation — restrict to safe characters to avoid path traversal
@@ -151,6 +177,32 @@ mod tests {
         let nav = reg.nav_entries();
         assert_eq!(nav.len(), 1);
         assert_eq!(nav[0].slug, "with_label");
+    }
+
+    /// Regression: a registered page without a template showed a sidebar
+    /// link that 404ed; it is now a startup error naming the page.
+    #[test]
+    fn a_registered_page_without_a_template_is_a_config_error() {
+        let reg = CustomPageRegistry::from_pages([
+            CustomPage {
+                slug: "status".into(),
+                label: Some("Status".into()),
+                ..Default::default()
+            },
+            CustomPage {
+                slug: "ghost".into(),
+                label: Some("Ghost".into()),
+                ..Default::default()
+            },
+        ]);
+
+        assert!(reg.check_templates(|_| true).is_ok());
+
+        let err = reg
+            .check_templates(|name| name == "pages/status")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ghost") && !err.contains("status,"), "{err}");
     }
 
     #[test]

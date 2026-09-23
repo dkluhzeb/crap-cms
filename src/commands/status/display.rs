@@ -6,8 +6,10 @@ use crate::{
     cli::{self, Table},
     config::CrapConfig,
     core::{Access, HookRef, Hooks, LiveMode, LiveSetting, Registry},
-    db::{DbConnection, DbPool, migrate, query},
+    db::{DbConnection, DbPool, query},
 };
+
+use super::migrations::migration_status;
 
 /// Format a byte count as a human-readable string (e.g., "1.5 MB").
 ///
@@ -440,20 +442,17 @@ pub(super) fn print_versions(reg: &Registry) {
 
 /// Print migration status (total, applied, pending).
 pub(super) fn print_migrations(config_dir: &Path, pool: &DbPool) {
-    let migrations_dir = config_dir.join("migrations");
-    let all_files = migrate::list_migration_files(&migrations_dir).unwrap_or_default();
-    let applied = migrate::get_applied_migrations(pool).unwrap_or_default();
-    let pending = all_files.iter().filter(|f| !applied.contains(*f)).count();
-
-    cli::kv(
-        "Migrations",
-        &format!(
+    let summary = match migration_status(config_dir, pool) {
+        Ok(status) => format!(
             "{} total, {} applied, {} pending",
-            all_files.len(),
-            applied.len(),
-            pending
+            status.total,
+            status.applied,
+            status.pending.len()
         ),
-    );
+        Err(e) => format!("unavailable ({e:#})"),
+    };
+
+    cli::kv("Migrations", &summary);
 }
 
 /// Print hooks assigned to collections and globals.

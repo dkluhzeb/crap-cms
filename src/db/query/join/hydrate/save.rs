@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{
     core::{
         Builder, DocumentFields, FieldChildren, FieldDefinition, field_children,
-        flatten_group_fields,
+        flatten_group_fields, reference_items,
     },
     db::{
         DbConnection, LocaleContext,
@@ -28,27 +28,18 @@ use crate::{
     },
 };
 
-/// Parse a JSON value into a list of string IDs.
+/// Parse a has-many relationship/upload value into its string IDs.
 ///
-/// Accepts either a JSON array of strings or a comma-separated string.
+/// Decodes through [`reference_items`] — the same decoder the validators
+/// count and check with — then keeps the string items.
 pub(crate) fn parse_id_list(val: &Value) -> Vec<String> {
-    match val {
-        Value::Array(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(ToString::to_string))
-            .collect(),
-        Value::String(s) => {
-            if s.is_empty() {
-                Vec::new()
-            } else {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            }
-        }
-        _ => Vec::new(),
-    }
+    reference_items(val)
+        .into_iter()
+        .filter_map(|item| match item {
+            Value::String(s) => Some(s),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Parse polymorphic relationship values from form data.
@@ -675,5 +666,13 @@ mod tests {
         let val = json!(["articles/"]);
         let items = parse_polymorphic_values(&val);
         assert!(items.is_empty(), "/id empty should be skipped");
+    }
+
+    /// Regression: a JSON-array string was split on commas, so the writer
+    /// stored `["a"` and `"b"]` as ids while validation counted two items.
+    #[test]
+    fn parse_id_list_decodes_a_json_array_string() {
+        assert_eq!(parse_id_list(&json!(r#"["a","b"]"#)), vec!["a", "b"]);
+        assert_eq!(parse_id_list(&json!("a, b")), vec!["a", "b"]);
     }
 }

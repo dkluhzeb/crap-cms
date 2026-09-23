@@ -212,11 +212,9 @@ impl ValidationWalker<'_> {
             errors,
         );
         checks::check_has_many_elements(
-            field,
-            &data_key,
-            value,
-            is_empty,
-            self.ctx.is_draft,
+            &checks::HasManyCheck::new(field, &data_key, value, is_empty)
+                .draft(self.ctx.is_draft)
+                .update(is_update),
             errors,
         );
         self.check_date(field, &data_key, value, is_empty, errors);
@@ -345,12 +343,10 @@ impl ValidationWalker<'_> {
         if field.field_type != FieldType::Richtext || is_empty || field.admin.nodes.is_empty() {
             return;
         }
-        let Some(registry) = self.ctx.registry else {
+        let (Some(registry), Some(content)) = (self.ctx.registry, value) else {
             return;
         };
-        let Some(Value::String(content)) = value else {
-            return;
-        };
+
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(self.lua, registry, self.ctx.table)
                 .draft(self.ctx.is_draft)

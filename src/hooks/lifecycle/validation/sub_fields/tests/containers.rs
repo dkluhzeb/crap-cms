@@ -454,3 +454,55 @@ fn test_validate_checkbox_inside_array_not_required_when_absent() {
         "Checkbox inside array should not be required even when required=true"
     );
 }
+
+/// Regression: a validator on a field in a group inside an array row saw the
+/// group as `ctx.data`; the documented scope is the row (a group is a
+/// namespace, as at the top level where `ctx.data` stays the document).
+#[test]
+fn test_validate_group_inside_array_validator_sees_the_row() {
+    let lua = mlua::Lua::new();
+    lua.load(
+        r#"
+            package.loaded["validators"] = {
+                scope = function(value, ctx)
+                    return "kind=" .. tostring(ctx.data.kind)
+                end
+            }
+        "#,
+    )
+    .exec()
+    .unwrap();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("kind", FieldType::Text).build(),
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("note", FieldType::Text)
+                            .validate("validators.scope")
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = DocumentFields::new();
+    data.insert(
+        "items".to_string(),
+        json!([{ "kind": "row-level", "meta": { "note": "x" } }]),
+    );
+
+    let err = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    )
+    .expect_err("the validator reports what it sees");
+
+    assert_eq!(err.errors[0].message, "kind=row-level");
+}

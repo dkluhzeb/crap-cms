@@ -5,14 +5,15 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use dialoguer::Confirm;
 
-use crate::service::values_from_strings;
-
 use crate::{
     cli::{self, crap_theme},
+    config::LocaleConfig,
     core::Registry,
-    db::DbPool,
+    db::{DbPool, LocaleContext},
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceContext, WriteInput, create_document_in_conn},
+    service::{
+        RunnerWriteHooks, ServiceContext, WriteInput, create_document_in_conn, values_from_strings,
+    },
 };
 
 use super::helpers::{self, format_duration, timing_stats};
@@ -27,6 +28,7 @@ pub(super) struct CreateBenchParams<'a> {
     pub user_data: Option<&'a str>,
     pub no_hooks: bool,
     pub yes: bool,
+    pub locale: &'a LocaleConfig,
 }
 
 /// Run create benchmarks for a collection.
@@ -60,7 +62,7 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
 
     // Resolve data
     let conn = params.pool.get()?;
-    let (data, source) = helpers::resolve_bench_data(&conn, slug, def, params.user_data)?;
+    let (data, source) = helpers::resolve_bench_data(&conn, def, params.user_data, params.locale)?;
     drop(conn);
 
     cli::kv("Iterations", &params.iterations.to_string());
@@ -71,6 +73,10 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
     }
 
     println!();
+
+    // Written under the default locale: a collection with localized fields
+    // has no bare column to write them to.
+    let locale_ctx = LocaleContext::default_for(params.locale);
 
     let mut durations = Vec::with_capacity(params.iterations);
     let mut errors = 0;
@@ -98,7 +104,9 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
             .override_access(true)
             .build();
 
-        let input = WriteInput::builder(values_from_strings(data_str)).build();
+        let input = WriteInput::builder(values_from_strings(data_str))
+            .locale_ctx(locale_ctx.as_ref())
+            .build();
 
         let start = Instant::now();
         let result = create_document_in_conn(&ctx, input);

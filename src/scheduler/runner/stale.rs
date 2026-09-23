@@ -84,7 +84,7 @@ pub fn recover_stale_jobs(
 mod tests {
     use super::*;
     use crate::{
-        core::{JobDefinition, job::JobStatus},
+        core::{JobDefinition, ScheduledBy, job::JobStatus},
         scheduler::runner::test_support::{make_registry_with_jobs, make_test_pool},
     };
 
@@ -101,7 +101,7 @@ mod tests {
         ]);
 
         // Running at attempt 1 of 3, heartbeat 600s stale (worker died).
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
              heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
@@ -131,7 +131,7 @@ mod tests {
         ]);
 
         // Running at attempt 1 of 1 (no retries left).
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
              heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
@@ -160,7 +160,16 @@ mod tests {
         let registry = make_registry_with_jobs(Vec::new());
 
         let data = r#"{"op":"create_many","collection":"posts","queued_by":{"kind":"system"},"max_documents":10,"documents":[{"title":"secret-ish"}]}"#;
-        job_query::insert_job(&conn, SYSTEM_BULK_JOB, data, "grpc", 1, "bulk", 0).unwrap();
+        job_query::insert_job(
+            &conn,
+            SYSTEM_BULK_JOB,
+            data,
+            ScheduledBy::Grpc,
+            1,
+            "bulk",
+            0,
+        )
+        .unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
              heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-600 seconds')",
@@ -189,7 +198,7 @@ mod tests {
             JobDefinition::builder("my_job", "some.handler").build(),
         ]);
 
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         )
@@ -213,7 +222,7 @@ mod tests {
         let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![]);
 
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
@@ -241,8 +250,8 @@ mod tests {
         ]);
 
         // Both retryable + stale (null heartbeat) → both requeued.
-        job_query::insert_job(&conn, "job_a", "{}", "manual", 3, "default", 0).unwrap();
-        job_query::insert_job(&conn, "job_b", "{}", "manual", 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "job_a", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "job_b", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute_batch("UPDATE _crap_jobs SET status = 'running', attempt = 1")
             .unwrap();
 

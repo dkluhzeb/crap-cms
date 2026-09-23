@@ -10,8 +10,9 @@
 //! the field author never intended to expose.
 //!
 //! Polymorphic values arrive in one of two shapes:
-//! - `has_many = true`: an array of `"collection/id"` strings
-//!   (or objects `{"collection": "...", "id": "..."}`)
+//! - `has_many = true`: a list of `"collection/id"` strings (or objects
+//!   `{"collection": "...", "id": "..."}`) — a typed array, a JSON-array
+//!   string or a comma list, decoded like the writer decodes it
 //! - `has_many = false`: a single `"collection/id"` string
 //!
 //! Both shapes are validated here.
@@ -23,7 +24,7 @@
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, validate::FieldError},
+    core::{FieldDefinition, reference_items, validate::FieldError},
     db::query::poly_ref,
 };
 
@@ -49,21 +50,15 @@ pub(crate) fn check_polymorphic_allowlist(
 
     let Some(value) = value else { return };
 
-    if rc.has_many {
-        let items = match value {
-            Value::Array(arr) => arr.clone(),
-            // Comma-separated string falls through to the parser below.
-            Value::String(s) if !s.is_empty() => s
-                .split(',')
-                .map(|p| Value::String(p.trim().to_string()))
-                .collect(),
-            _ => return,
-        };
-        for item in items {
-            check_one(field, data_key, &item, errors);
-        }
-    } else {
+    if !rc.has_many {
         check_one(field, data_key, value, errors);
+        return;
+    }
+
+    // The writer's own decoder: a typed list, a JSON-array string, or the
+    // admin form's comma list.
+    for item in reference_items(value) {
+        check_one(field, data_key, &item, errors);
     }
 }
 
@@ -164,6 +159,18 @@ mod tests {
         check_polymorphic_allowlist(&field, "ref", Some(&val), &mut errors);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("articles"));
+    }
+
+    /// Regression: a JSON-array string was split on commas, so its items
+    /// never parsed as `collection/id` and escaped the allowlist.
+    #[test]
+    fn json_array_string_items_are_checked() {
+        let field = polymorphic_field(true, &["posts"]);
+        let mut errors = Vec::new();
+        let val = json!(r#"["posts/p1","secret/s1"]"#);
+        check_polymorphic_allowlist(&field, "ref", Some(&val), &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("secret"));
     }
 
     #[test]

@@ -496,7 +496,8 @@ Top-level nav data exposed at `{{nav.*}}`.
 
 - **`collections`** (Vec&lt;[NavCollection](#navcollection)&gt;)
 - **`globals`** (Vec&lt;[NavGlobal](#navglobal)&gt;)
-- **`custom_pages`** (Vec&lt;[CustomPage](#custompage)&gt;) — Filesystem-routed custom admin pages registered via `crap.pages.register`. Only entries with a `label` set appear here.
+- **`custom_pages`** (Vec&lt;[NavPage](#navpage)&gt;) — Custom admin pages registered via `crap.pages.register` that the viewer may open, ordered by slug. Only pages with a `label` appear.
+- **`custom_page_sections`** (Vec&lt;[NavPageSection](#navpagesection)&gt;) — The same pages grouped for the sidebar: one section per `section` heading (alphabetical), then the ungrouped pages last (no heading).
 
 ### NavCollection
 
@@ -513,6 +514,23 @@ One sidebar entry for a global.
 
 - **`slug`** (string)
 - **`display_name`** (string)
+
+### NavPage
+
+One custom admin page in the sidebar nav. Carries only what the nav
+renders — the page's access rule stays server-side.
+
+- **`slug`** (string) — Slug — the URL segment under `/admin/p/`.
+- **`label`** (string) — Sidebar label.
+- **`section`** (Option&lt;string&gt;) _(optional)_ — Sidebar section heading; absent for an ungrouped page.
+- **`icon`** (Option&lt;string&gt;) _(optional)_ — Material Symbols icon name.
+
+### NavPageSection
+
+A group of custom pages in the sidebar.
+
+- **`heading`** (Option&lt;string&gt;) _(optional)_ — Section heading; absent for the trailing group of ungrouped pages.
+- **`pages`** (Vec&lt;[NavPage](#navpage)&gt;) — The section's pages, ordered by slug.
 
 ### UserContext
 
@@ -701,16 +719,6 @@ One row in a Date field's timezone picker.
 
 - **`value`** (string) _(optional)_
 - **`label`** (string) _(optional)_
-
-### CustomPage
-
-Sidebar metadata declared from Lua via `crap.pages.register`.
-
-- **`slug`** (string) — Slug — the URL segment and the filename stem.
-- **`section`** (Option&lt;string&gt;) _(optional)_ — Sidebar section heading. `None` → page is registered but not grouped (renders ungrouped at the bottom).
-- **`label`** (Option&lt;string&gt;) _(optional)_ — Sidebar label. `None` → page is registered but not shown in nav.
-- **`icon`** (Option&lt;string&gt;) _(optional)_ — Optional Material Symbols icon name.
-- **`access`** (Option&lt;string&gt;) _(optional)_ — Optional Lua function-ref name for access control. When set, the named function is called with the page context before the route handler renders; returning `false` produces a 403, and the page is hidden from the sidebar nav for users who can't read it. Mirrors `access.read` on collections / globals — register the function once via `crap.access.register("name", fn)`, then refer to it by name here. A bare ref string or a `{ ref, options }` table whose options reach the gate as `ctx.options`.
 
 ### PaginationContext
 

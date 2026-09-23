@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::cli;
 
-use super::helpers::{blueprints_dir, count_lua_files};
+use super::helpers::{SAVE_BLUEPRINT_HINT, blueprints_dir, count_lua_files};
 use super::manifest::read_manifest;
 
 /// List all saved blueprints, printing a table to stdout.
@@ -20,7 +20,7 @@ pub fn blueprint_list() -> Result<()> {
 
     if names.is_empty() {
         cli::info("No blueprints saved yet.");
-        cli::hint("Save one with: crap-cms blueprint save <dir> <name>");
+        cli::hint(SAVE_BLUEPRINT_HINT);
         return Ok(());
     }
 

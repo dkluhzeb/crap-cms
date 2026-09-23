@@ -85,7 +85,7 @@ fn jobs_get_run(
 ) -> LuaResult<Option<Table>> {
     let conn = get_tx_conn(lua)?;
     let user = hook_user(lua);
-    let hooks = LuaWriteHooks::builder(lua).build();
+    let hooks = LuaWriteHooks::builder(lua, state.registry.as_ref()).build();
     let ctx = job_ctx(lua, conn, &hooks, user.as_ref());
 
     let run = service::jobs::get_job_run(&ctx, state.registry.as_ref(), &id)
@@ -168,7 +168,7 @@ fn jobs_list_runs(
 
     let conn = get_tx_conn(lua)?;
     let user = hook_user(lua);
-    let hooks = LuaWriteHooks::builder(lua).build();
+    let hooks = LuaWriteHooks::builder(lua, state.registry.as_ref()).build();
     let ctx = job_ctx(lua, conn, &hooks, user.as_ref());
 
     let page = service::jobs::list_job_runs(
@@ -209,7 +209,7 @@ fn jobs_cancel_run(
 ) -> LuaResult<bool> {
     let conn = get_tx_conn(lua)?;
     let user = hook_user(lua);
-    let hooks = LuaWriteHooks::builder(lua).build();
+    let hooks = LuaWriteHooks::builder(lua, state.registry.as_ref()).build();
     let ctx = job_ctx(lua, conn, &hooks, user.as_ref());
 
     service::jobs::cancel_job_run(&ctx, state.registry.as_ref(), &id)

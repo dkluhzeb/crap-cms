@@ -101,7 +101,9 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::{db::DbConnection, scheduler::runner::test_support::make_test_pool};
+    use crate::{
+        core::ScheduledBy, db::DbConnection, scheduler::runner::test_support::make_test_pool,
+    };
 
     /// Regression: a failed job records the FULL anyhow cause chain (`{:#}`),
     /// not just the top-level message. The user-job path used to `to_string()`
@@ -111,7 +113,7 @@ mod tests {
     fn record_job_failure_stores_full_cause_chain() {
         let pool = make_test_pool();
         let conn = pool.get().unwrap();
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute_batch("UPDATE _crap_jobs SET status = 'running', attempt = 1")
             .unwrap();
 

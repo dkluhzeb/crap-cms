@@ -9,14 +9,14 @@ use crate::{
     cli::{self, Table},
     commands::{
         JobsAction,
-        helpers::{Project, hold_instance_lock, open_project},
+        helpers::{Project, open_project},
     },
     config::{CrapConfig, JobsConfig, parse_duration_string},
     core::{
-        Registry,
+        Registry, ScheduledBy,
         job::{JobRun, JobStatus, is_system_job_slug},
     },
-    db::{DbPool, pool, query},
+    db::{DbPool, query},
     service::{
         self,
         jobs::{JobHealthReport, JobHealthStatus},
@@ -267,7 +267,7 @@ fn run_trigger(
         &conn,
         slug,
         data_json,
-        "cli",
+        ScheduledBy::Cli,
         job_def.effective_max_attempts(queue_retries),
         &job_def.queue,
         effective_priority,
@@ -281,14 +281,7 @@ fn run_trigger(
 
 /// Cancel pending jobs, optionally filtered by slug.
 #[cfg(not(tarpaulin_include))]
-fn run_cancel(config_dir: &Path, slug: Option<String>, id: Option<String>) -> Result<()> {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-
-    let cfg = CrapConfig::load(&config_dir)?;
-    let _instance_lock = hold_instance_lock(&config_dir)?;
-    let pool = pool::create_pool(&config_dir, &cfg)?;
+fn run_cancel(pool: &DbPool, slug: Option<String>, id: Option<String>) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
     // A single run by id — the precise alternative to clearing a whole
@@ -315,23 +308,18 @@ fn run_cancel(config_dir: &Path, slug: Option<String>, id: Option<String>) -> Re
     Ok(())
 }
 
-/// Purge old completed/failed job runs older than the specified duration.
-#[cfg(not(tarpaulin_include))]
-fn run_purge(config_dir: &Path, older_than: &str) -> Result<()> {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-
-    let cfg = CrapConfig::load(&config_dir)?;
-    let _instance_lock = hold_instance_lock(&config_dir)?;
-    let pool = pool::create_pool(&config_dir, &cfg)?;
-
-    let secs = parse_duration_string(older_than).ok_or_else(|| {
+/// Parse the `--older-than` duration of `jobs purge` into seconds.
+fn parse_purge_age(older_than: &str) -> Result<u64> {
+    parse_duration_string(older_than).ok_or_else(|| {
         anyhow!(
             "Invalid duration '{older_than}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)"
         )
-    })?;
+    })
+}
 
+/// Purge old completed/failed job runs older than the specified duration.
+#[cfg(not(tarpaulin_include))]
+fn run_purge(pool: &DbPool, secs: u64) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
 
@@ -387,8 +375,25 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             } = open_project(config_dir)?;
             run_status(&pool, id.as_deref(), slug.as_deref(), limit)
         }
-        JobsAction::Cancel { slug, id } => run_cancel(config_dir, slug, id),
-        JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),
+        JobsAction::Cancel { slug, id } => {
+            let Project {
+                lock: _instance_lock,
+                config: _cfg,
+                registry: _registry,
+                pool,
+            } = open_project(config_dir)?;
+            run_cancel(&pool, slug, id)
+        }
+        JobsAction::Purge { older_than } => {
+            let secs = parse_purge_age(&older_than)?;
+            let Project {
+                lock: _instance_lock,
+                config: _cfg,
+                registry: _registry,
+                pool,
+            } = open_project(config_dir)?;
+            run_purge(&pool, secs)
+        }
         JobsAction::Healthcheck => {
             let Project {
                 lock: _instance_lock,
@@ -474,5 +479,13 @@ mod tests {
     fn truncate_counts_characters_not_bytes() {
         // 4 multi-byte chars, limit 2 → keep 2 chars + ellipsis (never splits).
         assert_eq!(truncate_with_ellipsis("héllo", 2), "hé…");
+    }
+
+    #[test]
+    fn purge_age_parses_durations_and_names_the_bad_one() {
+        assert_eq!(parse_purge_age("7d").unwrap(), 7 * 24 * 3600);
+
+        let err = parse_purge_age("soon").unwrap_err().to_string();
+        assert!(err.contains("Invalid duration 'soon'"), "{err}");
     }
 }

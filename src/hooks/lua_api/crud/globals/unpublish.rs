@@ -85,9 +85,8 @@ fn globals_unpublish(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &slug, "update");
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, state.registry.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(state.registry.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 

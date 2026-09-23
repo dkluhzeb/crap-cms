@@ -24,6 +24,11 @@ struct RowValidationCtx<'a> {
     lua: &'a Lua,
     row_obj: &'a JsonMap<String, Value>,
     row_data: &'a HashMap<String, Value>,
+    /// What validators and `required_when` predicates see as `ctx.data`: the
+    /// array/blocks row. A group inside the row keeps the row's scope — a
+    /// group is a namespace, not a new row — matching top-level fields, whose
+    /// scope stays the whole document inside a group.
+    scope: &'a HashMap<String, Value>,
     parent_name: &'a str,
     idx: usize,
     table: &'a str,
@@ -84,6 +89,7 @@ pub(in crate::hooks::lifecycle::validation) fn validate_sub_fields_inner(
         lua: params.lua,
         row_obj,
         row_data: &row_data,
+        scope: &row_data,
         parent_name: params.parent_name,
         idx: params.idx,
         table: params.table,
@@ -112,46 +118,7 @@ fn validate_children_recursive(
     for sf in fields {
         match field_children(sf) {
             FieldChildren::Group(sub_fields) => {
-                // Navigate into the Group's nested object and validate children.
-                // Form parser stores Group data as nested objects (e.g., {"meta": {"title": "..."}}).
-                let data_key = format!("{}{}", group_prefix, sf.name);
-                let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
-                let params = SubFieldParams {
-                    lua: ctx.lua,
-                    parent_name: &qualified,
-                    idx: 0,
-                    table: ctx.table,
-                    registry: ctx.registry,
-                    is_draft: ctx.is_draft,
-                    locale: ctx.locale,
-                    operation: ctx.operation,
-                    id: ctx.id,
-                    document: ctx.document,
-                };
-
-                // Rows are submitted whole, so an absent group means all its
-                // children are absent — validate them against an empty object
-                // so `required` sub-fields still fire. A present non-object
-                // (non-null) value is a malformed row, not a skip.
-                let group_val = ctx.row_obj.get(&data_key);
-
-                if let Some(v) = group_val
-                    && !v.is_null()
-                    && v.as_object().is_none()
-                {
-                    errors.push(
-                        FieldError::with_key(
-                            qualified.clone(),
-                            format!("{} must be an object", sf.name),
-                            "validation.invalid_row_type",
-                        )
-                        .with_param("field", sf.name.clone()),
-                    );
-                } else {
-                    let empty = serde_json::Map::new();
-                    let group_obj = group_val.and_then(Value::as_object).unwrap_or(&empty);
-                    validate_sub_fields_inner(&params, sub_fields, group_obj, errors);
-                }
+                validate_group_in_row(ctx, sf, sub_fields, group_prefix, errors);
             }
             FieldChildren::Wrapper(sub_fields) => {
                 validate_children_recursive(ctx, sub_fields, group_prefix, errors);
@@ -195,6 +162,66 @@ fn validate_children_recursive(
             }
         }
     }
+}
+
+/// Validate a group's children inside an array/blocks row. The form parser
+/// stores group data as a nested object (`{"meta": {"title": "..."}}`).
+///
+/// Rows are submitted whole, so an absent group means all its children are
+/// absent — they are validated against an empty object so `required`
+/// sub-fields still fire. A present non-object (non-null) value is a malformed
+/// row, not a skip. The children keep the row's validator scope.
+fn validate_group_in_row(
+    ctx: &RowValidationCtx<'_>,
+    sf: &FieldDefinition,
+    sub_fields: &[FieldDefinition],
+    group_prefix: &str,
+    errors: &mut Vec<FieldError>,
+) {
+    let data_key = format!("{}{}", group_prefix, sf.name);
+    let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
+    let group_val = ctx.row_obj.get(&data_key);
+
+    if let Some(v) = group_val
+        && !v.is_null()
+        && v.as_object().is_none()
+    {
+        errors.push(
+            FieldError::with_key(
+                qualified,
+                format!("{} must be an object", sf.name),
+                "validation.invalid_row_type",
+            )
+            .with_param("field", sf.name.clone()),
+        );
+
+        return;
+    }
+
+    let empty = JsonMap::new();
+    let group_obj = group_val.and_then(Value::as_object).unwrap_or(&empty);
+    let group_data: HashMap<String, Value> = group_obj
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let group_ctx = RowValidationCtx {
+        lua: ctx.lua,
+        row_obj: group_obj,
+        row_data: &group_data,
+        scope: ctx.scope,
+        parent_name: &qualified,
+        idx: 0,
+        table: ctx.table,
+        registry: ctx.registry,
+        is_draft: ctx.is_draft,
+        locale: ctx.locale,
+        operation: ctx.operation,
+        id: ctx.id,
+        document: ctx.document,
+    };
+
+    validate_children_recursive(&group_ctx, sub_fields, "", errors);
 }
 
 /// Recurse into nested array/blocks rows, resolving block type fields and validating each row.
@@ -299,7 +326,7 @@ fn sub_field_required(
         ctx.lua,
         func_ref,
         &ValidateCtxSource {
-            data: ctx.row_data,
+            data: ctx.scope,
             document: ctx.document,
             collection: ctx.table,
             field_name: &sf.name,
@@ -333,11 +360,10 @@ fn validate_leaf_sub_field(
 
     let is_empty = is_empty_value(value);
 
-    // An empty array counts as absent for `required` (matching the top-level
-    // `is_value_present`), but NOT for the other checks — `min_rows` etc.
-    // must still see the empty list to enforce count bounds.
-    let is_missing_for_required =
-        is_empty || matches!(value, Some(Value::Array(arr)) if arr.is_empty());
+    // `required` judges presence exactly like the top level (an empty list in
+    // any encoding is absent); the other checks still see the raw value, so
+    // `min_rows` etc. enforce count bounds on an empty list.
+    let is_missing_for_required = !checks::is_value_present(sf, value, is_empty);
 
     // 1. Required check (skip for Checkbox — absent/false is valid, and skipped
     //    on drafts via `sub_field_required`).
@@ -382,7 +408,7 @@ fn validate_leaf_sub_field(
             validate_ref,
             val,
             &ValidateCtxSource {
-                data: ctx.row_data,
+                data: ctx.scope,
                 document: ctx.document,
                 collection: ctx.table,
                 field_name: &sf.name,
@@ -429,7 +455,10 @@ fn validate_leaf_sub_field(
     checks::check_option_valid(&OptionCheck::new(sf, qualified, value, is_empty), errors);
 
     // 8. Has-many element validation (per-element length/numeric bounds, row counts)
-    checks::check_has_many_elements(sf, qualified, value, is_empty, ctx.is_draft, errors);
+    checks::check_has_many_elements(
+        &checks::HasManyCheck::new(sf, qualified, value, is_empty).draft(ctx.is_draft),
+        errors,
+    );
 
     // 8b. Polymorphic relationship allowlist — a forged target collection on a
     //     relationship/upload nested inside an array/blocks row must be rejected
@@ -452,7 +481,7 @@ fn validate_leaf_sub_field(
         && !is_empty
         && !sf.admin.nodes.is_empty()
         && let Some(registry) = ctx.registry
-        && let Some(Value::String(content)) = value
+        && let Some(content) = value
     {
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(ctx.lua, registry, ctx.table)

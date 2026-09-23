@@ -45,8 +45,8 @@ pub struct JobInfo<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub unique_key: Option<&'a str>,
-    /// How this run was triggered: `"cron"`, `"hook"`, `"grpc"`, or `"cli"`.
-    /// `nil` if unknown.
+    /// How this run was triggered: `"grpc"`, `"cron"`, `"hook"`, `"mcp"`,
+    /// `"cli"`, or `"system"`. `nil` if unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub scheduled_by: Option<&'a str>,

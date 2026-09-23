@@ -8,7 +8,7 @@ use super::parse::{deny_unknown_keys, fields::parse_fields, get_bool, get_string
 use super::utils::{lua_err, registry_lock_poisoned, require_init_phase};
 use crate::core::{
     FieldDefinition, RichtextNodeDef, SharedRegistry,
-    richtext::{render_html_custom_nodes, render_prosemirror_to_html},
+    richtext::{render_html_custom_nodes, render_prosemirror_to_html, validate_node_name},
 };
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -93,53 +93,9 @@ impl FromLua for RichtextNodeSpec {
     }
 }
 
-/// Built-in `ProseMirror` node types. Registering a custom node with one
-/// of these names would silently fail at render time — the built-in
-/// match arm in `core::richtext::renderer::render_node` runs first and
-/// the custom renderer is never called. Reject the registration so the
-/// plugin author sees the conflict immediately.
-const RESERVED_NODE_NAMES: &[&str] = &[
-    "doc",
-    "paragraph",
-    "text",
-    "heading",
-    "blockquote",
-    "code_block",
-    "bullet_list",
-    "ordered_list",
-    "list_item",
-    "horizontal_rule",
-    "hard_break",
-];
-
-/// Validates that a node name is non-empty, contains only lowercase ASCII
-/// letters, digits, and underscores, does not start with a digit or
-/// underscore, and does not collide with a built-in `ProseMirror` node type
-/// (the built-in match arm in the renderer would shadow the custom render
-/// function). The charset matches every other identifier in the system
-/// (`validate_slug`) — `is_alphanumeric` used to accept Unicode/uppercase.
-fn validate_node_name(name: &str) -> LuaResult<()> {
-    let valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit() || c == '_');
-
-    if !valid {
-        return Err(RuntimeError(format!(
-            "Invalid node name '{name}': must be non-empty, use only lowercase ASCII letters, \
-             digits, and underscores, and not start with a digit or underscore"
-        )));
-    }
-
-    if RESERVED_NODE_NAMES.contains(&name) {
-        return Err(RuntimeError(format!(
-            "Invalid node name '{name}': collides with a built-in ProseMirror node type. \
-             Built-in names {RESERVED_NODE_NAMES:?} are reserved — pick a different name."
-        )));
-    }
-
-    Ok(())
+/// The shared node-name rule ([`validate_node_name`]) as a Lua error.
+fn check_node_name(name: &str) -> LuaResult<()> {
+    validate_node_name(name).map_err(RuntimeError)
 }
 
 /// Validate that every parsed attr uses a scalar type and warn about
@@ -221,7 +177,7 @@ fn register_node(
     // only land in the current VM and fragment across the pool.
     require_init_phase(lua, REGISTER_NODE_INIT_ONLY_ERROR)?;
 
-    validate_node_name(name)?;
+    check_node_name(name)?;
     validate_node_attrs(name, &spec.attrs)?;
     validate_searchable_attrs(name, &spec.attrs, &spec.searchable_attrs)?;
 
@@ -376,7 +332,7 @@ pub fn register_richtext_pool_init(
 fn register_node_pool(lua: &Lua, name: &str, spec: RichtextNodeSpec) -> LuaResult<()> {
     require_init_phase(lua, REGISTER_NODE_INIT_ONLY_ERROR)?;
 
-    validate_node_name(name)?;
+    check_node_name(name)?;
     // Validate attrs here too — errors surface to the user even though
     // the shared registry already has the canonical `RichtextNodeDef`.
     validate_node_attrs(name, &spec.attrs)?;

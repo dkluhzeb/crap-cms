@@ -59,6 +59,7 @@ pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
                 exclude: exclude.as_deref(),
                 run_all: all,
                 user_data: data.as_deref(),
+                locale: &cfg.locale,
             })
         }
 
@@ -68,13 +69,14 @@ pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
             r#where,
         } => {
             let conn = db_pool.get().context("DB connection")?;
-            queries::run(
-                &registry,
-                &conn,
-                collection.as_deref(),
+            queries::run(&queries::QueryBenchParams {
+                registry: &registry,
+                conn: &conn,
+                collection: collection.as_deref(),
                 explain,
-                r#where.as_deref(),
-            )
+                where_clause: r#where.as_deref(),
+                locale: &cfg.locale,
+            })
         }
 
         BenchAction::Create {
@@ -92,6 +94,7 @@ pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
             user_data: data.as_deref(),
             no_hooks,
             yes,
+            locale: &cfg.locale,
         }),
     }
 }

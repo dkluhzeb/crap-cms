@@ -7,12 +7,13 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use serde::Serialize;
 
 use crate::{
     cli,
-    scaffold::{guards::refuse_file_overwrite, paths, render, to_title_case, validate_slug},
+    core::richtext::validate_node_name,
+    scaffold::{guards::refuse_file_overwrite, paths, render, to_title_case},
 };
 
 #[derive(Serialize)]
@@ -35,10 +36,11 @@ pub struct MakeNodeOptions<'a> {
 ///
 /// # Errors
 ///
-/// Returns an error if the name is invalid, the file already exists without
-/// `--force`, or writing the file fails.
+/// Returns an error if the name is not one `crap.richtext.register_node`
+/// accepts, the file already exists without `--force`, or writing the file
+/// fails.
 pub fn make_node(opts: &MakeNodeOptions) -> Result<()> {
-    validate_slug(opts.name)?;
+    validate_node_name(opts.name).map_err(|e| anyhow!(e))?;
 
     let dir = paths::richtext_nodes_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create lua/richtext_nodes/ directory")?;
@@ -73,6 +75,8 @@ fn render_node_lua(opts: &MakeNodeOptions) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use mlua::Lua;
+
     use super::*;
 
     #[test]
@@ -119,5 +123,63 @@ mod tests {
         make_node(&opts).unwrap();
         let err = make_node(&opts).unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    /// Regression: the scaffold's `render` interpolated `attrs.text`
+    /// unescaped — the stored-XSS pattern the richtext docs warn against.
+    #[test]
+    fn the_scaffolded_render_escapes_attr_values() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_node(&MakeNodeOptions {
+            config_dir: tmp.path(),
+            name: "cta",
+            inline: false,
+            force: false,
+        })
+        .unwrap();
+        let body = fs::read_to_string(tmp.path().join("lua/richtext_nodes/cta.lua")).unwrap();
+
+        let lua = Lua::new();
+        lua.load(
+            r"crap = {
+                fields = { text = function(t) return t end },
+                richtext = { register_node = function(_, spec) captured = spec end },
+            }",
+        )
+        .exec()
+        .unwrap();
+        lua.load(&body).exec().unwrap();
+
+        let html: String = lua
+            .load(r#"return captured.render({ text = "<img src=x onerror='a()'>" })"#)
+            .eval()
+            .unwrap();
+        assert_eq!(
+            html,
+            r#"<span class="cta">&lt;img src=x onerror=&#39;a()&#39;&gt;</span>"#
+        );
+    }
+
+    /// Regression: the scaffold validated names with the slug rule, which
+    /// accepts names `crap.richtext.register_node` rejects at boot.
+    #[test]
+    fn names_the_runtime_rejects_are_refused() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        for name in ["paragraph", "2col"] {
+            let result = make_node(&MakeNodeOptions {
+                config_dir: tmp.path(),
+                name,
+                inline: false,
+                force: false,
+            });
+
+            assert!(result.is_err(), "{name} must be refused");
+            assert!(
+                !tmp.path()
+                    .join(format!("lua/richtext_nodes/{name}.lua"))
+                    .exists()
+            );
+        }
     }
 }

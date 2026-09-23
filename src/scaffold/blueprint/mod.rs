@@ -8,6 +8,7 @@ mod remove;
 mod save;
 
 pub use apply::blueprint_use;
+pub use helpers::SAVE_BLUEPRINT_HINT;
 pub use list::{blueprint_list, list_blueprint_names};
 pub use remove::blueprint_remove;
 pub use save::blueprint_save;

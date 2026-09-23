@@ -89,14 +89,15 @@ pub use field::{
     BLOCK_TYPE_KEY, BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels,
     FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType,
     FieldWidth, JoinConfig, LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig,
-    RequiredLocales, SelectOption, ValidateFunction, to_title_case, validate_template_name,
+    RequiredLocales, SelectOption, ValidateFunction, reference_items, to_title_case,
+    validate_template_name,
 };
 pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
 pub use fs::write_atomically;
 pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
-pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
+pub use job::{JobDefinition, JobLabels, JobRun, JobStatus, ScheduledBy};
 pub use lifecycle::{Readiness, SERVER_DRAIN_SECS, drain_with_deadline};
 pub use lua_lease::{LocalLease, LuaVmLease};
 pub use nesting_depth::{NESTING_DEPTH, NestingDepth, max_nesting_depth, set_max_nesting_depth};

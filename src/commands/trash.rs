@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use super::TrashAction;
 use crate::{
     cli::{self, Table},
-    commands::{Project, open_project},
+    commands::{Project, cli_find, open_project},
     config::{CrapConfig, LocaleConfig, UploadStorage},
     core::{
         CollectionDefinition, Document, Registry, upload,
@@ -55,7 +55,8 @@ fn resolve_collections(registry: &Registry, filter: Option<&str>) -> Result<Vec<
 /// Build a `FindQuery` that returns only soft-deleted documents.
 ///
 /// CLI bypasses the service layer (`find_documents`) intentionally — there is
-/// no auth/hook context for a CLI invocation, so we go direct to `query::find`.
+/// no auth/hook context for a CLI invocation, so we go direct to the query layer
+/// through `cli_find`.
 /// The trade-off: this `_deleted_at EXISTS` filter is an internal injection,
 /// not a user filter, so it sidesteps the service-layer validator. Keep this
 /// helper private to the CLI so the bypass stays scoped.
@@ -84,7 +85,6 @@ fn run_list(
     }
 
     let conn = pool.get().context("Failed to get DB connection")?;
-    let locale_ctx = query::LocaleContext::default_for(&cfg.locale);
     let fq = deleted_filter();
 
     let mut table = Table::new(vec!["ID", "Title", "Collection", "Deleted At"]);
@@ -95,7 +95,7 @@ fn run_list(
             continue;
         };
 
-        let docs = query::find(&conn, slug, def, &fq, locale_ctx.as_ref())?;
+        let docs = cli_find(&conn, def, &fq, &cfg.locale)?;
         total += collect_trash_rows(&mut table, &docs, slug, def.title_field().unwrap_or("id"));
     }
 
@@ -441,10 +441,7 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
         .clone();
 
     let mut conn = pool.write().context("Failed to get DB connection")?;
-    let fq = deleted_filter();
-    // A localized collection has no bare columns to select.
-    let locale_ctx = query::LocaleContext::default_for(locale);
-    let docs = query::find(&conn, collection, &def, &fq, locale_ctx.as_ref())?;
+    let docs = cli_find(&conn, &def, &deleted_filter(), locale)?;
 
     if docs.is_empty() {
         cli::info(&format!("No trashed documents in '{collection}'."));

@@ -4,7 +4,7 @@ use serde_json::{Value, from_str, from_value};
 
 use crate::{
     core::{
-        DocumentFields,
+        DocumentFields, ScheduledBy,
         job::{JobDefinition, JobRun, is_system_job_slug},
     },
     db::{AccessResult, DbConnection, query},
@@ -47,7 +47,8 @@ fn reject_system_slug(slug: &str) -> Result<(), ServiceError> {
 pub struct QueueJobInput<'a> {
     pub job_def: &'a JobDefinition,
     pub data: Option<&'a str>,
-    pub scheduled_by: &'a str,
+    /// The surface queuing the run.
+    pub scheduled_by: ScheduledBy,
     /// Static scheduling priority; higher = sooner. `0` = standard FIFO.
     pub priority: i32,
     /// Queue-level retries default (`[jobs.queues.<queue>] retries`),
@@ -219,7 +220,7 @@ mod tests {
                 &QueueJobInput {
                     job_def: &job_def,
                     data: None,
-                    scheduled_by: "grpc",
+                    scheduled_by: ScheduledBy::Grpc,
                     priority: 0,
                     queue_retries: None,
                     delay_secs: 0,
@@ -241,7 +242,7 @@ mod tests {
             &QueueJobInput {
                 job_def: &smuggled,
                 data: None,
-                scheduled_by: "grpc",
+                scheduled_by: ScheduledBy::Grpc,
                 priority: 0,
                 queue_retries: None,
                 delay_secs: 0,

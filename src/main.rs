@@ -22,6 +22,7 @@ use crap_cms::{
     cli::{self, crap_theme},
     commands::{self, BlueprintAction, Cli, Command, DbAction, TemplatesAction, serve::ServeMode},
     config::{CrapConfig, LogRotation},
+    scaffold::SAVE_BLUEPRINT_HINT,
 };
 
 /// Binary entrypoint — parses CLI args and dispatches to the appropriate command.
@@ -203,9 +204,7 @@ fn dispatch_blueprint(action: BlueprintAction, config_flag: Option<PathBuf>) -> 
                 let names = crap_cms::scaffold::list_blueprint_names()?;
 
                 if names.is_empty() {
-                    bail!(
-                        "No blueprints saved yet.\nSave one with: crap-cms blueprint save <name>"
-                    );
+                    bail!("No blueprints saved yet.\n{SAVE_BLUEPRINT_HINT}");
                 }
                 let selection = Select::with_theme(&crap_theme())
                     .with_prompt("Select blueprint")

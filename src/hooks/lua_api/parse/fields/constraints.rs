@@ -1,7 +1,7 @@
 //! Constraint parsing: numeric ranges, length bounds, default values, and the
 //! `Constraints` struct that aggregates them for `validate_constraints`.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use mlua::{Table, Value};
 use serde_json::{Number as JsonNumber, Value as JsonValue};
 
@@ -135,42 +135,88 @@ pub(super) fn validate_constraints(name: &str, c: &Constraints) -> Result<()> {
 }
 
 pub(super) fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constraints> {
-    let min_rows = field_tbl.get::<Option<usize>>("min_rows").ok().flatten();
-    let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
-    let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
-    let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
-
-    let min = match field_tbl.get::<Value>("min") {
-        Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => i32::try_from(i).ok().map(f64::from),
-        _ => None,
-    };
-
-    let max = match field_tbl.get::<Value>("max") {
-        Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => i32::try_from(i).ok().map(f64::from),
-        _ => None,
-    };
-
-    let integer = field_tbl
-        .get::<Option<bool>>("integer")
-        .ok()
-        .flatten()
-        .unwrap_or(false);
-
     let constraints = Constraints {
-        min_rows,
-        max_rows,
-        min_length,
-        max_length,
-        min,
-        max,
-        integer,
+        min_rows: get_count(field_tbl, name, "min_rows")?,
+        max_rows: get_count(field_tbl, name, "max_rows")?,
+        min_length: get_count(field_tbl, name, "min_length")?,
+        max_length: get_count(field_tbl, name, "max_length")?,
+        min: get_bound(field_tbl, name, "min")?,
+        max: get_bound(field_tbl, name, "max")?,
+        integer: get_bool(field_tbl, "integer", false)?,
     };
 
     validate_constraints(name, &constraints)?;
 
     Ok(constraints)
+}
+
+/// A count bound (`min_rows`, `max_length`, …). Absent is `None`; present, it
+/// must be a non-negative whole number — a negative, fractional or wrong-typed
+/// value is a load error, never silently dropped.
+fn get_count(tbl: &Table, name: &str, key: &str) -> Result<Option<usize>> {
+    let value = tbl.get::<Value>(key)?;
+
+    let count = match &value {
+        Value::Nil => return Ok(None),
+        Value::Integer(i) => usize::try_from(*i).ok(),
+        Value::Number(n) => whole_number(*n).and_then(|i| usize::try_from(i).ok()),
+        _ => None,
+    };
+
+    count.map(Some).ok_or_else(|| {
+        anyhow!(
+            "Field '{name}': {key} must be a non-negative whole number, got {}",
+            describe(&value)
+        )
+    })
+}
+
+/// A numeric bound (`min` / `max`). Absent is `None`; present, it must be a
+/// finite number, and an integer must convert to `f64` exactly — anything else
+/// is a load error, never silently dropped.
+fn get_bound(tbl: &Table, name: &str, key: &str) -> Result<Option<f64>> {
+    let value = tbl.get::<Value>(key)?;
+
+    let bound = match &value {
+        Value::Nil => return Ok(None),
+        Value::Integer(i) => exact_f64(*i),
+        Value::Number(n) => n.is_finite().then_some(*n),
+        _ => None,
+    };
+
+    bound.map(Some).ok_or_else(|| {
+        anyhow!(
+            "Field '{name}': {key} must be a finite number (integers within ±2^53), got {}",
+            describe(&value)
+        )
+    })
+}
+
+/// `n` as an integer when it is a whole number within the exactly
+/// representable range.
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn whole_number(n: f64) -> Option<i64> {
+    // Exactness is checked before the cast: a whole number of magnitude
+    // below 2^53 converts without truncation.
+    (n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0).then_some(n as i64)
+}
+
+/// `i` as `f64` when the conversion is exact (magnitude at most 2^53).
+#[allow(clippy::cast_precision_loss)]
+fn exact_f64(i: i64) -> Option<f64> {
+    // Range-checked: every integer of magnitude ≤ 2^53 is exactly
+    // representable as an `f64`.
+    (i.unsigned_abs() <= 1 << 53).then_some(i as f64)
+}
+
+/// A config value as an error message shows it: numbers by value, anything
+/// else by type.
+fn describe(value: &Value) -> String {
+    match value {
+        Value::Integer(i) => i.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.type_name().to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +333,59 @@ mod tests {
         );
         tbl.set("default_value", "yes").unwrap();
         assert!(parse_default_value(&tbl, "active", &FieldType::Checkbox).is_err());
+    }
+
+    fn constraints_from(src: &str) -> Result<Constraints> {
+        let lua = Lua::new();
+        let tbl: Table = lua.load(src).eval().unwrap();
+
+        parse_constraints(&tbl, "f")
+    }
+
+    /// Regression: an integer `min`/`max` outside `i32` was silently dropped,
+    /// leaving the field unbounded.
+    #[test]
+    fn large_integer_bounds_are_kept_exactly() {
+        let c = constraints_from("{ min = 3000000000, max = 9007199254740992 }").unwrap();
+
+        assert_eq!(c.min, Some(3_000_000_000.0));
+        assert_eq!(c.max, Some(9_007_199_254_740_992.0));
+        assert!(
+            constraints_from("{ max = 9007199254740993 }").is_err(),
+            "not exact in f64"
+        );
+        assert_eq!(constraints_from("{ min = -1.5 }").unwrap().min, Some(-1.5));
+    }
+
+    /// Regression: present-but-invalid bounds were silently dropped instead of
+    /// failing the load.
+    #[test]
+    fn invalid_bounds_are_load_errors() {
+        for src in [
+            "{ min_rows = -1 }",
+            "{ max_rows = 2.5 }",
+            "{ min_length = '3' }",
+            "{ max_length = true }",
+            "{ min = 'low' }",
+            "{ max = 0/0 }",
+            "{ integer = 'yes' }",
+        ] {
+            let err = constraints_from(src).err();
+            assert!(err.is_some(), "{src} must be rejected");
+        }
+
+        let err = constraints_from("{ min_rows = -1 }")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("min_rows") && err.contains("-1"), "{err}");
+    }
+
+    #[test]
+    fn whole_float_counts_are_accepted() {
+        let c = constraints_from("{ min_rows = 2.0, max_length = 10 }").unwrap();
+
+        assert_eq!(c.min_rows, Some(2));
+        assert_eq!(c.max_length, Some(10));
     }
 }

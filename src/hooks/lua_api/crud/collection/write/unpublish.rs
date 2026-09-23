@@ -100,9 +100,8 @@ pub(super) fn unpublish_via_service(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, call.hooks, call.collection, "update");
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, registry.as_ref())
         .override_access(call.override_access)
-        .registry(Some(registry.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 

@@ -217,7 +217,7 @@ fn render_field_hook(opts: &MakeHookOptions) -> Result<String> {
         &FieldHookContext {
             position: opts.position,
             collection: opts.collection,
-            field: opts.field.unwrap_or("?"),
+            field: opts.field.unwrap_or("*"),
             factory_expr: expr,
         },
     )
@@ -314,10 +314,6 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
             opts.hook_type.label(),
             opts.hook_type.valid_positions(opts.is_global).join(", ")
         );
-    }
-
-    if opts.hook_type == HookType::Field && opts.field.is_none() {
-        bail!("Field hooks require --field to be specified");
     }
 
     Ok(())
@@ -556,19 +552,28 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("Invalid position"));
     }
 
+    /// Regression: a field hook without a field (`--field '*'`, or "any
+    /// field" in the selector) was refused, although the generator has an
+    /// any-field form: the single-argument `field_hook(fn)` factory.
     #[test]
-    fn field_requires_field_name() {
+    fn field_hook_without_a_field_takes_the_any_field_form() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = make_hook(&make_opts(
+        make_hook(&make_opts(
             tmp.path(),
-            "hook",
+            "trim_all",
             HookType::Field,
             "posts",
             "before_validate",
             None,
             false,
-        ));
-        assert!(result.unwrap_err().to_string().contains("--field"));
+        ))
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/trim_all.lua")).unwrap();
+        assert!(content.contains("before_validate field hook for posts.*"));
+        assert!(
+            content.contains("return crap.collections.posts.field_hook(function(value, context)")
+        );
     }
 
     // == Overwrite =======================================================

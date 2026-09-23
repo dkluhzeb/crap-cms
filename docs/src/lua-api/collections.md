@@ -268,7 +268,11 @@ same shape as the slug-keyed equivalents, slug bound.
 `validate` runs the target operation's access check (`access.create`, or
 `access.update` when an `id` is passed) for the current hook user before
 validating — same gate as the real write; pass `override_access = true` for
-trusted internal dry-runs.
+trusted internal dry-runs. It judges the data the real write would judge:
+server-derived upload columns are dropped, an update without `draft = true`
+of a document with a pending draft is judged on that draft with your data on
+top, and a non-default-locale update carrying a non-localized field reports
+the same locale-lock error the write returns.
 
 `unpublish` accepts `override_access`, `hooks`, and `events` options
 (`events = false` for a quiet unpublish, matching

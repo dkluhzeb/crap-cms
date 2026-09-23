@@ -47,6 +47,7 @@ use tracing::{info, info_span};
 use crate::{
     admin::{
         AdminState, CSP_NONCE, CspNonce, Translations, csrf,
+        custom_pages::CustomPageRegistry,
         handlers::{
             auth as auth_handlers, collections, custom_route::custom_routes_router, dashboard,
             events, globals, static_assets, uploads,
@@ -140,9 +141,8 @@ fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> R
         translations.clone(),
         Some(Arc::new(infra.hook_runner.clone())),
     )?;
-    let custom_pages = crate::admin::custom_pages::CustomPageRegistry::from_pages(
-        infra.hook_runner.extract_custom_pages(),
-    );
+    let custom_pages = CustomPageRegistry::from_pages(infra.hook_runner.extract_custom_pages());
+    custom_pages.check_templates(|name| handlebars.get_template(name).is_some())?;
     // Pool-backed for `provider = "custom"`: admin-sent mail (password
     // reset, verification) delegates to the registered Lua handler via the
     // hook-runner VM pool.

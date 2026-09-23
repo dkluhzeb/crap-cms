@@ -1,26 +1,35 @@
 //! The `validate` (dry-run) operations — collection and global.
 //!
-//! Runs the full before-write pipeline (field-access stripping, field hooks,
-//! validators, unique checks, `before_validate` hooks) without persisting and
-//! returns the typed outcome (`None` = valid, `Some(ValidationError)` = the
-//! per-field failures).
+//! Runs the write's before-write pipeline (admission, access gate,
+//! field-access stripping, field hooks, validators, unique checks,
+//! `before_validate` hooks) without persisting and returns the typed outcome
+//! (`None` = valid, `Some(ValidationError)` = the per-field failures).
+//!
+//! The input passes the SAME admission prefix the real write runs
+//! (`admit_create_input` / `admit_update_input` / `admit_global_update_input`):
+//! canonicalized (nested groups, canonical email and text, untrusted upload
+//! metadata stripped), the pending draft adopted as the base when the previewed
+//! write publishes one (never on a `draft` dry-run), and the locale lock
+//! applied. The adopted draft, stripped by the caller's field-level write
+//! access, is the completeness gate's locale overlay, as on the publish itself.
+//! Only the row lock is left out — the dry-run writes nothing.
 //!
 //! Access semantics match the surface's REAL write: the target operation's
 //! collection-level access rule (`access.create` / `access.update`) gates the
-//! dry-run exactly like the write it previews — an anonymous caller denied
-//! the write is denied the dry-run too, closing the unique-collision
-//! enumeration channel an ungated validate offered — and the acting user (or
-//! MCP's override) drives field-level write-access stripping. (MCP validate
-//! previously ran as anonymous WITHOUT override, so its dry-run could report
-//! field strips the actual override write would never apply.)
+//! dry-run exactly like the write it previews, judged on the admitted data —
+//! an anonymous caller denied the write is denied the dry-run too, closing the
+//! unique-collision enumeration channel an ungated validate offered — and the
+//! acting user (or MCP's override) drives field-level write-access stripping.
 
 use anyhow::Context as _;
+use serde_json::Value;
 
 use crate::{
-    core::{DocumentFields, ValidationError, canonicalize_text_values, nest_group_fields},
+    core::{DocumentFields, ValidationError},
     db::{DbConnection, LocaleContext, query::helpers::global_table},
     service::{
-        Def, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext, WriteInput,
+        Def, PendingDraft, RunnerWriteHooks, ServiceContext, ServiceError, ValidateContext,
+        WriteInput, admit_create_input, admit_global_update_input, admit_update_input,
         check_create_access, check_global_update_access, check_update_access, hooks::WriteHooks,
         stored_fields_for_update_rules, stored_global_fields_for_update_rules, validate_document,
     },
@@ -40,8 +49,15 @@ pub struct ValidateArgs {
     /// mode. Ignored by [`ValidateGlobal`] (always update against `default`).
     pub exclude_id: Option<String>,
     /// Validate as a draft write (skips required-field checks where the
-    /// target supports drafts — the body clamps, like the real write path).
+    /// target supports drafts — the body clamps, like the real write path —
+    /// and adopts no pending draft, like a draft save).
     pub draft: bool,
+    /// The previewed write carries server-derived upload metadata of its own
+    /// (the admin multipart upload path, whose real write is trusted). Every
+    /// other surface leaves it false, so caller-supplied `url` / `filename` /
+    /// size columns are stripped exactly as their real write strips them.
+    #[builder(default = false)]
+    pub trusted_upload_metadata: bool,
 }
 
 /// The dry-run outcome: `None` = valid; `Some(err)` = the typed validation
@@ -51,6 +67,34 @@ pub struct ValidateArgs {
 /// `Err(ServiceError)`.
 pub type ValidateOutput = Option<ValidationError>;
 
+/// Where the dry-run judges: the write hooks and the connection it runs on.
+#[derive(Clone, Copy)]
+struct DryRun<'a> {
+    write_hooks: &'a dyn WriteHooks,
+    conn: &'a dyn DbConnection,
+}
+
+impl<'a> DryRun<'a> {
+    fn new(write_hooks: &'a dyn WriteHooks, conn: &'a dyn DbConnection) -> Self {
+        Self { write_hooks, conn }
+    }
+}
+
+/// The input after the admission prefix, with the pending draft it adopted.
+struct Admitted<'i> {
+    input: WriteInput<'i>,
+    pending_draft: PendingDraft,
+}
+
+impl<'i> Admitted<'i> {
+    fn new(input: WriteInput<'i>, pending_draft: PendingDraft) -> Self {
+        Self {
+            input,
+            pending_draft,
+        }
+    }
+}
+
 /// Run the dry-run against an assembled [`ValidateContext`].
 ///
 /// **Conn mode** (`ctx.write_hooks` set — Lua inside a hook transaction):
@@ -59,8 +103,6 @@ pub type ValidateOutput = Option<ValidationError>;
 ///
 /// **Pool mode** (every other surface): runs inside a transaction that is
 /// always ROLLED BACK, so hook side effects during validation are discarded.
-/// Previously only the admin endpoint did this — a `before_validate` hook
-/// that wrote via nested CRUD could persist from a gRPC/MCP dry-run.
 fn run_validate(
     ctx: &ServiceContext<'_>,
     vctx: &ValidateContext<'_>,
@@ -70,6 +112,7 @@ fn run_validate(
         data,
         locale_ctx,
         draft,
+        trusted_upload_metadata,
         exclude_id: _,
     } = args;
 
@@ -77,32 +120,44 @@ fn run_validate(
     // locales the write refuses.
     let locale_ctx = write_locale_ctx(locale_ctx)?;
 
-    // Canonicalize (nested groups, canonical email and text) BEFORE the access
-    // check — the real write bodies do so first too, so an access hook reading
-    // `ctx.data.seo.title` sees the same data on the dry-run as on the write.
-    // (`validate_document` canonicalizes again internally; both steps are
-    // idempotent.)
-    let mut data = nest_group_fields(&data, vctx.fields);
-    canonicalize_text_values(&mut data, vctx.fields);
+    let input = WriteInput::builder(data)
+        .locale_ctx(locale_ctx.as_ref())
+        .draft(draft)
+        .ui_locale(ctx.ui_locale.clone())
+        .trusted_upload_metadata(trusted_upload_metadata)
+        .build();
 
-    if let Some(wh) = ctx.write_hooks {
-        check_validate_access(ctx, wh, vctx, &data, locale_ctx.as_ref())?;
+    // A validation failure anywhere from admission on — the locale lock
+    // included — is the dry-run's answer, not an error.
+    as_outcome(dry_run(ctx, vctx, input))
+}
 
-        let input = WriteInput::builder(data)
-            .locale_ctx(locale_ctx.as_ref())
-            .draft(draft)
-            .ui_locale(ctx.ui_locale.clone())
-            .build();
-        let conn = ctx.resolve_conn()?;
-        let stored = stored_for_update_rules(ctx, vctx, conn.as_ref(), locale_ctx.as_ref())?;
-        let vctx = ValidateContext {
-            stored_document: stored.as_ref(),
-            ..*vctx
-        };
+/// Admit the input, then judge it on the caller's connection (conn mode) or in
+/// a rolled-back transaction (pool mode).
+fn dry_run(
+    ctx: &ServiceContext<'_>,
+    vctx: &ValidateContext<'_>,
+    mut input: WriteInput<'_>,
+) -> Result<(), ServiceError> {
+    let pending_draft = admit(ctx, vctx, &mut input)?;
+    let admitted = Admitted::new(input, pending_draft);
 
-        return as_outcome(validate_document(conn.as_ref(), wh, &vctx, input, ctx.user));
-    }
+    let Some(wh) = ctx.write_hooks else {
+        return judge_rolled_back(ctx, vctx, admitted);
+    };
 
+    let conn = ctx.resolve_conn()?;
+
+    judge(ctx, DryRun::new(wh, conn.as_ref()), vctx, admitted)
+}
+
+/// Pool mode: judge inside a transaction that is always rolled back, with the
+/// runner's write hooks bound to it.
+fn judge_rolled_back(
+    ctx: &ServiceContext<'_>,
+    vctx: &ValidateContext<'_>,
+    admitted: Admitted<'_>,
+) -> Result<(), ServiceError> {
     let pool = ctx.pool.context("pool required")?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction().context("Start validation transaction")?;
@@ -112,25 +167,70 @@ fn run_validate(
         wh = wh.with_override_access();
     }
 
-    check_validate_access(ctx, &wh, vctx, &data, locale_ctx.as_ref())?;
-
-    let stored = stored_for_update_rules(ctx, vctx, &tx, locale_ctx.as_ref())?;
-    let vctx = ValidateContext {
-        stored_document: stored.as_ref(),
-        ..*vctx
-    };
-
-    let input = WriteInput::builder(data)
-        .locale_ctx(locale_ctx.as_ref())
-        .draft(draft)
-        .ui_locale(ctx.ui_locale.clone())
-        .build();
-    let out = as_outcome(validate_document(&tx, &wh, &vctx, input, ctx.user));
+    let out = judge(ctx, DryRun::new(&wh, &tx), vctx, admitted);
 
     // Always roll back — this is validation only.
     drop(tx);
 
     out
+}
+
+/// The write's admission prefix for the previewed operation — the same
+/// function the real create / update / global update calls, so the dry-run
+/// judges the input that write would judge.
+fn admit(
+    ctx: &ServiceContext<'_>,
+    vctx: &ValidateContext<'_>,
+    input: &mut WriteInput<'_>,
+) -> Result<PendingDraft, ServiceError> {
+    if let Def::Global(def) = &ctx.def {
+        return admit_global_update_input(ctx, def, input);
+    }
+
+    let def = ctx.collection_def()?;
+
+    let Some(id) = vctx.exclude_id else {
+        admit_create_input(def, input)?;
+
+        return Ok(PendingDraft::default());
+    };
+
+    admit_update_input(ctx, def, id, input)
+}
+
+/// Everything after admission: the access gate, the stored row the field
+/// rules judge, the publishing snapshot the completeness gate reads, and the
+/// before-write pipeline itself.
+fn judge(
+    ctx: &ServiceContext<'_>,
+    run: DryRun<'_>,
+    vctx: &ValidateContext<'_>,
+    admitted: Admitted<'_>,
+) -> Result<(), ServiceError> {
+    let Admitted {
+        input,
+        pending_draft,
+    } = admitted;
+
+    check_validate_access(ctx, run.write_hooks, vctx, &input.data, input.locale_ctx)?;
+
+    let stored = stored_for_update_rules(ctx, vctx, run.conn, input.locale_ctx)?;
+
+    let empty = DocumentFields::default();
+    let overlay = pending_draft.publishing_snapshot(
+        ctx,
+        run.write_hooks,
+        stored.as_ref().unwrap_or(&empty),
+        input.locale_ctx,
+    )?;
+
+    let vctx = ValidateContext {
+        stored_document: stored.as_ref(),
+        locale_overlay: overlay.as_ref().and_then(Value::as_object),
+        ..*vctx
+    };
+
+    validate_document(run.conn, run.write_hooks, &vctx, input, ctx.user)
 }
 
 /// The stored document update-mode field rules judge, read on the dry-run's
@@ -230,6 +330,8 @@ impl Operation for Validate {
             required_locales: def.required_locales.as_ref(),
             // Loaded inside the body, on the dry-run's own connection.
             stored_document: None,
+            // Set inside the body from the admitted pending draft.
+            locale_overlay: None,
         };
 
         run_validate(ctx, &vctx, args)
@@ -264,6 +366,7 @@ impl Operation for ValidateGlobal {
             // Globals have no collection-level `required_locales` default.
             required_locales: None,
             stored_document: None,
+            locale_overlay: None,
         };
 
         run_validate(ctx, &vctx, args)
@@ -396,5 +499,322 @@ mod tests {
             matches!(&err, ServiceError::HookError(msg) if msg.contains("filter table")),
             "got {err:?}"
         );
+    }
+
+    /// The dry-run judges the input the real write judges: both run the same
+    /// admission prefix, so a pending draft, the locale lock and the upload
+    /// metadata strip reach the dry-run exactly as they reach the write.
+    #[cfg(feature = "sqlite")]
+    mod admission {
+        use std::collections::HashSet;
+
+        use mlua::Lua;
+        use serde_json::json;
+
+        use super::*;
+        use crate::{
+            config::LocaleConfig,
+            core::{GlobalDefinition, Registry, VersionsConfig, upload::CollectionUpload},
+            db::{LocaleMode, query},
+            service::{LuaWriteHooks, create_document_in_conn, update_document_in_conn},
+        };
+
+        /// Validation-only write hooks: no Lua hooks run and every access rule
+        /// allows, so the outcome is the validators' alone. The registry carries
+        /// no richtext nodes; leaking it gives it the hooks' lifetime.
+        fn hooks(lua: &Lua) -> LuaWriteHooks<'_> {
+            let registry: &'static Registry = Box::leak(Box::new(Registry::new()));
+
+            LuaWriteHooks::builder(lua, registry)
+                .override_access(true)
+                .hooks_enabled(false)
+                .build()
+        }
+
+        fn data(pairs: &[(&str, Value)]) -> DocumentFields {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect()
+        }
+
+        fn de() -> LocaleContext {
+            LocaleContext {
+                mode: LocaleMode::Single("de".to_string()),
+                config: LocaleConfig {
+                    default_locale: "en".to_string(),
+                    locales: vec!["en".to_string(), "de".to_string()],
+                    fallback: true,
+                },
+            }
+        }
+
+        /// The field names a dry-run outcome reports as failing.
+        fn failing(out: &ValidateOutput) -> HashSet<String> {
+            out.as_ref()
+                .map(|ve| ve.to_field_map().into_keys().collect())
+                .unwrap_or_default()
+        }
+
+        /// Whether a real write was rejected with a validation error on `field`.
+        fn rejects(err: Option<ServiceError>, field: &str) -> bool {
+            matches!(
+                err,
+                Some(ServiceError::Validation(ve)) if ve.to_field_map().contains_key(field)
+            )
+        }
+
+        /// A draft-enabled `posts` collection whose `title` is required.
+        fn drafted_def() -> CollectionDefinition {
+            let mut def = CollectionDefinition::new("posts");
+            def.versions = Some(VersionsConfig::new(true, 10));
+            def.fields = vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("body", FieldType::Text).build(),
+            ];
+
+            def
+        }
+
+        /// A published `p1` whose pending draft blanked the required `title`.
+        fn drafted_posts() -> Connection {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE posts (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    body TEXT,
+                    _status TEXT DEFAULT 'published',
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+                CREATE TABLE _versions_posts (
+                    id TEXT PRIMARY KEY,
+                    _parent TEXT,
+                    _version INTEGER,
+                    _status TEXT,
+                    _latest INTEGER DEFAULT 0,
+                    snapshot TEXT,
+                    created_at TEXT
+                );
+                INSERT INTO posts (id, title) VALUES ('p1', 'Published');",
+            )
+            .unwrap();
+
+            let drafted = json!({ "title": "", "body": "drafted" });
+            query::create_version(&conn, "posts", "p1", "draft", &drafted).unwrap();
+
+            conn
+        }
+
+        /// Regression: a publish dry-run that omits a field the pending draft
+        /// blanked reported `valid`, while the publish itself — which adopts the
+        /// draft as its base — was rejected on that field.
+        #[test]
+        fn a_publish_dry_run_judges_the_pending_draft() {
+            let conn = drafted_posts();
+            let def = drafted_def();
+            let lua = Lua::new();
+            let wh = hooks(&lua);
+            let ctx = ServiceContext::collection("posts", &def)
+                .conn(&conn)
+                .write_hooks(&wh)
+                .build();
+
+            let patch = || data(&[("body", json!("edited"))]);
+
+            let out = Validate::run(
+                &ctx,
+                ValidateArgs::builder(patch())
+                    .exclude_id(Some("p1".to_string()))
+                    .build(),
+            )
+            .unwrap();
+            assert!(failing(&out).contains("title"), "got {out:?}");
+
+            let real = update_document_in_conn(&ctx, "p1", WriteInput::builder(patch()).build());
+            assert!(
+                rejects(real.err(), "title"),
+                "the publish it previews is rejected"
+            );
+
+            let draft = Validate::run(
+                &ctx,
+                ValidateArgs::builder(patch())
+                    .exclude_id(Some("p1".to_string()))
+                    .draft(true)
+                    .build(),
+            )
+            .unwrap();
+            assert!(draft.is_none(), "a draft dry-run adopts nothing: {draft:?}");
+        }
+
+        /// Regression: a non-default-locale dry-run carrying a shared field
+        /// reported `valid`, while the write rejected it through the locale lock.
+        #[test]
+        fn a_translation_dry_run_applies_the_locale_lock() {
+            let conn = Connection::open_in_memory().unwrap();
+            let mut def = CollectionDefinition::new("posts");
+            def.fields = vec![
+                FieldDefinition::builder("slug", FieldType::Text).build(),
+                FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .build(),
+            ];
+            let lua = Lua::new();
+            let wh = hooks(&lua);
+            let ctx = ServiceContext::collection("posts", &def)
+                .conn(&conn)
+                .write_hooks(&wh)
+                .build();
+
+            let patch = || data(&[("slug", json!("neu"))]);
+
+            let out = Validate::run(
+                &ctx,
+                ValidateArgs::builder(patch())
+                    .locale_ctx(Some(de()))
+                    .exclude_id(Some("p1".to_string()))
+                    .build(),
+            )
+            .unwrap();
+            assert!(failing(&out).contains("slug"), "got {out:?}");
+
+            let locale = de();
+            let real = update_document_in_conn(
+                &ctx,
+                "p1",
+                WriteInput::builder(patch())
+                    .locale_ctx(Some(&locale))
+                    .build(),
+            );
+            assert!(
+                rejects(real.err(), "slug"),
+                "the write it previews is rejected"
+            );
+        }
+
+        /// Regression: a caller-supplied `filename` on an upload collection
+        /// satisfied `required` in the dry-run, while the write strips it as
+        /// server-derived metadata and fails. The admin multipart preview, whose
+        /// real write is trusted, keeps its metadata.
+        #[test]
+        fn an_upload_dry_run_strips_caller_supplied_metadata() {
+            let conn = Connection::open_in_memory().unwrap();
+            let mut def = CollectionDefinition::new("media");
+            def.upload = Some(CollectionUpload::new());
+            def.fields = vec![
+                FieldDefinition::builder("filename", FieldType::Text)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("caption", FieldType::Text).build(),
+            ];
+            let lua = Lua::new();
+            let wh = hooks(&lua);
+            let ctx = ServiceContext::collection("media", &def)
+                .conn(&conn)
+                .write_hooks(&wh)
+                .build();
+
+            let forged = || data(&[("filename", json!("forged.jpg")), ("caption", json!("hi"))]);
+
+            let out = Validate::run(&ctx, ValidateArgs::builder(forged()).build()).unwrap();
+            assert!(failing(&out).contains("filename"), "got {out:?}");
+
+            let real = create_document_in_conn(&ctx, WriteInput::builder(forged()).build());
+            assert!(
+                rejects(real.err(), "filename"),
+                "the write it previews is rejected"
+            );
+
+            let trusted = Validate::run(
+                &ctx,
+                ValidateArgs::builder(forged())
+                    .trusted_upload_metadata(true)
+                    .build(),
+            )
+            .unwrap();
+            assert!(trusted.is_none(), "got {trusted:?}");
+        }
+
+        /// A draft-enabled `settings` global whose `a` is required, with a pending
+        /// draft that blanked it.
+        fn drafted_settings() -> (GlobalDefinition, Connection) {
+            let mut def = GlobalDefinition::new("settings");
+            def.versions = Some(VersionsConfig::new(true, 10));
+            def.fields = vec![
+                FieldDefinition::builder("a", FieldType::Text)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("b", FieldType::Text).build(),
+            ];
+
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE _versions__global_settings (
+                    id TEXT PRIMARY KEY,
+                    _parent TEXT NOT NULL,
+                    _version INTEGER NOT NULL,
+                    _status TEXT NOT NULL,
+                    _latest INTEGER NOT NULL DEFAULT 0,
+                    snapshot TEXT NOT NULL,
+                    created_at TEXT
+                );",
+            )
+            .unwrap();
+
+            let drafted = json!({ "a": "", "b": "drafted b" });
+            query::create_version(&conn, "_global_settings", "default", "draft", &drafted).unwrap();
+
+            (def, conn)
+        }
+
+        /// The global twin of the pending-draft regression.
+        #[test]
+        fn a_global_publish_dry_run_judges_the_pending_draft() {
+            let (def, conn) = drafted_settings();
+            let lua = Lua::new();
+            let wh = hooks(&lua);
+            let ctx = ServiceContext::global("settings", &def)
+                .conn(&conn)
+                .write_hooks(&wh)
+                .build();
+
+            let patch = || data(&[("b", json!("edited"))]);
+
+            let out = ValidateGlobal::run(&ctx, ValidateArgs::builder(patch()).build()).unwrap();
+            assert!(failing(&out).contains("a"), "got {out:?}");
+
+            let draft =
+                ValidateGlobal::run(&ctx, ValidateArgs::builder(patch()).draft(true).build())
+                    .unwrap();
+            assert!(draft.is_none(), "a draft dry-run adopts nothing: {draft:?}");
+        }
+
+        /// The global twin of the locale-lock regression.
+        #[test]
+        fn a_global_translation_dry_run_applies_the_locale_lock() {
+            let conn = Connection::open_in_memory().unwrap();
+            let mut def = GlobalDefinition::new("settings");
+            def.fields = vec![FieldDefinition::builder("slug", FieldType::Text).build()];
+            let lua = Lua::new();
+            let wh = hooks(&lua);
+            let ctx = ServiceContext::global("settings", &def)
+                .conn(&conn)
+                .write_hooks(&wh)
+                .build();
+
+            let out = ValidateGlobal::run(
+                &ctx,
+                ValidateArgs::builder(data(&[("slug", json!("neu"))]))
+                    .locale_ctx(Some(de()))
+                    .build(),
+            )
+            .unwrap();
+
+            assert!(failing(&out).contains("slug"), "got {out:?}");
+        }
     }
 }

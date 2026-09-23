@@ -20,7 +20,7 @@ use serde_json::{from_str, to_string};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, Registry,
+        CollectionDefinition, Document, DocumentFields, Registry, ScheduledBy,
         job::{JobRun, SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
     },
     db::{AccessResult, DbConnection, DbPool, LocaleContext, query},
@@ -277,12 +277,17 @@ pub fn check_queue_access(
     }
 }
 
-/// Insert a `_system_bulk` job run with exactly one attempt (see below).
+/// Insert a `_system_bulk` job run with exactly one attempt (see below),
+/// recording `scheduled_by` — the surface that queued it — as its provenance.
 ///
 /// # Errors
 ///
 /// Returns a backend error when serialization, the pool, or the INSERT fails.
-pub fn queue_bulk(pool: &DbPool, data: &BulkJobData) -> Result<JobRun, ServiceError> {
+pub fn queue_bulk(
+    pool: &DbPool,
+    data: &BulkJobData,
+    scheduled_by: ScheduledBy,
+) -> Result<JobRun, ServiceError> {
     // Enforced HERE, not per surface: this is the one insert site, so no
     // codec can forget the cap (gRPC used to check it and MCP did not).
     enforce_queue_limit(data)?;
@@ -304,7 +309,7 @@ pub fn queue_bulk(pool: &DbPool, data: &BulkJobData) -> Result<JobRun, ServiceEr
         &conn,
         SYSTEM_BULK_JOB,
         &json,
-        "api",
+        scheduled_by,
         max_attempts,
         SYSTEM_BULK_QUEUE,
         0,
@@ -384,10 +389,38 @@ mod tests {
         let registry = Registry::new();
         migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
 
-        let run = queue_bulk(&db_pool, &delete_job(false)).expect("system path queues");
+        let run = queue_bulk(&db_pool, &delete_job(false), ScheduledBy::Grpc)
+            .expect("system path queues");
 
         assert_eq!(run.slug, SYSTEM_BULK_JOB);
         assert_eq!(run.max_attempts, 1, "a bulk run is always a single attempt");
+    }
+
+    /// Regression: every queued bulk run was recorded as queued over gRPC,
+    /// although MCP queues them too — an MCP-queued run read back as gRPC.
+    #[test]
+    fn queue_bulk_records_the_callers_provenance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        migrate::sync_all(&db_pool, &Registry::new(), &config.locale).unwrap();
+
+        for by in [ScheduledBy::Grpc, ScheduledBy::Mcp] {
+            let run = queue_bulk(&db_pool, &delete_job(false), by).expect("queued");
+
+            let conn = db_pool.get().unwrap();
+            let stored = query::jobs::get_job_run(&conn, &run.id)
+                .unwrap()
+                .expect("the run is stored");
+
+            assert_eq!(stored.scheduled_by.as_deref(), Some(by.as_str()));
+        }
     }
 
     fn delete_job(force_hard_delete: bool) -> BulkJobData {

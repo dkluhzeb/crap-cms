@@ -11,6 +11,7 @@ use anyhow::anyhow;
 
 use crate::{
     api::handlers::ContentService,
+    core::ScheduledBy,
     service::{
         ServiceError,
         jobs::bulk_queue::{self, BulkJobData, QueuedBy},
@@ -84,7 +85,7 @@ impl ContentService {
             // Typed error kept: the document cap is `LimitExceeded`
             // (FAILED_PRECONDITION, like the synchronous call) and a busy pool
             // is `Transient` (UNAVAILABLE), never a blanket INTERNAL.
-            bulk_queue::queue_bulk(&infra.pool, &data)
+            bulk_queue::queue_bulk(&infra.pool, &data, ScheduledBy::Grpc)
                 .map(|run| run.id)
                 .map_err(QueueError::Service)
         })

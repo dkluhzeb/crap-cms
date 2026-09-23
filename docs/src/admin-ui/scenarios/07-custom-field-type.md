@@ -163,8 +163,10 @@ changes — fire it on every value change.
 
 ## Step 5 — restart and verify
 
-Lua loads at startup. Restart crap-cms (or rely on dev-mode
-template reload for the HBS).
+Lua loads at startup, and the new `templates/fields/rating.hbs` is a
+new overlay file — the template overlay directory is scanned once at
+startup — so restart crap-cms. After that, with `dev_mode = true`,
+edits to the existing `.hbs` file show up on the next request.
 
 Open `/admin/collections/products/create`. The `rating` field
 renders as five clickable stars; clicking one updates the form

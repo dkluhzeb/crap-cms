@@ -4,6 +4,7 @@
 //! for transaction management (open, commit/rollback). This allows both pool-based callers
 //! (admin, gRPC, MCP) and in-transaction callers (Lua CRUD) to share the same code.
 
+mod admission;
 mod admit;
 mod create;
 mod delete;
@@ -15,6 +16,9 @@ mod validate;
 
 use crate::service::ServiceError;
 
+pub(crate) use admission::{
+    PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
+};
 pub(crate) use create::check_create_access;
 pub use create::create_document_in_conn;
 pub(crate) use delete::{cancel_image_jobs, delete_document_in_conn, purge_document};

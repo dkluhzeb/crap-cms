@@ -8,7 +8,9 @@ use crate::cli;
 
 use crate::scaffold::init::LUA_API_TYPES;
 
-use super::helpers::{blueprints_dir, copy_dir_recursive, validate_blueprint_name};
+use super::helpers::{
+    SAVE_BLUEPRINT_HINT, blueprints_dir, copy_dir_recursive, validate_blueprint_name,
+};
 use super::list::list_blueprint_names;
 use super::manifest::{check_blueprint_version, read_manifest};
 
@@ -80,9 +82,7 @@ fn not_found_error(name: &str) -> Result<anyhow::Error> {
     let available = list_blueprint_names()?;
 
     if available.is_empty() {
-        bail!(
-            "Blueprint '{name}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>"
-        );
+        bail!("Blueprint '{name}' not found. No blueprints saved yet.\n{SAVE_BLUEPRINT_HINT}");
     }
 
     bail!(

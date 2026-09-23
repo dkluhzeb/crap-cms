@@ -5,5 +5,6 @@
 pub(crate) mod check;
 mod dispatch;
 mod display;
+mod migrations;
 
 pub use dispatch::run;

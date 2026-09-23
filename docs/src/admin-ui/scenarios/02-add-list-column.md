@@ -1,168 +1,172 @@
 # Scenario 2: Add a column to the collection list page
 
 **Goal**: add a "Word count" column to the `posts` collection's
-list view, computed from each post's body field.
+list view, computed from each post's `body` field.
 
-**Difficulty**: medium. Two files to touch: a template overlay and
-optionally a Lua hook (if the value isn't already in the document).
+**Difficulty**: easy to medium, depending on where the value lives.
 
-**You'll touch**: `templates/collections/items_table.hbs`,
-`templates/collections/items_row.hbs`, optionally a
-`before_render` hook.
+**You'll touch**: either the collection definition plus a
+`before_change` hook (Option A), or `templates/collections/items_table.hbs`,
+`templates/collections/items_row.hbs` and a `before_render` hook
+(Option B).
 
-## Approach
+## Choose where the value lives
 
-The list view renders rows via `items_row.hbs` with column cells in
-the order specified by `items_table.hbs`'s header. To add a column,
-override both partials and add a `<th>` / `<td>` pair. The cell
-content can pull from any field in the document — or from a value
-you compute in a `before_render` hook and stash on the page context.
+- **Option A — store it.** A `word_count` field kept fresh on every save.
+  It is a real column: it shows up in the column picker, and it sorts and
+  filters like any other field. No template override needed.
+- **Option B — compute it at render time.** No schema change; a
+  `before_render` hook adds the value to each list row and a template
+  override renders it. Display only: it cannot be sorted or filtered.
 
-## Step 1 — extract the table + row templates
+Prefer Option A unless you have a reason to keep the value out of the
+schema.
+
+## Option A — a stored field
+
+### Step 1 — add the field
+
+In the `posts` definition, add a number field and make it a default list
+column:
+
+```lua
+crap.collections.define("posts", {
+    fields = {
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.textarea({ name = "body" }),
+        crap.fields.number({
+            name = "word_count",
+            integer = true,
+            admin = { readonly = true, description = "Updated on save" },
+        }),
+    },
+    admin = {
+        use_as_title = "title",
+        list_columns = { "word_count", "created_at" },
+    },
+})
+```
+
+`list_columns` is the default column set; each user can still change their
+own selection with the column picker. See the
+[definition schema](../../collections/definition-schema.md) for details.
+
+### Step 2 — keep it fresh
+
+Register a `before_change` hook in `init.lua`. Write hooks read and write
+the document through `ctx.data`:
+
+```lua
+-- <config_dir>/init.lua
+crap.hooks.register("before_change", function(ctx)
+    if ctx.collection ~= "posts" then return ctx end
+
+    -- A partial update that doesn't touch `body` keeps the stored count.
+    local body = ctx.data.body
+    if type(body) ~= "string" then return ctx end
+
+    local _, words = string.gsub(body, "%S+", "")
+    ctx.data.word_count = words
+    return ctx
+end)
+```
+
+For an HTML rich text `body`, strip the markup first
+(`body:gsub("<[^>]*>", " ")`) so tags aren't counted as words.
+
+### Step 3 — restart
+
+Schema and `init.lua` changes are read at startup: restart crap-cms. Posts
+saved before the hook existed have no count until they are saved again —
+backfill them once with a script that re-saves each post, or with
+`crap.collections.update_many` from a one-off job.
+
+## Option B — computed at render time
+
+### Step 1 — extract the table and row templates
 
 ```
 $ crap-cms templates extract collections/items_table.hbs collections/items_row.hbs
 ```
 
-This drops both files into your config dir with source-version
-headers so `templates status` tracks drift later.
+This drops both files into your config dir with source-version headers so
+`templates status` tracks drift later.
 
-## Step 2 — add the column
+### Step 2 — add the column markup
 
-Open `<config_dir>/templates/collections/items_table.hbs` and add a
-header cell to the `<thead>`:
+In `<config_dir>/templates/collections/items_table.hbs`, add a header cell
+to the `<thead>` row, just before the last (actions) cell:
 
 ```hbs
-<thead>
-  <tr>
-    {{!-- existing cells --}}
-    <th>Word count</th>
-  </tr>
-</thead>
+<th>Word count</th>
 ```
 
-Open `<config_dir>/templates/collections/items_row.hbs` and add a
-matching cell:
+In `<config_dir>/templates/collections/items_row.hbs`, add the matching
+cell at the same position — before the last `<td>`:
 
 ```hbs
-{{!-- existing cells --}}
 <td>{{this.word_count}}</td>
 ```
 
-That's it for the markup. The remaining question is where
-`{{this.word_count}}` comes from.
+Each row the template sees is an entry of `ctx.docs`. A row carries only
+what the list needs — `id`, `title_value`, `created_at`, `updated_at`, the
+`cells` of the selected columns, and `thumbnail_url` for uploads — not the
+document's fields. So `word_count` has to be put on the row by a hook.
 
-## Step 3 — provide the data
-
-Two options depending on how the word count is stored:
-
-### Option A — already a field on the collection
-
-If `posts` has a `word_count` field (e.g., updated by a `before_change`
-hook on save), the value is already in the row data. The template
-renders it directly — nothing more to do. This is the cleanest
-approach: the count is also queryable, sortable, and filterable.
-
-```lua
--- <config_dir>/init.lua  — keep word_count fresh on every save.
-crap.hooks.register("before_change", function(ctx)
-  if ctx.collection ~= "posts" then return ctx end
-  if ctx.operation ~= "create" and ctx.operation ~= "update" then return ctx end
-
-  local body = ctx.input.body or ""
-  ctx.input.word_count = select(2, string.gsub(body, "%S+", ""))
-  return ctx
-end)
-```
-
-Pair this with a `word_count` integer field in the `posts`
-collection schema. Existing documents need a one-off migration to
-backfill the column for rows saved before the hook landed.
-
-### Option B — computed at render time
-
-If you don't want a schema field — say, the count is too cheap to
-denormalize, or you want to keep the schema clean — compute it in
-a `before_render` hook:
+### Step 3 — add the value to each row
 
 ```lua
 -- <config_dir>/init.lua
 crap.hooks.register("before_render", function(ctx, info)
-  if info.collection ~= "posts" or info.page ~= "collection_items" then
-    return
-  end
+    if info.page ~= "collection_items" or info.collection ~= "posts" then
+        return
+    end
 
-  for _, doc in ipairs(ctx.items) do
-    doc.word_count = select(2, string.gsub(doc.body or "", "%S+", ""))
-  end
+    local ids = {}
+    for _, row in ipairs(ctx.docs) do
+        ids[#ids + 1] = row.id
+    end
+    if #ids == 0 then return end
 
-  return ctx
+    -- One query for the whole page, not one per row.
+    local result = crap.collections.posts.find({
+        where = { id = { ["in"] = ids } },
+        select = { "body" },
+        limit = #ids,
+    })
+
+    local counts = {}
+    for _, doc in ipairs(result.documents) do
+        local _, words = string.gsub(doc.body or "", "%S+", "")
+        counts[doc.id] = words
+    end
+
+    for _, row in ipairs(ctx.docs) do
+        row.word_count = counts[row.id]
+    end
 end)
 ```
 
 Notes:
 
 - **`before_render` is global** — it fires for every admin page render,
-  so scope it with the second argument. `info.page` and
-  `info.collection` say exactly which page is rendering; bailing out
-  early is one line.
-- **Mutate or return** — Lua tables are pass-by-reference, so
-  mutating `ctx.items[i].word_count` is enough. Returning `ctx`
-  explicitly is conventional and harmless.
-- **Cost** — the hook runs in the request path. For 50 rows × a
-  word-count regex, this is a sub-millisecond cost. For more
-  expensive enrichments, prefer Option A.
-- **Need to look something up?** The hook has read-only database
-  access on authenticated pages, so an enrichment that needs a query
-  (`crap.collections.authors.find_by_id(doc.author)`) works here too —
-  it just runs once per page render, per row. Denormalizing with
-  Option A stays the better answer when the value is hot.
+  so scope it with the second argument: `info.page` and `info.collection`
+  say exactly which page is rendering.
+- **Mutate or return** — Lua tables are references, so setting
+  `row.word_count` is enough; returning `ctx` is optional.
+- **Read-only, as the viewer** — on an authenticated admin page the hook
+  can read the database, as the signed-in user with their access rules
+  applied; writes are refused. See
+  [`before_render`](../../hooks/lifecycle-events.md#before_render).
 
-## Step 4 — restart (or rely on dev mode)
+### Step 4 — restart
 
-If you're running with `[admin] dev_mode = true`, the templates are
-reloaded per-request — refresh `/admin/collections/posts` and the
-new column appears.
+The extracted templates are new files and the hook lives in `init.lua`, so
+restart crap-cms once. The overlay directory is scanned at startup: with
+`[admin] dev_mode = true`, later **edits** to these two files show up on the
+next request, but a newly added template file always needs a restart.
 
-If `dev_mode = false`, restart crap-cms.
-
-## Step 5 — how this relates to the column picker
-
-A template-added `<th>` / `<td>` pair is invisible to the column
-picker: it renders unconditionally, alongside whatever columns the
-picker manages. That's the right tool for a **computed** value like
-word count, which isn't a document field.
-
-For columns that *are* document fields, you don't need a template
-override at all: set the collection's default column set in its Lua
-definition —
-
-```lua
-admin = {
-    list_columns = { "title", "word_count_field", "_status", "created_at" },
-},
-```
-
-— and users can adjust their personal selection via the column
-picker (per-user selections override the default; with no
-`list_columns` the built-in default is `_status` — if the collection
-has drafts — plus `created_at`). See the
-[definition schema](../../collections/definition-schema.md) for
-`list_columns` details.
-
-## What this scenario *doesn't* cover
-
-- **Sorting** by the new column — that requires the column to be a
-  real DB field, not a hook-computed value.
-- **Filtering** by the new column — same.
-- **Editing** the value — same. If you want round-trip editing, add
-  a real field to the collection schema and skip the hook.
-
-For one-off display columns (counts, derived values, indicators),
-the hook-then-render pattern is the cleanest. For first-class
-columns, add a schema field.
-
-## Verifying
+### Verifying
 
 ```
 $ crap-cms templates status
@@ -170,7 +174,13 @@ $ crap-cms templates status
   ✓ templates/collections/items_row.hbs     —  current
 ```
 
-Both your overrides are tracked. After upgrading crap-cms, if
-upstream renames or restructures these templates, `templates status`
-will flag them as `behind` — run `templates diff
-collections/items_row.hbs` to see what to re-port.
+Both overrides are tracked. After upgrading crap-cms, if upstream
+restructures these templates, `templates status` flags them as `behind` —
+run `templates diff collections/items_row.hbs` to see what to re-port.
+
+## How the options relate to the column picker
+
+A template-added `<th>` / `<td>` pair is invisible to the column picker: it
+renders unconditionally, alongside whatever columns the picker manages.
+That suits a computed display value. A stored field (Option A) is a
+first-class column instead — users pick it, sort by it and filter on it.

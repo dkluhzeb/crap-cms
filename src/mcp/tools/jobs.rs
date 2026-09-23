@@ -31,7 +31,10 @@ use tracing::info;
 
 use crate::{
     config::{McpJobTools, parse_duration_string},
-    core::job::{JobRun, SYSTEM_BULK_JOB},
+    core::{
+        ScheduledBy,
+        job::{JobRun, SYSTEM_BULK_JOB},
+    },
     db::query::PaginationCtx,
     mcp::{
         protocol::ToolDefinition,
@@ -160,7 +163,7 @@ pub(in crate::mcp::tools) fn queue_bulk_tool(
         force_hard_delete: f.force_hard_delete,
     };
 
-    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data)
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Mcp)
         .map_err(ServiceError::into_anyhow_scrubbed)?;
 
     info!(
@@ -473,7 +476,7 @@ fn exec_trigger_job(args: &Value, ctx: &ToolExecCtx<'_>) -> Result<String> {
         &service::jobs::QueueJobInput {
             job_def: &job_def,
             data: Some(&data_json),
-            scheduled_by: "mcp",
+            scheduled_by: ScheduledBy::Mcp,
             priority,
             queue_retries,
             delay_secs,
@@ -621,7 +624,7 @@ mod tests {
                 &conn,
                 SYSTEM_BULK_JOB,
                 r#"{"op":"create_many","collection":"notes","queued_by":{"kind":"system"},"max_documents":0}"#,
-                "mcp",
+                ScheduledBy::Mcp,
                 1,
                 "bulk",
                 0,
@@ -651,7 +654,8 @@ mod tests {
 
         let insert = |data: &str| {
             let conn = t.pool.get().unwrap();
-            job_query::insert_job(&conn, SYSTEM_BULK_JOB, data, "admin", 1, "bulk", 0).unwrap()
+            job_query::insert_job(&conn, SYSTEM_BULK_JOB, data, ScheduledBy::Mcp, 1, "bulk", 0)
+                .unwrap()
         };
         let hidden = insert(
             r#"{"op":"create_many","collection":"notes","queued_by":{"kind":"system"},"max_documents":0}"#,

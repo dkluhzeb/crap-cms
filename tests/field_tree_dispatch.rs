@@ -137,11 +137,6 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
         "per-value has-many element validation (value map)",
     ),
     (
-        "src/hooks/lifecycle/validation/checks/required.rs",
-        1,
-        "per-value required-field check (value map)",
-    ),
-    (
         "src/hooks/lua_api/parse/fields/constraints.rs",
         1,
         "per-type expected default_value JSON type (value map)",

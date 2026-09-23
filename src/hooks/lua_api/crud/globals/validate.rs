@@ -98,9 +98,8 @@ fn globals_validate(
         .collect();
     data.extend(composite_data);
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(reg.as_ref()))
         .build();
 
     let ctx = ServiceContext::global(&slug, &def)

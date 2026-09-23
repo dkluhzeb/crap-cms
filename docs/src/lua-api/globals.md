@@ -155,7 +155,10 @@ hooks) and returns `{ valid = true }` or
 `{ valid = false, errors = { field = "message", ... } }`. Globals are a
 singleton document, so validation always runs in update mode against the
 fixed `default` row — there is no create mode and no `id` option. Mirrors
-`crap.collections.validate`.
+`crap.collections.validate`, including how the data is admitted: without
+`draft = true` a pending draft is the base your data lands on, and a
+non-default-locale call carrying a non-localized field reports the locale-lock
+error the real update returns.
 
 **Options:**
 

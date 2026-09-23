@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::ScheduledBy;
 use crap_cms::core::job::{JobDefinition, JobStatus};
 use crap_cms::core::upload::{SharedStorage, storage::LocalStorage};
 use crap_cms::db::query::jobs as job_query;
@@ -112,7 +113,7 @@ fn execute_job_echo_completes_successfully() {
         &conn,
         "test_echo_job",
         "{\"hello\":\"world\"}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,
@@ -159,7 +160,7 @@ fn execute_job_creates_document() {
         &conn,
         "test_create_post",
         "{\"title\":\"Scheduler Created\"}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,
@@ -209,8 +210,16 @@ fn execute_job_failing_handler_marks_failed() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let conn = pool.get().expect("DB connection");
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0)
-        .expect("insert_job");
+    let run = job_query::insert_job(
+        &conn,
+        "test_failing_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .expect("insert_job");
     let job_concurrency = HashMap::new();
     let claimed =
         job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
@@ -255,8 +264,16 @@ fn execute_job_failing_handler_retries() {
 
     let conn = pool.get().expect("DB connection");
     // max_attempts=3 so it should be retried
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0)
-        .expect("insert_job");
+    let run = job_query::insert_job(
+        &conn,
+        "test_failing_job",
+        "{}",
+        ScheduledBy::Cli,
+        3,
+        "default",
+        0,
+    )
+    .expect("insert_job");
     let job_concurrency = HashMap::new();
     let claimed =
         job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
@@ -295,8 +312,16 @@ fn recover_stale_jobs_on_full_setup() {
     let conn = pool.get().expect("DB connection");
 
     // Insert and claim a job, then simulate server crash (leave it running with old heartbeat)
-    let run =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     let claimed =
         job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
@@ -351,7 +376,16 @@ fn check_cron_schedules_skip_if_running_integration() {
     // Insert a running job for the cron job
     {
         let conn = pool.get().unwrap();
-        job_query::insert_job(&conn, "test_cron_job", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(
+            &conn,
+            "test_cron_job",
+            "{}",
+            ScheduledBy::Cli,
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'test_cron_job'",
             &[],
@@ -401,7 +435,7 @@ fn tx_two_creates_both_committed() {
         &conn,
         "test_tx_two_creates",
         "{}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,
@@ -457,7 +491,7 @@ fn tx_rollback_leaves_no_documents() {
         &conn,
         "test_tx_rollback_mid",
         "{}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,
@@ -515,7 +549,7 @@ fn tx_separate_blocks_first_commits_when_second_rolls_back() {
         &conn,
         "test_tx_separate_blocks",
         "{}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,

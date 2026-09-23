@@ -22,7 +22,6 @@ use schemars::{Schema, schema_for};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::admin::custom_pages::CustomPage as RegisteredCustomPage;
 use crate::core::{ConditionExpr, ConditionRow, DocumentFields};
 
 use crate::admin::context::{
@@ -38,7 +37,7 @@ use crate::admin::context::{
         TabPanel, TabsField, TextField, TextareaField, TimezoneOption, UploadField,
         ValidationAttrs,
     },
-    nav::{NavCollection, NavGlobal},
+    nav::{NavCollection, NavGlobal, NavPage, NavPageSection},
     page::{
         auth::{
             AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResendVerificationPage,
@@ -317,6 +316,8 @@ fn definitions() -> Vec<(&'static str, Schema)> {
         ("NavData", schema_for!(NavData)),
         ("NavCollection", schema_for!(NavCollection)),
         ("NavGlobal", schema_for!(NavGlobal)),
+        ("NavPage", schema_for!(NavPage)),
+        ("NavPageSection", schema_for!(NavPageSection)),
         ("UserContext", schema_for!(UserContext)),
         ("EditorLocaleOption", schema_for!(EditorLocaleOption)),
         ("Breadcrumb", schema_for!(Breadcrumb)),
@@ -335,7 +336,6 @@ fn definitions() -> Vec<(&'static str, Schema)> {
         ("ConditionExpr", schema_for!(ConditionExpr)),
         ("ConditionRow", schema_for!(ConditionRow)),
         ("TimezoneOption", schema_for!(TimezoneOption)),
-        ("CustomPage", schema_for!(RegisteredCustomPage)),
         ("PaginationContext", schema_for!(PaginationContext)),
         ("FieldContext", schema_for!(FieldContext)),
         ("BaseFieldData", schema_for!(BaseFieldData)),

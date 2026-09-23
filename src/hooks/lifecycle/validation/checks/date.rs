@@ -2,7 +2,10 @@ use chrono::{DateTime, FixedOffset, LocalResult, NaiveDate, NaiveDateTime, TimeZ
 use chrono_tz::Tz;
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, PickerAppearance, validate::FieldError};
+use crate::{
+    core::{FieldDefinition, FieldType, PickerAppearance, validate::FieldError},
+    db::query::helpers::normalize_date_value,
+};
 
 /// The shape a date value spells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,25 +52,41 @@ pub(crate) fn check_date_field(
         return;
     };
 
-    match date_shape(s) {
-        None => errors.push(
+    let Some(shape) = date_shape(s) else {
+        errors.push(
             FieldError::with_key(
                 data_key.to_owned(),
                 format!("{} is not a valid date format", field.name),
                 "validation.invalid_date",
             )
             .with_param("field", field.name.clone()),
-        ),
-        Some(shape) if !appearance_shows(field.picker_appearance.as_ref(), shape) => {
-            errors.push(appearance_error(field, data_key));
-        }
-        Some(_) => {}
+        );
+
+        return;
+    };
+
+    if !appearance_shows(field.picker_appearance.as_ref(), shape) {
+        errors.push(appearance_error(field, data_key));
     }
 
-    let date_part = s.get(..10).unwrap_or(s.as_str());
+    check_date_bounds(field, data_key, s, shape, errors);
+}
+
+/// Check `min_date` / `max_date` against the part of the value they judge —
+/// see [`judged_part`].
+fn check_date_bounds(
+    field: &FieldDefinition,
+    data_key: &str,
+    s: &str,
+    shape: DateShape,
+    errors: &mut Vec<FieldError>,
+) {
+    let Some(judged) = judged_part(field, s, shape) else {
+        return;
+    };
 
     if let Some(ref min_date) = field.min_date
-        && date_part < min_date.as_str()
+        && judged.as_str() < bound_part(min_date, shape)
     {
         errors.push(
             FieldError::with_key(
@@ -81,7 +100,7 @@ pub(crate) fn check_date_field(
     }
 
     if let Some(ref max_date) = field.max_date
-        && date_part > max_date.as_str()
+        && judged.as_str() > bound_part(max_date, shape)
     {
         errors.push(
             FieldError::with_key(
@@ -92,6 +111,35 @@ pub(crate) fn check_date_field(
             .with_param("field", field.name.clone())
             .with_param("max", max_date.clone()),
         );
+    }
+}
+
+/// The part of a date value the `YYYY-MM-DD` bounds judge:
+///
+/// - a month (`monthOnly`) by its month — a bound is cut to its month too, so
+///   the bound's own month is allowed;
+/// - a day or datetime without a timezone by the UTC day it is **stored** as
+///   (an offset datetime is stored converted to UTC, so `23:30-05:00` is the
+///   next day);
+/// - a day or datetime of a timezone-enabled field by the local day as
+///   entered — the day the editor picked in the chosen zone;
+/// - a time of day: nothing (the loader rejects bounds on `timeOnly`).
+fn judged_part(field: &FieldDefinition, s: &str, shape: DateShape) -> Option<String> {
+    match shape {
+        DateShape::Time => None,
+        DateShape::Month => Some(s.to_string()),
+        DateShape::Day | DateShape::DateTime if field.timezone => s.get(..10).map(str::to_string),
+        DateShape::Day | DateShape::DateTime => {
+            normalize_date_value(s).get(..10).map(str::to_string)
+        }
+    }
+}
+
+/// A `YYYY-MM-DD` bound in the form a value of `shape` compares against.
+fn bound_part(bound: &str, shape: DateShape) -> &str {
+    match shape {
+        DateShape::Month => bound.get(..7).unwrap_or(bound),
+        _ => bound,
     }
 }
 
@@ -582,37 +630,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_date_bounds_short_date_min() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("d", FieldType::Date)
-                .min_date("2024-06")
-                .picker_appearance(PickerAppearance::MonthOnly)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("d".to_string(), json!("2024-01"));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "Month-only date before min_date should fail"
-        );
-        assert!(
-            result.unwrap_err().errors[0]
-                .message
-                .contains("on or after")
-        );
-    }
-
     /// Regression test: date string slicing with multi-byte UTF-8 must not panic.
     /// Previously used `&s[..10]` which panics on non-ASCII; now uses `.get(..10)`.
     #[test]
@@ -645,34 +662,77 @@ mod tests {
         );
     }
 
+    /// Error keys `min_date = 2024-06-01` / `max_date = 2024-06-30` produce.
+    fn june_bound_keys(field: FieldDefinition, raw: &str) -> Vec<String> {
+        let field = FieldDefinition {
+            min_date: Some("2024-06-01".into()),
+            max_date: Some("2024-06-30".into()),
+            ..field
+        };
+        let mut errors = Vec::new();
+
+        check_date_field(&field, "d", Some(&json!(raw)), false, &mut errors);
+
+        errors.into_iter().filter_map(|e| e.key).collect()
+    }
+
+    /// Regression: month values compared `"2024-06" < "2024-06-01"`, so the
+    /// bound's own month — the only bound shape the loader produces — was
+    /// rejected. Months compare by month.
     #[test]
-    fn test_validate_date_bounds_short_date_max() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
-            .unwrap();
-        let fields = vec![
+    fn month_only_values_compare_by_month() {
+        let month = || {
             FieldDefinition::builder("d", FieldType::Date)
-                .max_date("2024-06")
                 .picker_appearance(PickerAppearance::MonthOnly)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("d".to_string(), json!("2024-12"));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
+                .build()
+        };
+
+        assert!(june_bound_keys(month(), "2024-06").is_empty());
+        assert_eq!(
+            june_bound_keys(month(), "2024-05"),
+            vec!["validation.date_min"]
         );
-        assert!(
-            result.is_err(),
-            "Month-only date after max_date should fail"
+        assert_eq!(
+            june_bound_keys(month(), "2024-07"),
+            vec!["validation.date_max"]
         );
-        assert!(
-            result.unwrap_err().errors[0]
-                .message
-                .contains("on or before")
+    }
+
+    /// Regression: an offset datetime was judged by the day written, but it is
+    /// stored converted to UTC — `2024-05-31T23:30-05:00` is stored on June 1.
+    #[test]
+    fn offset_datetimes_are_judged_by_their_stored_utc_day() {
+        let day_and_time = || {
+            FieldDefinition::builder("d", FieldType::Date)
+                .picker_appearance(PickerAppearance::DayAndTime)
+                .build()
+        };
+
+        assert!(june_bound_keys(day_and_time(), "2024-05-31T23:30:00-05:00").is_empty());
+        assert_eq!(
+            june_bound_keys(day_and_time(), "2024-07-01T01:00:00+02:00"),
+            Vec::<String>::new(),
+            "stored as 2024-06-30T23:00Z"
+        );
+        assert_eq!(
+            june_bound_keys(day_and_time(), "2024-06-01T01:00:00+02:00"),
+            vec!["validation.date_min"],
+            "stored as 2024-05-31T23:00Z"
+        );
+    }
+
+    /// A timezone-enabled field is judged by the local day the editor picked.
+    #[test]
+    fn timezone_fields_are_judged_by_the_local_day() {
+        let zoned = FieldDefinition::builder("d", FieldType::Date)
+            .picker_appearance(PickerAppearance::DayAndTime)
+            .timezone(true)
+            .build();
+
+        assert!(june_bound_keys(zoned.clone(), "2024-06-01T00:30").is_empty());
+        assert_eq!(
+            june_bound_keys(zoned, "2024-05-31T23:30"),
+            vec!["validation.date_min"]
         );
     }
 

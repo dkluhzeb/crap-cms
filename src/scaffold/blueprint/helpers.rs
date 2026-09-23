@@ -12,6 +12,11 @@ use anyhow::{Context as _, Result, anyhow, bail};
 #[cfg(test)]
 use crate::test_support::env_lock;
 
+/// How to save a blueprint, for the messages shown when none exists yet.
+/// `blueprint save` takes the name only — the project is the resolved config
+/// directory.
+pub const SAVE_BLUEPRINT_HINT: &str = "Save one with: crap-cms blueprint save <name>";
+
 /// Files and directories to skip when saving a blueprint (runtime artifacts).
 pub(super) const BLUEPRINT_SKIP: &[&str] = &["data", "uploads", "types"];
 
@@ -114,7 +119,25 @@ where
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::*;
+    use crate::commands::Cli;
+
+    /// Regression: two of the three "save one" hints showed a
+    /// `blueprint save <dir> <name>` form the command doesn't take.
+    #[test]
+    fn the_save_hint_is_an_invocation_the_cli_accepts() {
+        let line = SAVE_BLUEPRINT_HINT
+            .strip_prefix("Save one with: ")
+            .expect("hint prefix");
+        let args = line
+            .split_whitespace()
+            .map(|arg| if arg == "<name>" { "starter" } else { arg });
+
+        let parsed = Cli::try_parse_from(args);
+        assert!(parsed.is_ok(), "{line}: {:?}", parsed.err());
+    }
 
     #[test]
     fn validate_name_valid() {

@@ -14,4 +14,6 @@ pub use checks::is_valid_email_format;
 pub(in crate::hooks::lifecycle::validation) use completeness::check_localized_completeness;
 pub use context::ValidationCtx;
 pub(in crate::hooks::lifecycle::validation) use runner::is_empty_value;
-pub(crate) use runner::validate_fields_inner;
+#[cfg(test)]
+pub(in crate::hooks::lifecycle::validation) use runner::validate_fields_inner;
+pub(crate) use runner::validate_write_fields;

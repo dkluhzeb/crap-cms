@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Present-but-invalid field constraints fail the load.** `min_rows`, `max_rows`, `min_length` and `max_length` that are negative, fractional or not numbers, an `integer` that is not a boolean, and a `min` / `max` that is not a finite number used to be dropped silently, leaving the field unbounded; they now fail the load naming the field and key. An integer `min` / `max` outside the 32-bit range was also dropped; any integer that converts to a number exactly (up to ±2^53) is now kept.
+- **`min_date` / `max_date` on a `timeOnly` date field fail the load.** A time of day has no date to judge, so such a bound rejected every value at write time.
+- **Registering the same `crap.template_data` name twice is an error**, like `crap.pages.register`; the second registration used to replace the first silently.
+- **A registered custom page without a template fails startup**, naming the page. Its sidebar entry used to link to a 404. Add `templates/pages/<slug>.hbs` or drop the registration.
+- **A JSON-format rich text value that is not a document is refused.** Text that does not parse as JSON (or nests deeper than 127 levels), or a value that is neither text nor an object, used to skip the custom-node attribute checks; it now fails validation with `validation.invalid_richtext_json`.
+- **The sidebar's custom-page entries no longer carry the page's access rule.** `nav.custom_pages[]` holds `slug`, `label`, `section` and `icon`; the `access` reference (and its options) is no longer exposed to templates and `before_render` hooks. The new `nav.custom_page_sections` groups the same pages for the sidebar, and the sidebar now renders from it: a `before_render` hook that edits `nav.custom_pages` no longer changes the sidebar — edit `nav.custom_page_sections` instead.
+- **`make component` and `make field` refuse built-in names.** A component tag that is a built-in module (`dirty-form`, `pill-list`, …) or element (`crap-tags`, `crap-code`, …), and a field name that is a built-in field template (`code`, `date`, `text`, …), used to overwrite or shadow the built-in; they are now rejected. `make node` accepts exactly the names `crap.richtext.register_node` accepts (no leading digit, no built-in ProseMirror node names).
+
 - **Generated client types now describe an upload read as it actually arrives.** The Rust/Go/TypeScript/Python generators, the Lua type definitions and the Rust proto decoder walked the stored columns, so an upload collection's document type declared `thumbnail_url`, `thumbnail_width`, `thumbnail_height` and one field per format variant — none of which a read returns. Every read assembles those columns into a nested `sizes` object, and the generated types now say so. Regenerate your client after upgrading and read sizes as `sizes.thumbnail.url`.
 - **`sizes` is a reserved field name on an upload collection with `image_sizes`.** A user field of that name was silently overwritten by the assembled sizes object on every read; it is now rejected at definition time with the other reserved names. Rename such a field before upgrading.
 - **A changed field `type` on a column that holds data fails the boot.** It
@@ -1005,6 +1013,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **Lua CRUD writes skipped custom-node attribute validation in rich text.** `crap.collections.*` / `crap.globals.*` writes validated without the richtext node registry, so a node's required, length, option and custom `validate` rules were never checked on that path (and a restore from Lua skipped them too). Every write path now validates with the registry.
+- **HTML rich text node attributes are read like the browser reads them.** Validation and `before_validate` searched the markup for attribute substrings, so a `data-type="…"` text inside another attribute, an uppercase `<CRAP-NODE>`, whitespace variants or entity-encoded attributes (the editor's own serialization) let a node escape its checks while the page still rendered it. One tokenizer now serves validation, the attribute hooks and the renderer.
+- **The `make node` scaffold escapes attribute values in `render`.** It interpolated `attrs.text` unescaped — the stored-XSS pattern the rich text docs warn against. New scaffolds include an `escape_html` helper and use it.
 
 - **The admin restore-confirm page listed missing relations of fields the
   viewer can't read.** Its missing-target check ran on the stored version
@@ -2195,7 +2207,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`min_rows` / `max_rows` on a has-many relationship or upload counted the admin form's value as zero.** The form sends ids as a comma list, which the check counted as no items, so `min_rows >= 1` could never be satisfied from the admin and `max_rows` never fired. Row bounds, `required`, the polymorphic allowlist, the reference-shape check and the join writer now decode the value the same way; a JSON-array string (which the writer used to split on commas into broken ids) is decoded as a list everywhere.
+- **Rich text sent as a JSON document object skipped its node checks.** A JSON-format rich text value given as an object (as MCP and Lua tables send it) bypassed custom-node attribute validation and `before_validate` hooks; both now accept the object as well as the text.
+- **Custom-node `before_validate` hooks never ran for rich text inside a group or an array/blocks row.** They now run for rich text at any depth.
+- **Date bounds judged the wrong day or month.** `min_date` / `max_date` compared the value as written, but an offset datetime is stored converted to UTC — so `2024-05-31T23:30-05:00` was judged May 31 while stored as June 1. A field without a timezone is now judged by its stored UTC day, a timezone-enabled field by the local day as entered, and a `monthOnly` field by month (its bound's own month used to be rejected).
+- **`min_rows` on a scalar has-many list was skipped when the value was absent or empty.** It now counts an absent, null or empty value as zero, like array and relationship lists; an update that omits the field keeps its stored values.
+- **`required` inside an array/blocks row accepted empty lists.** A has-many sub-field sent as `"[]"` or `{}` counted as present; rows and custom-node attributes now use the top-level presence rule.
+- **A select or radio field without options accepted any value type.** A number or object was stored as its JSON spelling; values must now be text (a list of text for `has_many`).
+- **A validator on a field in a group inside an array row saw the group as `ctx.data`.** It now sees the row, as documented (a group never narrows the scope).
+- **A failed template render answered 200 on three of four render paths.** Every admin render path now answers a template failure with a 500.
+- **The `section` option of `crap.pages.register` was never rendered.** The sidebar now groups custom pages under their section heading, sections alphabetically, with ungrouped pages last.
+- **The `--font-family` theme token had no effect.** The admin font now reads the `--font-family` custom property, so a theme can set it.
+- **An error in `static/components/custom.js` was swallowed.** A failing custom module is now logged to the browser console.
+
+- **A queued bulk run reported the wrong source.** Every `queue = true` bulk operation was recorded with `scheduled_by = "api"`, which gRPC reports as `JOB_SCHEDULED_BY_GRPC`, including runs queued through MCP. Each run now records the surface that queued it (`grpc` or `mcp`). Runs the CMS queues itself (email delivery, image conversion, the migration drain) are recorded as `system`. gRPC used to report them as `JOB_SCHEDULED_BY_UNSPECIFIED`; the new enum value `JOB_SCHEDULED_BY_SYSTEM = 6` covers them now. `scheduled_by` is now one of `grpc`, `cron`, `hook`, `mcp`, `cli`, `system` on every surface, and an `api` stored by an earlier release reads back as `grpc`.
+- **`validate` could report `valid` for a write that the real write rejects.** The dry-run (gRPC `Validate` / `ValidateGlobal`, MCP `validate_*`, `crap.collections.validate` / `crap.globals.validate`, and the admin live validation) prepared its input on its own instead of the way `create` / `update` do, and three steps were missing. First, a non-draft update of a document (or global) with a pending draft did not take that draft as its base: a field the draft had cleared but the request left out went unchecked, and the localized-completeness check saw the live row rather than the draft being published. Second, a non-default-locale update carrying a non-localized field did not get the locale-lock error. Third, caller-supplied upload metadata (`filename`, `url`, size columns) was not dropped, so it could satisfy `required`. The dry-run now runs the same admission steps as the write it previews. A dry-run of a create under a non-default locale now fails like the create. The admin form's live validation drops the shared fields a translation form echoes, as the admin save does, and keeps its upload placeholders on a create.
 - **A form submit to a custom route with `csrf = true` was always refused.** The admin layout emits the CSRF token twice, because browsers submit in two shapes: an `X-CSRF-Token` header on htmx requests and a hidden `_csrf` field on every form. Custom routes read only the header, so a plain `<form>` posting to a protected route answered 403 while the identical form to a built-in admin route was accepted. Both surfaces now share one double-submit rule and accept either shape. The header still settles the check before the body is read; only a form submit is buffered first, within the route's existing body limit.
+- **Saving a translation as a draft in the admin was refused.** Under a non-default locale the edit form echoes the shared (non-localized) fields as read-only values, and the admin dropped them only on a publish; a draft save (collection, global or upload) still carried them and was rejected with the locale-lock error. The admin now drops the echoed shared fields on every save. Programmatic writes (gRPC, MCP, Lua) that carry shared fields under a non-default locale are still rejected.
+- **Admin error responses were silent under htmx.** htmx does not swap a 4xx/5xx response, so an htmx navigation or form submit that hit a 400, 404 or 500 page, or a failed template render, showed nothing. Every admin error response (400, 403, 404, 500, template render failures and the 422 toast-only reply) now carries the error in the `X-Crap-Toast` header, which the admin shows as a toast. A message with non-ASCII characters (a translated message such as `Überprüfen`) used to fail the header conversion and lose its toast silently; it is now escaped so it arrives intact.
 - **`jobs healthcheck` reported dead workers that were alive.** It used its own idea of when a running job is stale — three heartbeat intervals — while the scheduler, which actually reclaims the work, allows those three intervals plus the longest a single heartbeat write can legitimately take (the write pool's connection timeout and the database's busy timeout). A heartbeat held up behind a long write therefore failed the healthcheck, exiting 1, for a job the scheduler was correctly leaving alone. Both now read one rule.
 - **`admin.readonly` on a Group, Array, Blocks, Row, Collapsible or Tabs
   field now applies to everything inside it.** A read-only container
@@ -5151,6 +5180,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   backend through and delete the files after the delete commits,
   matching the gRPC and admin surfaces. (Soft-deletes still keep the
   files, so trashed documents remain restorable.)
+- **CLI commands failed on an auth collection with a localized field.**
+  `user list`, `user create`, the interactive user picker, `bench queries`,
+  `bench hooks` and `bench create` read or wrote without the configured
+  default locale, so the SQL named a column that doesn't exist on a
+  localized collection (`name` instead of `name__en`) and the command
+  failed. Every CLI read of documents now goes through one helper that
+  applies the default locale, and the CLI writes use it too.
+- **`bench queries` reported a failed query as `0 rows`.** The rows column
+  now shows `ERR` and the error is printed.
+- **`make hook -t field --field '*'` always failed** with "Field hooks
+  require --field", although `*` (and "any field" in the interactive
+  picker) is the documented way to ask for an any-field hook. It now
+  scaffolds the single-argument `field_hook(fn)` form.
+- **`status --check` never warned about an auth collection with no users**
+  unless that collection also had hooks, so a fresh project never saw it.
+  The warning now fires for every empty auth collection. A user count or a
+  migration status that can't be read is reported as its own warning
+  instead of being taken as "no users" or "nothing pending".
+- **`jobs cancel` and `jobs purge` skipped config validation and the schema
+  sync** every other command runs when it opens a project, so on a fresh
+  project they failed on the missing jobs table and an invalid `crap.toml`
+  went unnoticed. `migrate` now validates the config before it runs, too.
+- **The "no blueprints yet" hint showed `crap-cms blueprint save <dir>
+  <name>`**, a form the command doesn't accept, in two of its three places.
+  All three now show `crap-cms blueprint save <name>`.
+- **`make slot` warned "not one of the built-in slots" for six real slots**
+  (`list_toolbar_actions`, `list_footer`, `global_edit_toolbar`, …). It kept
+  its own list, which had fallen behind; it now reads the built-in slot
+  registry the slots guide is generated from.
+- **`make field` could leave a half-written scaffold.** Each of its three
+  files was checked just before it was written, so an existing component
+  file — or a name such as `star_rating` that makes no valid component tag —
+  was refused after the template and the plugin were already on disk. All
+  three targets are now checked before anything is written.
 
 ### Added
 
@@ -5980,6 +6043,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   exact, so no action is required. Float *parsing* is marginally slower.
   (gRPC is unaffected — it carries numbers as protobuf `double`, not
   JSON.)
+- **`update install` no longer refuses a distro-managed binary.** It only
+  stages a version in the store and never touches the running binary or the
+  one on `$PATH`, so it now works without `--force`. `update use` keeps the
+  guard, and bare `update` checks it before downloading instead of after.
+  The `--force` and `--yes` docs now say what they actually do: `--force`
+  also repoints the `crap-cms` on `$PATH` at the store, and `--yes` only
+  matters for bare `update` and `update use --force`.
+- **`logs clear` refuses `-f` / `-n`** instead of parsing and ignoring them.
+- **The CLI reference documents every flag.** `jobs trigger --priority`,
+  `jobs cancel --id`, `images retry --priority`, `fmt --follow-symlinks`,
+  the `user` lookup flags, `templates layout`, the `user-original` drift
+  state of `templates status` and the full `status --check` list (29
+  checks) were missing; a test now fails when a subcommand flag has no line
+  in the reference.
 
 ### Internal
 

@@ -4,15 +4,37 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::core::{
-    DocumentFields, FieldDefinition, flatten_group_fields, validate::ValidationError,
+    DocumentFields, FieldDefinition, Registry, flatten_group_fields, validate::ValidationError,
 };
 
 use super::ValidationCtx;
 use super::recursive::ValidationWalker;
 
-/// Inner implementation of `validate_fields` — operates on a locked `&Lua`.
-/// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
-pub(crate) fn validate_fields_inner(
+/// Validate a write's field data — the one entry point every write path uses
+/// (`HookRunner::validate_fields` and the in-VM Lua CRUD write hooks).
+///
+/// The registry is a required argument, not an optional context slot, so no
+/// write path can reach validation without the richtext node definitions its
+/// node-attr checks read.
+pub(crate) fn validate_write_fields(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    data: &DocumentFields,
+    ctx: &ValidationCtx,
+    registry: &Registry,
+) -> Result<(), ValidationError> {
+    let ctx = ValidationCtx {
+        registry: Some(registry),
+        ..*ctx
+    };
+
+    validate_fields_inner(lua, fields, data, &ctx)
+}
+
+/// Schema walk + completeness gate over an already-assembled context. Write
+/// paths go through [`validate_write_fields`]; this stays module-internal so
+/// the checks' own tests can drive it with a hand-built context.
+pub(in crate::hooks::lifecycle::validation) fn validate_fields_inner(
     lua: &Lua,
     fields: &[FieldDefinition],
     data: &DocumentFields,

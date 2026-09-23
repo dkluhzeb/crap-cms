@@ -80,7 +80,7 @@ fn collections_restore_version(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, &collection)?;
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
         .build();
 

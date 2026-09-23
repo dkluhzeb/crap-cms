@@ -397,6 +397,7 @@ fn parse_job_row(row: &DbRow) -> Result<JobRun> {
 )]
 mod tests {
     use super::*;
+    use crate::core::ScheduledBy;
     use crate::db::query::jobs::insert_job;
     use crate::db::query::jobs::test_helpers::setup_db;
 
@@ -407,8 +408,8 @@ mod tests {
     #[test]
     fn test_claim_pending_jobs() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &conc, &empty_queue_conc(), 0).unwrap();
@@ -426,7 +427,7 @@ mod tests {
     #[test]
     fn claim_reports_attempt_count_consistent_with_db_increment() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "retry_test", "{}", "manual", 3, "default", 0).unwrap();
+        insert_job(&conn, "retry_test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
 
@@ -448,8 +449,8 @@ mod tests {
     #[test]
     fn test_claim_respects_concurrency() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "limited", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "limited", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "limited", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "limited", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
 
         let mut conc = HashMap::new();
         conc.insert("limited".to_string(), 1u32);
@@ -462,7 +463,7 @@ mod tests {
     #[test]
     fn test_claim_skips_jobs_with_future_retry_after() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
 
         conn.execute(
             "UPDATE _crap_jobs SET retry_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+3600 seconds')",
@@ -478,7 +479,7 @@ mod tests {
     #[test]
     fn test_claim_picks_up_jobs_with_past_retry_after() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
 
         conn.execute(
             "UPDATE _crap_jobs SET retry_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 seconds')",
@@ -496,9 +497,9 @@ mod tests {
     #[test]
     fn higher_priority_claimed_first() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "low", "{}", "manual", 1, "default", 0).unwrap();
-        insert_job(&conn, "high", "{}", "manual", 1, "default", 10).unwrap();
-        insert_job(&conn, "mid", "{}", "manual", 1, "default", 5).unwrap();
+        insert_job(&conn, "low", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
+        insert_job(&conn, "high", "{}", ScheduledBy::Cli, 1, "default", 10).unwrap();
+        insert_job(&conn, "mid", "{}", ScheduledBy::Cli, 1, "default", 5).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &conc, &empty_queue_conc(), 0).unwrap();
@@ -511,9 +512,9 @@ mod tests {
     #[test]
     fn fifo_tiebreak_within_priority() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "first", "{}", "manual", 1, "default", 5).unwrap();
+        insert_job(&conn, "first", "{}", ScheduledBy::Cli, 1, "default", 5).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        insert_job(&conn, "second", "{}", "manual", 1, "default", 5).unwrap();
+        insert_job(&conn, "second", "{}", ScheduledBy::Cli, 1, "default", 5).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &conc, &empty_queue_conc(), 0).unwrap();
@@ -524,20 +525,20 @@ mod tests {
     #[test]
     fn decay_promotes_old_low_priority_job() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "old_low", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "old_low", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds') \
              WHERE slug = 'old_low'",
             &[],
         )
         .unwrap();
-        insert_job(&conn, "fresh_high", "{}", "manual", 1, "default", 1).unwrap();
+        insert_job(&conn, "fresh_high", "{}", ScheduledBy::Cli, 1, "default", 1).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
 
         let claimed_no_decay = {
             let (_d2, conn2) = setup_db();
-            insert_job(&conn2, "old_low", "{}", "manual", 1, "default", 0).unwrap();
+            insert_job(&conn2, "old_low", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
             conn2
                 .execute(
                     "UPDATE _crap_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds') \
@@ -545,7 +546,16 @@ mod tests {
                     &[],
                 )
                 .unwrap();
-            insert_job(&conn2, "fresh_high", "{}", "manual", 1, "default", 1).unwrap();
+            insert_job(
+                &conn2,
+                "fresh_high",
+                "{}",
+                ScheduledBy::Cli,
+                1,
+                "default",
+                1,
+            )
+            .unwrap();
 
             claim_pending_jobs(&conn2, 10, &conc, &empty_queue_conc(), 0).unwrap()
         };
@@ -558,7 +568,7 @@ mod tests {
     #[test]
     fn claim_surfaces_priority_in_job_run() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "test", "{}", "manual", 1, "default", 42).unwrap();
+        insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 42).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &conc, &empty_queue_conc(), 0).unwrap();
@@ -572,8 +582,17 @@ mod tests {
     #[test]
     fn queue_cap_limits_aggregate_claim() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "send_welcome", "{}", "hook", 1, "emails", 0).unwrap();
-        insert_job(&conn, "send_reset", "{}", "hook", 1, "emails", 0).unwrap();
+        insert_job(
+            &conn,
+            "send_welcome",
+            "{}",
+            ScheduledBy::Hook,
+            1,
+            "emails",
+            0,
+        )
+        .unwrap();
+        insert_job(&conn, "send_reset", "{}", ScheduledBy::Hook, 1, "emails", 0).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let mut queue_conc = HashMap::new();
@@ -593,8 +612,8 @@ mod tests {
     #[test]
     fn queue_without_config_is_unlimited() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "hook", 1, "reports", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "hook", 1, "reports", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Hook, 1, "reports", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Hook, 1, "reports", 0).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &conc, &empty_queue_conc(), 0).unwrap();
@@ -607,8 +626,26 @@ mod tests {
     #[test]
     fn slug_cap_inside_permissive_queue_still_enforced() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "send_welcome", "{}", "hook", 1, "emails", 0).unwrap();
-        insert_job(&conn, "send_welcome", "{}", "hook", 1, "emails", 0).unwrap();
+        insert_job(
+            &conn,
+            "send_welcome",
+            "{}",
+            ScheduledBy::Hook,
+            1,
+            "emails",
+            0,
+        )
+        .unwrap();
+        insert_job(
+            &conn,
+            "send_welcome",
+            "{}",
+            ScheduledBy::Hook,
+            1,
+            "emails",
+            0,
+        )
+        .unwrap();
 
         let mut conc = HashMap::new();
         conc.insert("send_welcome".to_string(), 1u32);
@@ -628,8 +665,8 @@ mod tests {
     #[test]
     fn queue_cap_zero_means_unlimited() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "a", "{}", "manual", 1, "default", 0).unwrap();
-        insert_job(&conn, "b", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "a", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
+        insert_job(&conn, "b", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         let conc: HashMap<String, u32> = HashMap::new();
         let mut queue_conc = HashMap::new();
@@ -656,7 +693,7 @@ mod tests {
             &conn,
             "_system_image_convert",
             "{}",
-            "system",
+            ScheduledBy::System,
             1,
             "images",
             0,
@@ -666,7 +703,7 @@ mod tests {
             &conn,
             "_system_image_convert",
             "{}",
-            "system",
+            ScheduledBy::System,
             1,
             "images",
             0,
@@ -676,7 +713,7 @@ mod tests {
             &conn,
             "_system_image_convert",
             "{}",
-            "system",
+            ScheduledBy::System,
             1,
             "images",
             0,
@@ -715,9 +752,18 @@ mod tests {
     #[test]
     fn queue_filter_claims_only_the_listed_queues() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "resize", "{}", "hook", 1, "heavy", 0).unwrap();
-        insert_job(&conn, "send_welcome", "{}", "hook", 1, "email", 0).unwrap();
-        insert_job(&conn, "reindex", "{}", "hook", 1, "default", 0).unwrap();
+        insert_job(&conn, "resize", "{}", ScheduledBy::Hook, 1, "heavy", 0).unwrap();
+        insert_job(
+            &conn,
+            "send_welcome",
+            "{}",
+            ScheduledBy::Hook,
+            1,
+            "email",
+            0,
+        )
+        .unwrap();
+        insert_job(&conn, "reindex", "{}", ScheduledBy::Hook, 1, "default", 0).unwrap();
 
         let no_caps = empty_queue_conc();
         let queues = vec!["heavy".to_string()];
@@ -739,9 +785,9 @@ mod tests {
     #[test]
     fn queue_filter_accepts_several_queues() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
-        insert_job(&conn, "b", "{}", "hook", 1, "email", 0).unwrap();
-        insert_job(&conn, "c", "{}", "hook", 1, "default", 0).unwrap();
+        insert_job(&conn, "a", "{}", ScheduledBy::Hook, 1, "heavy", 0).unwrap();
+        insert_job(&conn, "b", "{}", ScheduledBy::Hook, 1, "email", 0).unwrap();
+        insert_job(&conn, "c", "{}", ScheduledBy::Hook, 1, "default", 0).unwrap();
 
         let no_caps = empty_queue_conc();
         let queues = vec!["heavy".to_string(), "email".to_string()];
@@ -758,8 +804,8 @@ mod tests {
     #[test]
     fn no_queue_filter_claims_every_queue() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
-        insert_job(&conn, "b", "{}", "hook", 1, "default", 0).unwrap();
+        insert_job(&conn, "a", "{}", ScheduledBy::Hook, 1, "heavy", 0).unwrap();
+        insert_job(&conn, "b", "{}", ScheduledBy::Hook, 1, "default", 0).unwrap();
 
         let no_caps = empty_queue_conc();
         let params = filtered(None, &no_caps);
@@ -772,7 +818,7 @@ mod tests {
     #[test]
     fn empty_queue_filter_claims_nothing() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+        insert_job(&conn, "a", "{}", ScheduledBy::Hook, 1, "heavy", 0).unwrap();
 
         let no_caps = empty_queue_conc();
         let empty: Vec<String> = Vec::new();
@@ -786,7 +832,7 @@ mod tests {
     #[test]
     fn queue_names_are_bound_parameters() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "a", "{}", "hook", 1, "heavy", 0).unwrap();
+        insert_job(&conn, "a", "{}", ScheduledBy::Hook, 1, "heavy", 0).unwrap();
 
         let no_caps = empty_queue_conc();
         let queues = vec!["heavy') OR 1=1 --".to_string()];

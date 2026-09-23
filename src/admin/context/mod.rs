@@ -28,7 +28,7 @@ pub use editor_locale::{EditorLocaleContext, EditorLocaleOption};
 pub use field::FieldContext;
 pub use fields_meta::{FieldAdminMeta, FieldMeta};
 pub use global::GlobalContext;
-pub use nav::{NavCollection, NavData, NavGlobal};
+pub use nav::{NavCollection, NavData, NavGlobal, NavPage, NavPageSection};
 pub use page::{AuthBasePageContext, BasePageContext, Breadcrumb, PageMeta, PageType};
 pub use pagination::PaginationContext;
 pub use permissions::{CollectionPermissions, GlobalPermissions};

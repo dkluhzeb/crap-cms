@@ -1,35 +1,90 @@
+//! `has_many` scalar list validation: the list's shape and its
+//! `min_rows`/`max_rows` count, with each element checked by the `elements` submodule.
+
+mod elements;
+
 use serde_json::Value;
 
-use crate::{
-    core::{FieldDefinition, FieldType, validate::FieldError},
-    db::query::helpers::number_element,
-};
+use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-use super::length::not_text_error;
-use super::numeric::{NumberViolation, number_violation};
-use super::shared::{decode_element_list, element_display};
+use super::shared::decode_element_list;
+use elements::{check_number_value_bounds, check_text_element};
+
+/// The inputs of [`check_has_many_elements`].
+pub(crate) struct HasManyCheck<'a> {
+    field: &'a FieldDefinition,
+    data_key: &'a str,
+    value: Option<&'a Value>,
+    is_empty: bool,
+    is_draft: bool,
+    is_update: bool,
+}
+
+impl<'a> HasManyCheck<'a> {
+    pub(crate) fn new(
+        field: &'a FieldDefinition,
+        data_key: &'a str,
+        value: Option<&'a Value>,
+        is_empty: bool,
+    ) -> Self {
+        Self {
+            field,
+            data_key,
+            value,
+            is_empty,
+            is_draft: false,
+            is_update: false,
+        }
+    }
+
+    /// A draft save relaxes the `min_rows`/`max_rows` count.
+    #[must_use]
+    pub(crate) fn draft(mut self, is_draft: bool) -> Self {
+        self.is_draft = is_draft;
+
+        self
+    }
+
+    /// On an update an omitted field keeps its stored values, so its count is
+    /// not judged. A value inside a row or a node is always sent whole.
+    #[must_use]
+    pub(crate) fn update(mut self, is_update: bool) -> Self {
+        self.is_update = is_update;
+
+        self
+    }
+}
 
 /// Validate individual values within a `has_many` element list.
 /// Checks count bounds (`min_rows/max_rows`) for all `has_many` field types
 /// and per-element constraints for Text/Number. Accepts both the typed
 /// `Value::Array` shape (Lua/gRPC) and the JSON-string encoding (admin form).
-pub(crate) fn check_has_many_elements(
-    field: &FieldDefinition,
-    data_key: &str,
-    value: Option<&Value>,
-    is_empty: bool,
-    is_draft: bool,
-    errors: &mut Vec<FieldError>,
-) {
-    if !field.has_many || is_empty {
-        return;
-    }
+///
+/// An absent, null or empty value counts as zero values — the rule
+/// `check_row_bounds` applies to Array/Blocks/has-many relationships — except
+/// on an update that omits the field, which keeps what is stored.
+pub(crate) fn check_has_many_elements(check: &HasManyCheck<'_>, errors: &mut Vec<FieldError>) {
+    let HasManyCheck {
+        field,
+        data_key,
+        value,
+        is_empty,
+        is_draft,
+        is_update,
+    } = *check;
 
     let relevant = matches!(
         field.field_type,
         FieldType::Select | FieldType::Radio | FieldType::Text | FieldType::Number
     );
-    if !relevant {
+    if !field.has_many || !relevant {
+        return;
+    }
+
+    if is_empty {
+        if !is_draft && (!is_update || value.is_some()) {
+            check_count_bounds(field, data_key, 0, errors);
+        }
         return;
     }
 
@@ -73,148 +128,6 @@ pub(crate) fn check_has_many_elements(
     }
 }
 
-/// Validate one element of a text list: it must be text — the write would
-/// store a number or a list as its JSON spelling — and within the length
-/// bounds.
-fn check_text_element(
-    field: &FieldDefinition,
-    data_key: &str,
-    element: &Value,
-    errors: &mut Vec<FieldError>,
-) {
-    let Some(s) = element.as_str() else {
-        errors.push(not_text_error(field, data_key));
-
-        return;
-    };
-
-    check_text_value_length(field, data_key, s, errors);
-}
-
-/// Validate a single text value against `min_length/max_length` constraints.
-fn check_text_value_length(
-    field: &FieldDefinition,
-    data_key: &str,
-    v: &str,
-    errors: &mut Vec<FieldError>,
-) {
-    let char_count = v.chars().count();
-
-    if let Some(min_len) = field.min_length
-        && char_count < min_len
-    {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
-                format!(
-                    "{}: '{}' must be at least {} characters",
-                    field.name, v, min_len
-                ),
-                "validation.has_many_min_length",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("value", v.to_string())
-            .with_param("min", min_len.to_string()),
-        );
-    }
-
-    if let Some(max_len) = field.max_length
-        && char_count > max_len
-    {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
-                format!(
-                    "{}: '{}' must be at most {} characters",
-                    field.name, v, max_len
-                ),
-                "validation.has_many_max_length",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("value", v.to_string())
-            .with_param("max", max_len.to_string()),
-        );
-    }
-}
-
-/// Validate a single number value against min/max constraints. Elements
-/// arrive as JSON numbers (typed surfaces) or number-strings (admin form).
-fn check_number_value_bounds(
-    field: &FieldDefinition,
-    data_key: &str,
-    element: &Value,
-    errors: &mut Vec<FieldError>,
-) {
-    let num = number_element(element);
-    let v = element_display(element);
-    let v = v.as_str();
-
-    // A non-numeric element would be silently dropped by the write-edge
-    // coercion (data loss) — reject it, matching the single-value path.
-    let Some(num) = num else {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
-                format!("{}: {} must be a number", field.name, v),
-                "validation.has_many_invalid_number",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("value", v.to_string()),
-        );
-        return;
-    };
-
-    // Finite + integer rule, shared with the single-value numeric path.
-    if let Some(violation) = number_violation(field, num) {
-        let (message, key) = match violation {
-            NumberViolation::NotFinite => (
-                format!("{}: {} must be a finite number", field.name, v),
-                "validation.has_many_finite_number",
-            ),
-            NumberViolation::NotWhole => (
-                format!("{}: {} must be a whole number", field.name, v),
-                "validation.has_many_whole_number",
-            ),
-        };
-        errors.push(
-            FieldError::with_key(data_key.to_owned(), message, key)
-                .with_param("field", field.name.clone())
-                .with_param("value", v.to_string()),
-        );
-        return;
-    }
-
-    if let Some(min_val) = field.min
-        && num < min_val
-    {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
-                format!("{}: {} must be at least {}", field.name, v, min_val),
-                "validation.has_many_min_value",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("value", v.to_string())
-            .with_param("min", min_val.to_string()),
-        );
-    }
-
-    if let Some(max_val) = field.max
-        && num > max_val
-    {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
-                format!("{}: {} must be at most {}", field.name, v, max_val),
-                "validation.has_many_max_value",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("value", v.to_string())
-            .with_param("max", max_val.to_string()),
-        );
-    }
-}
-
 /// Shared `min_rows/max_rows` validation for all `has_many` field types.
 fn check_count_bounds(
     field: &FieldDefinition,
@@ -255,53 +168,47 @@ fn check_count_bounds(
 mod tests {
     use crate::core::DocumentFields;
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
-    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
+    use crate::hooks::lifecycle::validation::{
+        ValidationCtx, is_empty_value, validate_fields_inner,
+    };
 
-    use super::check_has_many_elements;
-    use serde_json::json;
+    use super::{HasManyCheck, check_has_many_elements};
+    use serde_json::{Value, json};
 
-    /// Regression: validation parsed a number element untrimmed while the write
-    /// trims it, so `" 5"` was rejected though the write would store `5`.
-    #[test]
-    fn a_padded_number_element_is_valid() {
-        let field = FieldDefinition::builder("scores", FieldType::Number)
-            .has_many(true)
-            .build();
-        let mut errors = Vec::new();
-
-        check_has_many_elements(
-            &field,
-            "scores",
-            Some(&json!([" 5"])),
-            false,
-            false,
-            &mut errors,
-        );
-
-        assert!(errors.is_empty(), "{errors:?}");
-    }
-
-    /// Regression: a non-string element of a text list (`[1, ["a"]]`) passed
-    /// validation and was stored as its JSON spelling. Every element must be
-    /// text.
-    #[test]
-    fn a_non_string_element_of_a_text_list_is_rejected() {
+    fn min_rows_errors(value: Option<&Value>, is_update: bool) -> usize {
         let field = FieldDefinition::builder("tags", FieldType::Text)
             .has_many(true)
+            .min_rows(1)
             .build();
+        let is_empty = is_empty_value(value);
         let mut errors = Vec::new();
 
         check_has_many_elements(
-            &field,
-            "tags",
-            Some(&json!(["ok", 1, ["a"]])),
-            false,
-            false,
+            &HasManyCheck::new(&field, "tags", value, is_empty).update(is_update),
             &mut errors,
         );
 
-        let keys: Vec<&str> = errors.iter().filter_map(|e| e.key.as_deref()).collect();
-        assert_eq!(keys, vec!["validation.invalid_text"; 2]);
+        errors.len()
+    }
+
+    /// Regression: `min_rows` on a scalar has-many list was skipped when the
+    /// value was absent, null or empty — Array/Blocks/relationship lists count
+    /// those as zero. An update that omits the field keeps its stored values.
+    #[test]
+    fn min_rows_counts_an_absent_or_blank_list_as_zero() {
+        assert_eq!(min_rows_errors(None, false), 1, "absent on create");
+        assert_eq!(min_rows_errors(Some(&Value::Null), false), 1);
+        assert_eq!(
+            min_rows_errors(Some(&json!("")), true),
+            1,
+            "cleared on update"
+        );
+        assert_eq!(
+            min_rows_errors(None, true),
+            0,
+            "omitted on update keeps the stored list"
+        );
+        assert_eq!(min_rows_errors(Some(&json!(["a"])), false), 0);
     }
 
     /// Regression: a malformed (scalar / bare-string) value on a has-many
@@ -341,40 +248,6 @@ mod tests {
         );
     }
 
-    /// Regression: elements submitted as a typed array (Lua/gRPC) were
-    /// silently skipped — the check only understood the JSON-string
-    /// encoding, so per-element bounds and counts never ran.
-    #[test]
-    fn typed_array_elements_validated() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .min_length(2)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(["ab", "x"]));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_err(), "element 'x' violates min_length=2");
-        let err = result.unwrap_err();
-        assert!(
-            err.errors
-                .iter()
-                .any(|e| e.key.as_deref() == Some("validation.has_many_min_length")),
-            "expected has_many_min_length, got: {:?}",
-            err.errors
-        );
-    }
-
     /// Regression companion: count bounds must also fire for typed arrays.
     #[test]
     fn typed_array_count_bounds_enforced() {
@@ -405,64 +278,6 @@ mod tests {
             "expected has_many_min_rows, got: {:?}",
             err.errors
         );
-    }
-
-    fn number_list_error_keys(scores: serde_json::Value, integer: bool) -> Vec<String> {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .integer(integer)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("scores".to_string(), scores);
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        result
-            .err()
-            .map(|e| e.errors.iter().filter_map(|fe| fe.key.clone()).collect())
-            .unwrap_or_default()
-    }
-
-    /// Regression: `has_many` Number elements skipped the finite/NaN,
-    /// `integer`, and non-numeric hardening the single-value path enforces
-    /// (only min/max ran), so `["NaN"]` / `["1.5"]` on an integer field /
-    /// `["abc"]` slipped through — the last one then silently dropped on write.
-    #[test]
-    fn has_many_number_rejects_non_finite() {
-        assert!(
-            number_list_error_keys(json!(["NaN"]), false)
-                .contains(&"validation.has_many_finite_number".to_string())
-        );
-    }
-
-    #[test]
-    fn has_many_number_rejects_fractional_when_integer() {
-        assert!(
-            number_list_error_keys(json!(["1.5"]), true)
-                .contains(&"validation.has_many_whole_number".to_string())
-        );
-    }
-
-    #[test]
-    fn has_many_number_rejects_non_numeric() {
-        assert!(
-            number_list_error_keys(json!(["abc"]), false)
-                .contains(&"validation.has_many_invalid_number".to_string())
-        );
-    }
-
-    #[test]
-    fn has_many_number_valid_list_passes() {
-        assert!(number_list_error_keys(json!([1, 2, 3]), true).is_empty());
     }
 
     /// Regression: `min_rows`/`max_rows` on a scalar `has_many` field were
@@ -584,56 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_has_many_text_valid() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_ok(), "Valid has_many text values should pass");
-    }
-
-    #[test]
-    fn test_validate_has_many_text_min_length_fails() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .min_length(3)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_err());
-        assert!(
-            result.unwrap_err().errors[0]
-                .message
-                .contains("at least 3 characters")
-        );
-    }
-
-    #[test]
     fn test_validate_has_many_text_max_rows_fails() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -659,52 +424,6 @@ mod tests {
                 .message
                 .contains("at most 2 values")
         );
-    }
-
-    #[test]
-    fn test_validate_has_many_number_valid() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_ok(), "Valid has_many number values should pass");
-    }
-
-    #[test]
-    fn test_validate_has_many_number_max_fails() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .max(50.0)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("scores".to_string(), json!(r#"["10","75"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("at most 50"));
     }
 
     #[test]
@@ -752,32 +471,6 @@ mod tests {
             &ValidationCtx::builder(&conn, "test").build(),
         );
         assert!(result.is_ok(), "Non-empty array should pass required check");
-    }
-
-    #[test]
-    fn test_has_many_text_max_length_not_applied_to_json_string() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .max_length(10)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_ok(),
-            "max_length should check per-value, not JSON string length"
-        );
     }
 
     #[test]
@@ -832,174 +525,6 @@ mod tests {
             "has_many number with fewer items than min_rows should fail"
         );
         assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
-    }
-
-    #[test]
-    fn test_validate_has_many_number_min_fails() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .min(5.0)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("scores".to_string(), json!(r#"["10","2"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "has_many number with value below min should fail"
-        );
-        assert!(result.unwrap_err().errors[0].message.contains("at least 5"));
-    }
-
-    #[test]
-    fn test_validate_has_many_text_max_length_fails() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .max_length(3)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["ab","toolong"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "has_many text with value exceeding max_length should fail"
-        );
-        assert!(
-            result.unwrap_err().errors[0]
-                .message
-                .contains("at most 3 characters")
-        );
-    }
-
-    /// Regression: `has_many` validation must report ALL invalid values, not just the first.
-    /// Previously, `break` after the first error caused subsequent violations to be hidden.
-    #[test]
-    fn test_has_many_reports_all_invalid_values() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-
-        // Three values all below min_length=5
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .min_length(5)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["ab","cd","ef"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_err());
-        let errors = &result.unwrap_err().errors;
-        assert_eq!(
-            errors.len(),
-            3,
-            "All three invalid values should produce errors, got {}",
-            errors.len()
-        );
-    }
-
-    /// Regression: `has_many` number validation must report ALL out-of-bounds values.
-    #[test]
-    fn test_has_many_number_reports_all_invalid_values() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
-            .unwrap();
-
-        let fields = vec![
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .max(10.0)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("scores".to_string(), json!(r#"["20","30"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_err());
-        let errors = &result.unwrap_err().errors;
-        assert_eq!(
-            errors.len(),
-            2,
-            "Both out-of-range values should produce errors, got {}",
-            errors.len()
-        );
-    }
-
-    /// Regression: `has_many` length validation must count characters, not bytes.
-    /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted with `.len()`.
-    #[test]
-    fn test_has_many_text_length_counts_chars_not_bytes() {
-        let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
-            .unwrap();
-
-        // "café" = 4 chars but 5 bytes (é is 2 bytes in UTF-8)
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .max_length(4)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["café"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_ok(), "café is 4 chars — should pass max_length=4");
-
-        // "你好" = 2 chars but 6 bytes
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Text)
-                .has_many(true)
-                .min_length(2)
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("tags".to_string(), json!(r#"["你好"]"#));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(result.is_ok(), "你好 is 2 chars — should pass min_length=2");
     }
 
     /// Regression: `has_many` Select must enforce `min_rows/max_rows` bounds.

@@ -12,6 +12,7 @@ use crate::{
         content,
         handlers::{ContentService, content_service::pool_error_status},
     },
+    core::ScheduledBy,
     service::{
         self, AppInfra, ServiceContext,
         jobs::{conceal_denied_trigger, job_not_found},
@@ -90,7 +91,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         &service::jobs::QueueJobInput {
             job_def: &job_def,
             data: Some(&input.data),
-            scheduled_by: "grpc",
+            scheduled_by: ScheduledBy::Grpc,
             priority: effective_priority,
             queue_retries,
             delay_secs: input.delay_secs,

@@ -7,6 +7,8 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
+use super::crap_node::find_crap_nodes;
+
 /// Render `ProseMirror` JSON to HTML.
 ///
 /// Handles standard PM nodes (doc, paragraph, heading, text, blockquote, `code_block`,
@@ -175,98 +177,33 @@ fn render_text_with_marks(text: &str, marks: Option<&Vec<Value>>, out: &mut Stri
 
 /// Render HTML content with custom node replacement.
 ///
-/// Finds `<crap-node data-type="X" data-attrs='Y'></crap-node>` elements and
-/// replaces them with the output of `custom_renderer(name, attrs)`. Elements
-/// without a matching renderer are left unchanged.
+/// Finds `<crap-node data-type="X" data-attrs='Y'></crap-node>` elements (via
+/// [`find_crap_nodes`], the tokenizer validation reads the same nodes with)
+/// and replaces them with the output of `custom_renderer(name, attrs)`.
+/// Elements without a type or a matching renderer are left unchanged.
 pub fn render_html_custom_nodes<F>(html: &str, custom_renderer: &F) -> String
 where
     F: Fn(&str, &Value) -> Option<String>,
 {
     let mut result = String::with_capacity(html.len());
-    let mut remaining = html;
+    let mut copied = 0;
 
-    while let Some((before, _)) = remaining.split_once("<crap-node ") {
-        // Add everything before the tag
-        result.push_str(before);
+    for tag in find_crap_nodes(html) {
+        result.push_str(&html[copied..tag.start]);
+        copied = tag.end;
 
-        // Find the end of the opening tag — reconstruct from the split point
-        let after_start = &remaining[before.len()..];
-        let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
-            (Some(sc), Some(et)) => {
-                if sc < et {
-                    sc + "/>".len()
-                } else {
-                    et + "</crap-node>".len()
-                }
-            }
-            (Some(sc), None) => sc + "/>".len(),
-            (None, Some(et)) => et + "</crap-node>".len(),
-            (None, None) => {
-                // Malformed — just pass through the rest
-                result.push_str(after_start);
-                remaining = "";
-                continue;
-            }
-        };
+        let rendered = tag
+            .node_type()
+            .and_then(|nt| custom_renderer(nt, &Value::Object(tag.node_attrs())));
 
-        let tag = &after_start[..close_pos];
-
-        // Extract data-type
-        let node_type = extract_attr_value(tag, "data-type");
-        // Extract data-attrs
-        let attrs_str = extract_attr_value(tag, "data-attrs");
-
-        if let Some(ref nt) = node_type {
-            let attrs: Value = attrs_str
-                .as_deref()
-                .map(|s| {
-                    // Exact inverse of `html_escape_attr`: `&` was escaped
-                    // FIRST on encode, so `&amp;` must decode LAST — decoding
-                    // it earlier double-decodes author-typed literal entity
-                    // text (`&lt;` stored → `&amp;lt;` encoded → would become
-                    // `<` instead of the literal `&lt;`).
-                    s.replace("&#39;", "'")
-                        .replace("&lt;", "<")
-                        .replace("&gt;", ">")
-                        .replace("&quot;", "\"")
-                        .replace("&amp;", "&")
-                })
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(Value::Object(Map::new()));
-
-            if let Some(rendered) = custom_renderer(nt, &attrs) {
-                result.push_str(&rendered);
-            } else {
-                // No renderer — pass through
-                result.push_str(tag);
-            }
-        } else {
-            result.push_str(tag);
+        match rendered {
+            Some(rendered) => result.push_str(&rendered),
+            None => result.push_str(&html[tag.start..tag.end]),
         }
-
-        remaining = &after_start[close_pos..];
     }
 
-    result.push_str(remaining);
+    result.push_str(&html[copied..]);
     result
-}
-
-/// Extract an attribute value from a tag string. Handles both single and double quotes.
-pub(crate) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
-    let patterns = [format!("{attr_name}=\""), format!("{attr_name}='")];
-
-    for pattern in &patterns {
-        if let Some((_before, after)) = tag.split_once(pattern.as_str()) {
-            let quote_char = if pattern.ends_with('"') { '"' } else { '\'' };
-
-            if let Some((value, _rest)) = after.split_once(quote_char) {
-                return Some(value.to_string());
-            }
-        }
-    }
-
-    None
 }
 
 /// Check if a URL uses a safe protocol (or is relative/anchor).
@@ -307,7 +244,10 @@ pub(crate) fn html_escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// the attr decode must be the exact inverse of
+    use super::*;
+    use crate::core::richtext::decode_entities;
+
+    /// The attr decode must be the exact inverse of
     /// `html_escape_attr`. Author-typed literal entity text (`&lt;`)
     /// must survive the encode/decode round-trip as literal text, not
     /// get promoted to markup by a premature `&amp;` decode.
@@ -317,16 +257,9 @@ mod tests {
         let encoded = html_escape_attr(original);
         assert_eq!(encoded, "literal &amp;lt; stays literal");
 
-        let decoded = encoded
-            .replace("&#39;", "'")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&amp;", "&");
+        let decoded = decode_entities(&encoded);
         assert_eq!(decoded, original, "round-trip must be lossless");
     }
-
-    use super::*;
 
     fn no_custom(_name: &str, _attrs: &Value) -> Option<String> {
         None
@@ -481,30 +414,6 @@ mod tests {
         assert_eq!(result, html);
     }
 
-    #[test]
-    fn extract_attr_value_double_quotes() {
-        let tag = r#"<crap-node data-type="cta" data-attrs='{"x":1}'></crap-node>"#;
-        assert_eq!(
-            extract_attr_value(tag, "data-type"),
-            Some("cta".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_attr_value_single_quotes() {
-        let tag = "<crap-node data-type='hello'></crap-node>";
-        assert_eq!(
-            extract_attr_value(tag, "data-type"),
-            Some("hello".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_attr_value_missing() {
-        let tag = "<crap-node></crap-node>";
-        assert_eq!(extract_attr_value(tag, "data-type"), None);
-    }
-
     /// Regression: heading level 0 produced invalid `<h0>` tags.
     #[test]
     fn render_heading_level_zero_clamped_to_1() {
@@ -584,16 +493,6 @@ mod tests {
         let result = render_prosemirror_to_html(json, &no_custom).unwrap();
         assert!(result.contains("&quot;"));
         assert!(!result.contains(r#"onload="alert(1)"#));
-    }
-
-    /// Regression: multi-byte UTF-8 in attr values must not panic from string slicing.
-    #[test]
-    fn extract_attr_value_multibyte_utf8() {
-        let tag = r#"<crap-node data-type="日本語ノード" data-attrs='{}'></crap-node>"#;
-        assert_eq!(
-            extract_attr_value(tag, "data-type"),
-            Some("日本語ノード".to_string())
-        );
     }
 
     /// Regression: multi-byte UTF-8 in HTML must not panic during crap-node replacement.

@@ -398,3 +398,65 @@ async fn edit_in_non_default_locale_shows_localized_values() {
         "slug should be readonly in non-default locale",
     );
 }
+
+// 9. Saving a translation as a draft
+//
+// Regression: the edit form echoes a non-default locale's read-only shared
+// fields, and only the publish path dropped them — a draft save under `de` was
+// refused with the locale-lock error on the untouched `slug`.
+#[tokio::test]
+async fn draft_save_in_non_default_locale_is_accepted() {
+    let config = make_locale_config();
+    let locale = config.locale.clone();
+    let mut def = make_localized_def();
+    def.versions = Some(VersionsConfig::new(true, 10));
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![def, make_users_def()],
+        vec![],
+        config,
+        "loc9@test.com",
+        "pass123",
+    );
+
+    let def = app.registry.get_collection("articles").unwrap().clone();
+    let en_ctx = LocaleContext::from_locale_string(Some("en"), &locale).unwrap();
+    let data: DocumentFields = HashMap::from([
+        ("title".to_string(), json!("Hello")),
+        ("slug".to_string(), json!("hello")),
+    ])
+    .into();
+    let doc_id = {
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "articles", &def, &data, en_ctx.as_ref()).unwrap();
+        tx.commit().unwrap();
+        doc.id
+    };
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(format!("/admin/collections/articles/{doc_id}"))
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "_locale=de&title=Hallo&slug=hello&_action=save_draft&_method=PUT",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let redirected = resp.headers().contains_key("HX-Redirect");
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        !body.contains("not localized"),
+        "the echoed shared field must not trip the locale lock on a draft save: {body}"
+    );
+    assert!(
+        redirected,
+        "a saved draft redirects to the edit page: {body}"
+    );
+}

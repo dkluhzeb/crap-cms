@@ -6,8 +6,8 @@ use std::cmp;
 use anyhow::{Context as _, Result};
 use nanoid::nanoid;
 
-use crate::core::JobRun;
 use crate::core::email::SYSTEM_EMAIL_JOB;
+use crate::core::{JobRun, ScheduledBy};
 use crate::db::query::jobs::get_job_run;
 use crate::db::{DbConnection, DbValue};
 
@@ -17,7 +17,7 @@ use crate::db::{DbConnection, DbValue};
 pub struct InsertJobOpts<'a> {
     pub slug: &'a str,
     pub data: &'a str,
-    pub scheduled_by: &'a str,
+    pub scheduled_by: ScheduledBy,
     pub max_attempts: u32,
     pub queue: &'a str,
     pub priority: i32,
@@ -70,7 +70,7 @@ pub fn insert_job(
     conn: &dyn DbConnection,
     slug: &str,
     data: &str,
-    scheduled_by: &str,
+    scheduled_by: ScheduledBy,
     max_attempts: u32,
     queue: &str,
     priority: i32,
@@ -171,7 +171,7 @@ pub fn insert_job_with(conn: &dyn DbConnection, opts: &InsertJobOpts) -> Result<
         DbValue::Text(opts.queue.to_string()),
         DbValue::Text(opts.data.to_string()),
         DbValue::Integer(i64::from(opts.max_attempts)),
-        DbValue::Text(opts.scheduled_by.to_string()),
+        DbValue::Text(opts.scheduled_by.as_str().to_string()),
         DbValue::Integer(i64::from(opts.priority)),
         opts.unique_key
             .map_or(DbValue::Null, |k| DbValue::Text(k.to_string())),
@@ -192,7 +192,7 @@ pub fn insert_job_with(conn: &dyn DbConnection, opts: &InsertJobOpts) -> Result<
             .queue(opts.queue)
             .data(opts.data)
             .max_attempts(opts.max_attempts)
-            .scheduled_by(opts.scheduled_by)
+            .scheduled_by(opts.scheduled_by.as_str())
             .priority(opts.priority);
         if let Some(key) = opts.unique_key {
             run_builder = run_builder.unique_key(key);
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn test_insert_and_get_job() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test_job", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test_job", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         assert_eq!(job.slug, "test_job");
         assert_eq!(job.status, JobStatus::Pending);
 
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn test_complete_job() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         // Claim it first (running at attempt 1, mirroring a real claim).
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn terminal_writes_are_guarded_by_running_and_attempt() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         // Row is now running at attempt 2 (the live retry).
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 2 WHERE id = ?1",
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn test_fail_job_no_retry() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn test_fail_job_with_retry() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn test_fail_job_retry_clears_heartbeat() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = datetime('now') WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn test_mark_stale() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn test_update_heartbeat() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn test_fail_job_retry_sets_retry_after() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
@@ -761,7 +761,7 @@ mod tests {
             &conn,
             SYSTEM_EMAIL_JOB,
             EMAIL_BODY,
-            "system",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -786,7 +786,7 @@ mod tests {
             &conn,
             SYSTEM_EMAIL_JOB,
             EMAIL_BODY,
-            "system",
+            ScheduledBy::System,
             3,
             "default",
             0,
@@ -807,7 +807,7 @@ mod tests {
             &conn,
             SYSTEM_EMAIL_JOB,
             EMAIL_BODY,
-            "system",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -826,7 +826,16 @@ mod tests {
     fn terminal_failure_of_other_jobs_keeps_data() {
         let (_dir, conn) = setup_db();
         let data = r#"{"report":"weekly"}"#;
-        let job = insert_job(&conn, "weekly_report", data, "cron", 1, "default", 0).unwrap();
+        let job = insert_job(
+            &conn,
+            "weekly_report",
+            data,
+            ScheduledBy::Cron,
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
         mark_running(&conn, &job.id);
 
         fail_job(&conn, &job.id, "boom", false, 1).unwrap();
@@ -844,7 +853,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "delayed",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -870,7 +879,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "immediate",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -897,7 +906,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "cleanup",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -938,7 +947,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "cleanup",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -973,7 +982,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "cleanup",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -1007,7 +1016,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "cleanup",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,
@@ -1029,7 +1038,7 @@ mod tests {
         let opts = InsertJobOpts {
             slug: "noisy",
             data: "{}",
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             max_attempts: 1,
             queue: "default",
             priority: 0,

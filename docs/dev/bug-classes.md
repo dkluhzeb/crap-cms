@@ -322,6 +322,27 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R23 (2026-09-23)**
+  - *Jobs catalogue/health:* gRPC/MCP/CLI/Lua list through one
+    `service::jobs` chokepoint; access fails closed and hides denied jobs;
+    one `stale_threshold_secs` for reclaim and healthcheck.
+  - *Custom-route CSRF:* `admin::csrf` shared with the global middleware
+    (header first, urlencoded `_csrf` second, constant-time, empty cookie
+    never matches); dispatch order unchanged.
+  - *Example job-manager plugin:* every Lua API call matches its signature;
+    mutations go through access-gated chokepoints; no triple-stash.
+  - *Validation:* `unique` (fails closed, self/soft-delete exclusion,
+    localized columns), custom `validate` return shapes, layout-wrapper
+    recursion and error paths, length/numeric/email checks, the row walker's
+    error paths, `crap.validation_error` nonce.
+  - *CLI:* dispatch/instance-lock/config-dir resolution, `serve`/`work` flags
+    and PID semantics, non-TTY prompts fail fast, `export`/`import`
+    atomicity, `make` overwrite refusal, `templates extract` exit code,
+    `status` exit codes, the reviewed-write allowlist in `surface_parity.rs`.
+  - *Admin extensions:* custom page route auth and slug validation, page
+    access fail-closed and nav/route agreement, `template_data` soft failure,
+    slot helper (cycle guard, raw-by-design output), overlay registration.
+
 - **R22 (2026-09-21)**
   - *Generated descriptions:* the wire-model → proto → MCP-schema → Lua-option
     chain agrees on every one of the 17 messages once `Int32` and proto3
@@ -1212,6 +1233,80 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-23 (33) — **CONVERGENCE ROUND 23** (budget lifted mid-round:
+  5 lenses — newest code (jobs catalogue parity, custom-route CSRF, example
+  job-manager plugin) and the validate dry-run on Sonnet, the CLI surface on
+  Sonnet, the individual validation checks and the admin extension surface on
+  Opus — 4 Opus fix batches, 2 Opus post-fix reviewers).
+  **~45 confirmed — 5 HIGH, ~20 MED, ~20 LOW — NOT quiet; no new class.**
+  The newest-code lens came back fully CLEAN; the two never-lensed surfaces
+  (CLI, admin extensions) and the per-check validation sweep carried the round.
+  - **P2 — the validate dry-run was a hand copy of write admission.** It never
+    adopted the pending draft, never applied the locale lock and skipped the
+    upload-metadata strip, so `validate` answered "valid" for publishes,
+    translations and upload creates the real write rejects. Fixed at a new
+    chokepoint, `service::write::admission` (`admit_create_input`,
+    `admit_update_input`, `admit_global_update_input`, `PendingDraft::
+    publishing_snapshot`), called by both the writes and `Validate`/
+    `ValidateGlobal`; pinned by a `WRITE_ADMISSION` entry in
+    `tests/chokepoint_copies.rs`.
+  - **P2 — Lua CRUD writes never ran rich text node-attribute validation**:
+    only `RunnerWriteHooks` injected the registry into the validation context.
+    `validate_write_fields` now takes the registry as a required argument and
+    `LuaWriteHooks` carries a non-optional `&Registry` (19 call sites),
+    so a write path cannot compile without it.
+  - **P1 — "the ids in this value" had four decoders.** `row_bounds` read a
+    string as a JSON array only while the admin form sends comma lists and the
+    writer split on commas (JSON-array strings became ids like `["a"`):
+    `min_rows = 1` made a has-many relationship unsaveable, `max_rows` was not
+    enforced. One decoder, `core::reference_items`, for validation, the writer
+    and ref-counting.
+  - **Known footgun recurring (find without a locale context)**: `user list`,
+    `bench` and `trash` read, and `user create`/`bench create` wrote, with
+    `None`, naming bare columns on localized collections. One CLI helper,
+    `commands::cli_find`, plus `LocaleContext::default_for` on the writes.
+  - **D — free-form provenance.** `scheduled_by` was a `&str` at nine insert
+    sites; `queue_bulk` hardcoded `"api"` for both gRPC and MCP callers and
+    `"system"` had no proto value. `core::job::ScheduledBy` (closed set,
+    legacy `api` read as `grpc`), `JOB_SCHEDULED_BY_SYSTEM = 6`.
+  - **D2 — CLI flags undocumented three times over** (`jobs trigger --priority`,
+    `jobs cancel --id`, `images retry --priority`, plus a whole
+    `templates layout` subcommand). New guard `tests/docs_cli_flags.rs`: every
+    long flag of the live clap tree must appear in its own section of
+    `flags.md`.
+  - MED cluster, validation: JSON rich text sent as an object skipped node
+    checks and unparseable JSON failed open; node-attr `before_validate` never
+    ran in groups or rows; Lua `min`/`max` beyond i32 and invalid counts were
+    dropped silently (now load errors); date bounds compared the raw text,
+    not the stored UTC day, and broke `monthOnly`; scalar `has_many`
+    `min_rows` skipped absent values.
+  - MED cluster, admin/CLI: template errors answered 200 on the Lua-render
+    paths; the `crap.pages` `section` option was documented everywhere and
+    rendered nowhere (now grouped in the sidebar); the `make node` scaffold
+    shipped the documented stored-XSS pattern; `make hook -t field` could not
+    produce its own "any field" form; the empty-auth-collection warning was
+    dead; `jobs cancel`/`purge` skipped config validation and schema sync; a
+    tutorial scenario (02) did not work as written.
+  - **Post-fix review (2 Opus reviewers) found no regression from the fixes but
+    surfaced two MEDs next to them**: an admin *draft* save under a non-default
+    locale was refused by the locale lock (the admin form strip was
+    publish-only; pre-existing, now visible because validate mirrors the
+    write) — `strip_locale_locked_form_fields` applies to every admin save; and
+    making template errors a real 500 left htmx requests with no feedback
+    (htmx does not swap 4xx/5xx) — every admin error response now carries an
+    `X-Crap-Toast` through one helper, which also stopped non-ASCII toasts from
+    being dropped at the header conversion.
+    Test fallout: two guards did their job on the round's own changes — the
+    `field_tree_dispatch` inventory row for `checks/required.rs` (its field-type
+    match became predicates) and the upgrade-guide parity gate (two new
+    Breaking bullets needed guide items); plus one obsolete unit test that
+    pinned the old last-wins `template_data` registration.
+    Gates (2026-09-23): clippy clean in both forms; unit + integration ~8,025
+    green over 108 binaries; e2e 323 green (80 binaries, per binary); all five
+    `gen-*` checks, `cargo fmt --check`, `crap-cms fmt --check`, `biome ci`
+    and the mdbook build clean. Postgres harness NOT run.
+    Cost: ~3.3M agent tokens (5 lenses ~1.0M, 4 fix batches ~1.35M, 2
+    reviewers ~0.4M, docs lookups ~0.13M). Streak: 0 quiet rounds.
 - 2026-09-21 (32) — **CONVERGENCE ROUND 22** (budget mode, Opus orchestrator:
   3 Sonnet lenses — export/import fidelity, generated descriptions & typegen,
   admin rendering layer — 2 Opus fix batches, 1 reviewer).

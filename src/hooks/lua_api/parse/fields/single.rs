@@ -20,7 +20,7 @@ use mlua::{Lua, Table, Value};
 use crate::{
     core::{
         AUTO_COLUMNS, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
-        LANG_SUFFIX, McpFieldConfig, RequiredLocales, TZ_SUFFIX,
+        LANG_SUFFIX, McpFieldConfig, PickerAppearance, RequiredLocales, TZ_SUFFIX,
     },
     db::query,
 };
@@ -460,12 +460,17 @@ fn assemble_field_definition(
     if let Some(v) = parts.relationship {
         fd_builder = fd_builder.relationship(v);
     }
-    if let Some(v) = parts.picker_appearance {
+    if let Some(v) = parts.picker_appearance.clone() {
         fd_builder = fd_builder.picker_appearance(v);
     }
 
     fd_builder = apply_constraint_bounds(fd_builder, &parts.constraints);
-    fd_builder = apply_date_bounds(fd_builder, field_tbl, &parts.name)?;
+    fd_builder = apply_date_bounds(
+        fd_builder,
+        field_tbl,
+        &parts.name,
+        parts.picker_appearance.as_ref(),
+    )?;
 
     if parts.timezone {
         fd_builder = fd_builder.timezone(true);
@@ -514,14 +519,20 @@ fn apply_constraint_bounds(
 /// `YYYY-MM-DD` string: the runtime check compares the submitted value's date
 /// part lexically against the bound, so a wrong type or format would make the
 /// bound silently never (or always) match. `min_date` after `max_date` is
-/// rejected outright.
+/// rejected outright, and so is a bound on a `timeOnly` field — a time of day
+/// has no date to judge.
 fn apply_date_bounds(
     mut builder: crate::core::FieldDefinitionBuilder,
     field_tbl: &Table,
     name: &str,
+    picker: Option<&PickerAppearance>,
 ) -> Result<crate::core::FieldDefinitionBuilder> {
     let min = get_date_bound(field_tbl, "min_date", name)?;
     let max = get_date_bound(field_tbl, "max_date", name)?;
+
+    if picker == Some(&PickerAppearance::TimeOnly) && (min.is_some() || max.is_some()) {
+        bail!("date field '{name}': min_date/max_date do not apply to a timeOnly picker");
+    }
 
     if let (Some(min), Some(max)) = (&min, &max)
         && min > max
@@ -1188,6 +1199,24 @@ mod tests {
         let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min_date.as_deref(), Some("1900-01-01"));
         assert_eq!(fields[0].max_date.as_deref(), Some("2100-12-31"));
+    }
+
+    /// A time of day has no date for `min_date`/`max_date` to judge; the
+    /// bound used to reject every value at write time instead of the config
+    /// at load time.
+    #[test]
+    fn test_parse_fields_date_bounds_on_time_only_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "opens").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "timeOnly").unwrap();
+        field.set("min_date", "2024-01-01").unwrap();
+        fields_tbl.set(1, field).unwrap();
+
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err().to_string();
+        assert!(err.contains("timeOnly"), "{err}");
     }
 
     #[test]

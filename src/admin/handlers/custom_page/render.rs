@@ -18,7 +18,7 @@ use crate::{
     admin::{
         AdminState,
         context::{BasePageContext, PageMeta, PageType, page::custom::CustomPage},
-        custom_pages::is_valid_slug,
+        custom_pages::{is_valid_slug, page_template_name},
         handlers::shared::{
             PageRequest, extract_editor_locale, forbidden, get_user_doc, has_page_access,
             not_found, render_page,
@@ -40,7 +40,7 @@ pub async fn render_custom_page(
         return not_found(&state, &format!("Page '{slug}' not found"));
     }
 
-    let template_name = format!("pages/{slug}");
+    let template_name = page_template_name(&slug);
     if state.handlebars.get_template(&template_name).is_none() {
         return not_found(&state, &format!("Page '{slug}' not found"));
     }

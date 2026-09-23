@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::{
-    core::{BlockDefinition, DocumentFields, FieldDefinition, FieldType},
+    core::{BlockDefinition, DocumentFields, FieldDefinition, FieldType, RelationshipConfig},
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };
 
@@ -553,4 +553,48 @@ fn test_validate_array_non_object_rows_rejected() {
         "error message should mention object requirement: {}",
         err.errors[0].message,
     );
+}
+
+/// Regression: a required has-many sub-field in a row accepted `"[]"` (the
+/// JSON-string empty list) and `{}` (an empty Lua table) as present, while
+/// the top-level `required` check treats both as absent.
+#[test]
+fn test_required_has_many_sub_field_treats_empty_encodings_as_absent() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("tags", FieldType::Text)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("refs", FieldType::Relationship)
+                    .relationship(RelationshipConfig::new("posts", true))
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = DocumentFields::new();
+    data.insert("items".to_string(), json!([{ "tags": "[]", "refs": {} }]));
+
+    let err = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    )
+    .expect_err("empty lists are absent");
+
+    let required: Vec<&str> = err
+        .errors
+        .iter()
+        .filter(|e| e.key.as_deref() == Some("validation.required"))
+        .map(|e| e.field.as_str())
+        .collect();
+    assert_eq!(required, vec!["items[0][tags]", "items[0][refs]"]);
 }

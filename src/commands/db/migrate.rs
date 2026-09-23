@@ -38,6 +38,9 @@ pub fn migrate(config_dir: &Path, action: &MigrateAction) -> Result<()> {
     }
 
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    // Migrations run Lua and write through the database like any command that
+    // opens the project, so the config is validated and put into service first.
+    cfg.apply()?;
 
     // Held before the Lua VM and the pool open the database, and for the whole
     // command: exclusively for `fresh`, which drops every table, and shared

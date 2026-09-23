@@ -54,7 +54,8 @@ pub(crate) mod wizard;
 
 // Re-exports -- preserve the flat `scaffold::*` API that callers use.
 pub use self::blueprint::{
-    blueprint_list, blueprint_remove, blueprint_save, blueprint_use, list_blueprint_names,
+    SAVE_BLUEPRINT_HINT, blueprint_list, blueprint_remove, blueprint_save, blueprint_use,
+    list_blueprint_names,
 };
 pub use self::collection::{
     BlockStub, CollectionOptions, FieldStub, TabStub, VALID_FIELD_TYPES, make_collection,

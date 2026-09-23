@@ -120,9 +120,8 @@ fn collections_create_many(
         parsed_items.push(parse_item(&item_table, &def)?);
     }
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, state.registry.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(state.registry.as_ref()))
         .hooks_enabled(hooks_enabled)
         .run_validation(opts.hooks)
         .build();

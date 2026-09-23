@@ -23,7 +23,7 @@ use crate::{
                 EnrichOptions, HxNav, PageRequest, apply_display_conditions, build_field_contexts,
                 editor_read_ctx, enrich_field_contexts, forbidden, get_user_doc, htmx_redirect,
                 is_non_default_locale, page_with_toast, parse_request_locale, paths,
-                redirect_response, split_sidebar_fields, strip_locale_locked_for_publish,
+                redirect_response, split_sidebar_fields, strip_locale_locked_form_fields,
                 toast_only_error, translate_validation_errors,
             },
         },
@@ -75,11 +75,10 @@ fn update_global_document_blocking(
         // non-default locale; strip them exactly as the collection publish
         // path does, so the service's shared-field guard doesn't reject the
         // translation save.
-        let data = strip_locale_locked_for_publish(
+        let data = strip_locale_locked_form_fields(
             params.form.into(),
             &params.def.fields,
             params.locale_ctx.as_ref(),
-            params.draft,
         );
         let args = UpdateGlobalArgs::builder(data)
             .locale_ctx(params.locale_ctx)

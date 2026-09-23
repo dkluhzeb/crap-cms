@@ -1984,7 +1984,7 @@ function crap.jobs.define(slug, config) end
 --- @field max_attempts integer Total max attempts.
 --- @field priority integer Scheduling priority this run was queued with (higher = claimed sooner).
 --- @field unique_key? string Dedup key, when the run was queued with `{ unique = "..." }`. `nil` for normal enqueues.
---- @field scheduled_by? string How this run was triggered: `"cron"`, `"hook"`, `"grpc"`, or `"cli"`. `nil` if unknown.
+--- @field scheduled_by? string How this run was triggered: `"grpc"`, `"cron"`, `"hook"`, `"mcp"`, `"cli"`, or `"system"`. `nil` if unknown.
 --- @field queued_at? string ISO-8601 timestamp when the run was queued. `nil` if unknown.
 
 --- Queue a job for background execution. Returns the job run ID.
@@ -2052,8 +2052,8 @@ function crap.pages.list() end
 
 --- Sidebar / access metadata for a custom admin page.
 --- @class crap.PageOptions
---- @field section? string Sidebar section heading (e.g., `"Tools"`).
---- @field label? string Sidebar label (defaults to title-cased slug when omitted).
+--- @field section? string Sidebar section heading (e.g., `"Tools"`). Pages sharing a heading are grouped under it; pages without one are listed after every section.
+--- @field label? string Sidebar label. Omitting it keeps the page out of the sidebar nav — it still routes at `/admin/p/<slug>` and its `access` gate still runs.
 --- @field icon? string Material Symbols icon name.
 --- @field access? string | crap.HookRef Lua function ref for access control (resolved against the same registry as collection-level `access.*`). A bare ref string or a `{ ref, options }` table whose options reach the gate as `ctx.options`.
 
@@ -2116,16 +2116,16 @@ function crap.routes.list() end
 -- ── crap.template_data ───────────────────────────────────────
 
 --- Register named template-data functions called lazily by the
---- `{{data "name"}}` Handlebars helper. Each function is invoked
---- once per HTTP request when first referenced; results are not
---- cached across requests.
+--- `{{data "name"}}` Handlebars helper. Each function is invoked on every
+--- `{{data}}` lookup that names it; results are not cached, so bind a value
+--- used twice once with `{{#with (data "name")}}`.
 --- @class crap.template_data
 crap.template_data = {}
 
 --- Register a named template-data function. Must be called from
 --- init.lua or a definition file — runtime registration only lands in
 --- one VM of the pool and is intermittent across requests.
---- @param name string  Unique name (used as `{{data "name"}}` in templates).
+--- @param name string  Unique name (used as `{{data "name"}}` in templates); registering a name twice is an error.
 --- @param func function  Lua function called on each `{{data}}` lookup; returns any JSON-encodable value.
 function crap.template_data.register(name, func) end
 

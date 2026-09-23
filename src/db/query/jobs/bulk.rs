@@ -149,8 +149,8 @@ pub fn delete_pending_failed_jobs_matching(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::JobStatus;
     use crate::core::upload::{SYSTEM_IMAGE_CONVERT_JOB, delete_image_jobs_for_document};
+    use crate::core::{JobStatus, ScheduledBy};
     use crate::db::query::jobs::test_helpers::setup_db;
     use crate::db::query::jobs::{insert_job, list_job_runs};
 
@@ -180,8 +180,8 @@ mod tests {
     fn test_cancel_pending_jobs_by_slug() {
         let (_dir, conn) = setup_db();
 
-        insert_job(&conn, "cleanup", "{}", "cli", 1, "default", 0).unwrap();
-        insert_job(&conn, "notify", "{}", "cli", 1, "default", 0).unwrap();
+        insert_job(&conn, "cleanup", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
+        insert_job(&conn, "notify", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         // Cancel only "cleanup" pending jobs
         let deleted = cancel_pending_jobs(&conn, Some("cleanup")).unwrap();
@@ -205,7 +205,7 @@ mod tests {
             &conn,
             "img",
             r#"{"collection":"media","document_id":"d1"}"#,
-            "sys",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -215,7 +215,7 @@ mod tests {
             &conn,
             "img",
             r#"{"collection":"media","document_id":"d2"}"#,
-            "sys",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -226,7 +226,7 @@ mod tests {
             &conn,
             "other",
             r#"{"collection":"media","document_id":"d1"}"#,
-            "sys",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -271,7 +271,7 @@ mod tests {
             &conn,
             SYSTEM_IMAGE_CONVERT_JOB,
             r#"{"collection":"media","document_id":"abc_def"}"#,
-            "sys",
+            ScheduledBy::System,
             1,
             "default",
             0,
@@ -281,7 +281,7 @@ mod tests {
             &conn,
             SYSTEM_IMAGE_CONVERT_JOB,
             r#"{"collection":"media","document_id":"abcXdef"}"#,
-            "sys",
+            ScheduledBy::System,
             1,
             "default",
             0,

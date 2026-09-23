@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
+    admin::templates::SLOT_DOCS,
     cli,
     scaffold::{
         guards::refuse_file_overwrite, paths, render, to_title_case, validate_template_slug,
@@ -24,33 +25,11 @@ struct SlotCtx<'a> {
     title: String,
 }
 
-/// Built-in slots and their typical use cases. Used by the scaffold to
-/// nudge the user toward the right slot when they pass `--list`.
-const KNOWN_SLOTS: &[(&str, &str)] = &[
-    (
-        "head_extras",
-        "extra <head> tags (OG, robots, PWA, analytics)",
-    ),
-    (
-        "body_end_scripts",
-        "end-of-body analytics / event listeners",
-    ),
-    ("page_header_actions", "extra buttons in the top header bar"),
-    ("dashboard_widgets", "custom dashboard cards"),
-    (
-        "collection_edit_toolbar",
-        "extra toolbar actions on collection edit pages",
-    ),
-    (
-        "collection_edit_sidebar",
-        "extra sidebar panels on collection edit pages",
-    ),
-    (
-        "sidebar_bottom",
-        "extra navigation links pinned to the bottom of the left sidebar",
-    ),
-    ("login_extras", "additional content on the login page"),
-];
+/// Whether `slot` is one the admin templates declare. The built-in slot
+/// registry is the one list of them, shared with the slots guide.
+fn is_builtin_slot(slot: &str) -> bool {
+    SLOT_DOCS.iter().any(|doc| doc.slot == slot)
+}
 
 /// Options for `make_slot`.
 pub struct MakeSlotOptions<'a> {
@@ -84,7 +63,7 @@ pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
     cli::success(&format!("Created {}", file_path.display()));
-    if !KNOWN_SLOTS.iter().any(|(s, _)| *s == opts.slot) {
+    if !is_builtin_slot(opts.slot) {
         cli::warning(&format!(
             "Slot `{}` is not one of the built-in slots. Verify the slot is declared somewhere via {{{{slot \"{}\"}}}}, or you'll see no output.",
             opts.slot, opts.slot,
@@ -111,6 +90,18 @@ fn render_slot_hbs(slot: &str, file: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the scaffold kept its own list of built-in slots, which
+    /// fell behind the registry and warned "not a built-in slot" for real
+    /// ones.
+    #[test]
+    fn every_registered_slot_is_builtin() {
+        for doc in SLOT_DOCS {
+            assert!(is_builtin_slot(doc.slot), "{} not recognised", doc.slot);
+        }
+
+        assert!(!is_builtin_slot("not_a_slot"));
+    }
 
     /// The scaffolded widget must already satisfy `crap-cms fmt` —
     /// otherwise a fresh `make slot` immediately fails the user's

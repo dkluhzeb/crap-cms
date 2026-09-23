@@ -9,7 +9,7 @@ use super::{
     github,
     install::run_install,
     path_lookup::warn_if_running_binary_mismatches_store,
-    safety::confirm,
+    safety::{confirm, ensure_self_managed},
     store,
     use_action::run_use,
     version::{current_version, is_newer},
@@ -23,6 +23,11 @@ pub(super) fn run_update_latest<C: CommandFactory>(yes: bool, force: bool) -> Re
     // to something outside the store (e.g. a `cargo install --path .` dev
     // build shadowing the shim).
     let store = store::Store::default_for_user()?;
+
+    // This flow ends by activating the new version, which `update use`
+    // refuses for a distro-managed binary — refuse before the download.
+    ensure_self_managed(&store, force)?;
+
     let mismatched = warn_if_running_binary_mismatches_store(&store);
 
     let latest = github::latest_tag(github::DEFAULT_REPO)?;
@@ -49,7 +54,7 @@ pub(super) fn run_update_latest<C: CommandFactory>(yes: bool, force: bool) -> Re
         return Ok(());
     }
 
-    run_install(&latest, false, force)?;
+    run_install(&latest, false)?;
     run_use::<C>(&latest, yes, force)?;
     Ok(())
 }

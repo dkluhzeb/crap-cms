@@ -10,15 +10,16 @@
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, is_empty_object, validate::FieldError},
+    core::{FieldDefinition, is_empty_object, reference_items, validate::FieldError},
     db::query::poly_ref,
 };
 
 /// Reject a relationship/upload value that is not an id or a list of ids.
 ///
 /// A has-many value may also arrive as a string (the admin form's JSON /
-/// comma-separated encodings, decoded by the writer); those are not
-/// inspected here. An empty object is the empty list a Lua table with no
+/// comma-separated encodings); its items are decoded with
+/// [`reference_items`], the writer's own decoder, and checked like a list's.
+/// An empty object is the empty list a Lua table with no
 /// entries becomes. `null` and absent values are left to `required`.
 pub(crate) fn check_relationship_shape(
     field: &FieldDefinition,
@@ -45,7 +46,9 @@ pub(crate) fn check_relationship_shape(
             Value::Array(items) => items
                 .iter()
                 .find_map(|item| element_problem(item, polymorphic)),
-            Value::String(_) => None,
+            Value::String(_) => reference_items(value)
+                .iter()
+                .find_map(|item| element_problem(item, polymorphic)),
             _ if is_empty_object(value) => None,
             _ => Some("must be a list of ids"),
         }
@@ -194,6 +197,15 @@ mod tests {
         let errors = errors_for(&polymorphic(), &json!("p1"));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("collection/id"));
+    }
+
+    /// A has-many string is decoded like the writer decodes it, so a JSON
+    /// string carrying non-id items is rejected rather than stored as nothing.
+    #[test]
+    fn has_many_strings_are_checked_item_by_item() {
+        assert!(errors_for(&has_many(), &json!(r#"["t1","t2"]"#)).is_empty());
+        assert_eq!(errors_for(&has_many(), &json!(r"[1,2]")).len(), 1);
+        assert_eq!(errors_for(&has_many(), &json!(r#"[{"id":"t1"}]"#)).len(), 1);
     }
 
     #[test]

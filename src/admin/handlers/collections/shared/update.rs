@@ -18,7 +18,7 @@ use crate::{
             forms::FormData,
             shared::{
                 HxNav, get_user_doc, htmx_redirect, parse_request_locale, paths, redirect_response,
-                strip_locale_locked_for_publish, toast_only_error,
+                strip_locale_locked_form_fields, toast_only_error,
             },
         },
     },
@@ -144,11 +144,10 @@ fn run_write(
         return Ok((result.doc, result.req_context));
     }
 
-    let data = strip_locale_locked_for_publish(
+    let data = strip_locale_locked_form_fields(
         args.input.form.into(),
         &args.def.fields,
         args.input.locale_ctx.as_ref(),
-        args.input.draft,
     );
 
     let op_args = UpdateArgs::builder(args.id, data)

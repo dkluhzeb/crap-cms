@@ -3,21 +3,18 @@
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{
-        Document, DocumentFields, canonicalize_text_values, collection::GlobalDefinition,
-        event::EventOperation, nest_group_fields,
-    },
+    core::{Document, DocumentFields, collection::GlobalDefinition, event::EventOperation},
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
     },
     service::{
-        AfterChangeInput, ServiceContext, ServiceError, SnapshotLocales, WriteHooks, WriteInput,
-        WriteResult, helpers as svc_helpers,
+        AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
+        admit_global_update_input, helpers as svc_helpers,
         persist::{DraftDocumentArgs, draft_document},
         run_after_change_hooks, run_pool_write,
         versions::{self, VersionSnapshotCtx},
-        write::{adopt_pending_global_draft, reject_locale_locked_fields},
+        write::reject_locale_locked_fields,
     },
 };
 
@@ -136,20 +133,12 @@ pub fn update_global_in_conn(
     // No-op on SQLite, whose IMMEDIATE transaction serializes writers already.
     conn.lock_row(&gtable, "default")?;
 
-    // Canonicalize incoming data up front: nested groups, canonical email and
-    // text values.
-    input.data = nest_group_fields(&input.data, &def.fields);
-    canonicalize_text_values(&mut input.data, &def.fields);
-
-    // Publishing means the same thing on a global as on a collection: the
-    // pending draft is the write's base and the request's own fields win over
-    // it. Without this a partial `crap.globals.update` published the one field
-    // it carried and silently discarded the rest of the draft.
-    let pending_draft = adopt_pending_global_draft(ctx, def, &mut input)?;
-
-    // Same shared-field guard as collections: a non-default-locale write that
-    // carries a locale-locked field is rejected, never silently skipped.
-    reject_locale_locked_fields(&def.fields, &input.data, input.locale_ctx)?;
+    // The admission prefix the `validate` dry-run runs too: canonicalize the
+    // incoming data, adopt the pending draft as the write's base (publishing
+    // means the same thing on a global as on a collection), and reject a
+    // non-default-locale write that carries a locale-locked field rather than
+    // silently skipping it.
+    let pending_draft = admit_global_update_input(ctx, def, &mut input)?;
 
     check_global_update_access(
         ctx,
@@ -178,17 +167,8 @@ pub fn update_global_in_conn(
     // The draft goes live as ONE unit, so the locales this request does not
     // target come from the snapshot — stripped by the publisher's own
     // field-level write access, exactly like the merged data above.
-    let mut publishing_draft = pending_draft.map(Value::Object);
-    if let Some(snapshot) = publishing_draft.as_mut() {
-        write_hooks.strip_write_access_value(
-            &def.fields,
-            snapshot,
-            &stored,
-            ctx.slug,
-            ctx.user,
-            SnapshotLocales::for_write(input.locale_ctx),
-        );
-    }
+    let publishing_draft =
+        pending_draft.publishing_snapshot(ctx, write_hooks, &stored, input.locale_ctx)?;
 
     let final_ctx = run_global_before_write_hooks(
         write_hooks,

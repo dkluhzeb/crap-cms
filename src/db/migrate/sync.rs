@@ -6,7 +6,7 @@ use tracing::error;
 use crate::{
     config::LocaleConfig,
     core::{
-        Registry,
+        Registry, ScheduledBy,
         upload::{
             FALLBACK_MAX_ATTEMPTS, IMAGE_CONVERT_QUEUE, ImageConvertJobData,
             SYSTEM_IMAGE_CONVERT_JOB,
@@ -432,7 +432,7 @@ fn drain_legacy_image_queue(conn: &dyn DbConnection) -> Result<()> {
             conn,
             SYSTEM_IMAGE_CONVERT_JOB,
             &data_json,
-            "system",
+            ScheduledBy::System,
             // Drain migration doesn't have JobsConfig in scope; use
             // the framework fallback. Operators tuning
             // `[jobs.queues.images] retries` only affect NEW jobs;

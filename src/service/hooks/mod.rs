@@ -1,7 +1,6 @@
 //! Hook trait abstractions for read and write operations.
 
 mod read;
-pub(crate) mod richtext;
 mod strip;
 mod write;
 

@@ -46,9 +46,13 @@ pub async fn validate_create(
 
     // Shared dry-run body: rolled-back transaction, field-access stripping as
     // the resolved editor, draft clamp — identical on every surface.
+    // An upload collection's admin create is the multipart path, whose real
+    // write carries the server-derived metadata the placeholders above stand
+    // in for — so the dry-run keeps them, like that trusted write.
     let args = ValidateArgs::builder(data)
         .locale_ctx(locale_ctx)
         .draft(payload.draft)
+        .trusted_upload_metadata(def.is_upload_collection())
         .build();
 
     let result = op::run_blocking::<Validate>(

@@ -36,7 +36,5 @@ pub(crate) use types::{
 };
 pub use validation::ValidationCtx;
 pub use validation::is_valid_email_format;
-pub(crate) use validation::richtext_attrs::{
-    collect_richtext_fields, run_before_validate_on_node_attrs,
-};
-pub(crate) use validation::validate_fields_inner;
+pub(crate) use validation::richtext_attrs::apply_node_attr_before_validate;
+pub(crate) use validation::validate_write_fields;

@@ -21,22 +21,27 @@
         {{#each nav.globals}}
           <li>{{> layout/sidebar_global_item}}</li>
         {{/each}}
-        {{#each nav.custom_pages}}
-          <li>
-            <a
-              class="link link--ghost"
-              href="/admin/p/{{slug}}"
-              hx-get="/admin/p/{{slug}}"
-              hx-target="#main"
-              hx-swap="innerHTML show:window:top"
-              hx-push-url="true"
-            >
-              {{#if icon}}
-                <span class="material-symbols-outlined">{{icon}}</span>
-              {{/if}}
-              {{label}}
-            </a>
-          </li>
+        {{#each nav.custom_page_sections}}
+          {{#if heading}}
+            <li class="sidebar__section-heading">{{heading}}</li>
+          {{/if}}
+          {{#each pages}}
+            <li>
+              <a
+                class="link link--ghost"
+                href="/admin/p/{{slug}}"
+                hx-get="/admin/p/{{slug}}"
+                hx-target="#main"
+                hx-swap="innerHTML show:window:top"
+                hx-push-url="true"
+              >
+                {{#if icon}}
+                  <span class="material-symbols-outlined">{{icon}}</span>
+                {{/if}}
+                {{label}}
+              </a>
+            </li>
+          {{/each}}
         {{/each}}
       </ul>
 

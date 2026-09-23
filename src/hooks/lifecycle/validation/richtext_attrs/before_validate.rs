@@ -2,7 +2,6 @@
 //! JSON or HTML and runs each node's per-attr `before_validate` Lua hooks,
 //! transforming the attr values in-place.
 
-use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use mlua::Lua;
@@ -10,33 +9,94 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        FieldDefinition, FieldType, HookRef, Registry, prefixed_name,
-        richtext::renderer::{extract_attr_value, html_escape_attr},
-        walk_leaf_fields,
+        DocumentFields, FieldDefinition, FieldType, HookRef, Registry, VisitAction, any_field,
+        richtext::{CrapNodeTag, find_crap_nodes, renderer::html_escape_attr},
+        walk_nested_mut,
     },
     hooks::{lifecycle::execution::resolve_hook_function, lua_api},
 };
 
-/// Collect richtext fields with custom nodes, paired with their flat
-/// `group__child` column name (the key in the flat data map). The flat-column
-/// walk ([`walk_leaf_fields`]) handles Group prefixing and transparent layout
-/// wrappers; Array/Blocks sub-fields (join-table data) are visited as opaque
-/// leaf columns and filtered out by the richtext check.
-pub(crate) fn collect_richtext_fields(
-    fields: &[FieldDefinition],
-) -> Vec<(&FieldDefinition, String)> {
-    let mut out = Vec::new();
+use super::extract::json_document;
 
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        if field.field_type == FieldType::Richtext && !field.admin.nodes.is_empty() {
-            out.push((field, prefixed_name(prefix, &field.name)));
-        }
-        Ok(())
-    });
-
-    out
+/// Whether `field` is a rich text field using a node whose attrs carry
+/// `before_validate` hooks.
+fn field_has_attr_hooks(field: &FieldDefinition, registry: &Registry) -> bool {
+    field.field_type == FieldType::Richtext
+        && field.admin.nodes.iter().any(|node_name| {
+            registry
+                .get_richtext_node(node_name)
+                .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
+        })
 }
 
+/// Whether any rich text field in `fields`, at any depth (groups, array and
+/// blocks rows, layout wrappers), has node-attr `before_validate` hooks — the
+/// cheap probe a caller runs before acquiring a VM.
+pub(crate) fn has_node_attr_before_validate(
+    fields: &[FieldDefinition],
+    registry: &Registry,
+) -> bool {
+    any_field(fields, &|field| field_has_attr_hooks(field, registry))
+}
+
+/// Run node-attr `before_validate` hooks on every rich text value in `data`:
+/// top level, groups and array/blocks rows at any depth, over the canonical
+/// nested write shape. The one pass every write-hook implementation runs.
+pub(crate) fn apply_node_attr_before_validate(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    data: &mut DocumentFields,
+    registry: &Registry,
+    collection: &str,
+) {
+    if !has_node_attr_before_validate(fields, registry) {
+        return;
+    }
+
+    walk_nested_mut(data, fields, &mut Vec::new(), &mut |field, level, _| {
+        if !field_has_attr_hooks(field, registry) {
+            return VisitAction::Keep;
+        }
+
+        level
+            .root_get(&field.name)
+            .and_then(|value| transform_richtext_value(lua, value, field, registry, collection))
+            .map_or(VisitAction::Keep, VisitAction::Replace)
+    });
+}
+
+/// One rich text value after its node-attr hooks, or `None` when unchanged. A
+/// JSON-format document may be its text or the document object; either keeps
+/// its shape.
+fn transform_richtext_value(
+    lua: &Lua,
+    value: &Value,
+    field: &FieldDefinition,
+    registry: &Registry,
+    collection: &str,
+) -> Option<Value> {
+    match value {
+        Value::String(content) => {
+            let new_content =
+                run_before_validate_on_node_attrs(lua, content, field, registry, collection);
+            (new_content != *content).then_some(Value::String(new_content))
+        }
+        Value::Object(_) if field.parses_json() => {
+            // A value that is not a readable document (e.g. nested past the
+            // depth limit) is left for validation to refuse.
+            json_document(value)?;
+
+            let mut doc = value.clone();
+            let mut modified = false;
+            transform_nodes_json(&mut doc, field, registry, lua, collection, &mut modified);
+            modified.then_some(doc)
+        }
+        _ => None,
+    }
+}
+
+/// Run node-attr `before_validate` hooks over one rich text content string
+/// (`ProseMirror` JSON text or HTML, per the field's format).
 ///
 /// Returns the (potentially modified) content string.
 pub(crate) fn run_before_validate_on_node_attrs(
@@ -46,20 +106,11 @@ pub(crate) fn run_before_validate_on_node_attrs(
     registry: &Registry,
     collection: &str,
 ) -> String {
-    let format = field.admin.richtext_format.as_deref().unwrap_or("html");
-
-    // Check if any node attr has before_validate hooks
-    let has_hooks = field.admin.nodes.iter().any(|node_name| {
-        registry
-            .get_richtext_node(node_name)
-            .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
-    });
-
-    if !has_hooks {
+    if !field_has_attr_hooks(field, registry) {
         return content.to_string();
     }
 
-    if format == "json" {
+    if field.parses_json() {
         run_before_validate_json(lua, content, field, registry, collection)
     } else {
         run_before_validate_html(lua, content, field, registry, collection)
@@ -136,7 +187,9 @@ fn transform_nodes_json(
     }
 }
 
-/// Run `before_validate` hooks on node attrs in HTML content.
+/// Run `before_validate` hooks on node attrs in HTML content. Nodes are found
+/// with the tokenizer validation and the renderer use; a node whose attrs a
+/// hook changed is rewritten, everything else is copied verbatim.
 fn run_before_validate_html(
     lua: &Lua,
     content: &str,
@@ -145,83 +198,77 @@ fn run_before_validate_html(
     collection: &str,
 ) -> String {
     let mut result = String::with_capacity(content.len());
-    let mut remaining = content;
+    let mut copied = 0;
 
-    while let Some(start) = remaining.find("<crap-node ") {
-        result.push_str(&remaining[..start]);
-        let after_start = &remaining[start..];
-
-        let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
-            (Some(sc), Some(et)) => {
-                if sc < et {
-                    sc + "/>".len()
-                } else {
-                    et + "</crap-node>".len()
-                }
-            }
-            (Some(sc), None) => sc + "/>".len(),
-            (None, Some(et)) => et + "</crap-node>".len(),
-            (None, None) => {
-                result.push_str(after_start);
-                remaining = "";
-                continue;
-            }
+    for tag in find_crap_nodes(content) {
+        let Some(rewritten) = rewrite_html_node(lua, &tag, field, registry, collection) else {
+            continue;
         };
 
-        let tag = &after_start[..close_pos];
-
-        if let Some(node_type) = extract_attr_value(tag, "data-type")
-            && field.admin.nodes.contains(&node_type)
-            && let Some(node_def) = registry.get_richtext_node(&node_type)
-            && node_def
-                .attrs
-                .iter()
-                .any(|a| !a.hooks.before_validate.is_empty())
-        {
-            let mut attrs: HashMap<String, Value> = extract_attr_value(tag, "data-attrs")
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-
-            let mut changed = false;
-            for attr_def in &node_def.attrs {
-                if attr_def.hooks.before_validate.is_empty() {
-                    continue;
-                }
-                if let Some(attr_val) = attrs.get(&attr_def.name).cloned() {
-                    let new_val = run_attr_before_validate_hooks(
-                        lua,
-                        &attr_def.hooks.before_validate,
-                        &attr_val,
-                        collection,
-                        &attr_def.name,
-                    );
-                    if new_val != attr_val {
-                        attrs.insert(attr_def.name.clone(), new_val);
-                        changed = true;
-                    }
-                }
-            }
-
-            if changed {
-                let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
-                let _ = write!(
-                    result,
-                    "<crap-node data-type=\"{}\" data-attrs='{}'></crap-node>",
-                    html_escape_attr(&node_type),
-                    html_escape_attr(&attrs_json),
-                );
-            } else {
-                result.push_str(tag);
-            }
-        } else {
-            result.push_str(tag);
-        }
-
-        remaining = &after_start[close_pos..];
+        result.push_str(&content[copied..tag.start]);
+        result.push_str(&rewritten);
+        copied = tag.end;
     }
 
-    result.push_str(remaining);
+    result.push_str(&content[copied..]);
     result
+}
+
+/// The node's markup after its attr hooks ran, or `None` when the node has no
+/// hooks or they changed nothing.
+fn rewrite_html_node(
+    lua: &Lua,
+    tag: &CrapNodeTag,
+    field: &FieldDefinition,
+    registry: &Registry,
+    collection: &str,
+) -> Option<String> {
+    let node_type = tag.node_type()?;
+    if !field.admin.nodes.iter().any(|n| n == node_type) {
+        return None;
+    }
+
+    let node_def = registry.get_richtext_node(node_type)?;
+    let mut attrs = tag.node_attrs();
+    let mut changed = false;
+
+    for attr_def in &node_def.attrs {
+        if attr_def.hooks.before_validate.is_empty() {
+            continue;
+        }
+
+        let Some(attr_val) = attrs.get(&attr_def.name).cloned() else {
+            continue;
+        };
+
+        let new_val = run_attr_before_validate_hooks(
+            lua,
+            &attr_def.hooks.before_validate,
+            &attr_val,
+            collection,
+            &attr_def.name,
+        );
+
+        if new_val != attr_val {
+            attrs.insert(attr_def.name.clone(), new_val);
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return None;
+    }
+
+    let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "<crap-node data-type=\"{}\" data-attrs='{}'></crap-node>",
+        html_escape_attr(node_type),
+        html_escape_attr(&attrs_json),
+    );
+
+    Some(out)
 }
 
 /// Run a chain of `before_validate` hook functions on a single attr value.
@@ -283,9 +330,38 @@ fn run_attr_before_validate_hooks(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::field::{FieldAdmin, FieldType};
+    use serde_json::json;
+
+    use crate::core::{
+        FieldHooks, RichtextNodeDef,
+        field::{FieldAdmin, FieldType},
+    };
 
     use super::*;
+
+    fn formatted_field(nodes: Vec<String>, format: &str) -> FieldDefinition {
+        FieldDefinition::builder("content", FieldType::Richtext)
+            .admin(
+                FieldAdmin::builder()
+                    .richtext_format(format)
+                    .nodes(nodes)
+                    .build(),
+            )
+            .build()
+    }
+
+    fn cta_registry() -> Registry {
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("cta", "CTA")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text).build(),
+                    FieldDefinition::builder("url", FieldType::Text).build(),
+                ])
+                .build(),
+        );
+        reg
+    }
 
     fn richtext_field(nodes: Vec<String>) -> FieldDefinition {
         FieldDefinition::builder("body", FieldType::Richtext)
@@ -324,79 +400,250 @@ mod tests {
         );
     }
 
-    // ── collect_richtext_fields ─────────────────────────────────────────────
+    // ── apply_node_attr_before_validate ────────────────────────────────────
 
-    fn richtext_with_nodes(name: &str) -> FieldDefinition {
+    /// A VM with a `hooks.trim` function and a registry whose `note` node's
+    /// `text` attr runs it before validation.
+    fn trimming_setup() -> (Lua, Registry) {
+        let lua = Lua::new();
+        lua.load(
+            r#"package.loaded["hooks"] = {
+                trim = function(value) return (value:gsub("^%s+", ""):gsub("%s+$", "")) end
+            }"#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut registry = Registry::new();
+        registry.register_richtext_node(
+            RichtextNodeDef::builder("note", "Note")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec![HookRef::new("hooks.trim")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        );
+
+        (lua, registry)
+    }
+
+    fn note_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Richtext)
-            .admin(FieldAdmin::builder().nodes(vec!["callout".into()]).build())
+            .admin(
+                FieldAdmin::builder()
+                    .nodes(vec!["note".into()])
+                    .richtext_format("json")
+                    .build(),
+            )
             .build()
     }
 
-    fn keys(fields: &[FieldDefinition]) -> Vec<String> {
-        collect_richtext_fields(fields)
-            .into_iter()
-            .map(|(_, key)| key)
-            .collect()
+    fn note_doc(text: &str) -> Value {
+        json!({ "type": "doc", "content": [{ "type": "note", "attrs": { "text": text } }] })
     }
 
+    /// Regression: the hooks were looked up under flat `group__field` keys,
+    /// but write data is nested by then, so a rich text field in a group never
+    /// had its node-attr hooks run.
     #[test]
-    fn collects_top_level_richtext_with_nodes_only() {
-        let fields = vec![
-            richtext_with_nodes("body"),
-            // no custom nodes → skipped
-            FieldDefinition::builder("notes", FieldType::Richtext).build(),
-            FieldDefinition::builder("title", FieldType::Text).build(),
-        ];
-        assert_eq!(keys(&fields), vec!["body".to_string()]);
-    }
-
-    #[test]
-    fn group_richtext_uses_double_underscore_data_key() {
+    fn hooks_run_for_rich_text_inside_a_group() {
+        let (lua, registry) = trimming_setup();
         let fields = vec![
             FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![richtext_with_nodes("body")])
+                .fields(vec![note_field("body")])
                 .build(),
         ];
-        assert_eq!(keys(&fields), vec!["meta__body".to_string()]);
+        let mut data = DocumentFields::new();
+        data.insert(
+            "meta".into(),
+            json!({ "body": note_doc("  hi  ").to_string() }),
+        );
+
+        apply_node_attr_before_validate(&lua, &fields, &mut data, &registry, "posts");
+
+        let body: Value = serde_json::from_str(data["meta"]["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body, note_doc("hi"));
+    }
+
+    /// Regression: rich text inside array/blocks rows never ran its hooks.
+    #[test]
+    fn hooks_run_for_rich_text_inside_array_rows() {
+        let (lua, registry) = trimming_setup();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![note_field("body")])
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("items".into(), json!([{ "body": note_doc("  a  ") }]));
+
+        apply_node_attr_before_validate(&lua, &fields, &mut data, &registry, "posts");
+
+        assert_eq!(
+            data["items"][0]["body"],
+            note_doc("a"),
+            "an object stays an object"
+        );
     }
 
     #[test]
-    fn layout_wrappers_are_transparent_no_prefix() {
+    fn nested_fields_without_hooks_are_probed_false() {
+        let registry = Registry::new();
         let fields = vec![
-            FieldDefinition::builder("row", FieldType::Row)
-                .fields(vec![richtext_with_nodes("body")])
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![note_field("body")])
                 .build(),
         ];
-        assert_eq!(keys(&fields), vec!["body".to_string()]);
+
+        assert!(!has_node_attr_before_validate(&fields, &registry));
+        assert!(has_node_attr_before_validate(&fields, &trimming_setup().1));
     }
 
     #[test]
-    fn recurses_into_tabs() {
-        let fields = vec![
-            FieldDefinition::builder("tabs", FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab::new(
-                    "Content",
-                    vec![richtext_with_nodes("body")],
-                )])
+    fn before_validate_hooks_transform_json() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks"] = {
+                trim = function(value, ctx)
+                    if type(value) == "string" then
+                        return value:match("^%s*(.-)%s*$")
+                    end
+                    return value
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("note", "Note")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec![HookRef::new("hooks.trim")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
                 .build(),
-        ];
-        assert_eq!(keys(&fields), vec!["body".to_string()]);
+        );
+        let field = formatted_field(vec!["note".to_string()], "json");
+        let content = r#"{"type":"doc","content":[{"type":"note","attrs":{"text":"  hello  "}}]}"#;
+
+        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
+
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        let text = parsed["content"][0]["attrs"]["text"].as_str().unwrap();
+        assert_eq!(text, "hello");
     }
 
     #[test]
-    fn group_inside_tabs_keeps_group_prefix() {
-        let fields = vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab::new(
-                    "SEO",
-                    vec![
-                        FieldDefinition::builder("seo", FieldType::Group)
-                            .fields(vec![richtext_with_nodes("desc")])
-                            .build(),
-                    ],
-                )])
+    fn before_validate_hooks_no_hooks_returns_original() {
+        let lua = Lua::new();
+        let reg = cta_registry();
+        let field = formatted_field(vec!["cta".to_string()], "json");
+        let content =
+            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"hi","url":"/"}}]}"#;
+
+        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn before_validate_hooks_transform_html() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks"] = {
+                upper = function(value, ctx)
+                    if type(value) == "string" then
+                        return value:upper()
+                    end
+                    return value
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("tag", "Tag")
+                .attrs(vec![
+                    FieldDefinition::builder("label", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec![HookRef::new("hooks.upper")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
                 .build(),
-        ];
-        assert_eq!(keys(&fields), vec!["seo__desc".to_string()]);
+        );
+        let field = formatted_field(vec!["tag".to_string()], "html");
+        let content =
+            r#"<p>Hi</p><crap-node data-type="tag" data-attrs='{"label":"hello"}'></crap-node>"#;
+
+        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
+
+        assert!(
+            result.contains("HELLO"),
+            "hook should uppercase the label: {result}"
+        );
+    }
+
+    #[test]
+    fn before_validate_html_escapes_single_quotes() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks"] = {
+                add_quote = function(value, ctx)
+                    if type(value) == "string" then
+                        return value .. "'"
+                    end
+                    return value
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("note", "Note")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec![HookRef::new("hooks.add_quote")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        );
+        let field = formatted_field(vec!["note".to_string()], "html");
+        let content =
+            r#"<p>Hi</p><crap-node data-type="note" data-attrs='{"text":"hello"}'></crap-node>"#;
+
+        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
+
+        // The single quote in the attr value must be escaped as &#39;
+        assert!(
+            result.contains("&#39;"),
+            "single quote should be escaped: {result}"
+        );
+        assert!(
+            !result.contains("data-attrs='{") || !result.contains("'}'"),
+            "unescaped quote should not break the attribute boundary"
+        );
     }
 }

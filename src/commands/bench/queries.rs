@@ -7,133 +7,185 @@ use anyhow::{Result, anyhow};
 use crate::{
     api::handlers::proto::parse_where_json,
     cli::{self, Table},
-    core::{CollectionDefinition, Registry},
+    commands::cli_find,
+    config::LocaleConfig,
+    core::{CollectionDefinition, Document, Registry},
     db::{
-        DbConnection, DbValue, FindQuery,
-        query::{self, filter::build_where_clause},
+        DbConnection, DbValue, FilterClause, FindQuery, LocaleContext,
+        query::filter::build_where_clause,
     },
 };
 
 use super::helpers::format_duration;
 
-/// Run query benchmarks on all (or filtered) collections.
-pub fn run(
-    registry: &Registry,
-    conn: &dyn DbConnection,
-    collection: Option<&str>,
-    explain: bool,
-    where_clause: Option<&str>,
-) -> Result<()> {
-    let filters = match where_clause {
-        Some(json_str) => {
-            let parsed = parse_where_json(json_str).map_err(|e| anyhow!("Invalid --where: {e}"))?;
-            cli::info(&format!("Filter: {json_str}"));
-            Some(parsed)
+/// Parameters for the query benchmark.
+pub(super) struct QueryBenchParams<'a> {
+    pub registry: &'a Registry,
+    pub conn: &'a dyn DbConnection,
+    pub collection: Option<&'a str>,
+    pub explain: bool,
+    pub where_clause: Option<&'a str>,
+    pub locale: &'a LocaleConfig,
+}
+
+/// One collection's query plan and read hooks, for the details section.
+type ExplainEntry = (String, Vec<String>, Vec<String>);
+
+/// What the rows column shows: the row count, or `ERR` when the query failed.
+/// A failed query must never read as an empty collection.
+fn rows_cell(slug: &str, result: &Result<Vec<Document>>) -> String {
+    match result {
+        Ok(docs) => docs.len().to_string(),
+        Err(e) => {
+            cli::warning(&format!("Query failed for {slug}: {e:#}"));
+
+            "ERR".to_string()
         }
-        None => None,
+    }
+}
+
+/// Parse the `--where` JSON into filters (none without it), announcing it
+/// when present.
+fn parse_filters(where_clause: Option<&str>) -> Result<Vec<FilterClause>> {
+    let Some(json_str) = where_clause else {
+        return Ok(Vec::new());
     };
+
+    let parsed = parse_where_json(json_str).map_err(|e| anyhow!("Invalid --where: {e}"))?;
+    cli::info(&format!("Filter: {json_str}"));
+
+    Ok(parsed)
+}
+
+/// Summarize the read hooks count for the table.
+fn hook_summary(read_hooks: &[String]) -> String {
+    if read_hooks.is_empty() {
+        return "-".to_string();
+    }
+
+    read_hooks.len().to_string()
+}
+
+/// Run query benchmarks on all (or filtered) collections.
+pub fn run(params: &QueryBenchParams) -> Result<()> {
+    let filters = parse_filters(params.where_clause)?;
+    let locale_ctx = LocaleContext::default_for(params.locale);
 
     cli::header("Query Benchmarks");
     println!();
 
     let mut table = Table::new(vec!["Collection", "Rows", "Time", "Read hooks"]);
-    let mut explain_output: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut explain_output: Vec<ExplainEntry> = Vec::new();
 
-    let mut slugs: Vec<_> = registry.collections.keys().collect();
+    let mut slugs: Vec<_> = params.registry.collections.keys().collect();
     slugs.sort();
 
     for slug in slugs {
-        if let Some(filter) = collection
-            && slug.as_ref() as &str != filter
+        if params
+            .collection
+            .is_some_and(|filter| slug.as_ref() as &str != filter)
         {
             continue;
         }
 
-        let def = &registry.collections[slug];
+        let def = &params.registry.collections[slug];
 
-        let find_query = match &filters {
-            Some(f) => FindQuery::builder()
-                .filters(f.clone())
-                .limit(Some(100))
-                .build(),
-            None => FindQuery::builder().limit(Some(100)).build(),
-        };
+        let find_query = FindQuery::builder()
+            .filters(filters.clone())
+            .limit(Some(100))
+            .build();
 
         let start = Instant::now();
-        let result = query::find(conn, slug, def, &find_query, None);
+        let result = cli_find(params.conn, def, &find_query, params.locale);
         let elapsed = start.elapsed();
 
-        let row_count = result.as_ref().map_or(0, std::vec::Vec::len);
         let read_hooks = collect_read_hooks(def);
-        let hook_summary = if read_hooks.is_empty() {
-            "-".to_string()
-        } else {
-            format!("{}", read_hooks.len())
-        };
 
         table.row(vec![
             slug.as_ref(),
-            &row_count.to_string(),
+            &rows_cell(slug, &result),
             &format_duration(elapsed),
-            &hook_summary,
+            &hook_summary(&read_hooks),
         ]);
 
-        if explain {
-            match run_explain(conn, slug, &find_query, def) {
-                Ok(lines) if !lines.is_empty() => {
-                    explain_output.push((slug.to_string(), lines, read_hooks));
-                }
-                Ok(_) => {
-                    if !read_hooks.is_empty() {
-                        explain_output.push((slug.to_string(), Vec::new(), read_hooks));
-                    }
-                }
-                Err(e) => {
-                    cli::warning(&format!("EXPLAIN failed for {slug}: {e}"));
-                }
-            }
+        if params.explain {
+            let target = ExplainTarget {
+                slug,
+                find_query: &find_query,
+                def,
+                locale_ctx: locale_ctx.as_ref(),
+            };
+
+            collect_explain(params.conn, &target, read_hooks, &mut explain_output);
         }
     }
 
     table.print();
-
-    if !explain_output.is_empty() {
-        println!();
-        cli::header("Query Details");
-
-        for (slug, plan_lines, hooks) in &explain_output {
-            println!();
-            cli::info(&format!("{slug}:"));
-
-            for line in plan_lines {
-                cli::dim(&format!("  plan: {line}"));
-            }
-
-            if hooks.is_empty() {
-                cli::dim("  hooks: (none)");
-            } else {
-                for hook in hooks {
-                    cli::dim(&format!("  hook: {hook}"));
-                }
-            }
-        }
-    }
+    print_explain_output(&explain_output);
 
     Ok(())
 }
 
-/// Run EXPLAIN QUERY PLAN with the same filters as the benchmark query.
-fn run_explain(
+/// The query an EXPLAIN runs for: the benchmarked collection and its query,
+/// under the same locale the benchmark read with.
+struct ExplainTarget<'a> {
+    slug: &'a str,
+    find_query: &'a FindQuery,
+    def: &'a CollectionDefinition,
+    locale_ctx: Option<&'a LocaleContext>,
+}
+
+/// Run the EXPLAIN for one collection and queue its details for printing.
+fn collect_explain(
     conn: &dyn DbConnection,
-    slug: &str,
-    find_query: &FindQuery,
-    def: &crate::core::CollectionDefinition,
-) -> Result<Vec<String>> {
+    target: &ExplainTarget<'_>,
+    read_hooks: Vec<String>,
+    out: &mut Vec<ExplainEntry>,
+) {
+    let slug = target.slug;
+
+    match run_explain(conn, target) {
+        Ok(lines) if !lines.is_empty() => out.push((slug.to_string(), lines, read_hooks)),
+        Ok(_) if !read_hooks.is_empty() => out.push((slug.to_string(), Vec::new(), read_hooks)),
+        Ok(_) => {}
+        Err(e) => cli::warning(&format!("EXPLAIN failed for {slug}: {e}")),
+    }
+}
+
+/// Print the "Query Details" section, if any collection has details.
+fn print_explain_output(explain_output: &[ExplainEntry]) {
+    if explain_output.is_empty() {
+        return;
+    }
+
+    println!();
+    cli::header("Query Details");
+
+    for (slug, plan_lines, hooks) in explain_output {
+        println!();
+        cli::info(&format!("{slug}:"));
+
+        for line in plan_lines {
+            cli::dim(&format!("  plan: {line}"));
+        }
+
+        if hooks.is_empty() {
+            cli::dim("  hooks: (none)");
+        }
+
+        for hook in hooks {
+            cli::dim(&format!("  hook: {hook}"));
+        }
+    }
+}
+
+/// Run EXPLAIN QUERY PLAN with the same filters as the benchmark query.
+fn run_explain(conn: &dyn DbConnection, target: &ExplainTarget<'_>) -> Result<Vec<String>> {
     if !conn.is_sqlite() {
         return Ok(vec!["(EXPLAIN only available for SQLite)".to_string()]);
     }
 
-    let (sql, params) = build_explain_sql(conn, slug, find_query, def)?;
+    let (sql, params) = build_explain_sql(conn, target)?;
     let rows = conn.query_all(&sql, &params)?;
 
     let mut lines = Vec::new();
@@ -169,10 +221,14 @@ fn collect_read_hooks(def: &CollectionDefinition) -> Vec<String> {
 /// Build the EXPLAIN QUERY PLAN SQL using the same WHERE clause as the find query.
 fn build_explain_sql(
     conn: &dyn DbConnection,
-    slug: &str,
-    find_query: &FindQuery,
-    def: &CollectionDefinition,
+    target: &ExplainTarget<'_>,
 ) -> Result<(String, Vec<DbValue>)> {
+    let ExplainTarget {
+        slug,
+        find_query,
+        def,
+        locale_ctx,
+    } = *target;
     let mut params: Vec<DbValue> = Vec::new();
 
     let where_clause = build_where_clause(
@@ -180,7 +236,7 @@ fn build_explain_sql(
         &find_query.filters,
         slug,
         &def.fields,
-        None,
+        locale_ctx,
         &mut params,
     )?;
 
@@ -223,23 +279,43 @@ mod tests {
         );
     }
 
+    /// A failed query must show as an error, never as an empty collection.
+    #[test]
+    fn a_failed_query_shows_err_not_zero_rows() {
+        let failed: Result<Vec<Document>> = Err(anyhow!("no such column: name"));
+        assert_eq!(rows_cell("users", &failed), "ERR");
+
+        let empty: Result<Vec<Document>> = Ok(Vec::new());
+        assert_eq!(rows_cell("users", &empty), "0");
+    }
+
     #[test]
     fn collect_read_hooks_is_empty_with_no_hooks() {
         assert!(collect_read_hooks(&CollectionDefinition::new("posts")).is_empty());
     }
 
+    fn explain_sql(def: &CollectionDefinition, fq: &FindQuery) -> (String, Vec<DbValue>) {
+        let target = ExplainTarget {
+            slug: "posts",
+            find_query: fq,
+            def,
+            locale_ctx: None,
+        };
+
+        build_explain_sql(&InMemoryConn::open(), &target).unwrap()
+    }
+
     #[test]
     fn build_explain_sql_base_and_soft_delete_variants() {
-        let conn = InMemoryConn::open();
         let fq = FindQuery::default();
         let mut def = CollectionDefinition::new("posts");
 
-        let (sql, params) = build_explain_sql(&conn, "posts", &fq, &def).unwrap();
+        let (sql, params) = explain_sql(&def, &fq);
         assert_eq!(sql, "EXPLAIN QUERY PLAN SELECT * FROM \"posts\"");
         assert!(params.is_empty());
 
         def.soft_delete = true;
-        let (sql2, _) = build_explain_sql(&conn, "posts", &fq, &def).unwrap();
+        let (sql2, _) = explain_sql(&def, &fq);
         assert_eq!(
             sql2,
             "EXPLAIN QUERY PLAN SELECT * FROM \"posts\" WHERE _deleted_at IS NULL"

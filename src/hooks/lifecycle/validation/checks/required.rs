@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::core::{FieldDefinition, FieldType, reference_items, validate::FieldError};
 use crate::hooks::lifecycle::validation::runner::is_empty_value;
 
 /// Check required constraint. For Array and has-many Relationship, "required"
@@ -44,27 +44,29 @@ pub(crate) fn check_required(
     );
 }
 
-/// Check if a field value is "present" for required validation purposes.
-/// Join-shaped and `has_many` fields accept both value encodings that reach
-/// validation: the typed `Value::Array` (Lua/gRPC) and the JSON-string
-/// encoding (admin form).
-fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bool) -> bool {
-    if !field.has_parent_column() {
-        // Array/Blocks/Relationship (join-shaped)
+/// Check if a field value is "present" for required validation purposes —
+/// the one predicate for `required` at the top level and inside array/blocks
+/// rows. Join-shaped and `has_many` fields accept both value encodings that
+/// reach validation: the typed `Value::Array` (Lua/gRPC) and the JSON-string
+/// encoding (admin form); an empty list in either encoding is absent.
+pub(crate) fn is_value_present(
+    field: &FieldDefinition,
+    value: Option<&Value>,
+    is_empty: bool,
+) -> bool {
+    if field.is_has_many_reference() {
+        // The writer's own decoder: a typed list, a JSON-array string, or the
+        // admin form's comma list — present when it names at least one id.
+        return value.is_some_and(|v| !reference_items(v).is_empty());
+    }
+
+    if matches!(field.field_type, FieldType::Array | FieldType::Blocks) {
+        // Only a non-empty row list counts — a bare string is meaningless here.
         return match value {
             Some(Value::Array(arr)) => !arr.is_empty(),
-            Some(Value::String(s)) => match field.field_type {
-                // A bare string is meaningless for Array/Blocks — only a
-                // non-empty JSON-encoded array counts as present.
-                FieldType::Array | FieldType::Blocks => {
-                    serde_json::from_str::<Vec<Value>>(s).is_ok_and(|arr| !arr.is_empty())
-                }
-                // has-many relationship: JSON-array string, or a bare id
-                _ if field.has_many => serde_json::from_str::<Vec<Value>>(s)
-                    .map_or(!s.is_empty(), |arr| !arr.is_empty()),
-                // has-one relationship/upload: a non-empty id string
-                _ => !s.is_empty(),
-            },
+            Some(Value::String(s)) => {
+                serde_json::from_str::<Vec<Value>>(s).is_ok_and(|arr| !arr.is_empty())
+            }
             _ => false,
         };
     }

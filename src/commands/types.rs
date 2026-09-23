@@ -84,7 +84,8 @@ pub enum MakeAction {
         #[arg(short = 'l', long)]
         position: Option<String>,
 
-        /// Target field name (field hooks; watched field for condition hooks)
+        /// Target field name (field hooks — `*` for an any-field hook; watched field for
+        /// condition hooks)
         #[arg(short = 'F', long)]
         field: Option<String>,
 

@@ -1439,6 +1439,9 @@ enum JobScheduledBy {
   JOB_SCHEDULED_BY_MCP = 4;
   // Queued from the command line (`crap-cms jobs trigger`).
   JOB_SCHEDULED_BY_CLI = 5;
+  // Queued by the CMS itself (email delivery, image conversion, the
+  // migration drain).
+  JOB_SCHEDULED_BY_SYSTEM = 6;
 }
 
 // MutationEvent is a single real-time event delivered on the Subscribe stream.

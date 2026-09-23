@@ -112,9 +112,8 @@ fn collections_delete(
 
     let ui_locale = hook_ui_locale(lua);
 
-    let write_hooks = LuaWriteHooks::builder(lua)
+    let write_hooks = LuaWriteHooks::builder(lua, reg.as_ref())
         .override_access(opts.override_access)
-        .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 

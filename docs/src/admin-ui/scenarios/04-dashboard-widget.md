@@ -96,7 +96,10 @@ end)
 Notes on the registration:
 
 - **`crap.template_data.register("name", fn)`** — `name` is what
-  the template uses in `{{data "name"}}`. The fn runs on demand.
+  the template uses in `{{data "name"}}`; registering the same name
+  twice is an error. The fn runs on demand, once per `{{data "name"}}`
+  lookup — bind the result once with `{{#with (data "name")}}` when the
+  template needs it in more than one place.
 - **`fn(ctx)`** — the page render context (`ctx.user`, `ctx.nav`,
   `ctx.crap.site_name`, etc.).
 - **Database access is read-only**, and identical to what
@@ -130,8 +133,9 @@ Lua loads at startup. Restart crap-cms to pick up your new
 $ pkill -f 'crap-cms serve' && cargo run -- --config /path/to/config serve
 ```
 
-Templates reload per request in `dev_mode = true`, but Lua
-registrations are evaluated once at startup. There's no
+In `dev_mode = true`, edits to overlay templates that existed at
+startup reload per request; a new template file and Lua
+registrations are only picked up by a restart. There's no
 file-watcher.
 
 ## Step 4 — verify
@@ -158,7 +162,7 @@ page.
 ## Caching the API response
 
 `crap.template_data` doesn't ship a built-in cache. The function
-runs on each render. For a 3rd-party API you don't want to hit on
+runs on each `{{data}}` lookup, on every render. For a 3rd-party API you don't want to hit on
 every request, two options:
 
 **Option A — module-level Lua cache.** Cache the result in a Lua

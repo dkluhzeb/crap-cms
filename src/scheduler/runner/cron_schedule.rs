@@ -8,7 +8,7 @@ use cron::Schedule;
 use tracing::{debug, info, warn};
 
 use crate::{
-    core::{JobDefinition, Registry},
+    core::{JobDefinition, Registry, ScheduledBy},
     db::{DbConnection, DbPool, query::jobs as job_query},
     scheduler::runner::cron_expr::parse_cron,
 };
@@ -80,7 +80,7 @@ fn insert_cron_run(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<()> {
         conn,
         tick.slug,
         "{}",
-        "cron",
+        ScheduledBy::Cron,
         def.effective_max_attempts(tick.queue_retries.get(&def.queue).copied()),
         &def.queue,
         def.priority,
@@ -388,7 +388,8 @@ mod tests {
         // Insert a running job for this slug
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default", 0).unwrap();
+            job_query::insert_job(&conn, "skip_job", "{}", ScheduledBy::Cli, 1, "default", 0)
+                .unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
@@ -419,7 +420,8 @@ mod tests {
         // Insert a running job
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default", 0).unwrap();
+            job_query::insert_job(&conn, "noskip_job", "{}", ScheduledBy::Cli, 1, "default", 0)
+                .unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }

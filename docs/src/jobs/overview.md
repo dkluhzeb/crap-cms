@@ -109,7 +109,7 @@ function M.run(ctx)
     ctx.job.max_attempts -- integer: total attempts allowed
     ctx.job.priority  -- integer: scheduling priority (higher = sooner)
     ctx.job.unique_key   -- string?: dedup key, if queued with { unique = ... }
-    ctx.job.scheduled_by -- string?: "cron" | "hook" | "grpc" | "cli"
+    ctx.job.scheduled_by -- string?: "grpc" | "cron" | "hook" | "mcp" | "cli" | "system"
     ctx.job.queued_at -- string?: ISO-8601 time the run was queued
     ctx.options       -- table?: per-config options when the handler was
                       --   registered as { ref = "...", options = {...} }

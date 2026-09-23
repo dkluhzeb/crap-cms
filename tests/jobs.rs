@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::HookRef;
 use crap_cms::core::job::{JobRun, JobStatus};
+use crap_cms::core::{HookRef, ScheduledBy};
 use crap_cms::db::query::jobs as job_query;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks;
@@ -92,7 +92,7 @@ fn insert_job_creates_pending_row() {
         &conn,
         "test_echo_job",
         "{\"key\":\"value\"}",
-        "manual",
+        ScheduledBy::Cli,
         1,
         "default",
         0,
@@ -113,8 +113,26 @@ fn claim_pending_jobs_marks_running() {
     let conn = pool.get().expect("DB connection");
 
     // Insert two pending jobs with different slugs (each has default concurrency=1)
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_create_post",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
 
     let job_concurrency = HashMap::new();
     let claimed =
@@ -135,8 +153,16 @@ fn complete_job_sets_completed_status() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     let claimed =
         job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
@@ -156,8 +182,16 @@ fn fail_job_with_retry_resets_to_pending() {
     let conn = pool.get().expect("DB connection");
 
     // max_attempts = 3 (retries=2 means 3 total attempts)
-    let run =
-        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_failing_job",
+        "{}",
+        ScheduledBy::Cli,
+        3,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
@@ -179,8 +213,16 @@ fn fail_job_no_retry_stays_failed() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run =
-        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_failing_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
@@ -197,8 +239,26 @@ fn list_job_runs_filters() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    job_query::insert_job(&conn, "test_failing_job", "{}", "cron", 1, "default", 0).unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_failing_job",
+        "{}",
+        ScheduledBy::Cron,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
 
     // Filter by slug
     let echo_runs = job_query::list_job_runs(&conn, Some("test_echo_job"), None, 50, 0).unwrap();
@@ -221,8 +281,26 @@ fn count_running_jobs() {
     let conn = pool.get().expect("DB connection");
 
     // Use different slugs to avoid per-job concurrency=1 limiting claims
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
+    job_query::insert_job(
+        &conn,
+        "test_create_post",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 0);
 
@@ -249,8 +327,16 @@ fn purge_old_jobs() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     job_query::complete_job(&conn, &run.id, 1, None).unwrap();
@@ -278,8 +364,16 @@ fn purge_old_jobs() {
     // Regression: retention is measured from COMPLETION, not creation. A job
     // queued long ago (old created_at) but only just finished (recent
     // completed_at) must NOT be purged before its result can be read.
-    let recent =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let recent = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     job_query::claim_pending_jobs(&conn, 5, &HashMap::new(), &HashMap::new(), 0).unwrap();
     job_query::complete_job(&conn, &recent.id, 1, None).unwrap();
     conn.execute(
@@ -418,8 +512,16 @@ fn find_stale_jobs_detects_running() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
@@ -441,8 +543,16 @@ fn mark_stale_changes_status() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run =
-        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{}",
+        ScheduledBy::Cli,
+        1,
+        "default",
+        0,
+    )
+    .unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 

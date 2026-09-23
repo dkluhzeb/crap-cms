@@ -376,7 +376,17 @@ nothing. The full list:
   matched nothing.
 - **`min_date` / `max_date` must be valid `YYYY-MM-DD` strings**, with
   `min_date <= max_date`. Malformed bounds used to silently never (or
-  always) match.
+  always) match. They are also rejected on a `timeOnly` date field, where
+  a time of day has no date to judge.
+- **`min_rows`, `max_rows`, `min_length`, `max_length`, `min`, `max` and
+  `integer` must be well-typed.** A negative, fractional or non-numeric
+  count, a non-finite or non-numeric `min` / `max`, and a non-boolean
+  `integer` used to be dropped silently (leaving the field unbounded); an
+  integer `min` / `max` beyond the 32-bit range was dropped too and is now
+  kept.
+- **A registered custom page needs its template.** `crap.pages.register`
+  for a slug without `templates/pages/<slug>.hbs` fails startup, and a
+  `crap.template_data` name registered twice is an error.
 - **Upload config is validated.** An `image_sizes` entry missing
   `name` / `width` / `height` used to vanish; an unknown `fit` value
   (e.g. `"covr"`) fell back to `cover`; a malformed
@@ -458,6 +468,16 @@ Each only bites a definition that was already relying on ignored input:
   runs on **every** backend, before any table is created, so an SQLite
   project fails here rather than at its first Postgres deployment, where
   the identifier would be silently truncated and could collide.
+- **Present-but-invalid field constraints fail the load.** A negative,
+  fractional or non-numeric `min_rows` / `max_rows` / `min_length` /
+  `max_length`, a non-boolean `integer`, or a non-finite `min` / `max` was
+  dropped and left the field unbounded; the load now names the field and
+  key. Fix the value (or remove the key to mean "no bound").
+- **`make component` and `make field` refuse built-in names.** A component
+  tag or field name that matches a built-in module, element or field
+  template is rejected instead of shadowing the built-in; pick another
+  name. This only affects scaffolding new files — existing ones are
+  untouched.
 
 ### 6d. Stricter data validation (values that used to slip through now error)
 
@@ -1575,6 +1595,20 @@ every shipped template already used — is now the only one.
 | `has_locales` | `has_editor_locales` | boolean; absent entirely when `[locale] locales` is empty |
 | `current_locale` | `editor_locale` | the active locale code (`"de"`) — what the hidden `_locale` input submits |
 | `locales` | `editor_locales` | array of `{ value, label, selected }`: the code, its upper-case label, `selected` for the active one |
+
+### The sidebar renders custom pages from `nav.custom_page_sections`
+
+The sidebar now groups custom pages under their `section` heading, and it reads
+them from the new `nav.custom_page_sections` (one entry per section heading,
+alphabetical, then the ungrouped pages) instead of `nav.custom_pages`.
+`nav.custom_pages` is still in the context, but a `before_render` hook that
+adds, removes or relabels entries there no longer changes the sidebar. Its
+entries also no longer carry the page's `access` rule.
+
+**Action:** if a `before_render` hook edits `nav.custom_pages` to change the
+sidebar, edit `nav.custom_page_sections` instead. If you override
+`layout/sidebar.hbs` and iterate `nav.custom_pages`, switch to
+`nav.custom_page_sections` to get the section headings.
 
 ### Navigation now partial-swaps `#main`
 

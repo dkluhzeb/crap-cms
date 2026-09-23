@@ -1,10 +1,13 @@
 //! Response helpers — error pages, redirects, HTMX-aware responses, toast rendering.
 
-use std::{fmt::Write as _, sync::Arc};
+use std::{
+    fmt::{Display, Write as _},
+    sync::Arc,
+};
 
 use axum::{
     Extension, Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Serialize;
@@ -29,6 +32,12 @@ use crate::{
     hooks::lifecycle::{RenderCrud, RenderInfo, RenderParams},
     service::ServiceError,
 };
+
+/// Body of the fallback page a failed template render answers with.
+const TEMPLATE_ERROR_BODY: &str = "<h1>Something went wrong</h1><p>Please try again.</p>";
+
+/// The toast text of [`TEMPLATE_ERROR_BODY`], for htmx requests.
+const TEMPLATE_ERROR_MESSAGE: &str = "Something went wrong. Please try again.";
 
 /// Who is viewing an authenticated admin page, and how it is being
 /// requested. Bundled so [`render_page`] keeps a short parameter list.
@@ -123,12 +132,7 @@ pub async fn render_page<T: Serialize>(
 
     match render_blocking(state, template.to_string(), data, crud).await {
         Ok(html) => Html(html).into_response(),
-        Err(RenderFailure::Template(e)) => {
-            error!("Template render error: {e}");
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                .into_response()
-        }
+        Err(RenderFailure::Template(e)) => template_error_response(&e),
         Err(RenderFailure::TaskDied) => server_error(state, "Page rendering failed"),
     }
 }
@@ -270,14 +274,46 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
         )),
     };
 
-    let mut resp = (StatusCode::FORBIDDEN, html).into_response();
+    with_error_toast((StatusCode::FORBIDDEN, html).into_response(), message)
+}
 
-    let toast = json!({ "message": message, "type": "error" }).to_string();
-    if let Ok(val) = toast.parse() {
-        resp.headers_mut().insert("X-Crap-Toast", val);
-    }
+/// Attach `message` as an error `X-Crap-Toast` header — the one way an admin
+/// error response reaches the user under htmx.
+///
+/// htmx does not swap a 4xx/5xx response by default, so the rendered error
+/// body never replaces the target; `static/components/toast.js` reads this
+/// header on `htmx:afterRequest` instead. A direct browser navigation renders
+/// the body and ignores the header. Every admin error response goes through
+/// here so none of them is silent on an htmx request.
+fn with_error_toast(mut resp: Response, message: &str) -> Response {
+    resp.headers_mut()
+        .insert("X-Crap-Toast", error_toast_header(message));
 
     resp
+}
+
+/// Encode an error toast as a header value. A header carries visible ASCII
+/// only, so every other character is written as a JSON `\uXXXX` escape
+/// (UTF-16, surrogate pairs above the BMP) — `JSON.parse` in the browser turns
+/// it back. A translated message (`Überprüfen`, `Zugriff für Gäste`) would
+/// otherwise fail the header conversion and lose its toast silently.
+fn error_toast_header(message: &str) -> HeaderValue {
+    let json = json!({ "message": message, "type": "error" }).to_string();
+
+    let mut ascii = String::with_capacity(json.len());
+    for ch in json.chars() {
+        if ch.is_ascii() && !ch.is_ascii_control() {
+            ascii.push(ch);
+            continue;
+        }
+
+        let mut units = [0u16; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            let _ = write!(ascii, "\\u{unit:04x}");
+        }
+    }
+
+    HeaderValue::from_str(&ascii).expect("escaped JSON is visible ASCII")
 }
 
 /// Create a redirect response to the given URL (303 See Other).
@@ -372,13 +408,8 @@ pub async fn page_with_toast<T: Serialize>(
     };
 
     match render_blocking(state, template.to_string(), data, crud).await {
-        Ok(html) => with_toast_header(Html(html).into_response(), toast),
-        Err(RenderFailure::Template(e)) => {
-            error!("Template render error: {e}");
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                .into_response()
-        }
+        Ok(html) => with_error_toast(Html(html).into_response(), toast),
+        Err(RenderFailure::Template(e)) => template_error_response(&e),
         Err(RenderFailure::TaskDied) => server_error(state, "Page rendering failed"),
     }
 }
@@ -390,42 +421,15 @@ pub async fn page_with_toast<T: Serialize>(
 /// which is taken exactly when no Lua participates in the render.
 fn html_with_toast(state: &AdminState, template: &str, data: &Value, toast: &str) -> Response {
     match state.render(template, data) {
-        Ok(html) => with_toast_header(Html(html).into_response(), toast),
-        Err(e) => {
-            error!("Template render error: {}", e);
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                .into_response()
-        }
+        Ok(html) => with_error_toast(Html(html).into_response(), toast),
+        Err(e) => template_error_response(&e),
     }
-}
-
-/// Attach the `X-Crap-Toast` notification header to a response. Shared so
-/// the inline and blocking render paths emit an identical header.
-fn with_toast_header(mut resp: Response, toast: &str) -> Response {
-    let json_toast = json!({ "message": toast, "type": "error" }).to_string();
-
-    if let Ok(val) = json_toast.parse() {
-        resp.headers_mut().insert("X-Crap-Toast", val);
-    }
-
-    resp
 }
 
 /// Return a 422 response with only the toast header — HTMX won't swap the body,
 /// so the user keeps their form data while seeing the error notification.
 pub fn toast_only_error(msg: &str) -> Response {
-    let json_toast = json!({ "message": msg, "type": "error" }).to_string();
-
-    let mut resp = Response::builder()
-        .status(StatusCode::UNPROCESSABLE_ENTITY)
-        .body(axum::body::Body::empty())
-        .unwrap();
-
-    if let Ok(val) = json_toast.parse() {
-        resp.headers_mut().insert("X-Crap-Toast", val);
-    }
-
-    resp
+    with_error_toast(StatusCode::UNPROCESSABLE_ENTITY.into_response(), msg)
 }
 
 /// Render a template, falling back to a plain error page on failure.
@@ -436,17 +440,20 @@ pub fn toast_only_error(msg: &str) -> Response {
 fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
     match state.render(template, data) {
         Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            error!("Template render error: {}", e);
-            // 500, not 200: an infrastructure failure
-            // must not read as success to monitors or htmx.
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string()),
-            )
-                .into_response()
-        }
+        Err(e) => template_error_response(&e),
     }
+}
+
+/// The response for a page whose template failed to render — the one
+/// fallback every render path uses. Logs the error and answers 500, not 200:
+/// an infrastructure failure must not read as success to monitors or htmx.
+fn template_error_response(e: &dyn Display) -> Response {
+    error!("Template render error: {e}");
+
+    with_error_toast(
+        (StatusCode::INTERNAL_SERVER_ERROR, Html(TEMPLATE_ERROR_BODY)).into_response(),
+        TEMPLATE_ERROR_MESSAGE,
+    )
 }
 
 /// Render a 400 Bad Request page with the given message. Used when a
@@ -470,7 +477,7 @@ pub fn bad_request(state: &AdminState, message: &str) -> Response {
         Err(_) => Html(format!("<h1>400</h1><p>{}</p>", html_escape(message))),
     };
 
-    (StatusCode::BAD_REQUEST, html).into_response()
+    with_error_toast((StatusCode::BAD_REQUEST, html).into_response(), message)
 }
 
 /// Render a 404 Not Found page with the given message.
@@ -492,7 +499,7 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
         Err(_) => Html(format!("<h1>404</h1><p>{}</p>", html_escape(message))),
     };
 
-    (StatusCode::NOT_FOUND, html).into_response()
+    with_error_toast((StatusCode::NOT_FOUND, html).into_response(), message)
 }
 
 /// Look up a collection definition by slug, returning an owned clone or the
@@ -645,12 +652,18 @@ pub fn server_error(state: &AdminState, message: &str) -> Response {
         Err(_) => Html(format!("<h1>500</h1><p>{}</p>", html_escape(message))),
     };
 
-    (StatusCode::INTERNAL_SERVER_ERROR, html).into_response()
+    with_error_toast(
+        (StatusCode::INTERNAL_SERVER_ERROR, html).into_response(),
+        message,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::from_str;
+
     use super::*;
+    use crate::admin::test_state::test_admin_state;
 
     #[test]
     fn htmx_redirect_returns_200_with_header() {
@@ -670,7 +683,7 @@ mod tests {
     #[cfg(feature = "sqlite")]
     #[test]
     fn service_error_not_found_maps_to_404() {
-        let state = crate::admin::test_state::test_admin_state();
+        let state = test_admin_state();
         let resp = service_error_to_admin_response(
             &state,
             ServiceError::NotFound("Document 'x' not found".into()),
@@ -712,11 +725,83 @@ mod tests {
         }
     }
 
+    /// Regression: three of the four render paths answered a failed template
+    /// with a 200, so monitors and htmx read the failure as success.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_failed_template_render_is_a_500_on_every_inline_path() {
+        let state = test_admin_state();
+        let data = json!({});
+
+        let toast = html_with_toast(&state, "no/such/template", &data, "saved");
+        assert_eq!(toast.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let plain = render_or_error(&state, "no/such/template", &data);
+        assert_eq!(plain.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Regression: a non-ASCII message failed the header conversion and the
+    /// toast was dropped without a trace.
+    #[test]
+    fn a_translated_toast_survives_the_header() {
+        let value = error_toast_header("Überprüfen — 🚫");
+        let parsed: Value = from_str(value.to_str().unwrap()).unwrap();
+
+        assert_eq!(parsed["message"], "Überprüfen — 🚫");
+        assert_eq!(parsed["type"], "error");
+    }
+
+    /// Regression: htmx does not swap a 4xx/5xx response, so an error page
+    /// without the toast header left an htmx navigation or submit with no
+    /// feedback at all. Every admin error response carries it.
+    #[test]
+    fn every_error_response_carries_an_error_toast() {
+        let state = test_admin_state();
+
+        let responses = [
+            template_error_response(&"boom"),
+            bad_request(&state, "bad"),
+            forbidden(&state, "denied"),
+            not_found(&state, "missing"),
+            server_error(&state, "broken"),
+        ];
+
+        for resp in responses {
+            let toast = resp
+                .headers()
+                .get("X-Crap-Toast")
+                .unwrap_or_else(|| panic!("{} has no toast header", resp.status()))
+                .to_str()
+                .expect("ascii header");
+            assert!(toast.contains(r#""type":"error""#), "{toast}");
+        }
+    }
+
+    /// Pin the chokepoint: the fallback body is spelled once, so every render
+    /// path answers a template failure through `template_error_response`.
+    #[test]
+    fn the_template_error_body_has_one_spelling() {
+        let src = include_str!("response.rs");
+        let production = src.split("#[cfg(test)]").next().expect("source");
+
+        assert_eq!(production.matches("<h1>Something went wrong").count(), 1);
+        assert_eq!(
+            production.matches("RenderFailure::Template(e)) =>").count(),
+            production
+                .matches("RenderFailure::Template(e)) => template_error_response(&e)")
+                .count()
+        );
+        assert_eq!(
+            template_error_response(&"x").status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
     /// An access denial still maps to 403.
     #[cfg(feature = "sqlite")]
     #[test]
     fn service_error_access_denied_maps_to_403() {
-        let state = crate::admin::test_state::test_admin_state();
+        let state = test_admin_state();
         let resp = service_error_to_admin_response(
             &state,
             ServiceError::AccessDenied("nope".into()),

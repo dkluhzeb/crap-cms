@@ -18,7 +18,7 @@ use std::sync::Arc;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Document;
 use crap_cms::core::DocumentFields;
-use crap_cms::core::HookRef;
+use crap_cms::core::{HookRef, ScheduledBy};
 use crap_cms::db::{DbConnection, FindQuery};
 use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
@@ -2609,7 +2609,7 @@ fn access_hook_filter_table_on_job_trigger_is_rejected() {
     let input = QueueJobInput {
         job_def: &job_def,
         data: None,
-        scheduled_by: "test",
+        scheduled_by: ScheduledBy::Cli,
         priority: 0,
         queue_retries: None,
         delay_secs: 0,
@@ -3220,7 +3220,7 @@ return M
         let input = QueueJobInput {
             job_def: &job_def,
             data: Some(payload),
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             priority: 0,
             queue_retries: None,
             delay_secs: 0,
@@ -3312,9 +3312,11 @@ return M
     // Seed one run for each job directly, independent of trigger access.
     let conn = db_pool.get().unwrap();
     let gated_run =
-        query::jobs::insert_job(&conn, "gated_job", "{}", "test", 1, "default", 0).unwrap();
+        query::jobs::insert_job(&conn, "gated_job", "{}", ScheduledBy::Cli, 1, "default", 0)
+            .unwrap();
     let _open_run =
-        query::jobs::insert_job(&conn, "open_job", "{}", "test", 1, "default", 0).unwrap();
+        query::jobs::insert_job(&conn, "open_job", "{}", ScheduledBy::Cli, 1, "default", 0)
+            .unwrap();
     drop(conn);
 
     let admin = make_user_doc("admin1", "admin");
@@ -3382,7 +3384,7 @@ return M
         let input = QueueJobInput {
             job_def: &job_def,
             data: None,
-            scheduled_by: "test",
+            scheduled_by: ScheduledBy::Cli,
             priority: 0,
             queue_retries: None,
             delay_secs: 0,

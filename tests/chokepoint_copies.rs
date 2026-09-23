@@ -229,6 +229,47 @@ const UPLOAD_WRITE_LIFECYCLE: Chokepoint = Chokepoint {
     ],
 };
 
+/// `service::write::admission` owns what a write does to the caller's data
+/// before the access gate judges it: canonicalize, adopt the pending draft a
+/// publish makes live, apply the locale lock. The real writes and the
+/// `validate` dry-run both call it; a dry-run that spelled those steps out a
+/// second time drifted from the write it previews (it missed the draft, the
+/// locale lock and the upload-metadata strip).
+const WRITE_ADMISSION: Chokepoint = Chokepoint {
+    name: "service::write::admission (admit_create_input / admit_update_input / \
+           admit_global_update_input)",
+    scan_root: "src/service",
+    home: Some("src/service/write"),
+    copy_pattern: r"\bnest_group_fields\(|\bcanonicalize_text_values\(|\badopt_pending(_global)?_draft\(|\breject_locale_locked_fields\(",
+    fix: "Admit the input through `admit_create_input` / `admit_update_input` / \
+          `admit_global_update_input`, so the write and its dry-run judge the same \
+          canonicalized, draft-adopted, locale-locked data.",
+    allowlist: &[
+        (
+            "src/service/persist/update.rs",
+            "Post-hook locale-lock safety net over the data a before-hook produced; the \
+             input itself was admitted",
+        ),
+        (
+            "src/service/globals/update.rs",
+            "Post-hook locale-lock safety net over the global's final hook data; the input \
+             itself was admitted",
+        ),
+        (
+            "src/service/versions/restore.rs",
+            "Canonicalizes a stored snapshot being restored; there is no caller input to admit",
+        ),
+        (
+            "src/service/versions/save_draft.rs",
+            "Re-nests the merged draft snapshot it stores; the draft write's input was admitted",
+        ),
+        (
+            "src/service/hooks/write.rs",
+            "Nests the stored row field-access rules judge as `ctx.document`; not write input",
+        ),
+    ],
+};
+
 /// Every chokepoint, for the allowlist-staleness companion test.
 const CHOKEPOINTS: &[&Chokepoint] = &[
     &LOCALE_CONTEXT,
@@ -239,6 +280,7 @@ const CHOKEPOINTS: &[&Chokepoint] = &[
     &COMPANION_SUFFIX,
     &SHAPE_READ_DOCUMENT,
     &UPLOAD_WRITE_LIFECYCLE,
+    &WRITE_ADMISSION,
 ];
 
 // ── the shared scan ──────────────────────────────────────────────────────────
@@ -440,6 +482,31 @@ fn upload_documents_take_their_read_shape_in_one_place() {
 #[test]
 fn upload_writes_settle_their_files_and_jobs_in_one_place() {
     UPLOAD_WRITE_LIFECYCLE.assert_no_copies();
+}
+
+#[test]
+fn writes_and_their_dry_run_admit_input_in_one_place() {
+    WRITE_ADMISSION.assert_no_copies();
+}
+
+/// The `validate` dry-run previews a write only because it runs that write's
+/// admission: pin that its body calls every admission step.
+#[test]
+fn the_validate_dry_run_runs_the_write_admission() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service/op/validate.rs");
+    let src = production_code(&fs::read_to_string(path).expect("validate.rs"));
+
+    for step in [
+        "admit_create_input(",
+        "admit_update_input(",
+        "admit_global_update_input(",
+    ] {
+        assert!(
+            src.contains(step),
+            "the validate dry-run no longer calls `{step}` — it must admit its input \
+             through the same step the write it previews runs"
+        );
+    }
 }
 
 #[test]

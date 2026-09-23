@@ -15,7 +15,7 @@
 use anyhow::anyhow;
 
 use crate::{
-    admin::{FormData, strip_locale_locked_for_publish},
+    admin::{FormData, strip_locale_locked_form_fields},
     core::{
         CollectionDefinition, Document, DocumentFields, FieldError, ReqContext, SharedStorage,
         ValidationError,
@@ -291,7 +291,7 @@ pub fn update_upload(
     let mut data: DocumentFields = form.into();
 
     if form_echoes_locked_fields {
-        data = strip_locale_locked_for_publish(data, &def.fields, locale_ctx, draft);
+        data = strip_locale_locked_form_fields(data, &def.fields, locale_ctx);
     }
 
     let (doc, req_context) = update_document(

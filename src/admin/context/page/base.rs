@@ -232,13 +232,13 @@ fn filter_nav_in_place(
     let Ok(mut conn) = state.infra.pool.get() else {
         nav.collections.clear();
         nav.globals.clear();
-        nav.custom_pages.clear();
+        nav.retain_custom_pages(|_| false);
         return;
     };
     let Ok(tx) = conn.transaction() else {
         nav.collections.clear();
         nav.globals.clear();
-        nav.custom_pages.clear();
+        nav.retain_custom_pages(|_| false);
         return;
     };
 
@@ -270,8 +270,13 @@ fn filter_nav_in_place(
 
     // A page the route would refuse stays out of the sidebar: pages grant on an
     // outright allow only.
-    nav.custom_pages
-        .retain(|p| has_page_access_with_conn(state, p.access.as_ref(), user_doc, &tx));
+    nav.retain_custom_pages(|p| {
+        let Some(page) = state.custom_pages.get(&p.slug) else {
+            return false;
+        };
+
+        has_page_access_with_conn(state, page.access.as_ref(), user_doc, &tx)
+    });
 
     let _ = tx.commit();
 }

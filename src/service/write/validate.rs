@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use serde_json::{Map, Value};
+
 use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, RequiredLocales,
@@ -107,12 +109,21 @@ pub struct ValidateContext<'a> {
     /// an update without one judges an empty document, so stored-value rules
     /// deny.
     pub stored_document: Option<&'a DocumentFields>,
+    /// The pending-draft snapshot a publish writes back over the row after
+    /// validation, already stripped by the caller's field-level write access —
+    /// the completeness gate judges the locales it replaces from it, exactly as
+    /// the real publish does. `None` unless the previewed write publishes a
+    /// pending draft.
+    pub locale_overlay: Option<&'a Map<String, Value>>,
 }
 
 /// Validate a document without persisting — runs the full before-write pipeline
 /// (field stripping, field hooks, validation, collection hooks) and returns.
 ///
-/// Used by live validation endpoints.
+/// Used by live validation endpoints. `input` must already have passed the
+/// write's admission prefix (`admit_create_input` / `admit_update_input` /
+/// `admit_global_update_input`) and the access gate, as the `validate`
+/// operation does — this is the part of the write that follows them.
 ///
 /// # Errors
 ///
@@ -125,13 +136,8 @@ pub fn validate_document(
     mut input: WriteInput<'_>,
     user: Option<&Document>,
 ) -> Result<()> {
-    // Note: collection-level access check is intentionally skipped here.
-    // Validation endpoints already check access before calling this function.
-
-    // Canonicalize incoming data (nested groups, canonical email and text) up
-    // front so the dry-run pipeline matches the real write path.
-    input.data = nest_group_fields(&input.data, ctx.fields);
-    canonicalize_text_values(&mut input.data, ctx.fields);
+    // Admission and the collection-level access check are the caller's: the
+    // `validate` operation runs both before calling this function.
 
     let is_draft = input.draft && ctx.supports_drafts;
 
@@ -176,6 +182,7 @@ pub fn validate_document(
         .collection_required_locales(ctx.required_locales)
         .user(user)
         .ui_locale(input.ui_locale.as_deref())
+        .locale_overlay(ctx.locale_overlay)
         .build();
 
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;

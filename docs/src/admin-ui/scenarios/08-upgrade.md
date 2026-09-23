@@ -153,9 +153,12 @@ breaking changes get announced.
   the browser console. The planned `crap-cms doctor` command will
   scan for these. Until then, exercise the admin in dev-mode after
   every upgrade and watch the console.
-- **No auto-rebuild trigger.** After dropping or editing a file,
-  the next request reads it (in dev mode) or restart picks it up
-  (in production). No file-watcher.
+- **No auto-rebuild trigger.** There is no file-watcher. An
+  **edit** to a template that existed at startup is read on the next
+  request in dev mode; a **new** template file, and anything in
+  production mode, needs a restart (the overlay directory is scanned
+  once at startup). Files under `static/` are served from disk, so a
+  changed or added static file is picked up on the next request.
 
 ## Verifying an upgrade went clean
 

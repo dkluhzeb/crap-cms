@@ -242,6 +242,7 @@
   "validation.has_many_finite_number": "{{field}}: {{value}} must be a finite number",
   "validation.has_many_whole_number": "{{field}}: {{value}} must be a whole number",
   "validation.relationship_shape": "{{field}} must reference a document by id",
+  "validation.invalid_richtext_json": "{{field}} must be a valid rich text JSON document",
   "validation.polymorphic_collection_not_allowed": "{{field}} references collection '{{collection}}' which is not allowed ({{allowed}})",
   "validation.invalid_row_type": "{{field}} must be an object",
   "validation.unknown_block_type": "{{field}} row {{index}} has unknown block type '{{block_type}}'",

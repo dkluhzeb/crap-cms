@@ -15,6 +15,11 @@ cat my.hbs | crap-cms fmt --stdio  # editor pipe
 The formatter is **idempotent**: `fmt(fmt(x)) == fmt(x)`. Running it
 twice produces the same result as running it once.
 
+Symlinks are left alone by default — a symlinked directory is not
+descended and a symlinked `.hbs` is not written through to its target,
+which may live outside the tree. Pass `--follow-symlinks` to format
+through them.
+
 See [the CLI reference](../../cli/flags.md#fmt--format-handlebars-templates)
 for full flag documentation and editor integration snippets.
 

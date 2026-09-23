@@ -12,12 +12,11 @@ use serde_json::Value;
 
 use crate::{
     cli::{self, crap_theme},
+    commands::cli_find,
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, Registry, field::FieldType},
-    db::{BoxedConnection, DbPool, LocaleContext, query},
+    core::{CollectionDefinition, Document, Registry, collection::Auth, field::FieldType},
+    db::{BoxedConnection, DbPool, FindQuery, LocaleContext, query},
 };
-
-use crate::core::collection::Auth;
 #[cfg(not(tarpaulin_include))]
 use dialoguer::Input;
 
@@ -157,7 +156,7 @@ pub(super) fn resolve_user(
     }
 
     // Interactive: select from existing users
-    select_user_interactive(&conn, collection, &def, locale_ctx.as_ref())
+    select_user_interactive(&conn, collection, &def, locale)
 }
 
 /// Interactively select a user from the collection.
@@ -166,10 +165,9 @@ fn select_user_interactive(
     conn: &BoxedConnection,
     collection: &str,
     def: &Arc<CollectionDefinition>,
-    locale_ctx: Option<&LocaleContext>,
+    locale: &LocaleConfig,
 ) -> Result<(Arc<CollectionDefinition>, Document)> {
-    let find_query = query::FindQuery::default();
-    let users = query::find(conn, collection, def, &find_query, locale_ctx)?;
+    let users = cli_find(conn, def, &FindQuery::default(), locale)?;
 
     if users.is_empty() {
         bail!("No users in '{collection}'");

@@ -8,7 +8,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::config::parse_duration_string;
-use crate::core::Registry;
+use crate::core::{Registry, ScheduledBy};
 use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
 use crate::hooks::lua_api::integer::{lua_integer, opt_integer};
@@ -128,7 +128,7 @@ fn queue_job_inner(
     // as gRPC and MCP. `LuaWriteHooks` runs the access function in THIS VM,
     // so a hook queuing a job never re-enters the VM pool.
     let user = hook_user(lua);
-    let hooks = LuaWriteHooks::builder(lua).build();
+    let hooks = LuaWriteHooks::builder(lua, state.registry.as_ref()).build();
     let ctx = ServiceContext::slug_only(slug)
         .conn(conn)
         .write_hooks(&hooks)
@@ -140,7 +140,7 @@ fn queue_job_inner(
         &service::jobs::QueueJobInput {
             job_def: &job_def,
             data: Some(&data_json),
-            scheduled_by: "hook",
+            scheduled_by: ScheduledBy::Hook,
             priority,
             queue_retries,
             delay_secs,

@@ -42,10 +42,10 @@ const PERSIST_FNS: &[&str] = &[
 /// The one canonicalization chokepoint every persisting body must run.
 const CANONICALIZER: &str = "canonicalize_write_input";
 
-/// The update admission step, which runs the canonicalizer first; a body that
-/// admits its input through it is canonicalized. Pinned by
-/// `the_admission_step_canonicalizes_first`.
-const ADMISSION: &str = "admit_update";
+/// The admission steps, each of which runs the canonicalizer first; a body
+/// that admits its input through one of them is canonicalized. Pinned by
+/// `the_admission_steps_canonicalize_first`.
+const ADMISSIONS: &[&str] = &["admit_update", "admit_create_input", "admit_update_input"];
 
 /// (file, function, why it persists without canonicalizing). Reviewed, one
 /// reason per row — never widen the matcher to make a body pass.
@@ -201,8 +201,8 @@ fn persisting_fns(code: &str) -> Vec<(String, bool)> {
                 && PERSIST_FNS.iter().any(|p| body.contains(&format!("{p}(")))
         })
         .map(|(name, body)| {
-            let canonicalizes =
-                body.contains(CANONICALIZER) || body.contains(&format!("{ADMISSION}("));
+            let canonicalizes = body.contains(CANONICALIZER)
+                || ADMISSIONS.iter().any(|a| body.contains(&format!("{a}(")));
             (name, canonicalizes)
         })
         .collect()
@@ -257,26 +257,50 @@ fn scan_src(root: &Path) -> Scan {
     scan
 }
 
-/// A persisting body may delegate to the admission step only because that
-/// step canonicalizes before anything else reads the input.
-#[test]
-fn the_admission_step_canonicalizes_first() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service/write/admit.rs");
-    let src = production_code(&fs::read_to_string(path).expect("admit.rs"));
-    let body = src
-        .split_once(&format!("fn {ADMISSION}("))
-        .expect("the admission step exists")
+/// The body of `fn name(` in `code`, up to the next top-level `fn`.
+fn body_of<'a>(code: &'a str, name: &str) -> &'a str {
+    let body = code
+        .split_once(&format!("fn {name}("))
+        .unwrap_or_else(|| panic!("`{name}` exists"))
         .1;
-    let canonicalize_at = body
+
+    body.split_once("\nfn ")
+        .or_else(|| body.split_once("\npub(crate) fn "))
+        .map_or(body, |(head, _)| head)
+}
+
+/// A persisting body may delegate to an admission step only because that step
+/// canonicalizes before anything else reads the input — and the update step
+/// before the draft is adopted.
+#[test]
+fn the_admission_steps_canonicalize_first() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |rel: &str| production_code(&fs::read_to_string(root.join(rel)).expect(rel));
+
+    let admission = read("src/service/write/admission.rs");
+
+    let create = body_of(&admission, "admit_create_input");
+    assert!(
+        create.contains(&format!("{CANONICALIZER}(")),
+        "the create admission canonicalizes"
+    );
+
+    let update = body_of(&admission, "admit_update_input");
+    let canonicalize_at = update
         .find(&format!("{CANONICALIZER}("))
-        .expect("it canonicalizes");
-    let adopt_at = body
+        .expect("the update admission canonicalizes");
+    let adopt_at = update
         .find("adopt_pending_draft(")
         .expect("it adopts the draft");
-
     assert!(
         canonicalize_at < adopt_at,
-        "the admission step must canonicalize before the draft is adopted"
+        "the update admission must canonicalize before the draft is adopted"
+    );
+
+    let admit = read("src/service/write/admit.rs");
+    assert!(
+        body_of(&admit, "admit_update").contains("admit_update_input("),
+        "the locking update gate runs the shared admission prefix"
     );
 }
 

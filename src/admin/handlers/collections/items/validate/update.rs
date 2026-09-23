@@ -10,7 +10,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            shared::{get_user_doc, parse_request_locale},
+            shared::{get_user_doc, parse_request_locale, strip_locale_locked_form_fields},
             validate::{
                 ValidateRequest, handle_validation_outcome, validation_error_response_simple,
             },
@@ -37,12 +37,19 @@ pub async fn validate_update(
     // Collection-level access is enforced in the shared operation body —
     // same rule, same user as the real write.
 
-    let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update");
-
     let locale_ctx = match parse_request_locale(payload.locale.as_deref(), &state.config.locale) {
         Ok(ctx) => ctx,
         Err(msg) => return validation_error_response_simple(&msg),
     };
+
+    // The edit form echoes shared fields read-only under a non-default locale;
+    // the admin write drops them before the service's locale lock, so the
+    // dry-run it previews does too.
+    let data = strip_locale_locked_form_fields(
+        prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update"),
+        &def.fields,
+        locale_ctx.as_ref(),
+    );
 
     // Shared dry-run body — `exclude_id` selects update mode (the target row
     // is excluded from unique checks).

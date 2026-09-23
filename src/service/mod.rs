@@ -119,12 +119,13 @@ pub(crate) use versions::{find_stored_version, read_version_snapshot, unpublish_
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
-pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 pub(crate) use write::{
+    PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
     check_create_access, check_update_access, delete_document_in_conn, owned_file_keys,
     purge_document, stored_fields_for_update_rules, update_document_in_conn,
     update_many_single_in_conn, warn_orphaned_files,
 };
+pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {

@@ -9,7 +9,7 @@ use crate::{
     cli::{self, crap_theme},
     config::{LocaleConfig, PasswordPolicy},
     core::{DocumentFields, Registry},
-    db::{DbPool, query},
+    db::{DbPool, LocaleContext, query},
     hooks::lifecycle::is_valid_email_format,
 };
 
@@ -73,7 +73,10 @@ pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
     let mut conn = p.pool.get().context("Failed to get database connection")?;
     let tx = conn.transaction().context("Failed to begin transaction")?;
 
-    let doc = query::create(&tx, p.collection, &def, &typed_data, None)
+    // Written under the default locale: a collection with localized fields
+    // has no bare column to write them to.
+    let locale_ctx = LocaleContext::default_for(p.locale);
+    let doc = query::create(&tx, p.collection, &def, &typed_data, locale_ctx.as_ref())
         .context("Failed to create user")?;
 
     query::update_password(&tx, p.collection, &doc.id, &password)

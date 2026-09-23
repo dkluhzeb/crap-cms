@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::job::JobStatus;
+use crate::core::job::{JobStatus, ScheduledBy};
 
 /// A single execution instance of a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +27,9 @@ pub struct JobRun {
     /// `(slug, unique_key)` prevents a second active row with the
     /// same pair from being inserted.
     pub unique_key: Option<String>,
-    /// How this job was triggered: "cron", "hook", "grpc", "cli".
+    /// How this job was triggered — a [`ScheduledBy`] name (`"grpc"`,
+    /// `"cron"`, `"hook"`, `"mcp"`, `"cli"`, `"system"`). A legacy `"api"`
+    /// reads back as `"grpc"`; any other unknown stored value as it is.
     pub scheduled_by: Option<String>,
     pub created_at: Option<String>,
     pub started_at: Option<String>,
@@ -155,7 +157,7 @@ impl JobRunBuilder {
 
     #[must_use]
     pub fn scheduled_by(mut self, s: impl Into<String>) -> Self {
-        self.scheduled_by = Some(s.into());
+        self.scheduled_by = Some(ScheduledBy::canonical_name(s.into()));
 
         self
     }

@@ -2,14 +2,18 @@
 //! `<config_dir>/static/components/<tag>.js`. Prints the one-line
 //! `import './<tag>.js';` to add to `custom.js` for registration.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
+use include_dir::Dir;
 use serde::Serialize;
 
 use crate::{
     cli,
-    scaffold::{guards::refuse_file_overwrite, paths, render},
+    scaffold::{EMBEDDED_STATIC, guards::refuse_file_overwrite, paths, render},
 };
 
 #[derive(Serialize)]
@@ -33,13 +37,11 @@ pub struct MakeComponentOptions<'a> {
 /// Returns an error if the tag is invalid, the file already exists without
 /// `--force`, or writing the file fails.
 pub fn make_component(opts: &MakeComponentOptions) -> Result<()> {
-    validate_tag(opts.tag)?;
+    let file_path = component_path(opts.config_dir, opts.tag)?;
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let dir = paths::static_components_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create static/components/ directory")?;
-
-    let file_path = dir.join(format!("{}.js", opts.tag));
-    refuse_file_overwrite(&file_path, opts.force)?;
 
     let js = render_component_js(opts.tag)?;
     fs::write(&file_path, &js)
@@ -52,6 +54,21 @@ pub fn make_component(opts: &MakeComponentOptions) -> Result<()> {
     ));
 
     Ok(())
+}
+
+/// Where the component for `tag` is written, once `tag` is known to be a
+/// valid custom-element name. Lets a generator that also writes a component
+/// refuse before it writes anything.
+///
+/// # Errors
+///
+/// Returns an error if `tag` isn't a valid custom-element name, or names a
+/// built-in component.
+pub(crate) fn component_path(config_dir: &Path, tag: &str) -> Result<PathBuf> {
+    validate_tag(tag)?;
+    refuse_builtin(tag)?;
+
+    Ok(paths::static_components_dir(config_dir).join(format!("{tag}.js")))
 }
 
 /// HTML custom-element tag rule: must contain `-`, must start with
@@ -83,6 +100,68 @@ fn validate_tag(tag: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Refuse a tag that would shadow a built-in component: its module file
+/// (`static/components/<tag>.js` overlays the built-in module of that name,
+/// so a scaffold there replaces it) or its element name (a second
+/// `customElements.define` of a built-in tag throws in the browser).
+fn refuse_builtin(tag: &str) -> Result<()> {
+    if EMBEDDED_STATIC
+        .get_file(format!("components/{tag}.js"))
+        .is_some()
+    {
+        bail!(
+            "'{tag}' is a built-in component module -- a component written there would \
+             replace it. To customize the built-in, run \
+             `crap-cms templates extract components/{tag}.js`; otherwise pick another tag"
+        );
+    }
+
+    if builtin_element_tags().iter().any(|t| t == tag) {
+        bail!("'{tag}' is a built-in element name -- pick another tag");
+    }
+
+    Ok(())
+}
+
+/// Every element name a built-in component registers with
+/// `customElements.define`.
+fn builtin_element_tags() -> Vec<String> {
+    let mut tags = Vec::new();
+
+    if let Some(dir) = EMBEDDED_STATIC.get_dir("components") {
+        collect_defined_tags(dir, &mut tags);
+    }
+
+    tags
+}
+
+fn collect_defined_tags(dir: &Dir<'_>, out: &mut Vec<String>) {
+    for file in dir.files() {
+        if let Some(src) = file.contents_utf8() {
+            out.extend(defined_tags(src));
+        }
+    }
+
+    for sub in dir.dirs() {
+        collect_defined_tags(sub, out);
+    }
+}
+
+/// The tags a script passes to `customElements.define`.
+fn defined_tags(src: &str) -> impl Iterator<Item = String> + '_ {
+    src.split("customElements.define(")
+        .skip(1)
+        .filter_map(|rest| {
+            let rest = rest.trim_start();
+            let quote = rest
+                .chars()
+                .next()
+                .filter(|c| matches!(c, '\'' | '"' | '`'))?;
+
+            rest[1..].split(quote).next().map(str::to_string)
+        })
 }
 
 fn render_component_js(tag: &str) -> Result<String> {
@@ -179,6 +258,47 @@ mod tests {
         assert!(
             err.to_string().to_lowercase().contains("invalid character")
                 || err.to_string().contains("lowercase")
+        );
+    }
+
+    /// Regression: `make component dirty-form` wrote a skeleton over the
+    /// built-in module's overlay path, silently replacing the built-in.
+    #[test]
+    fn rejects_a_built_in_module_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let err = make_component(&MakeComponentOptions {
+            config_dir: tmp.path(),
+            tag: "dirty-form",
+            force: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("built-in component module"), "{err}");
+        assert!(!tmp.path().join("static/components/dirty-form.js").exists());
+    }
+
+    #[test]
+    fn rejects_a_built_in_element_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let err = make_component(&MakeComponentOptions {
+            config_dir: tmp.path(),
+            tag: "crap-tags",
+            force: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("built-in element"), "{err}");
+    }
+
+    #[test]
+    fn defined_tags_reads_every_quote_style() {
+        let src = "customElements.define('crap-a', A);\ncustomElements.define(\n  \"crap-b\", B);";
+
+        assert_eq!(
+            defined_tags(src).collect::<Vec<_>>(),
+            vec!["crap-a", "crap-b"]
         );
     }
 

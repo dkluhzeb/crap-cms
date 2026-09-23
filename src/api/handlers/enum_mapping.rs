@@ -2,8 +2,8 @@
 //! on the gRPC wire (`MutationEvent`, `VersionInfo`, `JobRunInfo`).
 
 use crate::api::content;
-use crate::core::JobStatus;
 use crate::core::event::{EventOperation, EventTarget};
+use crate::core::{JobStatus, ScheduledBy};
 
 pub(in crate::api::handlers) fn mutation_operation(
     op: &EventOperation,
@@ -35,18 +35,25 @@ pub(in crate::api::handlers) fn job_run_status(status: JobStatus) -> content::Jo
     }
 }
 
-/// Map the stored `scheduled_by` string to its proto enum. `"api"` is what a
-/// queued bulk operation over gRPC records, so it maps to `Grpc`; unknown
-/// values or `None` are `Unspecified`.
-pub(in crate::api::handlers) fn job_scheduled_by(value: Option<&str>) -> content::JobScheduledBy {
-    match value {
-        Some("grpc" | "api") => content::JobScheduledBy::Grpc,
-        Some("cron") => content::JobScheduledBy::Cron,
-        Some("hook") => content::JobScheduledBy::Hook,
-        Some("mcp") => content::JobScheduledBy::Mcp,
-        Some("cli") => content::JobScheduledBy::Cli,
-        _ => content::JobScheduledBy::Unspecified,
+/// The proto enum of a job run's provenance.
+fn scheduled_by_proto(by: ScheduledBy) -> content::JobScheduledBy {
+    match by {
+        ScheduledBy::Grpc => content::JobScheduledBy::Grpc,
+        ScheduledBy::Cron => content::JobScheduledBy::Cron,
+        ScheduledBy::Hook => content::JobScheduledBy::Hook,
+        ScheduledBy::Mcp => content::JobScheduledBy::Mcp,
+        ScheduledBy::Cli => content::JobScheduledBy::Cli,
+        ScheduledBy::System => content::JobScheduledBy::System,
     }
+}
+
+/// Map a run's stored `scheduled_by` to its proto enum, read through
+/// [`ScheduledBy::from_stored`] (so a legacy `"api"` row is `Grpc`). A value
+/// that names no provenance, or `None`, is `Unspecified`.
+pub(in crate::api::handlers) fn job_scheduled_by(value: Option<&str>) -> content::JobScheduledBy {
+    value
+        .and_then(ScheduledBy::from_stored)
+        .map_or(content::JobScheduledBy::Unspecified, scheduled_by_proto)
 }
 
 pub(in crate::api::handlers) fn version_status(value: &str) -> content::VersionStatus {
@@ -131,26 +138,46 @@ mod tests {
     }
 
     #[test]
-    fn job_scheduled_by_known_and_unknown() {
+    fn job_scheduled_by_maps_every_variant() {
+        let cases = [
+            (ScheduledBy::Grpc, content::JobScheduledBy::Grpc),
+            (ScheduledBy::Cron, content::JobScheduledBy::Cron),
+            (ScheduledBy::Hook, content::JobScheduledBy::Hook),
+            (ScheduledBy::Mcp, content::JobScheduledBy::Mcp),
+            (ScheduledBy::Cli, content::JobScheduledBy::Cli),
+            (ScheduledBy::System, content::JobScheduledBy::System),
+        ];
         assert_eq!(
-            job_scheduled_by(Some("grpc")),
-            content::JobScheduledBy::Grpc
+            cases.len(),
+            ScheduledBy::ALL.len(),
+            "every provenance is pinned"
         );
+
+        for (internal, proto) in cases {
+            assert_eq!(job_scheduled_by(Some(internal.as_str())), proto);
+        }
+    }
+
+    /// Regression: an email / image-conversion / migration run (`"system"`)
+    /// had no proto value and reported `Unspecified`.
+    #[test]
+    fn a_system_run_is_reported_as_system() {
         assert_eq!(
-            job_scheduled_by(Some("cron")),
-            content::JobScheduledBy::Cron
+            job_scheduled_by(Some("system")),
+            content::JobScheduledBy::System
         );
-        assert_eq!(
-            job_scheduled_by(Some("hook")),
-            content::JobScheduledBy::Hook
-        );
-        // A queued bulk op over gRPC is recorded as "api"; MCP and CLI have
-        // their own variants.
+    }
+
+    #[test]
+    fn job_scheduled_by_legacy_and_unknown() {
+        // Earlier releases recorded every queued bulk op as "api".
         assert_eq!(job_scheduled_by(Some("api")), content::JobScheduledBy::Grpc);
-        assert_eq!(job_scheduled_by(Some("mcp")), content::JobScheduledBy::Mcp);
-        assert_eq!(job_scheduled_by(Some("cli")), content::JobScheduledBy::Cli);
         // Absent or unrecognized → Unspecified.
         assert_eq!(job_scheduled_by(None), content::JobScheduledBy::Unspecified);
+        assert_eq!(
+            job_scheduled_by(Some("manual")),
+            content::JobScheduledBy::Unspecified
+        );
         assert_eq!(
             job_scheduled_by(Some("something-else")),
             content::JobScheduledBy::Unspecified

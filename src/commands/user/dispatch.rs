@@ -55,7 +55,7 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             password_policy: &cfg.auth.password_policy,
             locale: &cfg.locale,
         }),
-        UserAction::List { collection } => user_list(&pool, &registry, &collection),
+        UserAction::List { collection } => user_list(&pool, &registry, &collection, &cfg.locale),
         UserAction::Delete {
             collection,
             email,

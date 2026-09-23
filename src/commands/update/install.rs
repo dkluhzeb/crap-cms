@@ -11,17 +11,18 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli;
 
-use super::{
-    checksum, github, platform, safety::ensure_self_managed, store, version::normalize_tag,
-};
+use super::{checksum, github, platform, store, version::normalize_tag};
 
 /// Download + verify + install a specific version.
-pub(super) fn run_install(version: &str, reinstall: bool, force: bool) -> Result<()> {
+///
+/// Stages the binary in the version store only — a scratch directory and
+/// `<store>/versions/<version>/` are the only paths it writes. The running
+/// binary and the one on `$PATH` are untouched until `update use`, so a
+/// distro-managed install is no reason to refuse here; `update use` carries
+/// that guard.
+pub(super) fn run_install(version: &str, reinstall: bool) -> Result<()> {
     let version = normalize_tag(version);
     let store = store::Store::default_for_user()?;
-
-    // Guard: running binary is outside the store → refuse unless --force.
-    ensure_self_managed(&store, force)?;
 
     if !reinstall && store.installed()?.contains(&version) {
         cli::info(&format!(

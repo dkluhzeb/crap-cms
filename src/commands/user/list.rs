@@ -5,13 +5,14 @@ use tracing::warn;
 
 use crate::{
     cli::{self, Table},
-    core::Registry,
-    db::{DbPool, query},
+    commands::cli_find,
+    config::LocaleConfig,
+    core::{Registry, collection::Auth},
+    db::{DbPool, FindQuery},
     service::{self, ServiceContext},
 };
 
 use super::helpers::load_auth_collection;
-use crate::core::collection::Auth;
 
 /// List users in an auth collection.
 ///
@@ -20,13 +21,17 @@ use crate::core::collection::Auth;
 /// Returns an error if the collection isn't an auth collection or the
 /// underlying find query fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_list(pool: &DbPool, registry: &Registry, collection: &str) -> Result<()> {
+pub fn user_list(
+    pool: &DbPool,
+    registry: &Registry,
+    collection: &str,
+    locale: &LocaleConfig,
+) -> Result<()> {
     let def = load_auth_collection(registry, collection)?;
     let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;
-    let find_query = query::FindQuery::default();
-    let users = query::find(&conn, collection, &def, &find_query, None)?;
+    let users = cli_find(&conn, &def, &FindQuery::default(), locale)?;
 
     if users.is_empty() {
         cli::info(&format!("No users in '{collection}'."));

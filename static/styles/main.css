@@ -7,12 +7,13 @@
  * finally themes (which override token values via
  * `html[data-theme="…"]` selectors and so must load last).
  *
- * Customizers replace the entire admin look by dropping
- * `<config_dir>/static/styles/themes/themes-<name>.css` files; this
- * entry point doesn't need to be touched. To override the entire
- * cascade, drop a replacement at
- * `<config_dir>/static/styles/main.css` — your version wins per
- * the standard overlay rule.
+ * Customizers add a theme by dropping
+ * `<config_dir>/static/styles/themes/themes-<name>.css` and importing it
+ * from a `<config_dir>/static/styles/main.css` overlay — a copy of this
+ * file with one more `@import` after the themes below (see the themes
+ * guide). A file dropped into `themes/` is not loaded by itself. The
+ * overlay wins per the standard overlay rule, so it can also replace
+ * the entire cascade.
  */
 
 /* Tokens — the public theming surface. */

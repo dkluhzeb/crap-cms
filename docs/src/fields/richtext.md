@@ -47,6 +47,10 @@ crap.fields.richtext({
 - **Changing format does NOT migrate existing data.** If you switch from `"html"` to
   `"json"` (or vice versa), existing documents retain their original format. The editor
   will attempt to parse the stored content according to the current format setting.
+  Re-save or migrate such values after switching to `"json"`: on a field that uses
+  [custom nodes](#custom-nodes) with attrs, a value that is still HTML is not a readable
+  JSON document, so the next write that includes it fails validation with
+  `validation.invalid_richtext_json`.
 - The API returns an HTML string for `"html"` and the parsed document (a table/object, not a string) for `"json"`.
 - Full-text search automatically extracts plain text from JSON-format richtext fields.
 
@@ -200,6 +204,15 @@ The following checks run automatically:
 Validation errors reference the node location: `"content[cta#0].url"` (first CTA node's
 `url` attribute in the `content` field).
 
+The checks run on every write surface (admin, gRPC, MCP, Lua CRUD) and for rich text
+fields at any depth — inside groups and array/blocks rows too. A `"json"` field's value
+may be sent as the document's JSON text or as the document object itself; a value that
+is neither a readable document (text that does not parse, nesting deeper than 127
+levels, or another type) fails with `validation.invalid_richtext_json`, since its nodes
+cannot be checked. In `"html"` content, nodes are found the way the browser parses the
+markup: the tag name and attribute names are case-insensitive, attribute values may use
+either quote or none, and entity-encoded attribute values are decoded.
+
 #### `before_validate` hooks
 
 Node attrs support `hooks.before_validate` for normalizing values before validation:
@@ -220,7 +233,8 @@ crap.richtext.register_node("cta", {
 ```
 
 The hook receives `(value, context)` and returns the transformed value. Runs before
-validation checks.
+validation checks, for rich text fields at any depth (including groups and array/blocks
+rows), whether a `"json"` value arrives as text or as a document object.
 
 #### Unsupported features
 

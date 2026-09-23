@@ -62,7 +62,12 @@ crap.fields.date({
 })
 ```
 
-Both values use ISO 8601 format. Dates outside the range produce a validation error.
+Both values use ISO 8601 format. Dates outside the range produce a validation error. What a bound judges depends on the field:
+
+- **`dayOnly` / `dayAndTime` without a timezone** — the UTC day the value is *stored* as. A datetime with an offset is stored converted to UTC, so `2026-01-01T01:00:00+02:00` is judged as December 31.
+- **`dayAndTime` with `timezone = true`** — the local day as entered, in the chosen zone: the day the editor picked.
+- **`monthOnly`** — the month: each bound is cut to its month, so `min_date = "2026-03-15"` accepts `2026-03`.
+- **`timeOnly`** — a time of day has no date, so `min_date` / `max_date` on a `timeOnly` field is a load error.
 
 ## Validation
 

@@ -6,3 +6,4 @@ pub(crate) mod render_scope;
 pub mod slot_docs;
 
 pub use registry::create_handlebars;
+pub use slot_docs::SLOT_DOCS;

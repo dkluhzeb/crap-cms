@@ -18,11 +18,13 @@
 //! ```
 //!
 //! The function is invoked lazily — only when a rendering template
-//! actually calls `{{data "fetch_weather"}}` — and only once per HTTP
-//! request thanks to the per-request VM acquisition.
+//! actually calls `{{data "fetch_weather"}}` — and on **every** such lookup:
+//! results are not cached, so a template that needs the value twice binds it
+//! once with `{{#with (data "…")}}`. Registering the same name twice is an
+//! error.
 
 use anyhow::Result;
-use mlua::{Function, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
 
 use super::utils::require_init_phase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
@@ -36,7 +38,10 @@ pub(crate) const TEMPLATE_DATA_KEY: &str = "_crap_template_data";
 #[lua_fn(path = "crap.template_data.register")]
 fn template_data_register(
     lua: &Lua,
-    #[lua(doc = "Unique name (used as `{{data \"name\"}}` in templates).")] name: String,
+    #[lua(
+        doc = "Unique name (used as `{{data \"name\"}}` in templates); registering a name twice is an error."
+    )]
+    name: String,
     #[lua(
         doc = "Lua function called on each `{{data}}` lookup; returns any JSON-encodable value."
     )]
@@ -50,6 +55,14 @@ fn template_data_register(
     )?;
 
     let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY)?;
+
+    if table.contains_key(name.as_str())? {
+        return Err(RuntimeError(format!(
+            "crap.template_data.register: '{name}' is already registered — each name \
+             maps to one function"
+        )));
+    }
+
     table.set(name, func)
 }
 
@@ -70,7 +83,7 @@ lua_table! {
     name: crap_template_data,
     path: "crap.template_data",
     state: (),
-    header: "Register named template-data functions called lazily by the\n`{{data \"name\"}}` Handlebars helper. Each function is invoked\nonce per HTTP request when first referenced; results are not\ncached across requests.",
+    header: "Register named template-data functions called lazily by the\n`{{data \"name\"}}` Handlebars helper. Each function is invoked on every\n`{{data}}` lookup that names it; results are not cached, so bind a value\nused twice once with `{{#with (data \"name\")}}`.",
     fns: [template_data_register, template_data_list],
 }
 
@@ -122,25 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn register_overwrites_existing_name() {
-        let lua = lua_in_init_phase();
-
-        lua.load(
-            r#"
-            crap.template_data.register("x", function() return 1 end)
-            crap.template_data.register("x", function() return 2 end)
-        "#,
-        )
-        .exec()
-        .unwrap();
-
-        let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY).unwrap();
-        let func: Function = table.get("x").unwrap();
-        let result: i64 = func.call(()).unwrap();
-        assert_eq!(result, 2);
-    }
-
-    #[test]
     fn list_returns_registered_names() {
         let lua = lua_in_init_phase();
 
@@ -155,6 +149,33 @@ mod tests {
 
         let names: Table = lua.load("return crap.template_data.list()").eval().unwrap();
         assert_eq!(names.raw_len(), 2);
+    }
+
+    /// Regression: a second registration under the same name silently
+    /// replaced the first; `crap.pages.register` already rejected duplicates.
+    #[test]
+    fn registering_a_name_twice_is_rejected() {
+        let lua = lua_in_init_phase();
+
+        let err = lua
+            .load(
+                r#"
+                crap.template_data.register("weather", function() return 1 end)
+                crap.template_data.register("weather", function() return 2 end)
+            "#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already registered"), "{err}");
+
+        let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY).unwrap();
+        let func: Function = table.get("weather").unwrap();
+        assert_eq!(
+            func.call::<i64>(()).unwrap(),
+            1,
+            "the first registration stays"
+        );
     }
 
     /// Regression: `crap.template_data.register` called outside the init

@@ -66,7 +66,7 @@ pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) ->
         Some(UpdateCmd::List) => run_list(),
         Some(UpdateCmd::Install { version, reinstall }) => {
             refuse_on_windows("install")?;
-            run_install(&version, reinstall, force)
+            run_install(&version, reinstall)
         }
         Some(UpdateCmd::Use { version }) => {
             refuse_on_windows("use")?;

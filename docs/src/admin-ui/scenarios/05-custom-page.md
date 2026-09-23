@@ -71,7 +71,8 @@ uses three pieces of context:
 
 The page is now reachable at `/admin/p/system_info`. Without a Lua
 registration, it just doesn't appear in the sidebar — direct URL
-access works.
+access works. The reverse is an error: registering a page whose
+template doesn't exist fails startup, naming the page.
 
 ## Step 2 — register the sidebar entry
 
@@ -92,7 +93,7 @@ rejected at registration time.
 
 | Field | Required? | Effect |
 |---|---|---|
-| `section` | no | Sidebar section heading. `nil` → renders ungrouped at the bottom. |
+| `section` | no | Sidebar section heading; pages sharing a heading are grouped under it (sections in alphabetical order). `nil` → listed ungrouped after every section. |
 | `label` | no | Sidebar label. `nil` → page routes but isn't shown in nav. |
 | `icon` | no | Material Symbols icon name (e.g. `"monitoring"`, `"heart-pulse"`). |
 | `access` | no | Lua function-ref (registered via `crap.access.register`). Returning `false` produces a 403 and hides the page from sidebar nav. Without it every admin user sees the page — `[access] default_deny` applies to collections and globals, not pages. |

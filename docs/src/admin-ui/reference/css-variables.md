@@ -135,6 +135,12 @@ so changing `--base` rescales the whole admin proportionally.
 | `--transition-normal` | `0.25s ease` |  |
 | `--transition-smooth` | `0.3s cubic-bezier(0.215, 0.61, 0.355, 1)` |  |
 
+## Font family
+
+| Token | Value | Notes |
+|---|---|---|
+| `--font-family` | `"Geist", system-ui, -apple-system, sans-serif` |  |
+
 ## Font sizes
 
 | Token | Value | Notes |

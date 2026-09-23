@@ -6,6 +6,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::core::ScheduledBy;
 use crate::db::{DbConnection, query};
 
 use super::validation::validate_no_crlf;
@@ -58,7 +59,7 @@ pub fn queue_email(
         conn,
         SYSTEM_EMAIL_JOB,
         &data_json,
-        "system",
+        ScheduledBy::System,
         max_attempts,
         SYSTEM_EMAIL_QUEUE,
         0,

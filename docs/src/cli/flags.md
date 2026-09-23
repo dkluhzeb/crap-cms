@@ -150,24 +150,32 @@ Prints a comprehensive project overview:
 
 #### `status --check`
 
-Runs a best-practice audit with 24 checks across four categories:
+Runs a best-practice audit with 29 checks across four categories:
 
 **Security:**
-- Auth secret too short or placeholder value
-- Brute-force protection disabled
+- Auth secret shorter than 32 characters
+- Auth secret that looks like a placeholder
+- Brute-force protection disabled (`max_login_attempts = 0`)
 - `default_deny = false` (collections publicly accessible)
 - Collections without access rules
+- A collection whose draft or trash view is publicly readable (drafts or soft delete enabled, no `access.draft` / `access.trash` or `access.update` rule, `default_deny = false`) — even when `read` is set
+- A global whose draft view is publicly readable (drafts enabled, no `access.draft` or `access.update` rule, `default_deny = false`)
+- Auth collection with `password_login` but no `bearer` method (login issues a token nothing accepts)
+- More than one always-active auth strategy on the same surface
+- More than one auth strategy bound to the same header on the same surface
 - gRPC rate limiting disabled with auth collections
 - CORS wildcard origin with credentials
 
 **Performance:**
 - `max_depth > 3` (N+1 query growth)
 - Cache disabled with relationship fields
-- Pool size too small or connection timeout too aggressive
+- Pool size too small
+- Connection timeout too aggressive
 - Response compression disabled
 - `pagination.max_limit > 500`
-- Too many hooks or before_change hooks per collection
-- Too many collections with `live_mode = "full"`
+- More than 10 hooks on a collection
+- More than 3 before_change hooks on a collection
+- More than 5 collections with `live_mode = "full"`
 
 **Configuration:**
 - `dev_mode` enabled
@@ -179,7 +187,11 @@ Runs a best-practice audit with 24 checks across four categories:
 - Auth collection without soft_delete
 - Upload collection without versioning
 - Soft delete without retention policy
-- Empty auth collection (0 users)
+- Auth collection with no users
+
+A check that can't read what it needs — the migration status, or an auth
+collection's user count — reports that as its own warning instead of
+passing or guessing.
 
 ```bash
 crap-cms status                # project overview
@@ -266,6 +278,15 @@ crap-cms bench create posts -d '{"title": "test", "slug": "bench-test"}'  # cust
 
 ### `user` — User management
 
+Every subcommand that acts on one user finds it with the same flags — the
+user is chosen interactively when neither `--email` nor `--id` is given:
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | `users` | Auth collection slug (every `user` subcommand) |
+| `--email` | `-e` | — | Find the user by email |
+| `--id` | — | — | Find the user by ID |
+
 #### `user create`
 
 ```bash
@@ -342,16 +363,17 @@ crap-cms user unlock [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 
 #### `user reset-totp`
 
-```
+```bash
 crap-cms user reset-totp [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--confirm` | `-y` | Skip confirmation prompt |
 
 Clears a user's TOTP enrollment (secret, confirmation, replay guard); they
 re-enroll on their next login. Requires `mfa = "totp"` on the collection;
 prompts for confirmation unless `-y` is passed.
-
-```
-```
 
 #### `user verify` / `user unverify`
 
@@ -370,6 +392,11 @@ Change a user's password. Prompts for the new password unless `-p` or
 ```bash
 crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PASSWORD> | --password-stdin]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--password` | `-p` | New password. Visible in the process list and shell history |
+| `--password-stdin` | — | Read the new password from the first line of standard input |
 
 ### `init` — Scaffold a new config directory
 
@@ -500,7 +527,7 @@ crap-cms make hook [NAME] [-t <TYPE>] [-c <COLLECTION>] [-l <POSITION>] [-F <FIE
 | `--type` | `-t` | Hook type: `collection`, `field`, `access`, or `condition` |
 | `--collection` | `-c` | Target collection or global slug |
 | `--position` | `-l` | Lifecycle position (e.g., `before_change`, `after_read`) |
-| `--field` | `-F` | Target field name (field hooks only; watched field for condition hooks) |
+| `--field` | `-F` | Target field name (field hooks only — `*` scaffolds an any-field hook with the single-argument `field_hook(fn)` form; watched field for condition hooks) |
 | `--force` | — | Overwrite existing file |
 
 Missing flags are resolved via interactive prompts. The wizard lists collections and globals from the registry (globals are tagged). For non-interactive mode, the slug is auto-detected as a global if it exists in the globals registry.
@@ -635,13 +662,17 @@ crap-cms make field [NAME] [-b <BASE_TYPE>] [-f]
 | `--base-type` | `-b` | `number` | Base field type to wrap: `text`, `number`, `textarea`, `select`, `radio`, `checkbox`, `date`, `email`, `json`, `code` |
 | `--force` | `-f` | — | Overwrite existing files |
 
-Writes three wired-together files: `templates/fields/<name>.hbs` (render template), `plugins/<name>.lua` (Lua wrapper plugin) and `static/components/crap-<name>.js` (Web Component skeleton).
+Writes three wired-together files: `templates/fields/<name>.hbs` (render template), `plugins/<name>.lua` (Lua wrapper plugin) and `static/components/crap-<name>.js` (Web Component skeleton). All three targets are checked before the first is written: an existing file (without `--force`) or a name that makes no valid component tag (`crap-<name>` may hold only lowercase letters, digits and `-`, so no `_`) refuses the whole scaffold and leaves nothing behind.
 
 #### `make theme`
 
 ```bash
 crap-cms make theme [NAME] [-f]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--force` | `-f` | Overwrite existing file |
 
 Writes `static/styles/themes/themes-<name>.css` (a starter overriding the CSS tokens). See [Themes](../admin-ui/guides/themes.md).
 
@@ -650,6 +681,10 @@ Writes `static/styles/themes/themes-<name>.css` (a starter overriding the CSS to
 ```bash
 crap-cms make component [TAG] [-f]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--force` | `-f` | Overwrite existing file |
 
 Writes `static/components/<tag>.js`, a custom Web Component skeleton (`TAG` must contain a hyphen, e.g. `my-widget`). See [Components](../admin-ui/reference/components.md).
 
@@ -660,6 +695,10 @@ Writes `static/components/<tag>.js`, a custom Web Component skeleton (`TAG` must
 ```bash
 crap-cms blueprint save <NAME> [-f]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--force` | `-f` | Overwrite an existing blueprint of that name |
 
 Saves the current config directory as a reusable blueprint (excluding `data/`, `uploads/`, `types/`). A `.crap-blueprint.toml` manifest is written with the CMS version and timestamp.
 
@@ -803,6 +842,10 @@ Running `crap-cms typegen` with no subcommand prints help. Under `admin.dev_mode
 crap-cms proto [-o <PATH>]
 ```
 
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--output` | `-o` | Output path (file or directory). Omit to write to stdout |
+
 Writes `content.proto` to stdout or the given path. No config directory needed.
 
 ```bash
@@ -933,6 +976,7 @@ Reports the relationship between every customized file in `<config_dir>/{templat
 - `? no source header` — hand-written, or header was stripped
 - `? unparseable source header` — header found but version isn't valid semver
 - `✗ orphaned` — file no longer exists in the embedded upstream
+- `· user-original (no upstream counterpart)` — your own file (a custom page, slot widget, component or theme) with no built-in default to drift from; informational, never a warning
 
 #### `templates diff`
 
@@ -946,12 +990,27 @@ Shows a unified diff between a customized file and its embedded default. The pat
 crap-cms templates diff templates/layout/base.hbs
 ```
 
+#### `templates layout`
+
+```bash
+crap-cms templates layout
+```
+
+One-time migration assistant for config dirs customized before the current template/static layout. **Read-only** — it never moves or rewrites a file. It reports:
+
+1. files on an old-layout path, as `OLD → NEW`;
+2. a copy-pasteable recipe of `mkdir -p` and move commands — `git mv` / `git rm` when the config dir is in a git work tree, plain `mv` / `rm` otherwise;
+3. what to verify after moving, which the tool can't rewrite safely (imports inside moved JS files, partial-by-path references in `.hbs` files, CSS `@import url(...)`);
+4. files under the overlay roots that match neither layout — your own files, listed so you know none were lost.
+
+On a config dir already on the current layout it says so and exits. See [Migrating from the old layout](../admin-ui/upgrade/migrating-from-old-layout.md).
+
 ### `fmt` — Format Handlebars templates
 
 Format `.hbs` files in place using the project's built-in Handlebars formatter. Same role as `cargo fmt` for Rust or `biome check --write` for JS/CSS — keeps the templates' style consistent.
 
 ```bash
-crap-cms fmt [PATHS...] [--check] [--stdio]
+crap-cms fmt [PATHS...] [--check] [--stdio] [--follow-symlinks]
 ```
 
 | Flag | Description |
@@ -959,6 +1018,7 @@ crap-cms fmt [PATHS...] [--check] [--stdio]
 | (none) | Format every `.hbs` under the given paths in place. Default scope is `templates/`. |
 | `--check` | Don't write — exit non-zero if any file would change. CI gate. |
 | `--stdio` | Read from stdin, write the formatted result to stdout. Used by editor formatter integrations. Mutually exclusive with `--check`. |
+| `--follow-symlinks` | Follow symlinks. Off by default: a symlinked directory is not descended and a symlinked `.hbs` is skipped rather than written through to its target (which may live outside the tree); a symlink named directly as a path is refused. |
 
 ```bash
 crap-cms fmt                              # format all templates/
@@ -1006,12 +1066,13 @@ Lists all defined jobs with their configuration (handler, schedule, queue, retri
 #### `jobs trigger`
 
 ```bash
-crap-cms jobs trigger <SLUG> [-d <DATA>]
+crap-cms jobs trigger <SLUG> [-d <DATA>] [-p <PRIORITY>]
 ```
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--data` | `-d` | `"{}"` | JSON data to pass to the job |
+| `--priority` | `-p` | the job's `priority` (or `0`) | Scheduling priority — higher runs sooner. Negative values are accepted |
 
 Manually queue a job for execution. Works even while the server is running (SQLite WAL allows concurrent access). Prints the queued job run ID.
 
@@ -1032,12 +1093,13 @@ Show recent job runs. If `--id` is given, shows details for that specific run. O
 #### `jobs cancel`
 
 ```bash
-crap-cms jobs cancel [--slug <SLUG>]
+crap-cms jobs cancel [--slug <SLUG>] [--id <ID>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--slug`, `-s` | *(all)* | Only cancel pending jobs with this slug. Without it, cancels all pending jobs. |
+| `--id` | — | Cancel exactly this pending run — the precise alternative to clearing a whole slug (e.g. one queued bulk operation). Takes precedence over `--slug`. A run that was already claimed is left alone and reported. |
 
 Deletes pending jobs from the queue. Useful for clearing stuck or unwanted jobs that keep retrying.
 
@@ -1098,14 +1160,15 @@ Shows counts by status (pending, processing, completed, failed) and total.
 #### `images retry`
 
 ```bash
-crap-cms images retry [--id <ID>] [--all] [-y]
+crap-cms images retry [--id <ID>] [--all] [-y] [-p <PRIORITY>]
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--id` | — | Retry a specific failed entry by ID |
-| `--all` | — | Retry all failed entries |
-| `--confirm` | `-y` | Required with `--all` |
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--id` | — | — | Retry a specific failed entry by ID |
+| `--all` | — | — | Retry all failed entries |
+| `--confirm` | `-y` | — | Required with `--all` |
+| `--priority` | `-p` | `0` | Scheduling priority for the retried job(s) — higher runs sooner, so an urgent retry can jump the queue. Negative values are accepted |
 
 #### `images purge`
 
@@ -1214,6 +1277,8 @@ View log output from file-based logging. Requires `[logging] file = true` in `cr
 |------------|-------------|
 | `clear` | Remove old rotated log files, keeping only the current one |
 
+`-f` and `-n` shape the tail only — `logs -f clear` is refused rather than silently ignoring them.
+
 ```bash
 crap-cms logs                # show last 100 lines
 crap-cms logs -f             # follow in real time
@@ -1234,8 +1299,8 @@ Without a subcommand, checks for a newer release and installs + activates it (wi
 
 | Flag | Description |
 |------|-------------|
-| `-y`, `--yes` | Skip confirmation prompts |
-| `--force` | Allow self-update even when the binary looks distro-managed |
+| `-y`, `--yes` | Skip confirmation prompts. Only bare `update` (the "install and switch?" prompt) and `update use --force` (the prompt before a regular file on `$PATH` is replaced) ask anything — `install`, `uninstall`, `completions` and the read-only subcommands never prompt and ignore it |
+| `--force` | Allow bare `update` and `update use` even when the running binary looks distro-managed (`/usr`, `/opt`, `/nix`, `/bin`, `/sbin`), **and** repoint the `crap-cms` on `$PATH` at the store after switching (see `update use`) |
 
 #### `update check`
 
@@ -1259,15 +1324,19 @@ List available release tags, marking installed versions and the active one.
 crap-cms update install <VERSION> [--reinstall]
 ```
 
-Download, verify (SHA256), and stage a version in the local store (`~/.local/share/crap-cms/versions/`). Does not activate — use `update use` to switch.
+Download, verify (SHA256), and stage a version in the local store (`~/.local/share/crap-cms/versions/`). Does not activate — use `update use` to switch. Staging touches only the store, never the running binary or the one on `$PATH`, so it works — without `--force` — even when the running binary is distro-managed.
 
 #### `update use`
 
 ```bash
-crap-cms update use <VERSION>
+crap-cms update use <VERSION> [--force] [-y]
 ```
 
-Switch the `current` symlink to the given installed version. Also auto-installs shell completions for the user's login shell (bash, zsh, or fish) — see `update completions` for where files are written and how the zsh `$fpath` is probed.
+Switch the `current` symlink to the given installed version. Refused when the running binary looks distro-managed, unless `--force` is passed.
+
+With `--force` it also **repoints the `crap-cms` on `$PATH` at the store**, so the shell runs the new version next time: a symlink there is replaced silently; a regular file (for example a `cargo install` build in `~/.local/bin`) is replaced with a symlink after a confirmation prompt, which `-y` skips; a distro-managed location is refused even with `--force`. Bare `update --force` does the same after installing the latest release.
+
+`update use` also auto-installs shell completions for the user's login shell (bash, zsh, or fish) — see `update completions` for where files are written and how the zsh `$fpath` is probed.
 
 #### `update uninstall`
 

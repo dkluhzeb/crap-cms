@@ -33,7 +33,7 @@ crap-focal-point:not(:defined) {
 
 /* 3. Global resets. */
 html {
-  font-family: "Geist", system-ui, -apple-system, sans-serif;
+  font-family: var(--font-family);
   color: var(--text-primary);
 }
 

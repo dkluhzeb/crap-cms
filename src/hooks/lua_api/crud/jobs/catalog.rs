@@ -55,7 +55,7 @@ fn job_to_table(lua: &Lua, job: &JobDefinitionInfo) -> LuaResult<Table> {
 fn jobs_list(state: &JobsCatalogState, lua: &Lua) -> LuaResult<Table> {
     let conn = get_tx_conn(lua)?;
     let user = hook_user(lua);
-    let hooks = LuaWriteHooks::builder(lua).build();
+    let hooks = LuaWriteHooks::builder(lua, state.registry.as_ref()).build();
 
     let ctx = ServiceContext::slug_only("")
         .conn(conn)

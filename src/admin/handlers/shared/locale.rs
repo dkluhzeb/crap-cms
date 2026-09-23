@@ -90,28 +90,23 @@ pub fn is_non_default_locale(state: &AdminState, requested_locale: Option<&str>)
     current != config.default_locale
 }
 
-/// Strip shared (locale-locked) fields from a non-default-locale PUBLISH
-/// (collections and globals alike).
+/// Strip shared (locale-locked) fields from a non-default-locale admin save —
+/// publish and draft alike, collections and globals alike.
 ///
 /// The admin edit form submits shared (non-localized) fields as read-only
 /// display artifacts — including the hidden row-id / `_block_type` inputs of a
 /// shared array/blocks field. Under a non-default locale the service rejects a
 /// write that carries them, to stop a programmatic caller (gRPC/Lua/MCP) from
-/// silently overwriting the canonical default-locale value. `save_draft` already
-/// drops them on the draft path; this does the same on publish so saving a
-/// translation isn't rejected, while the service guard still protects the
-/// programmatic surfaces. No-op for the default locale, drafts, or when nothing
-/// is locale-locked.
-pub(crate) fn strip_locale_locked_for_publish(
+/// silently overwriting the canonical default-locale value. The lock runs when
+/// the write is admitted, before any draft-specific handling, so the form's
+/// echo is dropped here for every admin save; the service guard still protects
+/// the programmatic surfaces. No-op for the default locale or when nothing is
+/// locale-locked.
+pub(crate) fn strip_locale_locked_form_fields(
     data: DocumentFields,
     fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
-    draft: bool,
 ) -> DocumentFields {
-    if draft {
-        return data;
-    }
-
     let locked = locale_locked_field_names(fields, locale_ctx);
     if locked.is_empty() {
         return data;
@@ -268,7 +263,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let out = strip_locale_locked_for_publish(data, &fields, Some(&locked_ctx("de")), false);
+        let out = strip_locale_locked_form_fields(data, &fields, Some(&locked_ctx("de")));
         assert!(out.contains_key("title"), "localized field is kept");
         assert!(!out.contains_key("slug"), "shared scalar is stripped");
         assert!(
@@ -277,26 +272,21 @@ mod tests {
         );
     }
 
-    /// No-op off the non-default-locale publish path: default locale, drafts
-    /// (`save_draft` strips), and a `None` locale context all pass data through.
+    /// No-op off the non-default locale: the default locale and a `None` locale
+    /// context pass data through.
     #[test]
-    fn publish_strip_is_noop_off_the_non_default_publish_path() {
+    fn strip_is_noop_off_the_non_default_locale() {
         let fields = shared_fields();
         let shared =
             || -> DocumentFields { [("slug".to_string(), json!("neu"))].into_iter().collect() };
 
         assert!(
-            strip_locale_locked_for_publish(shared(), &fields, Some(&locked_ctx("en")), false)
+            strip_locale_locked_form_fields(shared(), &fields, Some(&locked_ctx("en")))
                 .contains_key("slug"),
             "default locale is untouched"
         );
         assert!(
-            strip_locale_locked_for_publish(shared(), &fields, Some(&locked_ctx("de")), true)
-                .contains_key("slug"),
-            "draft path is untouched (save_draft strips)"
-        );
-        assert!(
-            strip_locale_locked_for_publish(shared(), &fields, None, false).contains_key("slug"),
+            strip_locale_locked_form_fields(shared(), &fields, None).contains_key("slug"),
             "no locale context is untouched"
         );
     }

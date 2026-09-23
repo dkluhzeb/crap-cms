@@ -23,7 +23,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
-use crap_cms::config::CrapConfig;
+use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::{CollectionDefinition, DocumentFields};
 use crap_cms::db::{
@@ -807,7 +807,7 @@ fn cmd_user_create_via_library() {
         password_stdin: false,
         fields: vec![("name".to_string(), "Lib User".to_string())],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &crap_cms::config::LocaleConfig::default(),
+        locale: &LocaleConfig::default(),
     })
     .unwrap();
 
@@ -843,7 +843,7 @@ fn cmd_user_create_extra_fields() {
             ("role".to_string(), "admin".to_string()),
         ],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &crap_cms::config::LocaleConfig::default(),
+        locale: &LocaleConfig::default(),
     })
     .unwrap();
 
@@ -869,7 +869,7 @@ fn cmd_user_create_non_auth_errors() {
         password_stdin: false,
         fields: vec![],
         password_policy: &crap_cms::config::PasswordPolicy::default(),
-        locale: &crap_cms::config::LocaleConfig::default(),
+        locale: &LocaleConfig::default(),
     });
     assert!(
         result.is_err(),
@@ -1398,10 +1398,50 @@ fn cmd_user_list() {
     create_user(&pool, &def, "bob@example.com", "pw456", &[("name", "Bob")]);
 
     // user_list should succeed
-    let result = commands::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users", &LocaleConfig::default());
     assert!(
         result.is_ok(),
         "user_list should succeed: {:?}",
+        result.err()
+    );
+}
+
+const LOCALIZED_MEMBERS_LUA: &str = r#"
+crap.collections.define("members", {
+    auth = true,
+    fields = {
+        { name = "name", type = "text", localized = true },
+    },
+})
+"#;
+
+/// Regression: `user list` read without a locale context, so on an auth
+/// collection with a localized field the SELECT named the bare column
+/// (`name`, not `name__en`) and failed.
+#[test]
+fn cmd_user_list_reads_a_localized_auth_collection() {
+    let (tmp, pool, registry) = full_setup_with(&[("members", LOCALIZED_MEMBERS_LUA)]);
+    let locale = CrapConfig::load(&tmp.path().join("config"))
+        .expect("load config")
+        .locale;
+    assert!(locale.is_enabled(), "fixture must enable localization");
+
+    let def = registry.get_collection("members").unwrap().clone();
+    let locale_ctx = LocaleContext::default_for(&locale);
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!("member@example.com"));
+    data.insert("name".to_string(), json!("Member"));
+
+    let mut conn = pool.get().expect("DB connection");
+    let tx = conn.transaction().expect("Start transaction");
+    query::create(&tx, "members", &def, &data, locale_ctx.as_ref()).expect("create member");
+    tx.commit().expect("Commit");
+    drop(conn);
+
+    let result = commands::user_list(&pool, &registry, "members", &locale);
+    assert!(
+        result.is_ok(),
+        "user_list on a localized auth collection should succeed: {:?}",
         result.err()
     );
 }
@@ -1411,7 +1451,7 @@ fn cmd_user_list_empty() {
     let (_tmp, pool, registry) = full_setup();
 
     // No users yet — should succeed with "No users" message
-    let result = commands::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users", &LocaleConfig::default());
     assert!(
         result.is_ok(),
         "user_list on empty collection should succeed: {:?}",
@@ -1423,7 +1463,7 @@ fn cmd_user_list_empty() {
 fn cmd_user_list_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user_list(&pool, &registry, "posts");
+    let result = commands::user_list(&pool, &registry, "posts", &LocaleConfig::default());
     assert!(
         result.is_err(),
         "user_list on non-auth collection should fail"
@@ -1436,7 +1476,7 @@ fn cmd_user_list_non_auth_errors() {
 fn cmd_user_list_missing_collection_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user_list(&pool, &registry, "nonexistent");
+    let result = commands::user_list(&pool, &registry, "nonexistent", &LocaleConfig::default());
     assert!(
         result.is_err(),
         "user_list on missing collection should fail"

@@ -8,7 +8,7 @@
 //! ```lua
 //! crap.pages.register("status", {
 //!   section = "Tools",                  -- optional sidebar section heading
-//!   label   = "System status",          -- optional; defaults to title-cased slug
+//!   label   = "System status",          -- optional; omit to keep the page out of the nav
 //!   icon    = "heart-pulse",            -- optional Material Symbols icon
 //!   access  = "access.admin_only",      -- optional Lua function ref
 //! })
@@ -43,9 +43,11 @@ use crate::{
 #[serde(default)]
 #[lua(class = "crap.PageOptions")]
 pub(crate) struct PageOptions {
-    /// Sidebar section heading (e.g., `"Tools"`).
+    /// Sidebar section heading (e.g., `"Tools"`). Pages sharing a heading
+    /// are grouped under it; pages without one are listed after every section.
     pub(crate) section: Option<String>,
-    /// Sidebar label (defaults to title-cased slug when omitted).
+    /// Sidebar label. Omitting it keeps the page out of the sidebar nav —
+    /// it still routes at `/admin/p/<slug>` and its `access` gate still runs.
     pub(crate) label: Option<String>,
     /// Material Symbols icon name.
     pub(crate) icon: Option<String>,

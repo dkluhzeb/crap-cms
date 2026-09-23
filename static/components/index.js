@@ -86,8 +86,9 @@ import './_internal/global.js';
 
 // ── User seam ─────────────────────────────────────────────────────
 // If the config dir overlays `static/components/custom.js`, register
-// bespoke components there. The dynamic `import()` is wrapped in a
-// `.catch(() => {})` so a missing file is a no-op, not a console
-// error. The browser fetches the URL once; a 404 response yields a
-// rejected promise that we silence.
-import('./custom.js').catch(() => {});
+// bespoke components there. A built-in (empty) `custom.js` always ships,
+// so the import never 404s: a rejection means the operator's file (or a
+// module it imports) failed to load or threw — log it rather than hide it.
+import('./custom.js').catch((err) => {
+  console.error('crap: static/components/custom.js failed to load', err);
+});

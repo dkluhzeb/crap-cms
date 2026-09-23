@@ -1,7 +1,6 @@
 //! `HookRunner` methods for CRUD lifecycle orchestration.
 
 use anyhow::Result;
-use serde_json::Value;
 
 use super::run::{FieldHooksCall, FieldWriteCtx};
 use super::vm_pool::reset_instruction_budget;
@@ -17,8 +16,8 @@ use crate::{
             execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
             types::{FieldHookEvent, TxContextGuard},
             validation::{
-                richtext_attrs::{collect_richtext_fields, run_before_validate_on_node_attrs},
-                validate_fields_inner,
+                richtext_attrs::{apply_node_attr_before_validate, has_node_attr_before_validate},
+                validate_write_fields,
             },
         },
     },
@@ -289,31 +288,15 @@ impl HookRunner {
         self.run_hooks_with_conn(hooks, event, ctx, conn, infra)
     }
 
-    /// Run `before_validate` hooks on richtext node attrs within field data.
-    ///
-    /// Walks the entire field tree (Groups with `__` prefix, Row/Collapsible transparent,
-    /// Tabs transparent) to find all Richtext fields with custom nodes.
+    /// Run `before_validate` hooks on richtext node attrs within field data,
+    /// at any depth. The VM is acquired only when some field has such hooks.
     fn run_richtext_node_attr_before_validate(
         &self,
         fields: &[FieldDefinition],
         data: &mut DocumentFields,
         collection: &str,
     ) {
-        let richtext_fields = collect_richtext_fields(fields);
-
-        if richtext_fields.is_empty() {
-            return;
-        }
-
-        let has_any_hooks = richtext_fields.iter().any(|(f, _)| {
-            f.admin.nodes.iter().any(|node_name| {
-                self.registry
-                    .get_richtext_node(node_name)
-                    .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
-            })
-        });
-
-        if !has_any_hooks {
+        if !has_node_attr_before_validate(fields, &self.registry) {
             return;
         }
 
@@ -325,20 +308,7 @@ impl HookRunner {
             }
         };
 
-        for (field, data_key) in &richtext_fields {
-            if let Some(Value::String(content)) = data.get(data_key.as_str()) {
-                let new_content = run_before_validate_on_node_attrs(
-                    &lua,
-                    content,
-                    field,
-                    &self.registry,
-                    collection,
-                );
-                if new_content != *content {
-                    data.insert(data_key.clone(), Value::String(new_content));
-                }
-            }
-        }
+        apply_node_attr_before_validate(&lua, fields, data, &self.registry, collection);
     }
 
     /// Validate field data against field definitions.
@@ -371,23 +341,6 @@ impl HookRunner {
             ctx.ui_locale.map(std::string::ToString::to_string),
         );
 
-        // Inject registry for richtext node attr validation if not already set
-        if ctx.registry.is_some() {
-            return validate_fields_inner(&lua, fields, data, ctx);
-        }
-        let enriched_ctx = ValidationCtx {
-            conn: ctx.conn,
-            table: ctx.table,
-            exclude_id: ctx.exclude_id,
-            is_draft: ctx.is_draft,
-            locale_ctx: ctx.locale_ctx,
-            registry: Some(&self.registry),
-            soft_delete: ctx.soft_delete,
-            collection_required_locales: ctx.collection_required_locales,
-            user: ctx.user,
-            ui_locale: ctx.ui_locale,
-            locale_overlay: ctx.locale_overlay,
-        };
-        validate_fields_inner(&lua, fields, data, &enriched_ctx)
+        validate_write_fields(&lua, fields, data, ctx, &self.registry)
     }
 }

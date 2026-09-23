@@ -651,6 +651,8 @@ grpcurl -plaintext -d '{
 
 **Access:** the target operation's collection access rule is enforced exactly like the write it previews — `access.create` in create mode, `access.update` when `id` is set. A denied caller gets `PERMISSION_DENIED` before any validator (or unique check) runs. Field-level write access is evaluated as the authenticated user (anonymous when no token), and write-denied fields are stripped before validation — the dry-run mirrors exactly what the real write would do.
 
+**What it judges:** the data the real write would judge. Server-derived upload columns (`url`, `filename`, size and dimension columns) are dropped, as on every non-multipart write. With `id` set and `draft` unset, a document with a pending draft is judged on that draft with the request's fields on top — the publish it previews makes the draft live — and localized-completeness checks see the draft's other locales. Under a non-default `locale`, a non-localized field in `data` is reported with the same locale-lock error the write returns, and a create under a non-default locale fails like the create does. No password travels in a `ValidateRequest`, so password-policy checks run on the real write only.
+
 ## ValidateGlobal
 
 Check global field data against its rules without persisting. The global equivalent of `Validate`. Globals are a singleton document, so validation always runs in update mode against the fixed `default` row — there is no create mode and no `id` field. Returns the same `ValidateResponse` as `Validate`.
@@ -1020,6 +1022,18 @@ enum JobRunStatus {
   JOB_RUN_STATUS_COMPLETED = 3;
   JOB_RUN_STATUS_FAILED = 4;
   JOB_RUN_STATUS_STALE = 5;
+}
+
+// Which surface queued the run. A run stored with an unrecognized value
+// reports UNSPECIFIED; a legacy "api" run reports GRPC.
+enum JobScheduledBy {
+  JOB_SCHEDULED_BY_UNSPECIFIED = 0;
+  JOB_SCHEDULED_BY_GRPC = 1;
+  JOB_SCHEDULED_BY_CRON = 2;
+  JOB_SCHEDULED_BY_HOOK = 3;
+  JOB_SCHEDULED_BY_MCP = 4;
+  JOB_SCHEDULED_BY_CLI = 5;
+  JOB_SCHEDULED_BY_SYSTEM = 6;           // email delivery, image conversion, migration drain
 }
 
 message JobRunInfo {

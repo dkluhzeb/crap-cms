@@ -10,7 +10,10 @@
 //! `custom.js`. Files are coordinated: the field name is the same
 //! across all three so the binding is consistent.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
@@ -18,7 +21,10 @@ use serde::Serialize;
 use crate::{
     cli,
     scaffold::{
-        component, guards::refuse_file_overwrite, paths, render, to_title_case, validate_slug,
+        EMBEDDED_TEMPLATES,
+        component::{self, component_path},
+        guards::refuse_file_overwrite,
+        paths, render, to_title_case, validate_slug,
     },
 };
 
@@ -52,60 +58,115 @@ pub struct MakeFieldOptions<'a> {
     pub force: bool,
 }
 
+/// The three files `make field` writes.
+struct FieldTargets {
+    template: PathBuf,
+    plugin: PathBuf,
+    component: PathBuf,
+}
+
+/// Refuse an unknown base type, naming the allowed ones.
+fn validate_base_type(base_type: &str) -> Result<()> {
+    if VALID_BASE_TYPES.contains(&base_type) {
+        return Ok(());
+    }
+
+    bail!(
+        "invalid base type '{}' (allowed: {})",
+        base_type,
+        VALID_BASE_TYPES.join(", ")
+    );
+}
+
+/// Refuse a name whose template would shadow a built-in field template:
+/// `templates/fields/<name>.hbs` overlays the built-in of that name, so every
+/// field of that built-in type would render the scaffold instead.
+fn refuse_builtin_field_name(name: &str) -> Result<()> {
+    if EMBEDDED_TEMPLATES
+        .get_file(format!("fields/{name}.hbs"))
+        .is_none()
+    {
+        return Ok(());
+    }
+
+    bail!(
+        "'{name}' is a built-in field template -- a field named that would replace the \
+         template of every '{name}' field; pick another name"
+    );
+}
+
+/// Resolve the three targets and check all of them before any is written, so
+/// a refusal — an existing file without `--force`, or a name that makes no
+/// valid component tag — leaves nothing half-scaffolded.
+fn field_targets(opts: &MakeFieldOptions, component_tag: &str) -> Result<FieldTargets> {
+    let targets = FieldTargets {
+        template: paths::templates_fields_dir(opts.config_dir).join(format!("{}.hbs", opts.name)),
+        plugin: paths::plugins_dir(opts.config_dir).join(format!("{}.lua", opts.name)),
+        component: component_path(opts.config_dir, component_tag)?,
+    };
+
+    for path in [&targets.template, &targets.plugin, &targets.component] {
+        refuse_file_overwrite(path, opts.force)?;
+    }
+
+    Ok(targets)
+}
+
+/// Write `content` to `path`, creating its directory.
+fn write_target(path: &Path, content: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    }
+
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
+}
+
 /// Scaffold the three files.
 ///
 /// # Errors
 ///
 /// Returns an error if the name is invalid, the base type is unknown, any
-/// target file already exists without `--force`, or writing fails.
+/// target file already exists without `--force`, or writing fails. Every
+/// refusal comes before the first file is written.
 pub fn make_field(opts: &MakeFieldOptions) -> Result<()> {
     validate_slug(opts.name)?;
+    refuse_builtin_field_name(opts.name)?;
+
     let base_type = opts.base_type.unwrap_or("number");
-    if !VALID_BASE_TYPES.contains(&base_type) {
-        bail!(
-            "invalid base type '{}' (allowed: {})",
-            base_type,
-            VALID_BASE_TYPES.join(", ")
-        );
-    }
+    validate_base_type(base_type)?;
 
     let label = to_title_case(opts.name);
     let component_tag = format!("crap-{}", opts.name);
+    let targets = field_targets(opts, &component_tag)?;
 
-    // 1. Per-field template
-    let tpl_dir = paths::templates_fields_dir(opts.config_dir);
-    fs::create_dir_all(&tpl_dir).context("Failed to create templates/fields/ directory")?;
-    let tpl_path = tpl_dir.join(format!("{}.hbs", opts.name));
-    refuse_file_overwrite(&tpl_path, opts.force)?;
-    fs::write(&tpl_path, render_template_hbs(opts.name, &component_tag)?)
-        .with_context(|| format!("Failed to write {}", tpl_path.display()))?;
+    // Render before writing, so a render failure leaves nothing behind either.
+    let template = render_template_hbs(opts.name, &component_tag)?;
+    let plugin = render_plugin_lua(opts.name, base_type, &label)?;
 
-    // 2. Lua plugin wrapper
-    let plug_dir = paths::plugins_dir(opts.config_dir);
-    fs::create_dir_all(&plug_dir).context("Failed to create plugins/ directory")?;
-    let plug_path = plug_dir.join(format!("{}.lua", opts.name));
-    refuse_file_overwrite(&plug_path, opts.force)?;
-    fs::write(&plug_path, render_plugin_lua(opts.name, base_type, &label)?)
-        .with_context(|| format!("Failed to write {}", plug_path.display()))?;
+    write_target(&targets.template, &template)?;
+    write_target(&targets.plugin, &plugin)?;
 
-    // 3. Web Component -- reuse the make_component generator so the
-    //    skeleton stays consistent with `make component`.
+    // The Web Component reuses the make_component generator so the skeleton
+    // stays consistent with `make component`.
     component::make_component(&component::MakeComponentOptions {
         config_dir: opts.config_dir,
         tag: &component_tag,
         force: opts.force,
     })?;
 
+    print_field_usage(opts.name);
+
+    Ok(())
+}
+
+/// Tell the user the field exists and how to use it in a collection.
+fn print_field_usage(name: &str) {
     cli::success(&format!(
-        "Created field '{}' -- three files wired together via admin.template.",
-        opts.name
+        "Created field '{name}' -- three files wired together via admin.template."
     ));
     cli::info(&format!(
         "\nUse it in a collection:\n\n  local {name} = require(\"plugins.{name}\")\n\n  crap.collections.define(\"products\", {{\n    fields = {{\n      {name}.field({{ name = \"my_{name}\" }}),\n      ...\n    }},\n  }})",
-        name = opts.name,
     ));
-
-    Ok(())
 }
 
 fn render_template_hbs(name: &str, tag: &str) -> Result<String> {
@@ -201,5 +262,66 @@ mod tests {
         make_field(&opts).unwrap();
         let err = make_field(&opts).unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    /// Regression: each of the three files was checked just before it was
+    /// written, so an existing component left a template and a plugin behind.
+    #[test]
+    fn an_existing_component_refuses_before_anything_is_written() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let comp_dir = tmp.path().join("static/components");
+        fs::create_dir_all(&comp_dir).unwrap();
+        fs::write(comp_dir.join("crap-rating.js"), "// mine").unwrap();
+
+        let err = make_field(&MakeFieldOptions {
+            config_dir: tmp.path(),
+            name: "rating",
+            base_type: None,
+            force: false,
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert!(!tmp.path().join("templates/fields/rating.hbs").exists());
+        assert!(!tmp.path().join("plugins/rating.lua").exists());
+    }
+
+    /// A name that is a valid slug but no valid component tag (`_` is not
+    /// allowed in a custom-element name) is refused before any file exists.
+    #[test]
+    fn a_name_without_a_valid_component_tag_writes_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let result = make_field(&MakeFieldOptions {
+            config_dir: tmp.path(),
+            name: "star_rating",
+            base_type: None,
+            force: false,
+        });
+
+        assert!(result.is_err());
+        assert!(!tmp.path().join("templates/fields/star_rating.hbs").exists());
+        assert!(!tmp.path().join("plugins/star_rating.lua").exists());
+    }
+
+    /// Regression: `make field code` wrote `templates/fields/code.hbs`, which
+    /// replaced the template of every built-in `code` field (and its
+    /// `crap-code` element collided with the built-in one).
+    #[test]
+    fn a_built_in_field_name_is_refused_before_anything_is_written() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let err = make_field(&MakeFieldOptions {
+            config_dir: tmp.path(),
+            name: "code",
+            base_type: None,
+            force: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("built-in field template"), "{err}");
+        assert!(!tmp.path().join("templates/fields/code.hbs").exists());
+        assert!(!tmp.path().join("plugins/code.lua").exists());
     }
 }

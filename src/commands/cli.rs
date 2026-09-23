@@ -239,6 +239,9 @@ pub enum Command {
     Mcp,
 
     /// View and manage log files
+    // `--follow` and `--lines` shape the tail; a subcommand such as `clear`
+    // refuses them rather than silently ignoring them.
+    #[command(args_conflicts_with_subcommands = true)]
     Logs {
         /// Follow log output in real time
         #[arg(short, long)]
@@ -281,11 +284,13 @@ pub enum Command {
 
     /// Manage installed versions of crap-cms
     Update {
-        /// Skip confirmation prompts (no-op for read-only subcommands).
+        /// Skip confirmation prompts. Only bare `update` and `update use --force`
+        /// prompt; every other subcommand ignores it.
         #[arg(short = 'y', long, global = true)]
         yes: bool,
 
-        /// Allow self-update even when the binary looks distro-managed.
+        /// Allow bare `update` and `update use` even when the binary looks
+        /// distro-managed, and repoint the `crap-cms` on `$PATH` at the store.
         #[arg(long, global = true)]
         force: bool,
 
@@ -296,9 +301,20 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser as _};
 
     use super::Cli;
+
+    /// Regression: `logs -f clear` / `logs -n 5 clear` parsed and silently
+    /// ignored the tail flags.
+    #[test]
+    fn logs_clear_refuses_the_tail_flags() {
+        assert!(Cli::try_parse_from(["crap-cms", "logs", "-f", "clear"]).is_err());
+        assert!(Cli::try_parse_from(["crap-cms", "logs", "-n", "5", "clear"]).is_err());
+
+        assert!(Cli::try_parse_from(["crap-cms", "logs", "clear"]).is_ok());
+        assert!(Cli::try_parse_from(["crap-cms", "logs", "-f", "-n", "5"]).is_ok());
+    }
 
     /// The binary's own contract: the parser builds, every argument is
     /// consistent, and the root keeps the name the docs and completions

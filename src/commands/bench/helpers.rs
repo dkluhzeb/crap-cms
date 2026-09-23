@@ -6,8 +6,10 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
+    commands::cli_find,
+    config::LocaleConfig,
     core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
-    db::{DbConnection, FindQuery, query},
+    db::{DbConnection, FindQuery},
 };
 
 /// Where the benchmark data came from.
@@ -29,11 +31,13 @@ impl DataSource {
 }
 
 /// Resolve benchmark data for a collection. Priority: user JSON > existing doc > synthetic.
+/// An existing document is read under the default locale, so its values are
+/// keyed by field name on a collection with localized fields too.
 pub(super) fn resolve_bench_data(
     conn: &dyn DbConnection,
-    slug: &str,
     def: &CollectionDefinition,
     user_data: Option<&str>,
+    locale: &LocaleConfig,
 ) -> Result<(DocumentFields, DataSource)> {
     // 1. User-provided JSON
     if let Some(json_str) = user_data {
@@ -48,7 +52,7 @@ pub(super) fn resolve_bench_data(
     // 2. Existing document from DB
     let find_query = FindQuery::builder().limit(Some(1)).build();
 
-    if let Ok(docs) = query::find(conn, slug, def, &find_query, None)
+    if let Ok(docs) = cli_find(conn, def, &find_query, locale)
         && let Some(doc) = docs.first()
     {
         let mut data = doc.fields.clone();

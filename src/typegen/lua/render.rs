@@ -3,13 +3,10 @@
 
 use crate::{
     admin::context::{AdminMeta, AuthMeta, UploadMeta, VersionsMeta},
-    admin::{
-        context::{
-            BasePageContext, CollectionContext, CrapMeta, DocumentRef, EditorLocaleOption,
-            FieldAdminMeta, FieldMeta, GlobalContext, NavCollection, NavData, NavGlobal, PageMeta,
-            UserContext, page::Breadcrumb,
-        },
-        custom_pages::CustomPage,
+    admin::context::{
+        BasePageContext, CollectionContext, CrapMeta, DocumentRef, EditorLocaleOption,
+        FieldAdminMeta, FieldMeta, GlobalContext, NavCollection, NavData, NavGlobal, NavPage,
+        NavPageSection, PageMeta, UserContext, page::Breadcrumb,
     },
     core::{
         CollectionDefinition, FieldDefinition, FieldType, Registry, Slug,
@@ -84,7 +81,8 @@ fn render_template_data_types(out: &mut String) {
     PageMeta::render_lua_annotation(out);
     NavCollection::render_lua_annotation(out);
     NavGlobal::render_lua_annotation(out);
-    CustomPage::render_lua_annotation(out);
+    NavPage::render_lua_annotation(out);
+    NavPageSection::render_lua_annotation(out);
     NavData::render_lua_annotation(out);
     FieldAdminMeta::render_lua_annotation(out);
     FieldMeta::render_lua_annotation(out);

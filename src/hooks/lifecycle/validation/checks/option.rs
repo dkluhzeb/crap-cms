@@ -4,9 +4,11 @@ use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
 use super::shared::{decode_element_list, element_display};
 
-/// Whether the field still declares `value` as one of its options.
+/// Whether the field still declares `value` as one of its options. A field
+/// that declares no options at all accepts any text — its values are still
+/// shape-checked (text, or a list of text for `has_many`).
 fn declares(field: &FieldDefinition, value: &str) -> bool {
-    field.options.iter().any(|opt| opt.value == value)
+    field.options.is_empty() || field.options.iter().any(|opt| opt.value == value)
 }
 
 /// Whether a submitted value passes: one the field still declares, or one the
@@ -114,7 +116,6 @@ pub(crate) fn check_option_valid(check: &OptionCheck<'_>, errors: &mut Vec<Field
 
     if (field.field_type != FieldType::Select && field.field_type != FieldType::Radio)
         || check.is_empty
-        || field.options.is_empty()
     {
         return;
     }
@@ -188,7 +189,7 @@ mod tests {
     use crate::core::validate::ValidationError;
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn choice(name: &str, has_many: bool, values: &[&str]) -> FieldDefinition {
         let options = values
@@ -685,6 +686,45 @@ mod tests {
         assert!(
             result.is_ok(),
             "Select with no options should not validate option values"
+        );
+    }
+
+    /// Regression: a select/radio with no options accepted any JSON type —
+    /// a number, an object — which was stored as its JSON spelling.
+    #[test]
+    fn a_field_without_options_still_rejects_non_text_values() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, one TEXT, many TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("one", FieldType::Select).build(),
+            choice("many", true, &[]),
+        ];
+
+        let validate = |one: Value, many: Value| {
+            let mut data = DocumentFields::new();
+            data.insert("one".to_string(), one);
+            data.insert("many".to_string(), many);
+            validate_fields_inner(
+                &lua,
+                &fields,
+                &data,
+                &ValidationCtx::builder(&conn, "test").build(),
+            )
+        };
+
+        assert!(validate(json!("x"), json!(["a", "b"])).is_ok());
+        assert_eq!(
+            error_keys(&validate(json!(42), json!(["a", 7]))),
+            vec![
+                "validation.invalid_option",
+                "validation.invalid_option_value"
+            ]
+        );
+        assert_eq!(
+            error_keys(&validate(json!("x"), json!({"a": 1}))),
+            vec!["validation.invalid_multi_select_json"]
         );
     }
 }

@@ -330,9 +330,10 @@ changing a representation is a breaking change to every consumer.
   and `FieldInfo.name` is the **Lua** field name (nested), never the flattened
   DB column (`group__sub`).
 - **Enum defaults.** Every enum has an explicit `*_UNSPECIFIED = 0`. A value the
-  server can't map collapses to `UNSPECIFIED` (e.g. a `cli`-scheduled run in
-  `JobScheduledBy`, a non-`published`/`draft` version status) rather than
-  erroring; adding an enum value is wire-safe, removing/renumbering is not.
+  server can't map collapses to `UNSPECIFIED` (e.g. a hand-written
+  `scheduled_by` in `JobScheduledBy`, a non-`published`/`draft` version
+  status) rather than erroring; adding an enum value is wire-safe,
+  removing/renumbering is not.
 - **Removed proto fields are compacted, not reserved.** While the wire format is
   pre-freeze (alpha), a removed field's tag is reclaimed by renumbering the
   survivors so the message stays gap-free. After the freeze, removed tags must
@@ -379,6 +380,12 @@ changing a representation is a breaking change to every consumer.
   outright allow shows it; a filter table hides it. A page without a rule is
   listed and renders — `[access] default_deny` applies to collections and
   globals, not pages.
+- **The sidebar's custom-page context is a view, not the registration.**
+  `nav.custom_pages` entries carry `slug`, `label`, `section` and `icon` —
+  never the page's `access` rule — and `nav.custom_page_sections` groups the
+  same pages: one section per heading (alphabetical), the ungrouped pages
+  last with no heading. Every registered page must have its
+  `templates/pages/<slug>.hbs`; a missing one fails startup.
 
 - **`data/crap.lock` is the instance lock.** `serve`, `work`, stdio `mcp` and
   every other CLI command that opens the database take it shared before opening
@@ -698,7 +705,11 @@ changing a representation is a breaking change to every consumer.
   write path — single create, single update, and bulk (`update_many`) — runs up
   front; the `write_paths_canonicalize_before_persist` guard test fails the build
   if a `persist_*` caller skips it, so a new write path can't reintroduce the
-  forgery gap.
+  forgery gap. It runs inside the write's admission prefix
+  (`service::write::admission`: canonicalize, adopt the pending draft a publish
+  makes live, locale lock), which the `validate` dry-run shares with the write it
+  previews — the dry-run strips the same columns (the admin's multipart preview
+  is the one trusted caller).
 - **Version restore validates at the write path's strictness.** Restore builds
   its `ValidationCtx` draft-aware, locale-scoped, and `required_locales`-aware
   exactly like create/update, and refuses a soft-deleted (trashed) target with
@@ -924,8 +935,14 @@ changing a representation is a breaking change to every consumer.
   clients. Adding a value is a forward-compat break for older cluster nodes
   (which parse an unknown status back to `pending`); renaming breaks stored rows.
 - **`_crap_jobs` columns** are append-only-text: `data`/`result`/`error` are
-  free TEXT, read positionally. `scheduled_by` is a free-form provenance string
-  (`cron`/`hook`/`api`/`grpc`/`manual`/`system`…) clients may match on.
+  free TEXT, read positionally. `scheduled_by` is a closed provenance set
+  (`core::ScheduledBy`): `grpc`, `cron`, `hook`, `mcp`, `cli`, `system` — every
+  insert names a variant, never a free string, and each maps to its own
+  `JobScheduledBy` value. Clients may match on these names; adding one is a new
+  enum value on every surface. Reads tolerate the legacy `api` (every queued
+  bulk run before bulk runs recorded their real surface), which reads back as
+  `grpc`; any other unknown stored value reads back unchanged on Lua/MCP/CLI and
+  as `UNSPECIFIED` on gRPC.
 - **`_crap_cron_fired` dedup key** = bare `slug`, window encoded in the `fired_at`
   value; system pseudo-crons use `__`-prefixed slugs (`__retention_purge`), which
   is why user job slugs cannot start with `_`.

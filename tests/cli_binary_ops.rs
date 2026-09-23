@@ -287,6 +287,36 @@ fn jobs_cancel() {
     );
 }
 
+/// Regression: cancel opened the database without a schema sync or config
+/// validation, unlike every other `jobs` subcommand.
+#[test]
+fn jobs_cancel_on_a_fresh_project_syncs_the_schema() {
+    let (_tmp, config_dir) = setup_with_job();
+
+    let stdout = run_ok_in(&config_dir, &["jobs", "cancel", "--slug", "cleanup"]);
+    assert!(
+        stdout.contains("Cancelled 0 pending"),
+        "should report nothing to cancel, got: {stdout}"
+    );
+}
+
+/// An invalid config is refused by `jobs purge`, as by every command that
+/// opens the project.
+#[test]
+fn jobs_purge_refuses_an_invalid_config() {
+    let (_tmp, config_dir) = setup_with_job();
+    let toml = config_dir.join("crap.toml");
+    let mut content = std::fs::read_to_string(&toml).unwrap();
+    content.push_str("\n[pagination]\ndefault_limit = 0\n");
+    std::fs::write(&toml, content).unwrap();
+
+    let output = run_in(&config_dir, &["jobs", "purge", "--older-than", "0s"]);
+    assert!(
+        !output.status.success(),
+        "an invalid config must be refused"
+    );
+}
+
 #[test]
 fn jobs_healthcheck() {
     let (_tmp, config_dir) = setup_with_job();
@@ -319,9 +349,8 @@ fn jobs_healthcheck() {
 fn jobs_purge() {
     let (_tmp, config_dir) = setup_with_job();
 
-    // Initialize DB (jobs purge skips sync_all, so trigger list first)
-    run_ok_in(&config_dir, &["jobs", "list"]);
-
+    // Regression: purge opened the database without a schema sync, so on a
+    // fresh project it failed until another command had created the tables.
     let stdout = run_ok_in(&config_dir, &["jobs", "purge", "--older-than", "0s"]);
     assert!(
         stdout.contains("Purged"),
@@ -337,9 +366,6 @@ fn jobs_purge() {
 fn images_list_empty() {
     let (_tmp, config_dir) = setup_with_photos();
 
-    // Initialize DB (images commands skip sync_all)
-    run_ok_in(&config_dir, &["status"]);
-
     let stdout = run_ok_in(&config_dir, &["images", "list"]);
     assert!(
         stdout.contains("No image-convert jobs found"),
@@ -350,9 +376,6 @@ fn images_list_empty() {
 #[test]
 fn images_stats_empty() {
     let (_tmp, config_dir) = setup_with_photos();
-
-    // Initialize DB (images commands skip sync_all)
-    run_ok_in(&config_dir, &["status"]);
 
     let stdout = run_ok_in(&config_dir, &["images", "stats"]);
     assert!(
@@ -368,9 +391,6 @@ fn images_stats_empty() {
 #[test]
 fn images_purge_empty() {
     let (_tmp, config_dir) = setup_with_photos();
-
-    // Initialize DB (images commands skip sync_all)
-    run_ok_in(&config_dir, &["status"]);
 
     let stdout = run_ok_in(&config_dir, &["images", "purge", "--older-than", "0s"]);
     assert!(

@@ -168,8 +168,12 @@ add `unpublish_posts`, `list_versions_posts` (args: `id`, optional `limit` /
 `validate_*` runs the full before-write pipeline (field coercion, validators,
 unique checks, `before_validate` hooks) and reports per-field errors without
 writing a row — the dry-run runs inside a transaction that is always rolled
-back, and with the same trusted override as MCP's real writes, so its outcome
-predicts exactly what the actual `create_*`/`update_*` call would do. Pass an
+back, and with the same trusted override as MCP's real writes. It admits the
+data exactly like the real `create_*`/`update_*` call: server-derived upload
+columns (`url`, `filename`, sizes) are dropped, a non-draft update of a
+document with a pending draft is judged on that draft with your data on top
+(the publish makes the draft live), and a non-default-locale update that
+carries a non-localized field fails with the same locale-lock error. Pass an
 `id` to validate in update mode (the row is excluded from unique checks); omit
 it to validate in create mode.
 

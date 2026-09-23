@@ -6,6 +6,7 @@ mod companion;
 mod definition;
 mod field_type;
 mod localized_string;
+mod references;
 mod relationship;
 mod select_option;
 mod storage;
@@ -21,6 +22,7 @@ pub use definition::{
 };
 pub use field_type::FieldType;
 pub use localized_string::LocalizedString;
+pub use references::reference_items;
 pub use relationship::{JoinConfig, RelationshipConfig};
 pub use select_option::SelectOption;
 

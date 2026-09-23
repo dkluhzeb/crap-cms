@@ -431,14 +431,15 @@ fn row_to_job_run(row: &DbRow) -> JobRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ScheduledBy;
     use crate::db::query::jobs::insert_job;
     use crate::db::query::jobs::test_helpers::setup_db;
 
     #[test]
     fn test_count_running() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
             &[],
@@ -453,8 +454,8 @@ mod tests {
     #[test]
     fn test_list_job_runs() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         let all = list_job_runs(&conn, None, None, 100, 0).unwrap();
         assert_eq!(all.len(), 2);
@@ -466,9 +467,9 @@ mod tests {
     #[test]
     fn list_and_count_in_filter_to_allowlist() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_c", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_c", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         let allowed = vec!["job_a".to_string(), "job_c".to_string()];
         let runs = list_job_runs_in(&conn, &allowed, None, 100, 0).unwrap();
@@ -484,8 +485,8 @@ mod tests {
         // The empty-allowlist short-circuit must yield no rows / zero — never an
         // `IN ()` SQL error, and never (via a dropped WHERE) every row.
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
 
         assert!(
             list_job_runs_in(&conn, &[], None, 100, 0)
@@ -498,9 +499,9 @@ mod tests {
     #[test]
     fn test_count_running_per_slug() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
 
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
@@ -528,8 +529,8 @@ mod tests {
     #[test]
     fn test_list_job_runs_with_status_filter() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
             &[],
@@ -553,7 +554,7 @@ mod tests {
     #[test]
     fn test_find_stale_jobs() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         // Set job as running with a stale heartbeat
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3600 seconds') WHERE id = ?1",

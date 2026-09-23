@@ -11,6 +11,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::core::ScheduledBy;
 use crate::db::query::helpers::like_escape;
 use crate::db::{DbConnection, query};
 
@@ -81,7 +82,7 @@ pub fn queue_image_conversion(
         conn,
         SYSTEM_IMAGE_CONVERT_JOB,
         &data_json,
-        "system",
+        ScheduledBy::System,
         max_attempts,
         IMAGE_CONVERT_QUEUE,
         0,

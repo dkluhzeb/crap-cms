@@ -49,7 +49,7 @@ pub(crate) use document::{
 // locale
 pub(crate) use locale::{
     editor_locale_ctx, editor_read_ctx, extract_editor_locale, is_non_default_locale,
-    parse_request_locale, strip_locale_locked_for_publish,
+    parse_request_locale, strip_locale_locked_form_fields,
 };
 
 // pagination
