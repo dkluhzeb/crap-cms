@@ -2195,6 +2195,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A form submit to a custom route with `csrf = true` was always refused.** The admin layout emits the CSRF token twice, because browsers submit in two shapes: an `X-CSRF-Token` header on htmx requests and a hidden `_csrf` field on every form. Custom routes read only the header, so a plain `<form>` posting to a protected route answered 403 while the identical form to a built-in admin route was accepted. Both surfaces now share one double-submit rule and accept either shape. The header still settles the check before the body is read; only a form submit is buffered first, within the route's existing body limit.
 - **`jobs healthcheck` reported dead workers that were alive.** It used its own idea of when a running job is stale — three heartbeat intervals — while the scheduler, which actually reclaims the work, allows those three intervals plus the longest a single heartbeat write can legitimately take (the write pool's connection timeout and the database's busy timeout). A heartbeat held up behind a long write therefore failed the healthcheck, exiting 1, for a job the scheduler was correctly leaving alone. Both now read one rule.
 - **`admin.readonly` on a Group, Array, Blocks, Row, Collapsible or Tabs
   field now applies to everything inside it.** A read-only container

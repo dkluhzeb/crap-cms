@@ -20,13 +20,12 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use subtle::ConstantTimeEq as _;
 use tokio::task;
 use tracing::{error, warn};
 
 use crate::{
     admin::{
-        AdminState,
+        AdminState, csrf,
         custom_routes::{RouteAccess, RouteBody, RouteCookie, RouteDefinition, RouteResponse},
         handlers::{
             auth::{CSRF_COOKIE, client_ip},
@@ -138,10 +137,14 @@ fn is_mutating(method: &Method) -> bool {
     )
 }
 
-/// Double-submit CSRF check: the `crap_csrf` cookie must match the
-/// `X-CSRF-Token` header (constant-time). Only consulted for routes with
-/// `csrf = true`.
-fn csrf_valid(headers: &HeaderMap) -> bool {
+/// Double-submit CSRF check for routes with `csrf = true`, through the same
+/// rule the global admin middleware applies: the `crap_csrf` cookie must match
+/// the `X-CSRF-Token` header or, for a form submit, the body's `_csrf` field.
+///
+/// `body` is `None` before the request body has been read. A `false` answer
+/// then is only final when the body could not have carried the token — see
+/// [`csrf_still_undecided`].
+fn csrf_valid(headers: &HeaderMap, body: Option<&[u8]>) -> bool {
     let cookie_header = headers
         .get(COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -149,10 +152,15 @@ fn csrf_valid(headers: &HeaderMap) -> bool {
     let Some(cookie) = extract_cookie(cookie_header, CSRF_COOKIE).filter(|c| !c.is_empty()) else {
         return false;
     };
-    let Some(header) = headers.get("x-csrf-token").and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    cookie.as_bytes().ct_eq(header.as_bytes()).into()
+
+    csrf::request_token_matches(cookie, headers, body)
+}
+
+/// Whether a header-only check that failed might still pass once the body is
+/// read. Lets a bad request be refused before anything is buffered, while a
+/// form submit — whose token lives in the body — gets its chance.
+fn csrf_still_undecided(headers: &HeaderMap) -> bool {
+    csrf::is_form_urlencoded(headers)
 }
 
 /// Resolve the request's principal via the unified auth evaluator. Returns
@@ -385,8 +393,12 @@ pub async fn dispatch_custom_route(
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 
-    // Optional CSRF for cookie-authenticated mutating routes.
-    if def.csrf && is_mutating(&method) && !csrf_valid(&headers) {
+    // Optional CSRF for cookie-authenticated mutating routes. The header case
+    // is settled here, before a byte of the body is read; a form submit carries
+    // its token in the body, so it is re-checked below once that is buffered.
+    let csrf_required = def.csrf && is_mutating(&method);
+
+    if csrf_required && !csrf_valid(&headers, None) && !csrf_still_undecided(&headers) {
         return (StatusCode::FORBIDDEN, "CSRF validation failed").into_response();
     }
 
@@ -402,6 +414,10 @@ pub async fn dispatch_custom_route(
     let Ok(body) = to_bytes(request.into_body(), mounted.body_limit).await else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
+
+    if csrf_required && !csrf_valid(&headers, Some(&body)) {
+        return (StatusCode::FORBIDDEN, "CSRF validation failed").into_response();
+    }
 
     let raw = RawRequest {
         method,
@@ -486,16 +502,50 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(COOKIE, "crap_csrf=tok123".parse().unwrap());
         headers.insert("x-csrf-token", "tok123".parse().unwrap());
-        assert!(csrf_valid(&headers));
+        assert!(csrf_valid(&headers, None));
 
         let mut mismatch = HeaderMap::new();
         mismatch.insert(COOKIE, "crap_csrf=tok123".parse().unwrap());
         mismatch.insert("x-csrf-token", "different".parse().unwrap());
-        assert!(!csrf_valid(&mismatch));
+        assert!(!csrf_valid(&mismatch, None));
 
         // Missing header
         let mut no_header = HeaderMap::new();
         no_header.insert(COOKIE, "crap_csrf=tok123".parse().unwrap());
-        assert!(!csrf_valid(&no_header));
+        assert!(!csrf_valid(&no_header, None));
+    }
+
+    /// Regression: a plain `<form>` submit carries the token in the body as
+    /// `_csrf` — the admin layout adds it to every form — and a custom route
+    /// used to read only the header, so the form the admin UI itself produces
+    /// was always refused.
+    #[test]
+    fn csrf_accepts_the_form_field_the_admin_layout_adds() {
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, "crap_csrf=tok123".parse().unwrap());
+        headers.insert(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded".parse().unwrap(),
+        );
+
+        // Header-only, before the body is read: not yet decided.
+        assert!(!csrf_valid(&headers, None));
+        assert!(csrf_still_undecided(&headers));
+
+        assert!(csrf_valid(&headers, Some(b"slug=weekly&_csrf=tok123")));
+        assert!(!csrf_valid(&headers, Some(b"slug=weekly&_csrf=wrong")));
+        assert!(!csrf_valid(&headers, Some(b"slug=weekly")));
+    }
+
+    /// A request that cannot carry the token in its body is refused before
+    /// anything is buffered.
+    #[test]
+    fn a_non_form_request_without_a_header_is_decided_immediately() {
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, "crap_csrf=tok123".parse().unwrap());
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+
+        assert!(!csrf_valid(&headers, None));
+        assert!(!csrf_still_undecided(&headers));
     }
 }

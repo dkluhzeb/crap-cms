@@ -54,6 +54,7 @@
 mod auth_middleware;
 pub(crate) mod context;
 mod csp_nonce;
+mod csrf;
 pub mod custom_pages;
 pub mod custom_routes;
 pub mod handlers;

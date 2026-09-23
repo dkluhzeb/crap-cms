@@ -38,7 +38,6 @@ use hyper_util::{
     server::conn::auto::Builder as AutoBuilder,
 };
 use nanoid::nanoid;
-use subtle::ConstantTimeEq;
 use tokio::{net::TcpListener, select, spawn};
 use tokio_util::sync::CancellationToken;
 use tower::{Service, ServiceBuilder, timeout::TimeoutLayer};
@@ -47,7 +46,7 @@ use tracing::{info, info_span};
 
 use crate::{
     admin::{
-        AdminState, CSP_NONCE, CspNonce, Translations,
+        AdminState, CSP_NONCE, CspNonce, Translations, csrf,
         handlers::{
             auth as auth_handlers, collections, custom_route::custom_routes_router, dashboard,
             events, globals, static_assets, uploads,
@@ -774,28 +773,14 @@ async fn validate_csrf_mutation(
     request: Request<Body>,
     cookie_value: &str,
 ) -> Result<Request<Body>, Response> {
-    // Check X-CSRF-Token header first (set by HTMX / JS)
-    let header_token = request
-        .headers()
-        .get("X-CSRF-Token")
-        .and_then(|v| v.to_str().ok())
-        .map(std::string::ToString::to_string);
-
-    if let Some(ref ht) = header_token
-        && bool::from(ht.as_bytes().ct_eq(cookie_value.as_bytes()))
-    {
+    // The header settles it without touching the body, when it is there.
+    if csrf::request_token_matches(cookie_value, request.headers(), None) {
         return Ok(request);
     }
 
-    // Fall back: check _csrf in URL-encoded form body
-    let content_type = request
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    if content_type.starts_with("application/x-www-form-urlencoded") {
+    // Otherwise the token may be the `_csrf` field of a form submit, which
+    // means buffering the body and handing it back to the inner handler.
+    if csrf::is_form_urlencoded(request.headers()) {
         if declares_oversized_body(&request) {
             return Err(csrf_body_too_large());
         }
@@ -805,13 +790,7 @@ async fn validate_csrf_mutation(
             .await
             .map_err(|_| csrf_body_too_large())?;
 
-        let form_token = form_urlencoded::parse(&bytes)
-            .find(|(k, _)| k == "_csrf")
-            .map(|(_, v)| v.to_string());
-
-        if let Some(ref ft) = form_token
-            && bool::from(ft.as_bytes().ct_eq(cookie_value.as_bytes()))
-        {
+        if csrf::request_token_matches(cookie_value, &parts.headers, Some(&bytes)) {
             return Ok(Request::from_parts(parts, Body::from(bytes)));
         }
     }

@@ -1,0 +1,141 @@
+{{#> layout/base}}
+  <h1>Jobs</h1>
+
+  {{#with (data "job_manager")}}
+    <div class="card">
+      <div class="card__header">
+        <span class="material-symbols-outlined">schedule</span>
+        <h3>Defined jobs</h3>
+      </div>
+      <div class="card__body">
+        {{#if has_jobs}}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Schedule</th>
+                <th>Queue</th>
+                <th>Retries</th>
+                <th>Timeout</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each jobs}}
+                <tr>
+                  <td>
+                    <strong>{{this.name}}</strong>
+                    <br />
+                    <code>{{this.slug}}</code>
+                  </td>
+                  <td>
+                    {{#if this.scheduled}}
+                      <code>{{this.schedule}}</code>
+                    {{else}}
+                      manual
+                    {{/if}}
+                  </td>
+                  <td>{{this.queue}}</td>
+                  <td>{{this.retries}}</td>
+                  <td>{{this.timeout}}s</td>
+                  <td>
+                    <form
+                      method="post"
+                      action="{{../trigger_url}}"
+                    >
+                      <input
+                        type="hidden"
+                        name="slug"
+                        value="{{this.slug}}"
+                      />
+                      <button
+                        type="submit"
+                        class="button button--small"
+                      >
+                        Run now
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
+        {{else}}
+          <p>No jobs defined.</p>
+        {{/if}}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__header">
+        <span class="material-symbols-outlined">history</span>
+        <h3>Recent runs</h3>
+      </div>
+      <div class="card__body">
+        <p class="text--muted">
+          Framework jobs — email delivery, image conversion and queued bulk
+          operations — are not listed here: they have no definition to gate
+          access on, so no surface but the CLI reports them. Run
+          <code>crap-cms jobs status</code>
+          to see those.
+        </p>
+        {{#if has_runs}}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Attempt</th>
+                <th>Created</th>
+                <th>Error</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each runs}}
+                <tr>
+                  <td>
+                    <code>{{this.slug}}</code>
+                  </td>
+                  <td>
+                    {{#if this.is_failed}}
+                      <span class="badge badge--error">{{this.status}}</span>
+                    {{else}}
+                      <span class="badge">{{this.status}}</span>
+                    {{/if}}
+                  </td>
+                  <td>{{this.attempt}}</td>
+                  <td>{{this.created_at}}</td>
+                  <td>{{this.error}}</td>
+                  <td>
+                    {{#if this.cancellable}}
+                      <form
+                        method="post"
+                        action="{{../cancel_url}}"
+                      >
+                        <input
+                          type="hidden"
+                          name="id"
+                          value="{{this.id}}"
+                        />
+                        <button
+                          type="submit"
+                          class="button button--small button--ghost"
+                        >
+                          Cancel
+                        </button>
+                      </form>
+                    {{/if}}
+                  </td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
+          <p> Showing {{total_runs}} run(s) in total. </p>
+        {{else}}
+          <p>No runs yet.</p>
+        {{/if}}
+      </div>
+    </div>
+  {{/with}}
+{{/layout/base}}

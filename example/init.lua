@@ -3,6 +3,12 @@ crap.log.info("Crap Studio initializing...")
 -- Load plugins (runs after collections/*.lua are loaded)
 require("plugins.seo").install({ exclude = { "pages", "inquiries" } })
 
+-- Admin page for the background job system: what is defined, what ran, and
+-- the two safe actions (run now, cancel a pending run). Everything it needs
+-- is public plugin surface — a custom page, `crap.template_data` and two
+-- custom routes — so it lives entirely in this config directory.
+require("plugins.job_manager").install({ access = "access.admin_only" })
+
 -- ── Helpers ──────────────────────────────────────────────────
 
 --- Escape a string for safe HTML output.
