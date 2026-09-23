@@ -142,7 +142,6 @@
   "error_invalid_credentials": "Invalid email or password",
   "error_internal": "Internal error",
   "error_passwords_no_match": "Passwords do not match",
-  "error_password_min_length": "Password must be at least 6 characters",
   "error_reset_link_expired": "Reset link has expired. Please request a new one.",
   "error_reset_link_invalid": "Invalid or expired reset link. Please request a new one.",
   "success_password_reset": "Password reset successfully",
@@ -212,6 +211,7 @@
   "op_not_exists": "not exists",
   "op_and": "AND",
   "op_or": "OR",
+  "filter_status_or_mixed": "The status filter can't be combined with other fields using OR — it always applies with AND. Filter the status on its own row.",
 
   "clear_search": "Clear search",
   "sort": "Sort",
@@ -290,5 +290,17 @@
   "trash_emptied": "Trash emptied",
   "error": "Error",
   "no_details": "No details available.",
-  "loading": "Loading..."
+  "loading": "Loading...",
+
+  "fields": "Fields",
+  "op_like": "like",
+  "op_is_any_of": "is any of",
+  "op_is_none_of": "is none of",
+  "validation.password_empty": "Password must not be empty",
+  "validation.password_min_length": "Password must be at least {{min}} characters",
+  "validation.password_max_bytes": "Password must be at most {{max}} bytes",
+  "validation.password_uppercase": "Password must contain at least one uppercase letter",
+  "validation.password_lowercase": "Password must contain at least one lowercase letter",
+  "validation.password_digit": "Password must contain at least one digit",
+  "validation.password_special": "Password must contain at least one special character"
 }

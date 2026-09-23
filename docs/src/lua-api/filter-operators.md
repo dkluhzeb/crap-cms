@@ -48,6 +48,12 @@ Use a table to specify an operator:
 
 > **Note:** `in` is a Lua keyword, so use `["in"]` bracket syntax.
 
+> **Has-many fields** (a `has_many` text/number/select/radio list, a has-many
+> relationship's `.id`, a has-many relationship inside an array or blocks row) are matched element by element: `equals`, `like`,
+> `contains`, `in`, the comparisons and `exists` match when **some** element
+> matches; `not_equals`, `not_in` and `not_exists` when **no** element does. See
+> [Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element).
+
 ## Examples
 
 ```lua

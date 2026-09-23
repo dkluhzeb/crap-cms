@@ -39,6 +39,7 @@ crap.fields.text({
 - `min_rows` / `max_rows` validate the count of values
 - Duplicate values are prevented in the admin UI
 - Type generation maps to `string[]` / `Vec<String>` / `list[str]` etc.
+- Filters match element by element — `{ tags = "news" }` finds documents whose list holds `"news"`; see [Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element). A has-many field cannot be a sort key.
 
 ## Admin Rendering
 

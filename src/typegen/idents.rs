@@ -1,4 +1,4 @@
-//! Per-language identifier sanitization for the client-SDK generators.
+//! Per-language identifier sanitization for the client-SDK and Lua generators.
 //!
 //! Field and collection/global names are validated only as `[A-Za-z0-9_]+`
 //! (non-empty) — so they may be a target-language keyword, start with a digit,
@@ -203,14 +203,63 @@ pub(crate) fn ts_type(pascal: &str) -> String {
 
 // ─────────────────────────── Lua ───────────────────────────
 
-/// Index expression for a `crap.<parent>.<key>` access in generated per-project
-/// Lua. A key that isn't a bare Lua identifier (a leading digit) must be
-/// bracket-indexed with a quoted string, otherwise it's a syntax error.
+/// Lua 5.4's reserved words. A key spelled as one is a syntax error in dotted
+/// access (`data.end`) and must be indexed with a quoted string.
+const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
+    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+];
+
+/// The words the `LuaLS` annotation parser reads as a field's scope when they
+/// open a `---@field` line (`---@field private name type`). A field spelled as
+/// one would lose its name to the scope, so its key is written quoted.
+const LUALS_FIELD_SCOPES: &[&str] = &["public", "protected", "private", "package"];
+
+/// Whether `name` is a Lua identifier usable as a bare key — `t.name` in code,
+/// `---@field name` in an annotation: an ASCII letter or `_` followed by ASCII
+/// letters, digits and `_`, and not a reserved word. A name starting with a
+/// digit is not one: the `LuaLS` annotation tokenizer reads its leading digits
+/// as an integer.
+pub(crate) fn is_lua_name(name: &str) -> bool {
+    let mut chars = name.chars();
+
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !LUA_KEYWORDS.contains(&name)
+}
+
+/// A quoted-string index (`["key"]`) — how Lua code and `LuaLS` annotations
+/// both spell a key that isn't a bare identifier.
+fn lua_quoted_index(key: &str) -> String {
+    format!("[\"{}\"]", escape_str(key))
+}
+
+/// Index expression for a `<parent>.<key>` access in generated per-project
+/// Lua. A key that isn't a bare Lua identifier (a leading digit, a reserved
+/// word) is bracket-indexed with a quoted string — dotted, it's a syntax
+/// error: `crap.collections["2fa"]`, `crap.collections["end"]`.
 pub(crate) fn lua_index(parent: &str, key: &str) -> String {
-    if starts_with_digit(key) {
-        format!("{parent}[\"{key}\"]")
-    } else {
+    if is_lua_name(key) {
         format!("{parent}.{key}")
+    } else {
+        format!("{parent}{}", lua_quoted_index(key))
+    }
+}
+
+/// The key of a `---@field` annotation for a table key named `name`: bare when
+/// it is a Lua identifier the `LuaLS` parser takes as a field name, otherwise
+/// the quoted index form (`---@field ["2fa"]? string`), which `LuaLS` keys by
+/// the string's content — so `data["2fa"]` resolves to the field. An optional
+/// marker follows either form.
+pub(crate) fn lua_field_key(name: &str) -> String {
+    if is_lua_name(name) && !LUALS_FIELD_SCOPES.contains(&name) {
+        name.to_string()
+    } else {
+        lua_quoted_index(name)
     }
 }
 
@@ -355,6 +404,56 @@ mod tests {
             lua_index("crap.collections", "posts"),
             "crap.collections.posts"
         );
+    }
+
+    /// Regression: a slug spelled as a Lua reserved word was dot-indexed
+    /// (`crap.collections.end`), a syntax error in the generated file.
+    #[test]
+    fn lua_index_brackets_reserved_words() {
+        assert_eq!(
+            lua_index("crap.collections", "end"),
+            "crap.collections[\"end\"]"
+        );
+        assert_eq!(
+            lua_index("crap.globals", "function"),
+            "crap.globals[\"function\"]"
+        );
+        assert_eq!(
+            lua_index("crap.collections", "ends"),
+            "crap.collections.ends"
+        );
+    }
+
+    #[test]
+    fn is_lua_name_follows_the_lua_identifier_grammar() {
+        for name in ["title", "_x", "a1", "Posts", "ends"] {
+            assert!(is_lua_name(name), "{name}");
+        }
+
+        for name in ["", "2fa", "9", "end", "nil", "goto", "a-b"] {
+            assert!(!is_lua_name(name), "{name}");
+        }
+    }
+
+    /// Regression: a leading-digit field name was written bare
+    /// (`---@field 2fa? string`), which `LuaLS` tokenizes as the integer `2`
+    /// and the name `fa`.
+    #[test]
+    fn lua_field_key_quotes_non_identifiers() {
+        assert_eq!(lua_field_key("2fa"), "[\"2fa\"]");
+        assert_eq!(lua_field_key("2fa__en"), "[\"2fa__en\"]");
+        assert_eq!(lua_field_key("end"), "[\"end\"]");
+        assert_eq!(lua_field_key("title"), "title");
+        assert_eq!(lua_field_key("seo__2fa"), "seo__2fa");
+    }
+
+    /// Regression: a field named after a `LuaLS` scope word
+    /// (`---@field private? string`) had its name read as the scope.
+    #[test]
+    fn lua_field_key_quotes_luals_scope_words() {
+        for name in ["public", "protected", "private", "package"] {
+            assert_eq!(lua_field_key(name), format!("[\"{name}\"]"));
+        }
     }
 
     #[test]

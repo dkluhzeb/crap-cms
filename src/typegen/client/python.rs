@@ -44,7 +44,12 @@ impl ClientPrinter for PyPrinter {
         w.blank();
     }
 
+    // Python emits read types only; a write-shape sub-type has nothing to render.
     fn sub_type(&mut self, def: &SubType) {
+        if def.input {
+            return;
+        }
+
         let name = idents::python_class(&def.name);
         let fields = &def.fields;
         self.class(&name, |w| {
@@ -66,7 +71,8 @@ impl ClientPrinter for PyPrinter {
         } else {
             select_options_docstring(&def.select_options)
         };
-        let (fields, system, timestamps) = (&def.fields, &def.system, def.timestamps);
+        let (fields, timestamps) = (&def.fields, def.timestamps);
+        let system = def.system.iter().chain(&def.collection_tag);
 
         self.class(&name, |w| {
             if !comment.is_empty() {
@@ -176,6 +182,7 @@ fn py_ty(ty: &FieldTy) -> String {
             let lit = format!("Literal[{}]", literal_values(values));
             if *many { format!("list[{lit}]") } else { lit }
         }
+        FieldTy::Literal(values) => format!("Literal[{}]", literal_values(values)),
         FieldTy::SubType { name, list } => {
             let n = idents::python_class(name);
             if *list { format!("list[{n}]") } else { n }

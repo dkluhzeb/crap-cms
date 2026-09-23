@@ -38,6 +38,18 @@ pub(crate) fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// [`quote_ident`] of `name`, qualified by `table` when one is given
+/// (`"posts"."tags"`). A column read inside a subquery is qualified so a name
+/// the subquery's own FROM item also exposes cannot shadow it.
+#[must_use]
+pub(crate) fn qualified_ident(table: Option<&str>, name: &str) -> String {
+    let Some(table) = table else {
+        return quote_ident(name);
+    };
+
+    format!("{}.{}", quote_ident(table), quote_ident(name))
+}
+
 /// Append a SQL condition with `WHERE` or `AND` depending on whether a WHERE clause already exists.
 pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condition: &str) {
     sql.push_str(if *has_where { " AND " } else { " WHERE " });
@@ -112,5 +124,11 @@ mod tests {
 
         // An embedded quote is doubled, per the SQL standard.
         assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    #[test]
+    fn qualified_ident_prefixes_the_quoted_table() {
+        assert_eq!(qualified_ident(None, "tags"), "\"tags\"");
+        assert_eq!(qualified_ident(Some("posts"), "tags"), "\"posts\".\"tags\"");
     }
 }

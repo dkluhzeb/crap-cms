@@ -13,7 +13,8 @@
 //!   `parse_cron` entry point shared by the boot-time schedule validator
 //!   and the per-tick scheduler.
 //! - `stale.rs` -- `recover_stale_jobs`.
-//! - `retention.rs` -- soft-delete retention purge and its tick claim.
+//! - `retention/` -- soft-delete retention purge (bounded batches) and its
+//!   tick claim.
 
 mod cron_expr;
 mod cron_schedule;
@@ -28,7 +29,7 @@ mod test_support;
 
 pub use cron_schedule::check_cron_schedules;
 pub use execute::{ExecuteJobParams, execute_job};
-pub use retention::purge_soft_deleted;
+pub use retention::{PurgeBatch, RetentionPurge, purge_soft_deleted};
 pub use stale::recover_stale_jobs;
 
 pub(crate) use cron_expr::parse_cron;

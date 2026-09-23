@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 
 use crate::{
     config::LocaleConfig,
-    db::query::helpers::{locale_column, quote_ident},
+    db::query::helpers::{locale_column, qualified_ident},
 };
 
 /// How to handle localized fields in a query.
@@ -47,13 +47,28 @@ impl<'a> ReadLocale<'a> {
     ///
     /// Returns an error if a locale code has no column form.
     pub(crate) fn column_expr(&self, column: &str) -> Result<String> {
-        let read = quote_ident(&locale_column(column, self.locale)?);
+        self.qualified_column_expr(None, column)
+    }
+
+    /// [`Self::column_expr`] with every column qualified by `table` when one is
+    /// given — for a read inside a subquery whose own FROM item could shadow a
+    /// bare column name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a locale code has no column form.
+    pub(crate) fn qualified_column_expr(
+        &self,
+        table: Option<&str>,
+        column: &str,
+    ) -> Result<String> {
+        let read = qualified_ident(table, &locale_column(column, self.locale)?);
 
         let Some(fallback) = self.fallback else {
             return Ok(read);
         };
 
-        let fallback = quote_ident(&locale_column(column, fallback)?);
+        let fallback = qualified_ident(table, &locale_column(column, fallback)?);
 
         Ok(format!("COALESCE({read}, {fallback})"))
     }

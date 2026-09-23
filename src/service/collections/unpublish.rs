@@ -7,7 +7,7 @@ use crate::{
     db::{AccessResult, query},
     hooks::AccessCheckInput,
     service::{
-        ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
+        Gated, ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
         persist_unpublish, run_after_change_hooks, run_pool_write, run_state_before_change,
         write::{UploadSettle, document_file_keys, settle_upload_write},
     },
@@ -18,9 +18,10 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Unpublish a versioned document on an existing connection/transaction.
 ///
 /// Runs the full lifecycle: access check -> before-hooks -> set draft status ->
-/// hydrate -> after-hooks -> strip read-denied fields.
+/// hydrate -> after-hooks -> strip read-denied fields. Returns the stored row
+/// the unpublish event is built from alongside the document.
 /// Does NOT manage transactions — caller must open/commit.
-fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -102,9 +103,13 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         conn,
     )?;
 
+    // The row as stored, before anything is shaped or stripped for the writer:
+    // the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
-    Ok(doc)
+    Ok((doc, row))
 }
 
 /// Unpublish a versioned document.
@@ -126,23 +131,25 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 }
 
 fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    run_pool_write(
+    let (doc, _) = run_pool_write(
         ctx,
         None,
         |inner| unpublish_document_in_conn(inner, id),
-        |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
+        |ctx, (doc, row)| {
+            ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row.clone());
             invalidate_user_streams_if_auth(ctx, &doc.id);
         },
-    )
+    )?;
+
+    Ok(doc)
 }
 
 fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let doc = unpublish_document_in_conn(ctx, id)?;
+    let (doc, row) = unpublish_document_in_conn(ctx, id)?;
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row);
     invalidate_user_streams_if_auth(ctx, &doc.id);
 
     Ok(doc)

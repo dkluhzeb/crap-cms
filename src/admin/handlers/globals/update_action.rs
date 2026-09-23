@@ -7,7 +7,6 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
-use tokio::task;
 use tracing::error;
 
 use crate::{
@@ -28,7 +27,10 @@ use crate::{
             },
         },
     },
-    core::{AuthUser, Document, GlobalDefinition, ReqContext, ValidationError},
+    core::{
+        AuthUser, Document, GlobalDefinition, ReqContext, ValidationError,
+        spawn_blocking_in_label_locale,
+    },
     db::LocaleContext,
     hooks::ConditionContext,
     service::{
@@ -230,7 +232,8 @@ pub async fn update_action(
         action,
     };
 
-    let result = task::spawn_blocking(move || update_global_document_blocking(params)).await;
+    let result =
+        spawn_blocking_in_label_locale(move || update_global_document_blocking(params)).await;
 
     match result {
         Ok(Ok(_)) => htmx_redirect(&paths::global(&slug)),

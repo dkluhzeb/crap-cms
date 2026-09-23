@@ -22,12 +22,12 @@ impl ContentService {
                     .labels
                     .singular
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 plural_label: def
                     .labels
                     .plural
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 timestamps: def.timestamps,
                 auth: def.is_auth_collection(),
                 upload: def.is_upload_collection(),
@@ -47,12 +47,12 @@ impl ContentService {
                     .labels
                     .singular
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 plural_label: def
                     .labels
                     .plural
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
             })
             .collect();
 

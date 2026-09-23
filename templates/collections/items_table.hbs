@@ -16,8 +16,8 @@
             hx-swap="innerHTML show:window:top"
             hx-push-url="true"
           >
-            {{#if collection.title_field}}
-              {{collection.title_field}}
+            {{#if title_label}}
+              {{title_label}}
             {{else}}
               {{t "id"}}
             {{/if}}
@@ -45,8 +45,8 @@
             {{/if}}
           </a>
         {{else}}
-          {{#if collection.title_field}}
-            {{collection.title_field}}
+          {{#if title_label}}
+            {{title_label}}
           {{else}}
             {{t "id"}}
           {{/if}}

@@ -46,6 +46,12 @@ crap.fields.select({
 })
 ```
 
+Filters match element by element — `{ categories = "news" }` finds documents
+with `news` among their selections, `{ categories = { not_equals = "news" } }`
+those without it; see
+[Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element).
+A has-many select cannot be a sort key.
+
 ## Admin Rendering
 
 Renders as a `<select>` dropdown. When `has_many = true`, renders as a multi-select.

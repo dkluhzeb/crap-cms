@@ -4,10 +4,11 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     core::{
-        DocumentFields, Hooks, LiveSetting,
+        CollectionDefinition, DocumentFields, EventGateSnapshot, Hooks, LiveMode, LiveSetting,
+        SharedEventTransport,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
-    hooks::lifecycle::PublishEventInput,
+    hooks::{HookRunner, lifecycle::PublishEventInput},
     service::ServiceContext,
 };
 
@@ -17,11 +18,38 @@ pub struct PendingEvent {
     pub operation: EventOperation,
     pub collection: String,
     pub document_id: String,
+    /// The document as stored and read-shaped, stripped for no one — see
+    /// [`PublishEventInput::data`]. What reaches subscribers is decided by
+    /// `mode` and, per subscriber, by the delivery strip.
     pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
     pub hooks: Hooks,
     pub live: Option<LiveSetting>,
     pub view: EventViewMeta,
+    /// What the event delivers — the definition's `live_mode`.
+    pub mode: LiveMode,
+    /// The stored row subscribers' row constraints are judged against (see
+    /// [`EventGateSnapshot`]).
+    pub gate: Option<EventGateSnapshot>,
+}
+
+impl PendingEvent {
+    /// Publish the event: the `live` filter, `before_broadcast` hooks, then
+    /// the transport. The one conversion from a pending event to a published
+    /// one, shared by an immediate publish and a post-commit queue flush.
+    pub(crate) fn publish(self, runner: &HookRunner, transport: Option<&SharedEventTransport>) {
+        let input = PublishEventInput::builder(self.target, self.operation)
+            .collection(self.collection)
+            .document_id(self.document_id)
+            .data(self.data)
+            .edited_by(self.edited_by)
+            .view(self.view)
+            .mode(self.mode)
+            .gate(self.gate)
+            .build();
+
+        runner.publish_event(transport, &self.hooks, self.live.as_ref(), input);
+    }
 }
 
 /// Shared queue for events accumulated during a transaction.
@@ -44,7 +72,7 @@ pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
 pub(crate) fn invalidate_user_streams_if_auth(ctx: &ServiceContext, id: &str) {
     if ctx
         .collection_def()
-        .is_ok_and(crate::core::CollectionDefinition::is_auth_collection)
+        .is_ok_and(CollectionDefinition::is_auth_collection)
     {
         ctx.publish_user_invalidation(id);
     }
@@ -57,18 +85,7 @@ pub(crate) fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
     let events: Vec<PendingEvent> = queue.borrow_mut().drain(..).collect();
 
     for pending in events {
-        runner.publish_event(
-            &ctx.event_transport,
-            &pending.hooks,
-            pending.live.as_ref(),
-            PublishEventInput::builder(pending.target, pending.operation)
-                .collection(pending.collection)
-                .document_id(pending.document_id)
-                .data(pending.data)
-                .edited_by(pending.edited_by)
-                .view(pending.view)
-                .build(),
-        );
+        pending.publish(runner, ctx.event_transport.as_ref());
     }
 }
 

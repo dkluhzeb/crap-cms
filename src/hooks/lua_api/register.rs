@@ -185,9 +185,36 @@ pub(crate) fn register_any_factories(lua: &Lua) -> Result<()> {
     Ok(())
 }
 
+/// Typing-helper factories on a per-collection accessor, with their arity.
+/// They exist purely so `LuaLS` can infer callback param types via
+/// `Lua.type.inferParamType`. Each is a pass-through (`f(fn) = fn` or
+/// `f(_, fn) = fn` for the two-arg variant) — no real registration, no
+/// transformation. Shared by the init VM and the pool VMs so both expose the
+/// same set.
+const COLLECTION_TYPING_HELPERS: &[(&str, usize)] = &[
+    ("hook", 1),
+    ("read_hook", 1),
+    ("field_hook", 2), // (field, fn) — also accepts (fn) via overload
+    ("condition", 1),
+    ("access", 1),        // discoverability alias for crap.any.access
+    ("auth_strategy", 1), // discoverability alias for crap.any.auth_strategy
+    ("row_label", 1),     // discoverability alias for crap.any.row_label
+];
+
+/// Typing-helper factories on a per-global accessor (see
+/// [`COLLECTION_TYPING_HELPERS`]).
+const GLOBAL_TYPING_HELPERS: &[(&str, usize)] = &[
+    ("hook", 1),
+    ("read_hook", 1),
+    ("field_hook", 2),
+    ("condition", 1),
+    ("access", 1),
+    ("row_label", 1),
+];
+
 /// Same as [`register_per_slug_accessors`] but emits **only the
-/// typing-helper factories** (`hook`, `field_hook`, `condition`,
-/// `access`, `auth_strategy`, `row_label`) — no CRUD wrappers.
+/// typing-helper factories** ([`COLLECTION_TYPING_HELPERS`],
+/// [`GLOBAL_TYPING_HELPERS`]) — no CRUD wrappers.
 /// Called on the init VM so hook/job files can refer to
 /// `crap.collections.<slug>.field_hook(...)` etc. during the
 /// `validate_hook_references` startup pass without tripping on a
@@ -197,22 +224,6 @@ pub(crate) fn register_per_slug_typing_helpers(
     lua: &Lua,
     registry: &crate::core::SharedRegistry,
 ) -> Result<()> {
-    const COLLECTION_TYPING_HELPERS: &[(&str, usize)] = &[
-        ("hook", 1),
-        ("field_hook", 2),
-        ("condition", 1),
-        ("access", 1),
-        ("auth_strategy", 1),
-        ("row_label", 1),
-    ];
-    const GLOBAL_TYPING_HELPERS: &[(&str, usize)] = &[
-        ("hook", 1),
-        ("field_hook", 2),
-        ("condition", 1),
-        ("access", 1),
-        ("row_label", 1),
-    ];
-
     let snapshot: Vec<(String, bool)> = {
         let reg = registry
             .read()
@@ -273,26 +284,6 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
         "ref_count",
     ];
     const GLOBAL_METHODS: &[&str] = &["get", "update", "unpublish", "validate"];
-
-    // Typing-helper factories that exist purely so LuaLS can infer
-    // callback param types via `Lua.type.inferParamType`. Each is a
-    // pass-through (`f(fn) = fn` or `f(_, fn) = fn` for the
-    // two-arg variant) — no real registration, no transformation.
-    const COLLECTION_TYPING_HELPERS: &[(&str, usize)] = &[
-        ("hook", 1),
-        ("field_hook", 2), // (field, fn) — also accepts (fn) via overload
-        ("condition", 1),
-        ("access", 1),        // discoverability alias for crap.any.access
-        ("auth_strategy", 1), // discoverability alias for crap.any.auth_strategy
-        ("row_label", 1),     // discoverability alias for crap.any.row_label
-    ];
-    const GLOBAL_TYPING_HELPERS: &[(&str, usize)] = &[
-        ("hook", 1),
-        ("field_hook", 2),
-        ("condition", 1),
-        ("access", 1),
-        ("row_label", 1),
-    ];
 
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
@@ -459,4 +450,49 @@ fn register_common_with_arc(
     register_config(lua, config)?;
     register_locale(lua, config)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{CollectionDefinition, collection::GlobalDefinition};
+
+    /// Every typing-helper factory the type generator declares on a
+    /// per-slug accessor exists at runtime and passes the function through,
+    /// `read_hook` included.
+    #[test]
+    fn per_slug_typing_helpers_pass_the_function_through() {
+        let lua = Lua::new();
+        lua.load("crap = { collections = {}, globals = {} }")
+            .exec()
+            .unwrap();
+
+        let registry = Registry::shared();
+        {
+            let mut reg = registry.write().unwrap();
+            reg.register_collection(CollectionDefinition::new("posts"));
+            reg.register_global(GlobalDefinition::new("footer"));
+        }
+
+        register_per_slug_typing_helpers(&lua, &registry).unwrap();
+
+        for (parent, helpers) in [
+            ("crap.collections.posts", COLLECTION_TYPING_HELPERS),
+            ("crap.globals.footer", GLOBAL_TYPING_HELPERS),
+        ] {
+            for (method, _) in helpers {
+                let same: bool = lua
+                    .load(format!(
+                        "local f = function() end return {parent}.{method}(f) == f"
+                    ))
+                    .eval()
+                    .unwrap_or_else(|e| panic!("{parent}.{method}: {e}"));
+                assert!(same, "{parent}.{method} must return its function");
+            }
+        }
+
+        for helpers in [COLLECTION_TYPING_HELPERS, GLOBAL_TYPING_HELPERS] {
+            assert!(helpers.iter().any(|(m, _)| *m == "read_hook"));
+        }
+    }
 }

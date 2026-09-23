@@ -264,6 +264,11 @@ const sheet = css`
   .body .filter-builder__remove {
     flex-shrink: 0;
   }
+  .body .filter-builder__hint {
+    margin: 0 0 var(--space-md, 0.75rem);
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary);
+  }
   .body .filter-builder__footer {
     margin-top: var(--space-lg, 1rem);
     display: flex;

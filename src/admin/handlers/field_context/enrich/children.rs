@@ -138,12 +138,12 @@ fn build_child_base(
             .admin
             .placeholder
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         description: child
             .admin
             .description
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         readonly: readonly_display(child, opts.ancestor_readonly, locale_locked),
         localized: child.localized,
         locale_locked,
@@ -191,7 +191,7 @@ fn apply_array_template(
         .labels
         .singular
         .as_ref()
-        .map(|ls| ls.resolve_default().to_string());
+        .map(|ls| ls.resolve_current().to_string());
     af.label_field.clone_from(&child.admin.label_field);
 }
 
@@ -247,7 +247,7 @@ fn apply_blocks_template(
         .labels
         .singular
         .as_ref()
-        .map(|ls| ls.resolve_default().to_string());
+        .map(|ls| ls.resolve_current().to_string());
     bf.picker.clone_from(&child.admin.picker);
 }
 

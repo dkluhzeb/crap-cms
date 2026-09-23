@@ -62,6 +62,12 @@ Access constraints may only use **equality** and **membership** operators:
 | `exists` | field is present (non-null) |
 | `not_exists` | field is absent (null) |
 
+On a has-many list (a `has_many` text/number/select/radio field) each
+operator reads the elements: `equals`/`in`/`exists` match when some element
+does, `not_equals`/`not_in`/`not_exists` when none does — the SQL and the
+in-memory paths agree. See
+[Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element).
+
 Pattern operators (`like`, `contains`) and ordered operators (`greater_than`,
 `less_than`, `greater_than_or_equal`, `less_than_or_equal`) are **rejected** in
 an access rule — returning one is a configuration error that fails the request
@@ -220,8 +226,10 @@ so are unsupported in access constraints:
   access is identity/ownership/membership, and `{ title = X }` is ambiguous
   across locales.) Constrain by a non-localized identity field instead.
 
-- **Dotted relationship/JSON paths (`{ ["author.id"] = … }`) are rejected.**
-  The SQL path resolves these via subqueries, but the in-memory path matches the
-  flat field only and so fails closed (hides rows it should show) for populated
-  and live-event surfaces. Returning one is a hard error — denormalize to a flat
-  own column (store and constrain `author_id` directly) instead.
+- **Dotted relationship/JSON paths (`{ ["tags.id"] = … }`, `{ ["items.owner"] = … }`)
+  are rejected.** The SQL path resolves these through subqueries on junction
+  tables and array or blocks rows, while the in-memory path decides from the
+  document payload at hand (a live event, a populated relationship), which
+  need not carry every row or id the database holds — the two could disagree.
+  Returning one is a hard error — denormalize to a flat own column (store and
+  constrain `author_id` directly) instead.

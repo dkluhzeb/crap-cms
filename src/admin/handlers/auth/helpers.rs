@@ -111,7 +111,10 @@ pub(in crate::admin::handlers) fn login_error(
     let show_collection_picker = auth_collections.len() > 1;
 
     let ctx = LoginPage {
-        base: AuthBasePageContext::for_state(state, PageMeta::new(PageType::AuthLogin, "Login")),
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(PageType::AuthLogin, "login_page_title"),
+        ),
         error: Some(error.to_string()),
         email: Some(email.to_string()),
         collections: auth_collections,
@@ -216,7 +219,7 @@ pub(in crate::admin::handlers) fn render_forgot_success(
     let ctx = ForgotPasswordPage {
         base: AuthBasePageContext::for_state(
             state,
-            PageMeta::new(PageType::AuthForgot, "Forgot Password"),
+            PageMeta::new(PageType::AuthForgot, "forgot_password_page_title"),
         ),
         success: true,
         collections: auth_collections.to_vec(),

@@ -1,5 +1,4 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{ConnectInfo, Form, State},
@@ -9,35 +8,83 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
-use crate::core::collection::Auth;
 use crate::{
     admin::{
-        AdminState,
+        AdminState, Translations,
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{
             auth::{ResetPasswordForm, client_ip},
             shared::{paths, render_auth_page},
         },
     },
-    core::{Registry, SharedInvalidationTransport, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
+    config::PasswordViolation,
+    core::{
+        Registry, SharedInvalidationTransport, collection::Auth,
+        rate_limit::IP_RESET_PASSWORD_KEYSPACE,
+    },
     db::DbPool,
     service::{
         ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
     },
 };
 
-/// Render a reset password error page with the given error key and optional token.
-fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> Response {
+/// The reset page's shared context.
+fn reset_page_base(state: &AdminState) -> AuthBasePageContext {
+    AuthBasePageContext::for_state(
+        state,
+        PageMeta::new(PageType::AuthReset, "reset_password_page_title"),
+    )
+}
+
+/// Render the reset page with `error` (the template translates it) and the
+/// token, when the form should stay usable.
+fn render_reset_page(
+    state: &AdminState,
+    base: AuthBasePageContext,
+    token: Option<&str>,
+    error: String,
+) -> Response {
     let ctx = ResetPasswordPage {
-        base: AuthBasePageContext::for_state(
-            state,
-            PageMeta::new(PageType::AuthReset, "Reset Password"),
-        ),
+        base,
         token: token.map(str::to_string),
-        error: Some(error.to_string()),
+        error: Some(error),
     };
 
     render_auth_page(state, "auth/reset_password", &ctx)
+}
+
+/// Render a reset password error page with the given error key and optional token.
+fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> Response {
+    render_reset_page(state, reset_page_base(state), token, error.to_string())
+}
+
+/// A password-policy violation in `locale`: the violation's translation key
+/// with its params (the minimum or maximum length) filled in.
+fn violation_message(
+    translations: &Translations,
+    locale: &str,
+    violation: PasswordViolation,
+) -> String {
+    let params: HashMap<String, String> = violation
+        .params()
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value))
+        .collect();
+
+    translations.get_interpolated(locale, violation.translation_key(), &params)
+}
+
+/// Render the reset page for a password-policy violation, in the page's
+/// locale — the English `Display` text is for the API surfaces.
+fn render_policy_violation(
+    state: &AdminState,
+    token: &str,
+    violation: PasswordViolation,
+) -> Response {
+    let base = reset_page_base(state);
+    let message = violation_message(&state.translations, &base.locale, violation);
+
+    render_reset_page(state, base, Some(token), message)
 }
 
 /// Find the reset token across all auth collections, validate it, and update the password.
@@ -117,8 +164,8 @@ pub async fn reset_password_action(
         return render_reset_error(&state, Some(&form.token), "error_passwords_no_match");
     }
 
-    if let Err(e) = state.config.auth.password_policy.validate(&form.password) {
-        return render_reset_error(&state, Some(&form.token), &e.to_string());
+    if let Err(violation) = state.config.auth.password_policy.validate(&form.password) {
+        return render_policy_violation(&state, &form.token, violation);
     }
 
     // Rate limit by IP to prevent brute-forcing reset tokens. Atomically record
@@ -172,5 +219,27 @@ pub async fn reset_password_action(
 
             render_reset_error(&state, None, "error_internal")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// Regression: a policy violation on the reset page rendered the English
+    /// `Display` text whatever the page's locale; it renders through its
+    /// translation key, params filled in.
+    #[test]
+    fn a_violation_renders_in_the_page_locale() {
+        let translations = Translations::load(Path::new("/nonexistent"));
+
+        let german =
+            violation_message(&translations, "de", PasswordViolation::TooShort { min: 12 });
+        assert_eq!(german, "Das Passwort muss mindestens 12 Zeichen lang sein");
+
+        let english = violation_message(&translations, "en", PasswordViolation::MissingDigit);
+        assert_eq!(english, "Password must contain at least one digit");
     }
 }

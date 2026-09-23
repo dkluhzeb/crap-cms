@@ -69,7 +69,12 @@ impl ClientPrinter for RustPrinter {
         w.blank();
     }
 
+    // Rust emits read types only; a write-shape sub-type has nothing to render.
     fn sub_type(&mut self, def: &SubType) {
+        if def.input {
+            return;
+        }
+
         let fields = &def.fields;
         self.struct_def(&def.name, |w| {
             for f in fields {
@@ -88,6 +93,9 @@ impl ClientPrinter for RustPrinter {
         } else {
             def.name.clone()
         };
+        // The populated `collection` tag is not a member: the polymorphic enums
+        // consume it as their serde tag, and a single-target `Rel<T>` already
+        // knows its collection.
         let (fields, system, timestamps) = (&def.fields, &def.system, def.timestamps);
 
         self.struct_def(&name, |w| {
@@ -164,7 +172,8 @@ fn emit_field(w: &mut CodeWriter, field: &Field) {
 /// Map a [`FieldTy`] to its Rust type string.
 fn rust_ty(ty: &FieldTy) -> String {
     match ty {
-        FieldTy::Str => "String".to_string(),
+        // A literal set stays a plain `String`, as the proto decoder reads it.
+        FieldTy::Str | FieldTy::Literal(_) => "String".to_string(),
         FieldTy::Num => "f64".to_string(),
         FieldTy::Bool => "bool".to_string(),
         FieldTy::Json | FieldTy::Map => "serde_json::Value".to_string(),

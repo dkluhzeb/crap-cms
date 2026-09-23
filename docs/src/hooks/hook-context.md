@@ -88,6 +88,12 @@ The type generator (`crap-cms typegen`) emits per-collection context types with 
   `data: crap.data.Posts` and `collection: "posts"` (literal)
 - **Globals:** `crap.hook.global_{slug}` — e.g., `crap.hook.global_site_settings`
   has `data: crap.global_data.SiteSettings`
+- **`after_read` hooks:** `crap.read_hook.{PascalCase}` /
+  `crap.read_hook.global_{slug}` — `data` is the document as the read returns
+  it (`crap.doc.Posts` / `crap.global_doc.SiteSettings`: hidden fields
+  stripped, upload sizes folded, relationships populated), not the stored
+  shape. Wrap such a hook in `crap.collections.<slug>.read_hook(fn)` or
+  annotate it `---@type crap.read_hook_fn.Posts`.
 
 Use the typed context for hooks that target a specific collection:
 

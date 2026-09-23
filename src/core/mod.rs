@@ -8,7 +8,7 @@
 //!
 //! - **Leaf modules** (`auth`, `collection`, `condition`, `document`,
 //!   `document_fields`, `document_id`, `field`, `job`, `registry`,
-//!   `req_context`, `slug`, `text`, `timezone`, `validate`) -- one or two
+//!   `req_context`, `slug`, `text`, `timezone`, `tls`, `validate`) -- one or two
 //!   tightly-coupled types each. Their public types are re-exported
 //!   flat at `crate::core::*`; external callers use the short path.
 //!   Builders stay one level deeper, accessed via `Type::builder()`.
@@ -18,7 +18,9 @@
 //!   sites (`cache::create_cache(...)` reads as "build a cache";
 //!   `email::MfaCodeEmailContext` says "email render context").
 //!   External callers reach traits/factories/impl-classes/contexts
-//!   through `crate::core::<domain>::Foo`.
+//!   through `crate::core::<domain>::Foo`. `redis_client` (the single
+//!   Redis client constructor, `redis` feature only) is reached the same
+//!   way: `redis_client::open_client(...)`.
 //!
 //! **The exception inside the namespace modules:** the `Shared*`
 //! handle types (Arc-wrapped trait objects that app code actually
@@ -58,12 +60,15 @@ pub mod lua_lease;
 pub mod nesting_depth;
 pub mod parse;
 pub mod rate_limit;
+#[cfg(feature = "redis")]
+pub mod redis_client;
 pub mod registry;
 pub mod req_context;
 pub mod richtext;
 pub mod slug;
 pub mod text;
 pub mod timezone;
+pub mod tls;
 pub mod upload;
 pub mod validate;
 pub mod walk;
@@ -89,8 +94,9 @@ pub use field::{
     BLOCK_TYPE_KEY, BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels,
     FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType,
     FieldWidth, JoinConfig, LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig,
-    RequiredLocales, SelectOption, ValidateFunction, reference_items, to_title_case,
-    validate_template_name,
+    RequiredLocales, SelectOption, ValidateFunction, current_label_locale, in_label_locale,
+    reference_items, set_default_label_locale, spawn_blocking_in_label_locale, to_title_case,
+    validate_template_name, with_label_locale,
 };
 pub(crate) use field::{Companion, LANG_SUFFIX, TZ_SUFFIX};
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
@@ -113,6 +119,7 @@ pub use slug::Slug;
 pub use text::{
     canonical_operand, canonical_text, canonicalize_text_values, has_canonical_form, normalize_text,
 };
+pub use tls::install_crypto_provider;
 pub use validate::{FieldError, ValidationError};
 pub(crate) use walk::{
     FieldChildren, SchemaStep, field_children, find_field, prefixed_name, walk_all_fields,
@@ -135,8 +142,8 @@ pub use auth::{SharedPasswordProvider, SharedTokenProvider};
 pub use cache::SharedCache;
 pub use email::SharedEmailProvider;
 pub use event::{
-    EventReceiver, EventViewMeta, MutationEvent, MutationEventInput, SharedEventTransport,
-    SharedInvalidationTransport,
+    EventGateSnapshot, EventReceiver, EventViewMeta, MutationEvent, MutationEventInput,
+    SharedEventTransport, SharedInvalidationTransport,
 };
 pub use rate_limit::SharedRateLimitBackend;
 pub use upload::SharedStorage;

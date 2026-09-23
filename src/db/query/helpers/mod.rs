@@ -36,16 +36,20 @@ pub(crate) use date::{normalize_date_value, normalize_date_with_timezone, utc_no
 pub(crate) use document::stored_document_values;
 pub(in crate::db::query) use encode::companion_writes;
 pub(crate) use encode::{
-    column_value, companion_value, decode_value, decodes, nested_value, stored_value,
+    column_value, companion_value, decode_row_value, decode_value, decodes, nested_value,
+    row_column_value, stored_value,
 };
-pub(crate) use has_many::{coerce_has_many_scalar, number_element, parse_has_many_scalar};
+pub(crate) use has_many::{
+    ListPlace, coerce_has_many_scalar, is_polymorphic, number_element, parse_has_many_scalar,
+    reference_list, stored_list,
+};
 pub(crate) use naming::{
     column_belongs_to, global_table, join_table, lang_column, locale_column, tz_column,
     versions_table,
 };
 pub(crate) use sql::{
     SOFT_DELETE_ACTIVE, append_soft_delete_filter, append_sql_condition, like_escape,
-    placeholder_list, quote_ident,
+    placeholder_list, qualified_ident, quote_ident,
 };
 
 // The field-tree walkers `prefixed_name` and `walk_leaf_fields` now live in

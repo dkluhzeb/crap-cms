@@ -80,7 +80,8 @@ impl AppInfra {
 
     /// Assemble a standalone bundle from core deps plus config — for processes
     /// that build their own state instead of sharing the boot bundle (the stdio
-    /// MCP transport, the `work` job worker) and for test fixtures. The populate
+    /// MCP transport, the `work` job worker, a CLI command writing through the
+    /// service layer) and for test fixtures. The populate
     /// singleflight is process-local to this bundle; the live transports come
     /// from the caller (config-built for real processes so Redis-backed writes
     /// reach `serve`'s subscribers; `None` for tests).

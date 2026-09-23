@@ -47,7 +47,7 @@ pub(crate) use helpers::stored_document_values;
 pub(crate) use locale::{
     ReadLocale, column_is_localized, column_read_expr, group_locale_fields, is_locale_locked_write,
     is_non_default_single_locale, locale_locked_field_names, locale_write_column,
-    per_locale_columns, regroup_by_locale, stored_columns,
+    per_locale_columns, qualified_column_read_expr, regroup_by_locale, stored_columns,
 };
 pub(crate) use read::decode_document_values;
 

@@ -17,11 +17,10 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use tokio::task;
 use tracing::error;
 
 use crate::{
-    core::{CollectionDefinition, Document, collection::Surface},
+    core::{CollectionDefinition, Document, collection::Surface, spawn_blocking_in_label_locale},
     db::BoxedConnection,
     service::{
         AppInfra, RunnerReadHooks, ServiceContext, ServiceError,
@@ -230,7 +229,9 @@ impl CoreError {
 
 /// Run an operation on a blocking thread: acquire a connection, resolve the
 /// principal, look up the target definition, assemble the context (all infra
-/// via `ServiceContextBuilder::infra`), and execute.
+/// via `ServiceContextBuilder::infra`), and execute. The caller's label locale
+/// comes along, so a label a hook resolves inside the operation follows the
+/// admin viewer's UI locale.
 ///
 /// # Errors
 ///
@@ -241,7 +242,7 @@ pub async fn run_blocking<O: Operation>(
     target: TargetRef,
     args: O::Args,
 ) -> Result<O::Output, CoreError> {
-    task::spawn_blocking(move || run::<O>(&infra, principal, &target, args))
+    spawn_blocking_in_label_locale(move || run::<O>(&infra, principal, &target, args))
         .await
         .inspect_err(|e| error!("{} task join error: {e}", O::NAME))
         .map_err(|e| CoreError::Internal(anyhow!("{} task join error: {e}", O::NAME)))?
@@ -509,8 +510,7 @@ fn resolve_principal(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{path::Path, sync::Arc, time::Duration};
 
     use r2d2_sqlite::SqliteConnectionManager;
 
@@ -518,10 +518,92 @@ mod tests {
     use crate::{
         admin::test_support::test_infra,
         config::{CrapConfig, UploadConfig},
-        core::{Registry, SharedTokenProvider, auth::JwtTokenProvider, upload::create_storage},
+        core::{
+            LocalizedString, Registry, SharedTokenProvider, auth::JwtTokenProvider,
+            upload::create_storage, with_label_locale,
+        },
         db::DbPool,
         hooks::HookRunner,
     };
+
+    /// An infra over `registry` whose pool can never hand out a connection,
+    /// with a short timeout so a `get()` fails fast with r2d2's timeout error.
+    fn unreachable_pool_infra(dir: &Path, registry: Arc<Registry>) -> Arc<AppInfra> {
+        let config = CrapConfig::test_default();
+
+        let manager = SqliteConnectionManager::file("/nonexistent-dir/no.db");
+        let pool = DbPool::from_pool(
+            r2d2::Pool::builder()
+                .max_size(1)
+                .connection_timeout(Duration::from_millis(100))
+                .build_unchecked(manager),
+        );
+
+        let hook_runner = HookRunner::builder()
+            .config_dir(dir)
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+        let storage = create_storage(dir, &UploadConfig::default()).unwrap();
+        let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new("test-secret"));
+
+        test_infra(
+            pool,
+            registry,
+            hook_runner,
+            storage,
+            token_provider,
+            &config,
+            dir,
+        )
+    }
+
+    /// An operation that reports how a localized label resolves inside it.
+    struct LabelProbe;
+
+    impl Operation for LabelProbe {
+        type Args = LocalizedString;
+        type Output = String;
+
+        const NAME: &'static str = "label_probe";
+        const READS_VIA_CONTEXT: bool = false;
+
+        fn run(_ctx: &ServiceContext<'_>, label: Self::Args) -> Result<Self::Output, ServiceError> {
+            Ok(label.resolve_current().to_string())
+        }
+    }
+
+    /// Regression: an admin operation run on a blocking thread (the edit
+    /// page's read, delete, restore, empty trash) resolved labels — in hooks,
+    /// in `crap.schema` — against the default locale while the list page
+    /// followed the viewer's UI locale.
+    #[tokio::test]
+    async fn run_blocking_keeps_the_caller_label_locale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = Registry::default();
+        registry.register_collection(CollectionDefinition::new("posts"));
+        let infra = unreachable_pool_infra(tmp.path(), Arc::new(registry));
+
+        let label = LocalizedString::Localized(HashMap::from([
+            ("de".to_string(), "Titel".to_string()),
+            ("en".to_string(), "Title".to_string()),
+            ("fr".to_string(), "Titre".to_string()),
+        ]));
+        let op = run_blocking::<LabelProbe>(
+            infra,
+            Principal::Resolved {
+                user: None,
+                ui_locale: None,
+            },
+            TargetRef::collection("posts"),
+            label,
+        );
+
+        let resolved = with_label_locale("fr".to_string(), op).await;
+
+        assert_eq!(resolved.unwrap(), "Titre");
+    }
 
     /// Regression: a pool failure surfaced through `run` must arrive as
     /// TRANSIENT (503-class on every codec), not internal (500). This held
@@ -533,36 +615,7 @@ mod tests {
     #[test]
     fn pool_error_stays_classifiable() {
         let tmp = tempfile::tempdir().unwrap();
-        let config = CrapConfig::test_default();
-
-        // A pool whose connections can never be established, with a short
-        // timeout so `get()` fails fast with r2d2's timeout error.
-        let manager = SqliteConnectionManager::file("/nonexistent-dir/no.db");
-        let pool = DbPool::from_pool(
-            r2d2::Pool::builder()
-                .max_size(1)
-                .connection_timeout(Duration::from_millis(100))
-                .build_unchecked(manager),
-        );
-
-        let registry: Arc<Registry> = Arc::new(Registry::default());
-        let hook_runner = HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(Arc::clone(&registry))
-            .config(&config)
-            .build()
-            .unwrap();
-        let storage = create_storage(tmp.path(), &UploadConfig::default()).unwrap();
-        let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new("test-secret"));
-        let infra = test_infra(
-            pool,
-            registry,
-            hook_runner,
-            storage,
-            token_provider,
-            &config,
-            tmp.path(),
-        );
+        let infra = unreachable_pool_infra(tmp.path(), Arc::new(Registry::default()));
 
         let args = FindByIdArgs::builder("x").build();
         let err = run::<FindById>(

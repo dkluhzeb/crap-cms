@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -6,7 +5,7 @@ use axum::{
     extract::{Path, Request, State},
     response::Response,
 };
-use tokio::task;
+use tokio::task::JoinError;
 use tracing::error;
 
 use crate::{
@@ -21,7 +20,10 @@ use crate::{
             },
         },
     },
-    core::{AuthUser, CollectionDefinition, Document, SharedStorage, upload::UploadedFile},
+    core::{
+        AuthUser, CollectionDefinition, Document, SharedStorage, spawn_blocking_in_label_locale,
+        upload::UploadedFile,
+    },
     db::LocaleContext,
     service::{
         self, AppInfra, ServiceContext, ServiceError,
@@ -29,32 +31,6 @@ use crate::{
         upload::{CreateUploadInput, create_upload},
     },
 };
-
-/// Extract and validate the password field for auth collections.
-/// Returns `Ok(None)` for non-auth collections.
-fn extract_and_validate_password(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    form_data: &mut HashMap<String, String>,
-) -> Result<Option<String>, Box<Response>> {
-    if !def.is_auth_collection() {
-        return Ok(None);
-    }
-
-    let password = form_data.remove("password");
-
-    if password.as_deref().unwrap_or("").is_empty() {
-        return Err(Box::new(toast_only_error("Password is required")));
-    }
-
-    if let Some(ref pw) = password
-        && let Err(e) = state.config.auth.password_policy.validate(pw)
-    {
-        return Err(Box::new(toast_only_error(&e.to_string())));
-    }
-
-    Ok(password)
-}
 
 /// Prepared form data for creating a document.
 struct CreateInput {
@@ -159,7 +135,7 @@ async fn spawn_create(
     def: &CollectionDefinition,
     auth_user: Option<&Extension<AuthUser>>,
     input: CreateInput,
-) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
+) -> Result<Result<service::WriteResult, ServiceError>, JoinError> {
     let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
 
     let args = CreateBlockingInput {
@@ -173,7 +149,7 @@ async fn spawn_create(
         input,
     };
 
-    task::spawn_blocking(move || create_document_blocking(args)).await
+    spawn_blocking_in_label_locale(move || create_document_blocking(args)).await
 }
 
 /// POST /admin/collections/{slug} — create a new item
@@ -214,11 +190,10 @@ pub async fn create_action(
     // A file only reaches the write when the collection accepts one.
     let file = file.filter(|_| def.is_upload_collection());
 
-    // Field and collection write access are checked inside the service write.
-    let password = match extract_and_validate_password(&state, &def, form.raw_mut()) {
-        Ok(pw) => pw,
-        Err(resp) => return *resp,
-    };
+    // Field and collection write access, and the password policy, are checked
+    // inside the service write — a violation comes back as a `password` field
+    // error the form re-render shows in the viewer's locale.
+    let password = form.take_password(&def);
 
     let draft = form.take_action() == "save_draft";
 

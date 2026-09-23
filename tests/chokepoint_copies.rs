@@ -296,6 +296,41 @@ const CONFIG_LOAD: Chokepoint = Chokepoint {
     ],
 };
 
+/// `service::user_settings::UserSettings` owns the shape of a user's settings
+/// blob — where the UI locale lives and where per-collection column choices
+/// live. Reading the raw blob and indexing it by hand is how a collection slug
+/// once collided with the `ui_locale` preference.
+const USER_SETTINGS: Chokepoint = Chokepoint {
+    name: "service::user_settings::{load_user_settings, UserSettings}",
+    scan_root: "src",
+    home: Some("src/service/user_settings.rs"),
+    copy_pattern: r"\bget_user_settings\(",
+    fix: "Read the settings with `user_settings::load_user_settings` and use the \
+          `UserSettings` accessors (`ui_locale`, `columns`, `set_*`), so every reader \
+          and writer agrees on the blob's shape.",
+    allowlist: &[(
+        "src/db/query/user_settings.rs",
+        "The SQL behind the service: reads the raw row the service parses",
+    )],
+};
+
+/// `core::redis_client::open_client` is the one place a Redis client is
+/// opened. It installs the process-wide rustls crypto provider first: a
+/// `rediss://` client opened any other way panics on its first TLS handshake
+/// in a process whose entry point did not install one.
+const REDIS_CLIENT: Chokepoint = Chokepoint {
+    name: "core::redis_client::open_client",
+    scan_root: "src",
+    home: None,
+    copy_pattern: r"\bClient::open\(",
+    fix: "Open the client with `redis_client::open_client`, which installs the \
+          TLS crypto provider a `rediss://` URL needs before building the client.",
+    allowlist: &[(
+        "src/core/redis_client.rs",
+        "The chokepoint itself: installs the crypto provider, then opens the client",
+    )],
+};
+
 /// Every chokepoint, for the allowlist-staleness companion test.
 const CHOKEPOINTS: &[&Chokepoint] = &[
     &LOCALE_CONTEXT,
@@ -308,6 +343,8 @@ const CHOKEPOINTS: &[&Chokepoint] = &[
     &UPLOAD_WRITE_LIFECYCLE,
     &WRITE_ADMISSION,
     &CONFIG_LOAD,
+    &USER_SETTINGS,
+    &REDIS_CLIENT,
 ];
 
 // ── the shared scan ──────────────────────────────────────────────────────────
@@ -539,6 +576,16 @@ fn the_validate_dry_run_runs_the_write_admission() {
 #[test]
 fn commands_load_their_config_validated() {
     CONFIG_LOAD.assert_no_copies();
+}
+
+#[test]
+fn user_settings_are_read_through_their_model() {
+    USER_SETTINGS.assert_no_copies();
+}
+
+#[test]
+fn redis_clients_are_opened_through_open_client() {
+    REDIS_CLIENT.assert_no_copies();
 }
 
 #[test]

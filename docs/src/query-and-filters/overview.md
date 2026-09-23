@@ -21,6 +21,8 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 | Exists | `{ exists = true }` | `{"exists": true}` | `field IS NOT NULL` |
 | Not exists | `{ not_exists = true }` | `{"not_exists": true}` | `field IS NULL` |
 
+> **Has-many fields** (lists) are matched element by element — `equals` means "some element equals", `not_equals` "no element equals". See [Has-many fields](#has-many-fields-element-by-element).
+>
 > **Note:** `exists`/`not_exists` accept only the boolean `true`. `{ exists = false }` (or any non-boolean value) is rejected with an error on every surface — it is never silently dropped or read as IS NOT NULL. Use `not_exists = true` for IS NULL.
 >
 > **Ranges:** one operator object may carry several operators, ANDed together — `{ greater_than_or_equal = "2024-01-01", less_than = "2025-01-01" }`.
@@ -48,6 +50,45 @@ admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
   `date` field compares lexicographically over its normalized ISO form (which
   orders correctly). If you want numeric ordering, use a `number` field — don't
   store numbers in a `text` field.
+
+### Has-many fields: element by element
+
+A field that holds a list — a `text`, `number`, `select` or `radio` field with
+`has_many = true`, a has-many relationship or upload filtered by `.id`, and a
+has-many relationship or upload inside an array or blocks row — is filtered
+**element by element**, on every surface and both backends:
+
+| Operator | Matches a document when… |
+|----------|--------------------------|
+| `equals` | **some** element equals the value |
+| `not_equals` | **no** element equals the value |
+| `in` | **some** element is in the list |
+| `not_in` | **no** element is in the list |
+| `like` / `contains` | **some** element matches the pattern / contains the text |
+| `greater_than`, `less_than`, `…_or_equal` | **some** element satisfies the comparison |
+| `exists` | the list holds at least one element |
+| `not_exists` | the list is empty |
+
+Each element compares as the field's single value would: a `number` list
+numerically (`{ scores = { greater_than = "9" } }` matches `[10]`), a `text`
+list in its stored form, `like`/`contains` case-insensitively. A relationship
+list inside a row compares its ids — a polymorphic entry by the id after its
+`collection/`, as a top-level list's `.id` does. An empty list and an unset
+(NULL) list hold no elements: every positive operator misses them, and
+`not_equals`, `not_in` and `not_exists` match them.
+
+Every stored list is a list: when `has_many` is switched on over existing
+values (or a list is retyped), the schema sync stores each old value as a list
+once — see [Changing a definition that has data](../database/overview.md#changing-a-definition-that-has-data).
+
+Conditions on the same list combine by AND like any others, each judged over
+the elements on its own: in the admin list, the rows *tags is a* AND *tags is
+b* (`where[tags][equals]=a&where[tags][equals]=b`) match documents tagged both
+`a` **and** `b`. To accept any of several values, use `in` (or an OR row in
+the admin filter builder).
+
+A has-many field cannot be used as `order_by` — its values have no single
+order — and a sort on one is rejected with a validation error.
 
 ## Sorting
 
@@ -369,7 +410,7 @@ grpcurl -plaintext -d '{
 
 ### Array Sub-Fields
 
-Filter by sub-field values in array rows. Uses an `EXISTS` subquery against the array join table. Returns parent documents that have **at least one** array row matching the condition.
+Filter by sub-field values in array rows. Uses an `EXISTS` subquery against the array join table. Returns parent documents that have **at least one** array row matching the condition — for every operator, `not_equals` included (`variants.color not_equals "red"` finds a document with at least one non-red variant). A has-many sub-field — a list, or a has-many relationship's ids (`variants.related`) — is then read element by element inside that row. A sub-field inside a layout `row`, `collapsible` or `tabs` is named directly (`variants.width`), since a row stores it under its own name.
 
 **Lua:**
 
@@ -392,7 +433,7 @@ crap.collections.products.find({
 
 ### Block Sub-Fields
 
-Filter by field values inside block rows. Uses `json_extract` on the block `data` column. Returns parent documents that have **at least one** block row matching.
+Filter by field values inside block rows. Uses `json_extract` on the block `data` column. Returns parent documents that have **at least one** block row matching. A field inside a layout `row`, `collapsible` or `tabs` is named directly (`content.caption`), and a has-many list or relationship inside the block is read element by element.
 
 **Lua:**
 
@@ -421,7 +462,11 @@ crap.collections.posts.find({
 
 ### Has-Many Relationships
 
-Filter by related document IDs. Uses an `EXISTS` subquery against the relationship join table.
+Filter by related document IDs (`.id`) of a has-many relationship or upload. The
+junction rows are the list's elements, read element by element exactly like a
+scalar has-many list (see [Has-many fields](#has-many-fields-element-by-element)):
+`{ ["tags.id"] = { not_equals = "tag-123" } }` matches posts that do **not** carry
+that tag, including posts with no tags at all.
 
 **Lua:**
 

@@ -150,9 +150,9 @@ fn update_many_pool(
 
                 // A failure here returns via `?`; the envelope rolls back
                 // every change made so far.
-                let (doc, _) = update_many_single_in_conn(inner, doc_id, input, locale_config)?;
+                let (_, row) = update_many_single_in_conn(inner, doc_id, input, locale_config)?;
 
-                results.push((doc_id.clone(), doc.fields.clone()));
+                results.push((doc_id.clone(), row));
                 ids.push(doc_id.clone());
                 modified += 1;
             }
@@ -172,8 +172,8 @@ fn update_many_pool(
         |ctx, (result, updated)| {
             // Per-doc events are gated by `ctx.emit_events` (set by the
             // surface; bulk defaults to off).
-            for (id, fields) in updated {
-                ctx.publish_mutation_event(EventOperation::Update, id, fields);
+            for (id, row) in updated {
+                ctx.publish_mutation_event(EventOperation::Update, id, row.clone());
             }
 
             // A bulk role/group change on auth documents must tear down each
@@ -236,11 +236,11 @@ fn update_many_conn(
             .ui_locale(opts.ui_locale.clone())
             .build();
 
-        let (updated_doc, _) = update_many_single_in_conn(ctx, doc_id, input, locale_config)?;
+        let (_, row) = update_many_single_in_conn(ctx, doc_id, input, locale_config)?;
 
         // Gated by `ctx.emit_events`; in conn mode the enqueued event flushes
         // after the caller's tx commits.
-        ctx.publish_mutation_event(EventOperation::Update, doc_id, &updated_doc.fields);
+        ctx.publish_mutation_event(EventOperation::Update, doc_id, row);
         updated_ids.push(doc_id.clone());
         modified += 1;
     }

@@ -1,6 +1,8 @@
 //! Admin UI translation loading: compiled-in English + German, config dir overlay.
 
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, fs, path::Path};
+
+use tracing::warn;
 
 static DEFAULT_EN: &str = include_str!("../../translations/en.json");
 static DEFAULT_DE: &str = include_str!("../../translations/de.json");
@@ -13,6 +15,11 @@ pub struct Translations {
 impl Translations {
     /// Load translations: compiled-in locales as base, overlaid with
     /// `<config_dir>/translations/*.json` files if they exist.
+    ///
+    /// Every overlay file names a UI locale by its stem: `de.json` extends
+    /// the built-in German, `fr.json` adds French to the locale picker. A
+    /// file that cannot be read or is not a flat string map is skipped with a
+    /// warning naming the file and the reason — never silently.
     #[must_use]
     pub fn load(config_dir: &Path) -> Self {
         let mut locales: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -26,25 +33,7 @@ impl Translations {
             locales.insert("de".to_string(), de);
         }
 
-        // Overlay with config dir translations/*.json if they exist
-        let translations_dir = config_dir.join("translations");
-
-        if translations_dir.exists()
-            && let Ok(entries) = std::fs::read_dir(&translations_dir)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "json")
-                    && let Some(locale) = path.file_stem().and_then(|s| s.to_str())
-                    && let Ok(content) = std::fs::read_to_string(&path)
-                    && let Ok(overrides) = serde_json::from_str::<HashMap<String, String>>(&content)
-                {
-                    let map = locales.entry(locale.to_string()).or_default();
-
-                    map.extend(overrides);
-                }
-            }
-        }
+        apply_overlays(&config_dir.join("translations"), &mut locales);
 
         Translations { locales }
     }
@@ -135,10 +124,61 @@ impl Translations {
     }
 }
 
+/// The UI locale an overlay file defines: the stem of a `*.json` file.
+fn overlay_locale(path: &Path) -> Option<&str> {
+    if path.extension().is_none_or(|ext| ext != "json") {
+        return None;
+    }
+
+    path.file_stem().and_then(|s| s.to_str())
+}
+
+/// Read one overlay file as a flat `key → string` map, or say why not.
+fn read_overlay(path: &Path) -> Result<HashMap<String, String>, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+
+    serde_json::from_str(&content).map_err(|e| format!("not a flat string map: {e}"))
+}
+
+/// Overlay every `*.json` file in `dir` onto `locales`, warning about each
+/// file that cannot be used.
+fn apply_overlays(dir: &Path, locales: &mut HashMap<String, HashMap<String, String>>) {
+    if !dir.exists() {
+        return;
+    }
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(
+                "Cannot read admin translations directory {}: {e}",
+                dir.display()
+            );
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(locale) = overlay_locale(&path) else {
+            continue;
+        };
+
+        match read_overlay(&path) {
+            Ok(overrides) => locales
+                .entry(locale.to_string())
+                .or_default()
+                .extend(overrides),
+            Err(reason) => warn!(
+                "Skipping admin translation file {}: {reason}",
+                path.display()
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]
@@ -283,6 +323,33 @@ mod tests {
         assert_eq!(t.get("en", "custom_key"), "custom_value");
         // Built-in keys should still be present
         assert_eq!(t.get("en", "save"), "Save");
+    }
+
+    /// Regression: a malformed overlay file was skipped without a word, so a
+    /// typo silently reverted the whole locale to the built-in strings. The
+    /// reason is reported and the other files still load.
+    #[test]
+    fn a_malformed_overlay_is_reported_and_the_rest_still_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let trans_dir = tmp.path().join("translations");
+        fs::create_dir_all(&trans_dir).unwrap();
+        fs::write(trans_dir.join("fr.json"), r#"{"save": "Enregistrer",}"#).unwrap();
+        fs::write(trans_dir.join("nested.json"), r#"{"save": {"x": "y"}}"#).unwrap();
+        fs::write(trans_dir.join("it.json"), r#"{"save": "Salva"}"#).unwrap();
+
+        let reason = read_overlay(&trans_dir.join("fr.json")).unwrap_err();
+        assert!(reason.contains("not a flat string map"), "{reason}");
+        assert!(read_overlay(&trans_dir.join("nested.json")).is_err());
+
+        let t = Translations::load(tmp.path());
+        assert_eq!(t.get("it", "save"), "Salva");
+        assert!(!t.available_locales().contains(&"fr"));
+    }
+
+    #[test]
+    fn only_json_files_define_locales() {
+        assert_eq!(overlay_locale(Path::new("/x/fr.json")), Some("fr"));
+        assert_eq!(overlay_locale(Path::new("/x/README.md")), None);
     }
 
     #[test]

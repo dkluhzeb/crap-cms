@@ -51,8 +51,11 @@ freeze is unconditional.
     column would hold — a number as a number (surrounding whitespace ignored), a
     timezone date as UTC, a list as a typed array; a value the column can't hold
     stays as sent (validation rejects it);
-  - every other type — JSON, rich text, code, select, radio and references — is
-    stored as sent.
+  - a has-many relationship or upload is its id list — a JSON array of id
+    strings (`collection/id` when polymorphic), whether the write carried a
+    list, a JSON array as text or the admin form's comma-separated ids;
+  - every other type — JSON, rich text, code, select, radio and single
+    references — is stored as sent.
 
   A missing value stays missing: only the admin form reads a checkbox absent
   from a submitted row as unchecked, because HTML omits unchecked boxes.
@@ -107,6 +110,28 @@ freeze is unconditional.
   on an older Postgres database back to `TEXT`); the write edge canonicalizes each element to the
   field's type (`coerce_has_many_scalar`) and the read path parses it back
   (`parse_has_many_scalar`), so the list round-trips identically across surfaces.
+- **Every stored has-many list is NULL or a JSON array.** A scalar `has_many`
+  column (every locale's, every `group__` one, an array row's), a scalar
+  has-many value inside a JSON-stored row, and the id list of a has-many
+  relationship or upload stored in a row hold nothing else; the list filters
+  expand them unguarded. Writes keep it so; the schema sync
+  (`db::migrate::has_many_lists`, gated per table on a versioned fingerprint of
+  its list fields) rewrites a value a definition change left behind — a single
+  value becomes a one-element list, read by the write's own list reading
+  (`stored_list`) — and refuses to start, naming the documents, on a value
+  holding nothing of the field's type rather than dropping it. Text that isn't
+  a JSON array reads by where it is stored (`ListPlace`): in a document's own
+  column (top-level, per locale, `group__`) it is **one value**, since no
+  release stored a list there in any other form; inside an array or blocks row
+  (an array table's column, a row's JSON) it is **comma-separated values**,
+  the form earlier admin forms stored a row's list in. Every write path and
+  `crap-cms import` maintain the invariant; reads and filters do **not** guard
+  against a value that breaks it. A row written around the application — raw
+  SQL, an external ETL job — that leaves non-JSON text in such a column makes
+  every filter on that field fail with a query error (the JSON expansion
+  rejects it) rather than silently mis-match: fail loud, never wrong. The
+  schema sync repairs such values the next time the table's has-many fields
+  change; keep external writers to JSON arrays or NULL.
 - **The soft-delete rebuild preserves data and drops only inline UNIQUE.**
   Enabling `soft_delete` on a table with unique fields rebuilds it to replace
   inline `UNIQUE` (which would block re-inserting a value whose row is trashed)
@@ -134,6 +159,12 @@ freeze is unconditional.
   existing data, and `locale_shape:{table}` holds `{version}:{sorted localized
   columns}` so a flip of a field's `localized` flag moves its values exactly
   once per flip, in either direction.
+- **The user-settings blob shape.** `_crap_user_settings` holds one JSON object
+  per user: `ui_locale` at the top level, per-collection list preferences under
+  `collections.{slug}` (`{"columns": [...]}`). Entries written before the
+  `collections` namespace (`{slug}.columns` at the top level) are still read and
+  move under `collections` on that collection's next save; the reader
+  (`service::user_settings::UserSettings`) must keep reading them.
 - **A retired gate key is deleted, never left behind.** A database must carry
   no key naming a pass nothing reads any more — an orphaned whole-database flag
   is exactly what makes a later-added collection skip its conversion forever.
@@ -240,9 +271,21 @@ freeze is unconditional.
   differently per surface — the admin URL's terse `gt`/`gte`/`lt`/`lte` and MCP's
   `greater_than_equal`/`less_than_equal` — those short forms were removed in
   favor of the single verbose grammar.) Empty-`in` → no match / empty-`not_in` →
-  all match, plus the dot-notation nested-path grammar. The lenient filter-value
-  coercions (checkbox accepts `1/true/yes/on`; a non-numeric number filter falls
-  back to text) are a **deliberate, permanent** leniency.
+  all match, plus the dot-notation nested-path grammar. The lenient checkbox
+  filter value (`1/true/yes/on`) is a **deliberate, permanent** leniency; a
+  filter value that does not fit the field's type (a non-numeric number) is a
+  validation error.
+- **Has-many filters are element-wise.** A filter on a list — a scalar
+  `has_many` field, a has-many relationship/upload's `.id` — quantifies over
+  its elements: `equals`, `like`, `contains`, `in`, the ordered comparisons and
+  `exists` match when some element does; `not_equals`, `not_in` and
+  `not_exists` when no element matches the positive operator. An empty or
+  unset list holds no elements. A has-many relationship/upload inside an array
+  or blocks row reads its stored id list the same way, a polymorphic entry by
+  the id after its `collection/`. SQL (`EXISTS` / `NOT EXISTS` over the
+  expanded list or the junction rows) and the in-memory evaluator apply the
+  same reading. A has-many list is never a sort key. Array and blocks rows
+  stay records: a sub-field filter asks for some row that satisfies it.
 - **Cursor token format** (base64url JSON) — kept decodable for in-flight URLs.
 - **Timestamp formats are deliberately per-concern and must not be "unified".**
   Persisted document date values normalize to millisecond ISO 8601 UTC
@@ -265,7 +308,32 @@ changing a representation is a breaking change to every consumer.
   populated document (`depth >= 1`): Rust `Rel<T>` (`#[serde(untagged)] enum {
   Doc(Box<T>), Id(String) }`), Go `Rel[T]` (struct + custom JSON), TypeScript
   `string | TDocument`, Python `str | T`; a has-many field is a list of that. Do
-  not flatten either side back to a bare id.
+  not flatten either side back to a bare id. This is the READ side only: the
+  write (`…Data`) types carry every reference as its id (`string` /
+  `string[]`, a polymorphic one as its `"collection/id"` string), because every
+  write surface rejects a populated document.
+- **Read and write types come from two wire shapes, never one from the other**
+  (`core::upload::read_shape`). The read shape drops `hidden` fields at any
+  depth and folds an upload's per-size columns into `sizes`; the write shape
+  drops virtual `join` fields and the server-derived upload columns
+  (`CollectionUpload::derived_field_names`, the set the write chokepoint
+  strips), keeps each field's own `required` (a required relationship is
+  required), and — on an auth collection — adds an optional `password`. The
+  Lua `crap.input.*` / `crap.partial.*` / `crap.partial_many.*` classes (the
+  last never with `password`: `update_many` refuses one) follow the write
+  shape and `crap.doc.*` the read shape; `crap.data.*` stays the stored shape a
+  write hook's `ctx.data` holds, and an `after_read` hook's context
+  (`crap.read_hook.*`) types `ctx.data` with the read shape. The typed
+  `crap.where.*` keys and `order_by` values follow the queryable columns — a
+  `hidden` field's are never among them.
+- **A collection read type declares the populated `collection` tag** as the
+  one-value literal of its slug (TypeScript `collection?: "posts"`, Python
+  `Optional[Literal["posts"]]`, Go `*string`, Lua `collection? "posts"`); Rust
+  leaves it to the polymorphic enums' serde tag. It is omitted when a field of
+  the collection is itself named `collection`, and it never renames a field: a
+  Go tag member whose name a field's member already holds takes the suffix
+  (`Collection_2`). `_status` is `"draft" |
+  "published"` in TypeScript, Python and Lua and a plain string in Rust and Go.
 - **Every field of a read type is optional**, independent of the write-side
   `required` flag, and in the group and row types nested inside it. A read can
   omit any key: a draft read returns required fields empty, field read access
@@ -282,16 +350,42 @@ changing a representation is a breaking change to every consumer.
 - **Polymorphic relationships are a discriminated type over their targets**
   (Rust untagged enum + a `#[serde(tag = "collection")]` ref enum, TS/Python a
   union of the target documents, Go `interface{}`) — never a bare string.
-- **Per-collection types split `…Data` (writable) and `…Document` (adds `id` +
-  timestamps); globals are a single type. `CollectionSlug` enumerates the
-  slugs.**
+- **In TypeScript every collection and global splits `…Data` (the write
+  shape) and `…Document` (the read shape, adds `id` + timestamps); Rust, Go and
+  Python emit the read type only. `CollectionSlug` enumerates the slugs.**
 - **Identifier safety and collision policy are frozen.** A name that collides
   with a language's rules is sanitized per language with the **wire key
   preserved** (never rename the wire key to fix a language identifier); a
   type-name collision is a hard generation error, not a silent rename.
 - **Rust `typegen proto` decodes into the `typegen client -l rs` structs** — the
   two are one contract and must compile together, including decoding a populated
-  relationship (`Rel::Doc`) nested at any depth.
+  relationship (`Rel::Doc`) nested at any depth. Guarded structurally (both
+  parse with `syn`, and every decoder builds exactly the fields of its client
+  struct — `typegen::golden_tests`); a real compile of the pair needs a Rust
+  toolchain at test time and is not part of the suite.
+
+## Generated Lua types (`typegen lua`)
+
+- **Class and alias names are `crap.<namespace>.<PascalSlug>`** (and
+  `…global_<slug>` for the global hook contexts), the slug `PascalCase`d but
+  otherwise unchanged — a leading digit stays (`crap.data.2fa`), since a
+  dotted LuaLS type name only has to start with a letter. Hook authors write
+  these names in `---@type` annotations; never rename them.
+- **A key that isn't a bare Lua identifier is a quoted index**: a leading
+  digit, a Lua reserved word, or a LuaLS field-scope word (`public`,
+  `protected`, `private`, `package`) is declared `---@field ["2fa"]? string`
+  and bound `crap.collections["2fa"]`; LuaLS keys it by the string, so
+  `data["2fa"]` is typed. The typing factories are declared on the
+  class-bound accessor local (`function _coll_<slug>.hook(fn) end`), never as
+  `function crap.collections.<slug>.hook` (a syntax error for such a slug, and
+  a field LuaLS refuses to inject for every slug).
+- **A class-name collision is a hard generation error**, as in the client
+  generators: `PascalCase` isn't injective (`a1` / `a_1`), and LuaLS would
+  merge the two declarations.
+- **The output checks clean under LuaLS.** Guarded hermetically against the
+  annotation grammar (`typegen::lua::luals_check`) and by a real
+  `lua-language-server --check` of the kitchen sink plus `types/crap.lua`
+  when one is installed (`CRAP_LUALS`, `PATH`, or a Mason install).
 
 ## gRPC wire format (`proto/content.proto`)
 
@@ -599,9 +693,9 @@ changing a representation is a breaking change to every consumer.
   strip read-denied and hidden fields, judged in the write's locale, falling
   back to the default locale). A surface must never report a raw write result:
   a write's response and a read of the same document have to agree, field for
-  field, or a client's types split in two. `shape_reported` alone is for a
-  *system* report (a job writing on nobody's behalf), where stripping is left
-  to per-subscriber event delivery.
+  field, or a client's types split in two. A live event is never built
+  from that report: it carries the stored row, shaped by `shape_reported`
+  alone, and stripping is left to per-subscriber event delivery.
   - **A user document on an auth response is a normal `Document`.** `Login`,
     `VerifyMfa` and `Me` return it hydrated, field-read-stripped and
     API-hidden-stripped, like every other document on the wire.
@@ -682,6 +776,48 @@ changing a representation is a breaking change to every consumer.
   — one construction point and one enforcement point. Both are fail-closed (an
   access hook that errors or a global returning a row-filter drops the view) and
   a new stream surface must reuse both, never re-derive the access mapping.
+- **Live row constraints are judged against the event's gating snapshot, which
+  is never delivered.** Every published mutation event carries the stored row
+  it concerns (for a delete, the row as removed; for a soft delete, as trashed)
+  in an opaque `gate` snapshot, and `EventGate::evaluate` judges a subscriber's
+  row constraint against it — never against the delivered `data`, which
+  `live_mode` may empty and `before_broadcast` may reshape. The snapshot exists
+  only for that check: the SSE envelope and the gRPC `MutationEvent` are built
+  from an exhaustive destructure of the event that discards it, the type has no
+  accessor, and its `Debug` is redacted. An event without a snapshot is dropped
+  for a constrained view (fail-closed). On the Redis event channel the snapshot
+  travels as an additional `gate` key of the JSON event (absent when there is
+  none; a node that predates it ignores it, and its own events — lacking it —
+  reach only unconstrained subscribers). The transport bounds `data` and the
+  snapshot independently, each on its own JSON size (512 KiB each): an
+  over-cap `data` is dropped (the event then reads as a metadata event), and an
+  over-cap snapshot is dropped (the event then reaches only unconstrained
+  subscribers). Neither part's size may cost the other its place on the wire.
+- **The in-memory constraint evaluator judges a document's whole row.** A
+  `Document` keeps `id` and the timestamps outside its field map; every caller
+  that judges one — populated relationship targets, draft snapshots, event
+  gating snapshots — builds the evaluator's input through `matches_document` /
+  `constraint_row`, so a constraint naming `id` or a timestamp is judged as
+  the SQL `WHERE` judges it. Passing `doc.fields` alone is forbidden.
+- **A `full`-mode payload is stripped per subscriber from the stored row,
+  never for the writer.** A write publishes the row it stored, read-shaped and
+  stripped for no one, as the event's `data`: the `live` filter and
+  `before_broadcast` hooks see it in both modes, the transport carries it only
+  in `full` mode (a `metadata` event drops it after those hooks), and
+  `EventGate::evaluate` strips each subscriber's copy by that subscriber's own
+  field-read access, then of hidden fields, then runs `after_read` — the
+  subscriber's read pipeline. On the Redis channel `data` therefore holds
+  hidden and read-denied values (server-to-server, like the snapshot); every
+  delivery encoder must go through `EventGate::evaluate`, never forward
+  `data`. Stripping for the writer before publishing is forbidden: it would
+  make what one subscriber receives depend on who made the change.
+- **A delete event is gated by the view its row was last in, and every
+  permanent delete publishes one.** The view and snapshot come from the
+  removed row, read on the delete's connection (`read_delete_event`): a
+  trashed row — soft-deleted now, or purged from the trash, or force-deleted
+  while trashed — is gated by `trash`, any other by its status view. The
+  retention purge, the CLI trash purge and "Empty trash" publish through the
+  same event, after their transaction commits.
 - **A live stream fails closed on a lost revocation signal.** Both the gRPC
   `Subscribe` and admin SSE pumps drop the subscriber when the fixed-capacity
   user-invalidation broadcast reports `Lagged` or `Closed` — an overflow may have

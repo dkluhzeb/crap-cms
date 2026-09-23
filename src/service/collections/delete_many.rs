@@ -129,10 +129,9 @@ fn delete_many_pool(
             let mut skipped_count = 0i64;
             let mut upload_keys_to_clean: Vec<String> = Vec::new();
             let mut deleted_ids = Vec::new();
-            // Pre-deletion `_status` per deleted id, in lockstep with
-            // `deleted_ids`, to gate each hard-delete event by the status view
-            // the document was last in.
-            let mut pre_statuses = Vec::new();
+            // Per deleted id, in lockstep with `deleted_ids`: its delete event
+            // (the view the removed row was last in and its gating snapshot).
+            let mut removed = Vec::new();
 
             for id in &doc_ids {
                 opts.deadline
@@ -147,7 +146,7 @@ fn delete_many_pool(
                             upload_keys_to_clean.extend(result.upload_keys);
                         }
                         deleted_ids.push(id.clone());
-                        pre_statuses.push(result.pre_status);
+                        removed.push(result.event);
                     }
                     // A referenced document is skipped (best-effort), not a failure.
                     Err(ServiceError::Referenced { .. }) => {
@@ -171,15 +170,13 @@ fn delete_many_pool(
                     deleted_ids,
                     upload_keys_to_clean,
                 },
-                pre_statuses,
+                removed,
             ))
         },
-        |ctx, (result, pre_statuses)| {
-            let soft_delete = ctx.collection_def().is_ok_and(|d| d.soft_delete);
-
+        |ctx, (result, removed)| {
             // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
-            for (id, pre_status) in result.deleted_ids.iter().zip(pre_statuses) {
-                ctx.publish_delete_event(id, soft_delete, pre_status.clone());
+            for (id, event) in result.deleted_ids.iter().zip(removed) {
+                ctx.publish_delete_event(id, event.clone());
             }
             // Deleting an auth document revokes that user — tear down each
             // affected user's live streams POST-COMMIT, for BOTH hard and soft
@@ -249,7 +246,7 @@ fn delete_many_conn(
 
                 // Gated by `ctx.emit_events`; in conn mode the enqueued event
                 // flushes after the caller's tx commits.
-                ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+                ctx.publish_delete_event(id, result.event);
                 deleted_ids.push(id.clone());
             }
             Err(ServiceError::Referenced { .. }) => {

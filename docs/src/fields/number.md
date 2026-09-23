@@ -37,6 +37,7 @@ crap.fields.number({
 - `min` / `max` validate each individual value
 - `min_rows` / `max_rows` validate the count of values
 - Type generation maps to `number[]` / `Vec<f64>` / `list[float]` etc.
+- Filters match element by element — `{ scores = { greater_than = "90" } }` finds documents whose list holds a value above 90; see [Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element). A has-many field cannot be a sort key.
 
 ## Step
 

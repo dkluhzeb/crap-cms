@@ -5,8 +5,9 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::core::{
     BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
+    flatten_array_sub_fields,
 };
-use crate::db::DbConnection;
+use crate::db::{DbConnection, query::filter::elements::ListLeaf};
 
 use super::types::BlockWalkResult;
 
@@ -16,8 +17,13 @@ use super::types::BlockWalkResult;
 /// At each segment:
 /// - **Blocks/Array** sub-field → add a `json_each()` join, recurse
 /// - **Group** sub-field → extend the JSON path (no join)
-/// - **Scalar** → leaf node, produce `json_extract` expression
+/// - **Scalar** → leaf node, produce `json_extract` expression (a leaf holding
+///   a list — a scalar has-many list, a has-many reference's ids — is flagged
+///   with it)
 /// - **`_block_type`** → special: extract from current nesting level
+///
+/// Layout wrappers (row, collapsible, tabs) are transparent: a row stores
+/// their sub-fields beside its own, so a path names those directly.
 pub(super) fn walk_block_fields(
     conn: &dyn DbConnection,
     segments: &[&str],
@@ -32,9 +38,7 @@ pub(super) fn walk_block_fields(
     let mut json_path_parts: Vec<String> = Vec::new();
 
     // Collect all fields across all block types at the current level.
-    let all_fields: Vec<&FieldDefinition> =
-        block_defs.iter().flat_map(|bd| bd.fields.iter()).collect();
-    let mut current_fields = all_fields;
+    let mut current_fields = block_fields(block_defs);
 
     let mut remaining = segments;
 
@@ -49,7 +53,7 @@ pub(super) fn walk_block_fields(
             }
             let expr = build_block_type_expr(conn, &each_joins, &mut json_path_parts, join_table);
 
-            return Ok((each_joins, expr, Some(FieldType::Text)));
+            return Ok((each_joins, expr, Some(FieldType::Text), None));
         }
 
         let field_def = current_fields
@@ -66,7 +70,7 @@ pub(super) fn walk_block_fields(
                 each_joins.push((source, alias));
                 json_path_parts.clear();
 
-                current_fields = sub.iter().collect();
+                current_fields = flatten_array_sub_fields(sub);
             }
             // Nested blocks → json_each join, descend into every block's fields.
             FieldChildren::Blocks(blocks) => {
@@ -76,16 +80,17 @@ pub(super) fn walk_block_fields(
                 each_joins.push((source, alias));
                 json_path_parts.clear();
 
-                current_fields = blocks.iter().flat_map(|bd| bd.fields.iter()).collect();
+                current_fields = block_fields(blocks);
             }
-            // Group and transparent layout wrappers extend the JSON path (no join).
-            FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) => {
+            // A group extends the JSON path (no join).
+            FieldChildren::Group(sub) => {
                 json_path_parts.push(seg.to_string());
-                current_fields = sub.iter().collect();
+                current_fields = flatten_array_sub_fields(sub);
             }
-            FieldChildren::Tabs(tabs) => {
-                json_path_parts.push(seg.to_string());
-                current_fields = tabs.iter().flat_map(|t| t.fields.iter()).collect();
+            // Never among the flattened fields: a wrapper holds no value of
+            // its own.
+            FieldChildren::Wrapper(_) | FieldChildren::Tabs(_) => {
+                bail!("Layout field '{seg}' has no value of its own to filter on");
             }
             FieldChildren::Leaf => {
                 if !remaining.is_empty() {
@@ -100,12 +105,26 @@ pub(super) fn walk_block_fields(
                     conn.json_extract_expr(&format!("{last_alias}.value"), &path)
                 };
 
-                return Ok((each_joins, expr, Some(field_def.field_type.clone())));
+                return Ok((
+                    each_joins,
+                    expr,
+                    Some(field_def.field_type.clone()),
+                    ListLeaf::of(field_def),
+                ));
             }
         }
     }
 
     bail!("Filter path must end on a scalar field or _block_type, not a container")
+}
+
+/// Every block type's fields, layout wrappers flattened: a block row holds
+/// them all under its own keys.
+fn block_fields(block_defs: &[BlockDefinition]) -> Vec<&FieldDefinition> {
+    block_defs
+        .iter()
+        .flat_map(|bd| flatten_array_sub_fields(&bd.fields))
+        .collect()
 }
 
 fn build_block_type_expr(
@@ -168,7 +187,7 @@ mod tests {
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let (joins, expr, _leaf) =
+        let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["body"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.body')");
@@ -181,7 +200,7 @@ mod tests {
         grp.fields = vec![make_field("title", FieldType::Text, false)];
         let block_defs = vec![make_block_def("rich", vec![grp])];
 
-        let (joins, expr, _leaf) =
+        let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["meta", "title"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.meta.title')");
@@ -198,7 +217,7 @@ mod tests {
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr, _leaf) =
+        let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["nested", "text"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
@@ -221,7 +240,7 @@ mod tests {
         nested.blocks = mid_blocks;
         let block_defs = vec![make_block_def("top", vec![nested])];
 
-        let (joins, expr, _leaf) = walk_block_fields(
+        let (joins, expr, _leaf, _list) = walk_block_fields(
             &conn,
             &["nested", "deeper", "field"],
             &block_defs,
@@ -247,7 +266,7 @@ mod tests {
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr, _leaf) = walk_block_fields(
+        let (joins, expr, _leaf, _list) = walk_block_fields(
             &conn,
             &["nested", "_block_type"],
             &block_defs,
@@ -272,7 +291,7 @@ mod tests {
         sidebar.fields = vec![nested];
         let block_defs = vec![make_block_def("layout", vec![sidebar])];
 
-        let (joins, expr, _leaf) = walk_block_fields(
+        let (joins, expr, _leaf, _list) = walk_block_fields(
             &conn,
             &["sidebar", "nested", "body"],
             &block_defs,
@@ -348,7 +367,7 @@ mod tests {
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let (joins, expr, _leaf) =
+        let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$._block_type')");
@@ -361,7 +380,7 @@ mod tests {
         arr.fields = vec![make_field("name", FieldType::Text, false)];
         let block_defs = vec![make_block_def("list", vec![arr])];
 
-        let (joins, expr, _leaf) =
+        let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["items", "name"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
@@ -382,7 +401,7 @@ mod tests {
         meta.fields = vec![nested];
         let block_defs = vec![make_block_def("rich", vec![meta])];
 
-        let (joins, expr, _leaf) = walk_block_fields(
+        let (joins, expr, _leaf, _list) = walk_block_fields(
             &conn,
             &["meta", "nested", "_block_type"],
             &block_defs,
@@ -395,5 +414,66 @@ mod tests {
             "json_extract(posts_content.data, '$.meta.nested')"
         );
         assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
+    }
+
+    /// A scalar has-many leaf inside a block is flagged as a list, so its
+    /// filter quantifies over the elements of the stored array.
+    #[test]
+    fn walk_block_flags_a_scalar_has_many_leaf_as_a_list() {
+        let (_dir, conn) = test_conn();
+        let tags = FieldDefinition::builder("tags", FieldType::Select)
+            .has_many(true)
+            .build();
+        let block_defs = vec![make_block_def(
+            "card",
+            vec![tags, make_field("body", FieldType::Text, false)],
+        )];
+
+        let (_, expr, leaf, list) =
+            walk_block_fields(&conn, &["tags"], &block_defs, "posts_content").unwrap();
+        assert_eq!(expr, "json_extract(data, '$.tags')");
+        assert_eq!(leaf, Some(FieldType::Select));
+        assert_eq!(list, Some(ListLeaf::Scalar(FieldType::Select)));
+
+        let (_, _, _, list) =
+            walk_block_fields(&conn, &["body"], &block_defs, "posts_content").unwrap();
+        assert!(list.is_none());
+    }
+
+    /// A has-many relationship inside a block is flagged with its id list.
+    #[test]
+    fn walk_block_flags_a_has_many_reference_as_a_list() {
+        let (_dir, conn) = test_conn();
+        let block_defs = vec![make_block_def(
+            "card",
+            vec![make_has_many_field("related", "tags")],
+        )];
+
+        let (_, _, _, list) =
+            walk_block_fields(&conn, &["related"], &block_defs, "posts_content").unwrap();
+        assert_eq!(list, Some(ListLeaf::References { polymorphic: false }));
+    }
+
+    /// Regression: a field inside a layout row of a block was unreachable —
+    /// the walk looked among the block's direct fields and put the row's name
+    /// into the JSON path, though a block row stores the field under its own
+    /// key. The field is named directly, and extracted from its own key.
+    #[test]
+    fn walk_block_reaches_a_field_inside_a_layout_row() {
+        let (_dir, conn) = test_conn();
+        let row = FieldDefinition::builder("layout", FieldType::Row)
+            .fields(vec![make_field("caption", FieldType::Text, false)])
+            .build();
+        let block_defs = vec![make_block_def("image", vec![row])];
+
+        let (joins, expr, leaf, _) =
+            walk_block_fields(&conn, &["caption"], &block_defs, "posts_content").unwrap();
+        assert!(joins.is_empty());
+        assert_eq!(expr, "json_extract(data, '$.caption')");
+        assert_eq!(leaf, Some(FieldType::Text));
+
+        assert!(
+            walk_block_fields(&conn, &["layout", "caption"], &block_defs, "posts_content").is_err()
+        );
     }
 }

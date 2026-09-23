@@ -1,4 +1,5 @@
-//! WHERE clause building and subquery SQL generation.
+//! WHERE clause building: each filter leaf rendered as a column condition,
+//! a list condition or a join-table subquery ([`super::subquery`]).
 //!
 //! Locale resolution is NOT done here: every filter leaf gets its column
 //! expression from [`resolve_filter`], which reads a localized column through
@@ -7,16 +8,19 @@
 use anyhow::Result;
 
 use super::{
-    operators::{build_filter_condition, build_op_condition},
-    resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
+    elements::{ListExpr, build_list_condition},
+    operators::build_op_condition,
+    resolve::{ResolvedFilter, resolve_filter},
+    subquery::{SubqueryScope, build_subquery_sql},
 };
-use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType};
+use crate::core::FieldDefinition;
 use crate::db::{DbConnection, DbValue, Filter, FilterClause, LocaleContext};
 
-// ── Subquery SQL generation ──────────────────────────────────────────────
+// ── Filter leaves ────────────────────────────────────────────────────────
 
 /// Build a complete SQL condition for a single filter, dispatching between
-/// direct column conditions and EXISTS subqueries.
+/// direct column conditions and EXISTS subqueries. A scalar has-many column
+/// quantifies over the elements of its list.
 fn build_filter_sql(
     conn: &dyn DbConnection,
     f: &Filter,
@@ -26,121 +30,31 @@ fn build_filter_sql(
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
     let resolved = resolve_filter(conn, &f.field, slug, fields, locale_ctx)?;
+
     match resolved {
-        ResolvedFilter::Column { expr, field_type } => {
-            build_op_condition(conn, &f.field, &expr, &f.op, field_type.as_ref(), params)
-        }
+        ResolvedFilter::Column {
+            expr,
+            list: Some(leaf),
+            ..
+        } => build_list_condition(conn, f, &ListExpr::new(&expr, &leaf), params),
+        ResolvedFilter::Column {
+            expr, field_type, ..
+        } => build_op_condition(conn, &f.field, &expr, &f.op, field_type.as_ref(), params),
         ResolvedFilter::Subquery {
             ref join_table,
             ref parent_table,
             ref condition,
             ref locale_constraint,
-        } => build_subquery_sql(
-            conn,
-            join_table,
-            parent_table,
-            condition,
-            locale_constraint.as_deref(),
-            f,
-            params,
-        ),
-    }
-}
-
-/// Generate an `EXISTS (SELECT 1 FROM … WHERE …)` clause for a subquery filter.
-///
-/// When `locale_constraint` is `Some(locale)`, an extra `"{join_table}"._locale = ?`
-/// clause is appended so filters on localized junction tables (arrays, blocks,
-/// has-many relationships whose parent is localized) only match rows belonging
-/// to the active locale.
-fn build_subquery_sql(
-    conn: &dyn DbConnection,
-    join_table: &str,
-    parent_table: &str,
-    condition: &SubqueryCondition,
-    locale_constraint: Option<&str>,
-    f: &Filter,
-    params: &mut Vec<DbValue>,
-) -> Result<String> {
-    let op = &f.op;
-    match condition {
-        SubqueryCondition::Column { col, field_type } => {
-            // The same validate-then-quote guard the parent-table path applies,
-            // so a join-table column can't reach SQL unchecked either.
-            let op_sql = build_filter_condition(
-                conn,
-                &Filter {
-                    field: col.clone(),
-                    op: op.clone(),
-                },
-                &f.field,
-                field_type.as_ref(),
-                params,
-            )?;
-            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
-            Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
-            ))
-        }
-        SubqueryCondition::BlockType => {
-            let op_sql = build_op_condition(
-                conn,
-                &f.field,
-                BLOCK_TYPE_KEY,
-                op,
-                Some(&FieldType::Text),
-                params,
-            )?;
-            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
-            Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
-            ))
-        }
-        SubqueryCondition::Json {
-            each_joins,
-            extract_expr,
-            field_type,
         } => {
-            let mut from_parts = vec![format!("\"{}\"", join_table)];
-            for (source, alias) in each_joins {
-                from_parts.push(conn.json_each_source(source, alias));
-            }
-            // A Number sub-field's JSON extract is text on Postgres — cast it
-            // so the comparison is numeric, not lexical (or a type error).
-            let extract = if matches!(field_type.as_ref(), Some(FieldType::Number)) {
-                conn.json_number_cast(extract_expr)
-            } else {
-                extract_expr.clone()
+            let scope = SubqueryScope {
+                join_table,
+                parent_table,
+                locale_constraint: locale_constraint.as_deref(),
             };
-            let op_sql =
-                build_op_condition(conn, &f.field, &extract, op, field_type.as_ref(), params)?;
-            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
-            Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE \"{join_table}\".parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})",
-                from_parts.join(", "),
-            ))
+
+            build_subquery_sql(conn, &scope, condition, f, params)
         }
     }
-}
-
-/// Produce the trailing `AND "{join_table}"._locale = ?` fragment and push
-/// the locale bind parameter, or return `""` when no locale constraint applies.
-fn append_locale_clause(
-    conn: &dyn DbConnection,
-    join_table: &str,
-    locale_constraint: Option<&str>,
-    params: &mut Vec<DbValue>,
-) -> String {
-    let Some(locale) = locale_constraint else {
-        return String::new();
-    };
-
-    params.push(DbValue::Text(locale.to_string()));
-    format!(
-        " AND \"{}\"._locale = {}",
-        join_table,
-        conn.placeholder(params.len())
-    )
 }
 
 // ── WHERE clause building ────────────────────────────────────────────────

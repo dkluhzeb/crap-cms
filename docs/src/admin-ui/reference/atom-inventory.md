@@ -100,11 +100,11 @@ stylesheet via `document.adoptedStyleSheets` on first connect (noted).
 | `<crap-conditions>`          | Display-conditions evaluator                                       | 276  |
 | `<crap-scroll-restore>`      | Scroll position preservation across htmx swaps                     | 241  |
 | `<crap-validate-form>`       | Native HTML5 form-validation surfacing                             | 451  |
-| `<crap-live-events>`         | SSE subscriber for live document updates                           | 315  |
+| `<crap-live-events>`         | SSE subscriber for live document updates                           | 352  |
 | `<crap-array-row>`           | Array/blocks row wrapper; owns row label-watcher logic             | 105  |
 | `<crap-pill-list>`           | Chip cluster; `data-items` JSON; emits `crap:pill-removed`. *Self-styled* | 197  |
 | `<crap-column-picker>`       | Drawer body for picking visible columns; htmx-submits             | 189  |
-| `<crap-filter-builder>`      | Drawer body for `where[…]` filter composition. Exports `OPS_BY_TYPE` | 593  |
+| `<crap-filter-builder>`      | Drawer body for `where[…]` filter composition. Exports `OPS_BY_TYPE` | 710  |
 
 **Stable contract** (page-enhancement common):
 - The host-element tag itself (presence on the page = behaviour active).
@@ -144,7 +144,7 @@ standalone web components mounted by the orchestrator:
 | ---------------------------- | --- | ------------------------------------------------------------------------------------------- |
 | `<crap-list-settings>`       | 163 | Orchestrator: `data-action="open-column-picker"` / `data-action="open-filter-builder"` buttons; htmx-search focus preservation. |
 | `<crap-column-picker>`       | 189 | `data-collection` (slug) + `data-options` (JSON `ColumnOption[]`); fires `crap:column-picker-saved` on htmx success. |
-| `<crap-filter-builder>`      | 593 | `data-collection` (slug) + `data-fields` (JSON `FieldMeta[]`); fires `crap:filter-builder-applied` on apply. Exports `OPS_BY_TYPE` for subclass extension. |
+| `<crap-filter-builder>`      | 710 | `data-collection` (slug) + `data-fields` (JSON `FieldMeta[]`); fires `crap:filter-builder-applied` on apply. Exports `OPS_BY_TYPE` for subclass extension. |
 
 **Orchestration**: the toolbar listens for `data-action` clicks,
 discovers the page's `<crap-drawer>` singleton via `EV_DRAWER_REQUEST`,

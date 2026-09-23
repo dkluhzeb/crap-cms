@@ -45,7 +45,7 @@ impl FieldMeta {
                     .admin
                     .label
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 hidden: field.admin.hidden,
                 readonly: field.admin.readonly,
                 width: field.admin.width.as_ref().map(|w| w.as_str().to_owned()),
@@ -53,12 +53,12 @@ impl FieldMeta {
                     .admin
                     .description
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 placeholder: field
                     .admin
                     .placeholder
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
             },
         }
     }

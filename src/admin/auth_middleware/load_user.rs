@@ -7,12 +7,12 @@
 //! does the load-and-validate dance; this wrapper adds the
 //! admin-only `ui_locale` enrichment.
 
-use serde_json::Value;
-
-use crate::config::LocaleConfig;
-use crate::core::{AuthUser, Registry, auth::Claims};
-use crate::db::{DbPool, query};
-use crate::service::auth::evaluator::load_authenticated_user;
+use crate::{
+    config::LocaleConfig,
+    core::{AuthUser, Registry, auth::Claims},
+    db::DbPool,
+    service::{auth::evaluator::load_authenticated_user, user_settings::load_user_settings},
+};
 
 /// Load the full user document for an authenticated user. Honors
 /// locked + stale-session-version rejections identically to the
@@ -28,15 +28,9 @@ pub(crate) fn load_auth_user(
     let conn = pool.get().ok()?;
     let mut auth = load_authenticated_user(claims, registry, &conn, locale_config)?;
 
-    auth.ui_locale = query::get_user_settings(&conn, &claims.sub)
+    auth.ui_locale = load_user_settings(&conn, &claims.sub)
         .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v.get("ui_locale")
-                .and_then(|l| l.as_str())
-                .map(std::string::ToString::to_string)
-        })
+        .and_then(|settings| settings.ui_locale().map(str::to_string))
         .unwrap_or_else(|| locale_config.default_locale.clone());
 
     Some(auth)

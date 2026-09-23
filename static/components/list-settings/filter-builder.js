@@ -3,7 +3,10 @@
  *
  * Renders a row-per-condition filter UI into itself. Each row is
  * connector + field + op + value + remove. Apply builds a `where[…]`
- * URL and navigates via htmx.
+ * URL and navigates via htmx. A `_status` row joins its neighbour with
+ * OR only when both rows filter `_status` — the server refuses `_status`
+ * in an OR group with other fields — so the OR choice is disabled
+ * (with a hint) wherever it would mix them.
  *
  * Mounted dynamically by `<crap-list-settings>` inside the page-singleton
  * `<crap-drawer>` body. The orchestrator constructs the element with
@@ -96,6 +99,27 @@ export const OPS_BY_TYPE = {
 const NO_VALUE_OPS = new Set(['exists', 'not_exists']);
 
 /**
+ * The draft/published status pseudo-field. The server applies it to the
+ * whole query with AND, so it can share an OR group only with other
+ * `_status` rows — an OR group mixing it with another field is a 400.
+ */
+const STATUS_FIELD = '_status';
+
+/**
+ * Whether joining a row on `field` to the row before it (on `prevField`)
+ * with OR would put `_status` and another field into one OR group. The
+ * builder emits one row per OR bucket, so an OR streak is valid exactly
+ * when every adjacent pair in it agrees on being a `_status` row.
+ *
+ * @param {string} prevField
+ * @param {string} field
+ * @returns {boolean}
+ */
+function orMixesStatus(prevField, field) {
+  return (prevField === STATUS_FIELD) !== (field === STATUS_FIELD);
+}
+
+/**
  * @typedef {{ label: string, value: string }} SelectOption
  *
  * @typedef {{
@@ -133,6 +157,8 @@ export class CrapFilterBuilder extends HTMLElement {
     super();
     /** @type {boolean} */
     this._connected = false;
+    /** @type {HTMLElement|null} */
+    this._statusHint = null;
   }
 
   connectedCallback() {
@@ -179,14 +205,27 @@ export class CrapFilterBuilder extends HTMLElement {
     // apply that filter — which is *not* what the user intended.
     const rowsEl = h(
       'div',
-      { class: 'filter-builder__rows' },
+      {
+        class: 'filter-builder__rows',
+        // Field and connector selects bubble `change` — re-check which
+        // rows may join their neighbour with OR after every edit.
+        onChange: () => this._syncStatusConnectors(rowsEl),
+      },
       presets.map((p) => this._buildRow(fieldMetas, p)),
     );
+
+    this._statusHint = h('p', {
+      class: 'filter-builder__hint',
+      hidden: true,
+      text: t('filter_status_or_mixed'),
+    });
+    this._syncStatusConnectors(rowsEl);
 
     return h(
       'div',
       { class: 'filter-builder' },
       rowsEl,
+      this._statusHint,
       this._buildAddRowButton(rowsEl, fieldMetas),
       this._buildFooter(rowsEl, slug),
     );
@@ -202,7 +241,10 @@ export class CrapFilterBuilder extends HTMLElement {
       {
         type: 'button',
         class: ['button', 'button--ghost', 'button--small'],
-        onClick: () => rowsEl.appendChild(this._buildRow(fieldMetas, null)),
+        onClick: () => {
+          rowsEl.appendChild(this._buildRow(fieldMetas, null));
+          this._syncStatusConnectors(rowsEl);
+        },
       },
       h('span', { class: 'material-symbols-outlined', text: 'add' }),
       ` ${t('add_condition')}`,
@@ -282,12 +324,82 @@ export class CrapFilterBuilder extends HTMLElement {
       {
         type: 'button',
         class: ['button', 'button--ghost', 'button--small', 'filter-builder__remove'],
-        onClick: () => row.remove(),
+        onClick: () => this._removeRow(row),
       },
       h('span', { class: 'material-symbols-outlined', text: 'close' }),
     );
     row.append(connectorSelect, fieldSelect, opSelect, valueWrap, removeBtn);
     return row;
+  }
+
+  /**
+   * Remove a row, then re-check the connectors: the row that moves up
+   * gets a new neighbour.
+   *
+   * @param {HTMLElement} row
+   */
+  _removeRow(row) {
+    const rowsEl = row.parentElement;
+    row.remove();
+
+    if (rowsEl) this._syncStatusConnectors(rowsEl);
+  }
+
+  /**
+   * Keep `_status` out of mixed OR groups: a row whose field disagrees with
+   * its previous row's on being `_status` can only join it with AND. Its OR
+   * option is disabled (an already-chosen OR falls back to AND) and the
+   * builder shows a hint saying why. Runs on every field/connector change,
+   * row add and row remove, and once for the URL-hydrated rows.
+   *
+   * @param {HTMLElement} rowsEl
+   */
+  _syncStatusConnectors(rowsEl) {
+    /** @type {string|null} */
+    let prevField = null;
+    let anyLocked = false;
+
+    for (const row of rowsEl.querySelectorAll('.filter-builder__row')) {
+      const fieldEl = /** @type {HTMLSelectElement|null} */ (
+        row.querySelector('.filter-builder__field')
+      );
+      const connector = /** @type {HTMLSelectElement|null} */ (
+        row.querySelector('.filter-builder__connector')
+      );
+      if (!fieldEl || !connector) continue;
+
+      const field = fieldEl.value;
+
+      const locked = prevField !== null && orMixesStatus(prevField, field);
+      this._lockConnector(connector, locked);
+
+      anyLocked ||= locked;
+      prevField = field;
+    }
+
+    if (this._statusHint) this._statusHint.hidden = !anyLocked;
+  }
+
+  /**
+   * Enable or disable one connector's OR option. Disabling it also resets
+   * a selected OR to AND and titles the select with the reason.
+   *
+   * @param {HTMLSelectElement} connector
+   * @param {boolean} locked
+   */
+  _lockConnector(connector, locked) {
+    const orOption = /** @type {HTMLOptionElement|null} */ (
+      connector.querySelector('option[value="OR"]')
+    );
+    if (orOption) orOption.disabled = locked;
+
+    if (!locked) {
+      connector.removeAttribute('title');
+      return;
+    }
+
+    connector.value = 'AND';
+    connector.title = t('filter_status_or_mixed');
   }
 
   /**
@@ -525,8 +637,11 @@ export class CrapFilterBuilder extends HTMLElement {
     for (let i = 0; i < filters.length; i++) {
       const f = filters[i];
       // First row's connector is irrelevant (no prev row to connect to);
-      // treat it as AND so it starts the buffer cleanly.
-      const isOr = i > 0 && f.connector === 'OR';
+      // treat it as AND so it starts the buffer cleanly. An OR that would
+      // mix `_status` with another field is applied as AND: the row locking
+      // prevents it between neighbouring rows, but a skipped empty row can
+      // still bring two rows together here.
+      const isOr = i > 0 && f.connector === 'OR' && !orMixesStatus(filters[i - 1].field, f.field);
       if (!isOr) flush();
       buffer.push(f);
     }

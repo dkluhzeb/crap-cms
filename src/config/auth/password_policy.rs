@@ -1,6 +1,10 @@
 //! Password strength requirements applied to every password-set path.
 
-use anyhow::{Result, bail};
+use std::{
+    error::Error,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
+
 use serde::{Deserialize, Serialize};
 
 /// Password strength requirements. Applied to all password-setting paths:
@@ -35,35 +39,115 @@ impl Default for PasswordPolicy {
     }
 }
 
+/// The first requirement a password fails. Its `Display` is the English
+/// message every surface reports; [`translation_key`](Self::translation_key)
+/// and [`params`](Self::params) let the admin UI render it in the viewer's
+/// locale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordViolation {
+    /// Fewer than `min` characters.
+    TooShort {
+        min: usize,
+    },
+    /// More than `max` bytes.
+    TooLong {
+        max: usize,
+    },
+    MissingUppercase,
+    MissingLowercase,
+    MissingDigit,
+    MissingSpecial,
+}
+
+impl PasswordViolation {
+    /// The admin translation key for this violation.
+    #[must_use]
+    pub fn translation_key(&self) -> &'static str {
+        match self {
+            Self::TooShort { .. } => "validation.password_min_length",
+            Self::TooLong { .. } => "validation.password_max_bytes",
+            Self::MissingUppercase => "validation.password_uppercase",
+            Self::MissingLowercase => "validation.password_lowercase",
+            Self::MissingDigit => "validation.password_digit",
+            Self::MissingSpecial => "validation.password_special",
+        }
+    }
+
+    /// The interpolation params [`translation_key`](Self::translation_key)'s
+    /// message uses.
+    #[must_use]
+    pub fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::TooShort { min } => vec![("min", min.to_string())],
+            Self::TooLong { max } => vec![("max", max.to_string())],
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl Display for PasswordViolation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::TooShort { min } => write!(f, "Password must be at least {min} characters"),
+            Self::TooLong { max } => write!(f, "Password must be at most {max} bytes"),
+            Self::MissingUppercase => {
+                f.write_str("Password must contain at least one uppercase letter")
+            }
+            Self::MissingLowercase => {
+                f.write_str("Password must contain at least one lowercase letter")
+            }
+            Self::MissingDigit => f.write_str("Password must contain at least one digit"),
+            Self::MissingSpecial => {
+                f.write_str("Password must contain at least one special character")
+            }
+        }
+    }
+}
+
+impl Error for PasswordViolation {}
+
 impl PasswordPolicy {
     /// Validate a password against this policy. Returns `Ok(())` if the password
-    /// meets all requirements, or `Err` with a human-readable message.
+    /// meets all requirements, or the first requirement it fails.
     ///
     /// # Errors
     ///
-    /// Returns a descriptive error if the password violates length, character
-    /// class, or any other configured requirement.
-    pub fn validate(&self, password: &str) -> Result<()> {
+    /// Returns the [`PasswordViolation`] for the first failed length,
+    /// character-class, or other configured requirement.
+    pub fn validate(&self, password: &str) -> Result<(), PasswordViolation> {
         if password.chars().count() < self.min_length {
-            bail!("Password must be at least {} characters", self.min_length);
+            return Err(PasswordViolation::TooShort {
+                min: self.min_length,
+            });
         }
+
         // Max length uses byte length intentionally: Argon2 hashes the raw bytes,
         // so limiting bytes prevents DoS via large multi-byte payloads.
         if password.len() > self.max_length {
-            bail!("Password must be at most {} bytes", self.max_length);
+            return Err(PasswordViolation::TooLong {
+                max: self.max_length,
+            });
         }
-        if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
-            bail!("Password must contain at least one uppercase letter");
+
+        let lacks =
+            |required: bool, class: fn(char) -> bool| required && !password.chars().any(class);
+
+        if lacks(self.require_uppercase, |c: char| c.is_ascii_uppercase()) {
+            return Err(PasswordViolation::MissingUppercase);
         }
-        if self.require_lowercase && !password.chars().any(|c| c.is_ascii_lowercase()) {
-            bail!("Password must contain at least one lowercase letter");
+
+        if lacks(self.require_lowercase, |c: char| c.is_ascii_lowercase()) {
+            return Err(PasswordViolation::MissingLowercase);
         }
-        if self.require_digit && !password.chars().any(|c| c.is_ascii_digit()) {
-            bail!("Password must contain at least one digit");
+
+        if lacks(self.require_digit, |c: char| c.is_ascii_digit()) {
+            return Err(PasswordViolation::MissingDigit);
         }
-        if self.require_special && !password.chars().any(|c| !c.is_alphanumeric()) {
-            bail!("Password must contain at least one special character");
+
+        if lacks(self.require_special, |c: char| !c.is_alphanumeric()) {
+            return Err(PasswordViolation::MissingSpecial);
         }
+
         Ok(())
     }
 }
@@ -187,6 +271,22 @@ mod tests {
         assert!(policy.validate("Abcdefg!").is_err(), "missing digit");
         assert!(policy.validate("Abc12345").is_err(), "missing special");
         assert!(policy.validate("Ac1!").is_err(), "too short");
+    }
+
+    /// Each violation names its own translation key and the params that key
+    /// interpolates, so the admin renders it in the viewer's locale.
+    #[test]
+    fn violations_carry_their_translation_key_and_params() {
+        let policy = PasswordPolicy {
+            min_length: 10,
+            ..Default::default()
+        };
+        let err = policy.validate("short").unwrap_err();
+
+        assert_eq!(err, PasswordViolation::TooShort { min: 10 });
+        assert_eq!(err.translation_key(), "validation.password_min_length");
+        assert_eq!(err.params(), vec![("min", "10".to_string())]);
+        assert_eq!(err.to_string(), "Password must be at least 10 characters");
     }
 
     #[test]

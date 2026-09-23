@@ -73,7 +73,7 @@ impl FieldError {
     /// Chainable on construction:
     ///
     /// ```ignore
-    /// FieldError::with_key(field_name, msg, "validation.length_min")
+    /// FieldError::with_key(field_name, msg, "validation.min_length")
     ///     .with_param("field", display_name)
     ///     .with_param("min", min_len.to_string())
     /// ```
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn with_param_chain_accumulates() {
-        let err = FieldError::with_key("title", "min 5", "validation.length_min")
+        let err = FieldError::with_key("title", "min 5", "validation.min_length")
             .with_param("field", "Title")
             .with_param("min", "5");
         assert_eq!(err.params.get("field").map(String::as_str), Some("Title"));

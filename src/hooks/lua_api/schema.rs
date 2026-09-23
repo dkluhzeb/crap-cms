@@ -241,11 +241,11 @@ fn build_labels(labels: &Labels) -> SchemaLabels {
         singular: labels
             .singular
             .as_ref()
-            .map(|s| s.resolve_default().to_string()),
+            .map(|s| s.resolve_current().to_string()),
         plural: labels
             .plural
             .as_ref()
-            .map(|s| s.resolve_default().to_string()),
+            .map(|s| s.resolve_current().to_string()),
     }
 }
 
@@ -335,7 +335,7 @@ fn build_field(f: &FieldDefinition) -> SchemaField {
             .options
             .iter()
             .map(|o| SchemaOption {
-                label: o.label.resolve_default().to_owned(),
+                label: o.label.resolve_current().to_owned(),
                 value: o.value.clone(),
             })
             .collect(),
@@ -345,7 +345,7 @@ fn build_field(f: &FieldDefinition) -> SchemaField {
             .iter()
             .map(|b| SchemaBlock {
                 block_type: b.block_type.clone(),
-                label: b.label.as_ref().map(|s| s.resolve_default().to_owned()),
+                label: b.label.as_ref().map(|s| s.resolve_current().to_owned()),
                 group: b.group.clone(),
                 image_url: b.image_url.clone(),
                 fields: b.fields.iter().map(build_field).collect(),

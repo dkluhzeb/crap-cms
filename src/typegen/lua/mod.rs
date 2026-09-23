@@ -10,11 +10,17 @@
 //!   fn — no hand-written `.lua` block files.
 //! - **Runtime per-collection** ([`render::render`]) renders a single
 //!   collection's definition table on demand (used by the admin
-//!   live-reload path). Lives in [`render`] + [`field`]. Uses the
+//!   live-reload path). Lives in [`render`] + [`collection_classes`] /
+//!   [`global_classes`] / [`query_classes`] (the per-collection and
+//!   per-global classes, built from the shared [`classes`] blocks) +
+//!   [`accessor`] (the accessor
+//!   stubs and typing factories) + [`field`]. Uses the
 //!   hand-written `field_to_lua_type` mapping in `field.rs` rather
 //!   than the derive surface — kept separate to avoid pulling
-//!   proc-macros into the request hot path. See the docstring at the
-//!   top of `field.rs` for the drift-risk note.
+//!   proc-macros into the request hot path. The classes follow the
+//!   wire shapes of `core::upload::read_shape` — the write shape for
+//!   the input classes, the read shape for the document classes — the
+//!   same source the client generators use.
 //!
 //! ## Derive surface
 //!
@@ -41,12 +47,19 @@
 //!   preamble (`-- ── crap.X ──` divider + intro doc + `--- @class
 //!   crap.X` + `crap.X = {}`).
 
+mod accessor;
 mod annotation;
+mod classes;
+mod collection_classes;
 mod ensure_table;
 mod field;
 mod fn_macro_tests;
 mod fn_render;
 mod fn_spec;
+mod global_classes;
+#[cfg(test)]
+pub(super) mod luals_check;
+mod query_classes;
 mod render;
 mod sentinel_extract;
 mod static_file;
@@ -85,5 +98,14 @@ pub(super) mod test_helpers {
 
     pub fn checkbox_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Checkbox).build()
+    }
+
+    /// One `---@class` annotation block, from its header to the blank line
+    /// after it.
+    pub fn class_block<'a>(out: &'a str, header: &str) -> &'a str {
+        let start = out.find(header).expect("class emitted");
+        let rest = &out[start..];
+
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
     }
 }

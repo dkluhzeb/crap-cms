@@ -93,12 +93,12 @@ fn build_sub_field_base(
             .admin
             .placeholder
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         description: sf
             .admin
             .description
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         readonly: readonly_display(sf, opts.ancestor_readonly, locale_locked),
         localized: sf.localized,
         locale_locked,

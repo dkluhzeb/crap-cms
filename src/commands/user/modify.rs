@@ -7,16 +7,11 @@ use dialoguer::Confirm;
 
 use crate::{
     cli::{self, crap_theme},
-    commands::helpers::create_live_transports,
+    commands::cli_infra,
     config::{CrapConfig, LocaleConfig, PasswordPolicy},
-    core::{
-        CollectionDefinition, Document, Registry,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-        upload::create_storage_with_lease,
-    },
+    core::{CollectionDefinition, Document, Registry},
     db::{DbPool, query},
-    hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError},
+    service::{self, AppInfra, ServiceContext, ServiceError},
 };
 
 use super::helpers::{
@@ -49,36 +44,22 @@ fn confirm_delete(doc: &Document, email: &str, collection: &str) -> Result<bool>
 
 /// Delete through the service layer, like every other surface: a user other
 /// documents reference is refused, a soft-delete collection moves the user to
-/// the trash, delete hooks run and upload files are cleaned up. With live
-/// updates over Redis, the delete reaches `serve`'s subscribers through
-/// `transports` and tears down the user's open streams there. Collection access
-/// rules don't apply to the operator's CLI.
+/// the trash, delete hooks run, upload files are cleaned up and the cache is
+/// cleared. With live updates over Redis, the delete reaches `serve`'s
+/// subscribers through `infra`'s transports and tears down the user's open
+/// streams there. Collection access rules don't apply to the operator's CLI.
 fn delete_through_service(
     p: &UserDeleteParams<'_>,
-    def: &Arc<CollectionDefinition>,
+    infra: &AppInfra,
+    def: &CollectionDefinition,
     id: &str,
-    transports: (Option<SharedEventTransport>, SharedInvalidationTransport),
 ) -> Result<()> {
-    let (event_transport, invalidation_transport) = transports;
-
-    let hook_runner = HookRunner::builder()
-        .config_dir(p.config_dir)
-        .registry(Arc::clone(p.registry))
-        .config(p.config)
-        .invalidation_transport(invalidation_transport.clone())
-        .build()?;
-    let storage =
-        create_storage_with_lease(p.config_dir, &p.config.upload, hook_runner.lua_lease())?;
-
     let ctx = ServiceContext::collection(p.collection, def)
-        .pool(p.pool)
-        .runner(&hook_runner)
+        .infra(infra)
         .override_access(true)
-        .event_transport(event_transport)
-        .invalidation_transport(Some(invalidation_transport))
         .build();
 
-    service::delete_document(&ctx, id, Some(&*storage), Some(&p.config.locale))
+    service::delete_document(&ctx, id, Some(&*infra.storage), Some(&p.config.locale))
         .map_err(ServiceError::into_anyhow)
         .context("Failed to delete user")?;
 
@@ -105,7 +86,7 @@ pub fn user_delete(p: &UserDeleteParams<'_>) -> Result<()> {
 
     // Built — and a configured Redis reached — before the prompt, so a delete
     // that couldn't reach `serve`'s subscribers fails before it is confirmed.
-    let transports = create_live_transports(p.config)?;
+    let infra = cli_infra(p.config_dir, p.registry, p.config, p.pool)?;
 
     if !p.confirm && !confirm_delete(&doc, user_email, p.collection)? {
         cli::info("Aborted.");
@@ -118,7 +99,7 @@ pub fn user_delete(p: &UserDeleteParams<'_>) -> Result<()> {
         .get_collection(p.collection)
         .ok_or_else(|| anyhow!("Collection '{}' not found in registry", p.collection))?;
 
-    delete_through_service(p, def, &doc.id, transports)?;
+    delete_through_service(p, &infra, def, &doc.id)?;
 
     let outcome = if def.soft_delete {
         "Moved user to the trash"

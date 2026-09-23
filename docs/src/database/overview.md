@@ -3,7 +3,7 @@
 Crap CMS supports two first-class database backends:
 
 - **SQLite (default)** — zero configuration, single file, no server to manage, WAL mode for concurrent reads. The right choice for single-node deployments and the vast majority of workloads.
-- **PostgreSQL** — enabled via `--features postgres` at build time. Full feature parity with SQLite: schema sync, migrations, full-text search (via `tsvector`), `_ref_count` delete protection, soft delete, atomic job claiming (`FOR UPDATE SKIP LOCKED`), and all query operators. No feature degradation — pick whichever matches your operational model.
+- **PostgreSQL** — enabled via `--features postgres` at build time. Full feature parity with SQLite: schema sync, migrations, full-text search (via `tsvector`), `_ref_count` delete protection, soft delete, atomic job claiming (`FOR UPDATE SKIP LOCKED`), and all query operators. No feature degradation — pick whichever matches your operational model. Works with PostgreSQL 12 or newer.
 
 The choice primarily comes down to your deployment topology:
 
@@ -78,6 +78,24 @@ CREATE TABLE _global_site_settings (
 );
 ```
 
+### Has-many list columns
+
+A `has_many` text, number, select or radio field stores its values as a JSON
+array in a `TEXT` column — its own column, one per locale when localized, a
+group's `group__field` column, or an array table's column — and inside a
+JSON-stored row (a blocks row, a group or array nested in a row) as a JSON
+array too; so does the id list of a has-many relationship or upload inside an
+array or blocks row. **Such a value is always a JSON array or NULL.** Every
+write path and `crap-cms import` store it that way, and the schema sync repairs
+a value a definition change left behind (see
+[Changing a definition that has data](#changing-a-definition-that-has-data)).
+
+Reads and filters rely on that and do not guard against anything else. If you
+write rows around Crap CMS — raw SQL, an external ETL job — keep these columns
+to JSON arrays (`'["news","tech"]'`, `'[1,2]'`) or NULL: a row holding any
+other text makes every filter on that field **fail with a query error** rather
+than silently match the wrong documents.
+
 ### Junction Tables
 
 Has-many relationships and arrays use join tables:
@@ -121,6 +139,7 @@ On startup, Crap CMS compares Lua definitions against the database schema:
 3. **Missing junction tables** — created for new has-many/array fields
 4. **Removed columns** — logged as warnings (not dropped)
 5. **Missing `_password_hash`** — added to auth collections
+6. **Has-many lists** — a value of a has-many field that isn't stored as a list yet (the field was just switched to `has_many`, or its list retyped) is rewritten as one; see [Changing a definition that has data](#changing-a-definition-that-has-data)
 
 Schema sync runs in a single transaction. If anything fails, all changes are rolled back. The one exception to "nothing outside the transaction" is a [soft-delete transition](../collections/soft-deletes.md#enabling-soft-deletes-on-an-existing-collection) on SQLite, which switches foreign-key enforcement off around that sync and verifies every reference before committing.
 
@@ -153,6 +172,7 @@ table that already holds rows:
 | Field `type` changed | **Boot refused** — migrate the column by hand (copy to a new field, or `ALTER` it yourself), then restart |
 | `unique` added | A managed unique index is created; duplicates already present make the index creation fail — deduplicate first |
 | `required` added | Validation only; no `NOT NULL` is retrofitted |
+| `has_many` turned on (or a has-many list retyped) | Stored values are rewritten as lists once: a single value becomes a one-element list, a list's elements take the field's type, blank text becomes NULL. Text that isn't a JSON array is one value in a document's own column (`'Hello, world'` → `["Hello, world"]`) and comma-separated values inside an array or blocks row, where earlier releases stored a row's list that way (`'a,b'` → `["a","b"]`). A value holding nothing of the field's type (text in a `number` list) **refuses the boot**, naming the collection, column and document — fix or clear it, then restart. The same applies to a relationship or upload inside an array or blocks row turned `has_many` |
 | `default_value` changed | Takes effect immediately — defaults are applied by the application |
 | `localized` toggled | Values carried into the default locale's column and back (see the locale docs) |
 | `soft_delete` enabled | Inline `UNIQUE` replaced by partial indexes (see soft deletes) |

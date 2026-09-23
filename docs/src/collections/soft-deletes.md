@@ -82,6 +82,10 @@ soft_delete_retention = "90d"   -- purge after 90 days
 
 The scheduler runs the purge job periodically. Documents with `_deleted_at` older than the retention period are permanently deleted, including upload file cleanup.
 
+The purge works in batches of at most 500 expired documents (across all collections), each committed on its own — its files deleted and its delete events published after that batch commits — and continues batch by batch until everything expired has been examined, so a large backlog never holds the write lock or its rows in memory all at once. A document still referenced by others is skipped and stays in the trash. A document that fails to purge (its row or files cannot be read, or its delete fails) is logged with its collection and id, left in the trash, and retried on the next purge run; the rest of the purge goes on without it. Once 8 documents of one collection have failed in one run, the rest of that collection is skipped until the next run.
+
+Every purge — the scheduled one, "Empty trash", and the CLI's `trash purge` / `trash empty` — publishes a live delete event for each purged document after it commits, gated by the `trash` view (see [Live Updates](../live-updates/overview.md#access-control)).
+
 If `soft_delete_retention` is not set, trashed documents persist indefinitely until manually purged via the admin UI or CLI.
 
 Supported formats: `"30d"` (days), `"24h"` (hours), or raw seconds.

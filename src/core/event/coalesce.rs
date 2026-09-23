@@ -100,8 +100,10 @@ pub fn drain_and_coalesce(
 }
 
 /// Collapse a batch latest-wins per `(target, collection, document)`; the
-/// survivors keep their own sequence/timestamp/operation and are returned in
-/// the order their final state arrived. Arrival order is the only order that
+/// survivors keep their own sequence/timestamp/operation — and their own
+/// gating snapshot, so the subscriber gate judges the row the surviving event
+/// describes, never one it replaced — and are returned in the order their
+/// final state arrived. Arrival order is the only order that
 /// spans publishers: on a shared transport every node counts its own
 /// `sequence` from 1, so sequence numbers from different nodes don't compare.
 /// A collection and a global sharing a slug stay distinct (targets are
@@ -133,13 +135,18 @@ pub fn coalesce_events(events: Vec<MutationEvent>) -> Vec<MutationEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::{
-        DocumentFields, DocumentId, EventViewMeta, Slug,
-        event::transport::EventTransport,
-        event::{EventOperation, InProcessEventBus, MutationEventInput},
-    };
+    use serde_json::json;
     use tokio::sync::broadcast;
+
+    use super::*;
+    use crate::{
+        core::{
+            Document, DocumentFields, DocumentId, EventGateSnapshot, EventViewMeta, Slug,
+            event::transport::EventTransport,
+            event::{EventOperation, InProcessEventBus, MutationEventInput},
+        },
+        db::{Filter, FilterClause, FilterOp},
+    };
 
     fn mk(sequence: u64, target: EventTarget, collection: &str, id: &str) -> MutationEvent {
         MutationEvent {
@@ -153,6 +160,7 @@ mod tests {
             data: DocumentFields::new(),
             edited_by: None,
             view: Some(EventViewMeta::default()),
+            gate: None,
         }
     }
 
@@ -221,6 +229,39 @@ mod tests {
         );
     }
 
+    /// A gating snapshot for a document whose `owner` is `owner`.
+    fn owned_by(owner: &str) -> EventGateSnapshot {
+        let mut doc = Document::new("a");
+        doc.fields.insert("owner".into(), json!(owner));
+
+        EventGateSnapshot::of(&doc)
+    }
+
+    /// The survivor of a coalesce is judged by ITS OWN stored row: a document
+    /// that moved out of a subscriber's constraint must not be gated by the
+    /// stale row of an event it replaced.
+    #[test]
+    fn survivor_keeps_its_own_gate_snapshot() {
+        let mut before = mk(1, EventTarget::Collection, "posts", "a");
+        before.gate = Some(owned_by("u1"));
+        let mut after = mk(2, EventTarget::Collection, "posts", "a");
+        after.gate = Some(owned_by("u2"));
+
+        let out = coalesce_events(vec![before, after]);
+
+        let owner_u1 = [FilterClause::Single(Filter {
+            field: "owner".into(),
+            op: FilterOp::Equals("u1".into()),
+        })];
+        let gate = out[0].gate.as_ref().expect("survivor carries a snapshot");
+
+        assert_eq!(out.len(), 1);
+        assert!(
+            !gate.matches(&owner_u1, &[]),
+            "the newest row (owner u2) decides, not the replaced one"
+        );
+    }
+
     #[test]
     fn keep_filter_applies_before_coalescing() {
         let (tx, rx) = broadcast::channel(16);
@@ -252,6 +293,7 @@ mod tests {
             data: DocumentFields::new(),
             edited_by: None,
             view: EventViewMeta::default(),
+            gate: None,
         });
     }
 

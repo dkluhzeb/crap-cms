@@ -27,6 +27,7 @@ use crap_cms::{
         serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
+    core::install_crypto_provider,
     scaffold::SAVE_BLUEPRINT_HINT,
 };
 
@@ -34,6 +35,9 @@ use crap_cms::{
 #[cfg(not(tarpaulin_include))]
 #[tokio::main]
 async fn main() {
+    // Before anything can open a TLS connection (a `rediss://` backend).
+    install_crypto_provider();
+
     let cli_args = Cli::parse();
 
     // Box the future: `run` covers every CLI command's startup path, so the

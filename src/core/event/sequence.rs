@@ -54,6 +54,7 @@ pub(crate) fn stamp_event(
         data,
         edited_by,
         view,
+        gate,
     } = input;
 
     MutationEvent {
@@ -69,6 +70,7 @@ pub(crate) fn stamp_event(
         // Producers always carry view metadata; `Some` marks it as present so a
         // consumer can distinguish it from an event that arrived without one.
         view: Some(view),
+        gate,
     }
 }
 
@@ -77,7 +79,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        DocumentFields, DocumentId, Slug,
+        Document, DocumentFields, DocumentId, EventGateSnapshot, EventViewMeta, Slug,
         event::types::{EventOperation, EventTarget},
     };
 
@@ -114,11 +116,16 @@ mod tests {
             document_id: DocumentId::new("id1"),
             data: DocumentFields::new(),
             edited_by: None,
-            view: crate::core::EventViewMeta::default(),
+            view: EventViewMeta::default(),
+            gate: Some(EventGateSnapshot::of(&Document::new("id1"))),
         };
+        let expected_gate = input.gate.clone();
+
         let event = stamp_event(input, 42, "node-a");
+
         assert_eq!(event.sequence, 42);
         assert_eq!(event.publisher, "node-a");
         assert!(!event.timestamp.is_empty());
+        assert_eq!(event.gate, expected_gate, "the gating snapshot is carried");
     }
 }

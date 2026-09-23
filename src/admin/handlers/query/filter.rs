@@ -10,14 +10,18 @@
 //!   independent OR-clauses that are AND'd at the top level. Mirrors
 //!   `FilterClause::Or(Vec<Vec<Filter>>)` once per `G`.
 //!
-//! After the per-param decode pass, each AND-context (top-level + each OR-bucket
-//! independently) is post-processed: same `(field, Equals)` filters collapse to a
-//! single `FilterOp::In(values)`, same `(field, NotEquals)` collapse to `NotIn`. Other
-//! ops stay distinct (they're additive, not redundant).
+//! Rows are combined exactly as written: every row of an AND-context (the
+//! top level, or one OR-bucket) must match — two `equals` rows on the same field
+//! ask for a value (a has-many list: elements) matching both, never "either".
+//! "Any of" is an OR group: `where[or][G][0][f][equals]=a&where[or][G][1][f][equals]=b`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::{self, Display, Formatter},
+};
 
 use crate::{
+    admin::Translations,
     core::collection::CollectionDefinition,
     db::query::{
         FILTER_OP_SPECS, Filter, FilterClause, FilterOp, FilterOpValueKind,
@@ -31,8 +35,8 @@ use super::url::url_decode;
 /// unknown operator. Derived from the canonical operator table
 /// ([`FILTER_OP_SPECS`]) so the message can never advertise an operator the
 /// decoder rejects — minus the list operators (`in`/`not_in`), which the URL
-/// form does not spell directly: repeated `equals`/`not_equals` params
-/// collapse into them instead.
+/// form does not spell: "any of" is an OR group of `equals` rows, "none of"
+/// an AND of `not_equals` rows.
 fn valid_url_ops() -> String {
     FILTER_OP_SPECS
         .iter()
@@ -43,8 +47,8 @@ fn valid_url_ops() -> String {
 }
 
 /// Parse an operator string and value into a `FilterOp` — the canonical grammar
-/// shared with the gRPC/MCP surfaces (`in`/`not_in` are synthesized post-hoc
-/// from repeated `equals`/`not_equals`, so they aren't parsed here).
+/// shared with the gRPC/MCP surfaces (`in`/`not_in` are not spelled in the URL
+/// form, so they aren't parsed here).
 ///
 /// `exists`/`not_exists` accept the admin UI's canonical valueless form
 /// (`where[field][exists]=`) or the literal `true` — anything else is a 400,
@@ -84,7 +88,7 @@ struct ParsedRow {
 
 /// Parse a `where[field][op]` key (the AND form). Returns `(field, op_str)`.
 /// Rejects keys that begin with `where[or]…` so the OR form falls through.
-fn parse_top_key(key: &str) -> Option<(String, String)> {
+pub(super) fn parse_top_key(key: &str) -> Option<(String, String)> {
     let rest = key.strip_prefix("where[")?;
     if rest.starts_with("or][") {
         return None;
@@ -95,7 +99,7 @@ fn parse_top_key(key: &str) -> Option<(String, String)> {
 }
 
 /// Parse a `where[or][G][N][field][op]` key. Returns `(group_index, bucket_index, field, op_str)`.
-fn parse_or_key(key: &str) -> Option<(usize, usize, String, String)> {
+pub(super) fn parse_or_key(key: &str) -> Option<(usize, usize, String, String)> {
     let rest = key.strip_prefix("where[or][")?;
     let (group_str, rest) = rest.split_once("][")?;
     let group: usize = group_str.parse().ok()?;
@@ -169,74 +173,104 @@ fn parse_one_entry(part: &str, valid_cols: &HashSet<String>) -> Result<Option<Pa
     }))
 }
 
-/// Within one AND-context, collapse `(field, Equals)` rows into a single
-/// `FilterOp::In(values)` and `(field, NotEquals)` rows into `NotIn`. Other ops keep
-/// their separate-AND identity (`title contains foo` AND `title contains bar` is
-/// additive — both must match — and shouldn't be silently merged).
-///
-/// Preserves first-seen value order so URL ordering is reflected in SQL params (and
-/// dedupes exact repeats so `?where[t][equals]=A&where[t][equals]=A` doesn't bind two
-/// identical params).
-fn merge_same_field_equals(filters: Vec<Filter>) -> Vec<Filter> {
-    let mut equals: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut not_equals: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // Preserve insertion order of fields for stable output.
-    let mut equals_order: Vec<String> = Vec::new();
-    let mut not_equals_order: Vec<String> = Vec::new();
-    let mut others: Vec<Filter> = Vec::new();
+/// Translation key of the message for a `_status` row inside a mixed OR
+/// group. The admin filter builder shows the same text as its hint for why
+/// such a row can only join its neighbour with AND.
+pub(crate) const STATUS_IN_MIXED_OR_KEY: &str = "filter_status_or_mixed";
 
-    for f in filters {
-        match f.op {
-            FilterOp::Equals(v) => {
-                let entry = equals.entry(f.field.clone()).or_default();
-                if !entry.contains(&v) {
-                    entry.push(v);
-                }
-                if !equals_order.contains(&f.field) {
-                    equals_order.push(f.field);
-                }
-            }
-            FilterOp::NotEquals(v) => {
-                let entry = not_equals.entry(f.field.clone()).or_default();
-                if !entry.contains(&v) {
-                    entry.push(v);
-                }
-                if !not_equals_order.contains(&f.field) {
-                    not_equals_order.push(f.field);
-                }
-            }
-            _ => others.push(f),
+/// Why a list URL's `where[…]` parameters were refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WhereParamsError {
+    /// A `_status` row shares an OR group with another field — see
+    /// `reject_status_in_mixed_or`. The filter builder cannot produce this
+    /// shape, so it reaches the server only from a hand-edited URL; its
+    /// message is translated into the viewer's UI language.
+    StatusInMixedOr,
+    /// Any other invalid entry (malformed key, unknown field or operator,
+    /// system column), with its diagnostic message.
+    Invalid(String),
+}
+
+impl WhereParamsError {
+    /// The message for a viewer whose UI language is `locale`.
+    pub(crate) fn message(&self, translations: &Translations, locale: &str) -> String {
+        match self {
+            Self::StatusInMixedOr => translations.get(locale, STATUS_IN_MIXED_OR_KEY).to_string(),
+            Self::Invalid(message) => message.clone(),
+        }
+    }
+}
+
+impl From<String> for WhereParamsError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl Display for WhereParamsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StatusInMixedOr => f.write_str(
+                "'_status' cannot be combined with other fields in an OR filter group; \
+                 filter the status on its own row",
+            ),
+            Self::Invalid(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Which rows one OR group (`where[or][G]…`) holds: its bucket indices and
+/// whether any row filters `_status` / any other field.
+#[derive(Default)]
+struct OrGroupShape {
+    buckets: HashSet<usize>,
+    has_status: bool,
+    has_other: bool,
+}
+
+/// Refuse `_status` inside an OR group that also filters another field.
+///
+/// `_status` does not ride the generic filter tree: it is lifted into the
+/// typed status filter, which is combined with the whole query by AND. Inside a real OR
+/// (two or more buckets) next to another field that lift changes the meaning
+/// — `(_status = draft) OR (title = B)` would run as `draft AND title = B` —
+/// so the combination is a 400. An OR group of only `_status` rows is a
+/// status union, and a single-bucket group is an AND; both are exact.
+fn reject_status_in_mixed_or(raw_query: &str) -> Result<(), WhereParamsError> {
+    let mut groups: BTreeMap<usize, OrGroupShape> = BTreeMap::new();
+
+    for part in raw_query.split('&') {
+        let key = url_decode(part.split('=').next().unwrap_or(""));
+        let Some((group, bucket, field, _)) = parse_or_key(&key) else {
+            continue;
+        };
+
+        let shape = groups.entry(group).or_default();
+        shape.buckets.insert(bucket);
+
+        if field == "_status" {
+            shape.has_status = true;
+        } else {
+            shape.has_other = true;
         }
     }
 
-    let mut out = Vec::new();
-    out.append(&mut others);
-    for field in equals_order {
-        let mut vals = equals.remove(&field).unwrap_or_default();
-        let op = if vals.len() == 1 {
-            FilterOp::Equals(vals.pop().unwrap())
-        } else {
-            FilterOp::In(vals)
-        };
-        out.push(Filter { field, op });
+    let mixed = groups
+        .values()
+        .any(|g| g.buckets.len() > 1 && g.has_status && g.has_other);
+    if mixed {
+        return Err(WhereParamsError::StatusInMixedOr);
     }
-    for field in not_equals_order {
-        let mut vals = not_equals.remove(&field).unwrap_or_default();
-        let op = if vals.len() == 1 {
-            FilterOp::NotEquals(vals.pop().unwrap())
-        } else {
-            FilterOp::NotIn(vals)
-        };
-        out.push(Filter { field, op });
-    }
-    out
+
+    Ok(())
 }
 
 /// Parse `where[field][op]=value` and `where[or][N][field][op]=value` parameters from
 /// a raw URL query string. Returns the resulting `Vec<FilterClause>` ready for the
 /// service-layer read pipeline. Strict: a present-but-invalid `where[...]` entry
-/// (malformed key, unknown field, system column, unknown operator) is an `Err` so
-/// the caller can return 400 instead of silently rendering wrong/unfiltered results.
+/// (malformed key, unknown field, system column, unknown operator, `_status` in a
+/// mixed OR group) is an `Err` so the caller can return 400 instead of silently
+/// rendering wrong/unfiltered results.
 ///
 /// The per-entry decode rejects system columns (`_*`) so they cannot ride the
 /// generic path; the service-layer read entrypoints
@@ -246,7 +280,9 @@ fn merge_same_field_equals(filters: Vec<Filter>) -> Vec<Filter> {
 pub(crate) fn parse_where_params(
     raw_query: &str,
     def: &CollectionDefinition,
-) -> Result<Vec<FilterClause>, String> {
+) -> Result<Vec<FilterClause>, WhereParamsError> {
+    reject_status_in_mixed_or(raw_query)?;
+
     // The filterable-column set (id + leaf columns incl. `group__sub`, minus
     // array/blocks), computed once and shared across every `where[]` entry.
     let valid_cols = get_valid_filter_columns(def, None);
@@ -276,17 +312,10 @@ pub(crate) fn parse_where_params(
         }
     }
 
-    let mut clauses: Vec<FilterClause> = merge_same_field_equals(top_level)
-        .into_iter()
-        .map(FilterClause::Single)
-        .collect();
+    let mut clauses: Vec<FilterClause> = top_level.into_iter().map(FilterClause::Single).collect();
 
     for (_group_idx, buckets) in or_groups {
-        let groups: Vec<Vec<Filter>> = buckets
-            .into_values()
-            .map(merge_same_field_equals)
-            .filter(|g| !g.is_empty())
-            .collect();
+        let groups: Vec<Vec<Filter>> = buckets.into_values().filter(|g| !g.is_empty()).collect();
         match groups.len() {
             0 => {}
             // One bucket is degenerate (no real OR) — flatten its filters back into
@@ -312,49 +341,6 @@ pub(crate) fn extract_where_params(raw_query: &str) -> String {
         .join("&")
 }
 
-/// Extract `_status` `equals` filter values from a raw URL query string. Returns
-/// `None` if no such param exists; otherwise returns every distinct value found
-/// across both top-level and OR-bucket contexts.
-///
-/// `_status` is a system column (`_*` prefix) and is therefore rejected by
-/// `parse_where_params` and `validate_user_filters`. The admin filter drawer routes
-/// it through this typed extractor instead so it can ride a service-layer typed
-/// param (`FindDocumentsInput::status_filter`) and bypass user-filter validation
-/// safely. The service maps these status values to the requested content views
-/// (`service::requested_views`), which `ViewScope` resolves and gates per view.
-///
-/// Accepts both raw (`where[_status][equals]=draft`) and URL-encoded
-/// (`where%5B_status%5D%5Bequals%5D=draft`) forms. Recognises the OR-clause form
-/// (`where[or][G][N][_status][equals]=…`) too. De-duplicates repeated values so
-/// `?…=draft&…=draft` doesn't bind two identical SQL params.
-pub(crate) fn extract_status_filter(raw_query: &str) -> Option<Vec<String>> {
-    let mut values: Vec<String> = Vec::new();
-    for part in raw_query.split('&') {
-        let Some((key, value)) = part.split_once('=') else {
-            continue;
-        };
-        let decoded_key = url_decode(key);
-        let matches_status = decoded_key == "where[_status][equals]"
-            || (decoded_key.starts_with("where[or][")
-                && decoded_key.ends_with("][_status][equals]"));
-        if !matches_status {
-            continue;
-        }
-        let v = url_decode(value);
-        if v.is_empty() {
-            continue;
-        }
-        if !values.contains(&v) {
-            values.push(v);
-        }
-    }
-    if values.is_empty() {
-        None
-    } else {
-        Some(values)
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -371,9 +357,10 @@ pub(crate) fn extract_status_filter(raw_query: &str) -> Option<Vec<String>> {
     clippy::used_underscore_binding
 )]
 mod tests {
+    use std::path::Path;
+
     use super::*;
-    use crate::core::FieldType;
-    use crate::core::{collection::CollectionDefinition, field::FieldDefinition};
+    use crate::core::{FieldType, collection::CollectionDefinition, field::FieldDefinition};
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -423,7 +410,9 @@ mod tests {
     #[test]
     fn parse_where_invalid_field_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[nonexistent][equals]=foo", &def).unwrap_err();
+        let err = parse_where_params("where[nonexistent][equals]=foo", &def)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("Unknown filter field 'nonexistent'"),
             "unexpected: {err}"
@@ -455,14 +444,18 @@ mod tests {
         }
 
         // A genuinely unknown nested column is still rejected.
-        let err = parse_where_params("where[seo__missing][equals]=x", &def).unwrap_err();
+        let err = parse_where_params("where[seo__missing][equals]=x", &def)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Unknown filter field"), "unexpected: {err}");
     }
 
     #[test]
     fn parse_where_invalid_op_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[title][invalid]=foo", &def).unwrap_err();
+        let err = parse_where_params("where[title][invalid]=foo", &def)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("Unknown filter operator 'invalid'") && err.contains("equals"),
             "unexpected: {err}"
@@ -481,14 +474,18 @@ mod tests {
     #[test]
     fn parse_where_status_non_equals_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[_status][not_equals]=draft", &def).unwrap_err();
+        let err = parse_where_params("where[_status][not_equals]=draft", &def)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("only 'equals'"), "unexpected: {err}");
     }
 
     #[test]
     fn parse_where_system_column_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[_deleted_at][exists]=", &def).unwrap_err();
+        let err = parse_where_params("where[_deleted_at][exists]=", &def)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("system column '_deleted_at'"),
             "unexpected: {err}"
@@ -498,7 +495,9 @@ mod tests {
     #[test]
     fn parse_where_malformed_or_key_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[or][abc][0][title][equals]=x", &def).unwrap_err();
+        let err = parse_where_params("where[or][abc][0][title][equals]=x", &def)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("Malformed filter parameter"),
             "unexpected: {err}"
@@ -508,7 +507,9 @@ mod tests {
     #[test]
     fn parse_where_missing_value_rejected() {
         let def = test_def();
-        let err = parse_where_params("where[title][equals]", &def).unwrap_err();
+        let err = parse_where_params("where[title][equals]", &def)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("missing '='"), "unexpected: {err}");
     }
 
@@ -552,55 +553,59 @@ mod tests {
         }
     }
 
+    /// The operator of every top-level row, in URL order.
+    fn top_level_ops(result: &[FilterClause]) -> Vec<&FilterOp> {
+        result
+            .iter()
+            .map(|clause| match clause {
+                FilterClause::Single(f) => &f.op,
+                other => panic!("expected Single, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Regression: two `equals` rows on one field were merged into `in`, so
+    /// the filter builder's "title is foo AND title is bar" listed documents
+    /// matching either value — and on a has-many list, documents holding
+    /// either element instead of both. AND rows now stay AND.
     #[test]
-    fn parse_where_two_equals_same_field_merges_to_in() {
+    fn parse_where_two_equals_same_field_stay_two_and_rows() {
         let def = test_def();
         let result =
             parse_where_params("where[title][equals]=foo&where[title][equals]=bar", &def).unwrap();
-        assert_eq!(result.len(), 1);
-        match &result[0] {
-            FilterClause::Single(f) => {
-                assert_eq!(f.field, "title");
-                match &f.op {
-                    FilterOp::In(vals) => assert_eq!(vals, &vec!["foo".to_string(), "bar".into()]),
-                    other => panic!("expected In, got {other:?}"),
-                }
-            }
-            _ => panic!("expected Single"),
-        }
+
+        let ops = top_level_ops(&result);
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], FilterOp::Equals(v) if v == "foo"));
+        assert!(matches!(ops[1], FilterOp::Equals(v) if v == "bar"));
     }
 
     #[test]
-    fn parse_where_three_equals_same_field_merges() {
-        let def = test_def();
-        let result = parse_where_params(
-            "where[title][equals]=a&where[title][equals]=b&where[title][equals]=c",
-            &def,
-        )
-        .unwrap();
-        assert_eq!(result.len(), 1);
-        match &result[0] {
-            FilterClause::Single(f) => match &f.op {
-                FilterOp::In(vals) => assert_eq!(vals.len(), 3),
-                other => panic!("expected In, got {other:?}"),
-            },
-            _ => panic!("expected Single"),
-        }
-    }
-
-    #[test]
-    fn parse_where_two_not_equals_same_field_merges_to_not_in() {
+    fn parse_where_two_not_equals_same_field_stay_two_and_rows() {
         let def = test_def();
         let result = parse_where_params(
             "where[title][not_equals]=a&where[title][not_equals]=b",
             &def,
         )
         .unwrap();
+
+        let ops = top_level_ops(&result);
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().all(|op| matches!(op, FilterOp::NotEquals(_))));
+    }
+
+    /// "Any of" is an OR group of `equals` rows.
+    #[test]
+    fn parse_where_any_of_is_an_or_group() {
+        let def = test_def();
+        let result = parse_where_params(
+            "where[or][0][0][status][equals]=a&where[or][0][1][status][equals]=b",
+            &def,
+        )
+        .unwrap();
+
         assert_eq!(result.len(), 1);
-        match &result[0] {
-            FilterClause::Single(f) => assert!(matches!(&f.op, FilterOp::NotIn(v) if v.len() == 2)),
-            _ => panic!("expected Single"),
-        }
+        assert!(matches!(&result[0], FilterClause::Or(alts) if alts.len() == 2));
     }
 
     #[test]
@@ -611,21 +616,6 @@ mod tests {
         let result =
             parse_where_params("where[title][equals]=a&where[title][contains]=b", &def).unwrap();
         assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn parse_where_dedupes_repeated_equals_value() {
-        let def = test_def();
-        // Same value twice → still just one Equals (no In of size 1).
-        let result =
-            parse_where_params("where[title][equals]=foo&where[title][equals]=foo", &def).unwrap();
-        assert_eq!(result.len(), 1);
-        match &result[0] {
-            FilterClause::Single(f) => {
-                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "foo"));
-            }
-            _ => panic!("expected Single"),
-        }
     }
 
     #[test]
@@ -689,10 +679,11 @@ mod tests {
         assert!(matches!(&result[1], FilterClause::Or(g) if g.len() == 2));
     }
 
+    /// Two `equals` rows on one field inside an OR bucket AND together, as
+    /// they do at the top level.
     #[test]
-    fn parse_where_in_merge_within_or_bucket() {
+    fn parse_where_same_field_rows_within_or_bucket_stay_and() {
         let def = test_def();
-        // Within bucket (0,0), two `equals` on `title` collapse to one `In`.
         let result = parse_where_params(
             "where[or][0][0][title][equals]=A&where[or][0][0][title][equals]=B&where[or][0][1][slug][equals]=c",
             &def,
@@ -700,13 +691,10 @@ mod tests {
         match &result[0] {
             FilterClause::Or(alts) => {
                 assert_eq!(alts.len(), 2);
-                let FilterClause::Single(f0) = &alts[0] else {
-                    panic!("bucket 0 collapsed two equals into one In → Single");
+                let FilterClause::And(bucket) = &alts[0] else {
+                    panic!("bucket 0 ANDs its two equals rows, got {:?}", alts[0]);
                 };
-                match &f0.op {
-                    FilterOp::In(vals) => assert_eq!(vals.len(), 2),
-                    other => panic!("expected In inside bucket 0, got {other:?}"),
-                }
+                assert_eq!(bucket.len(), 2);
             }
             _ => panic!("expected Or"),
         }
@@ -752,100 +740,85 @@ mod tests {
         }
     }
 
+    /// Regression: `(_status = draft) OR (title = B)` silently became
+    /// `_status = draft AND title = B` — the status row was lifted out of its
+    /// OR bucket into a global filter. Mixing `_status` with other fields in
+    /// one OR group is refused instead.
     #[test]
-    fn parse_where_or_rejects_system_column() {
+    fn parse_where_rejects_status_mixed_into_an_or_group() {
         let def = test_def();
-        // `_status` is a system column — it's rejected from the generic path even
-        // inside an OR bucket. The typed `extract_status_filter` is the supported
-        // entry point.
-        let result = parse_where_params(
+        let err = parse_where_params(
             "where[or][0][0][_status][equals]=draft&where[or][0][1][title][equals]=B",
             &def,
         )
-        .unwrap();
-        // bucket 0 dropped, only bucket 1 survives → degenerate single bucket
-        // flattens to top-level AND Single.
-        assert_eq!(result.len(), 1);
-        assert!(matches!(&result[0], FilterClause::Single(_)));
+        .unwrap_err();
+
+        assert_eq!(err, WhereParamsError::StatusInMixedOr);
+        assert!(err.to_string().contains("_status"), "{err}");
     }
 
+    /// The mixed-OR refusal renders in the viewer's UI language, from the
+    /// same translation key the filter builder's hint uses.
     #[test]
-    fn extract_status_filter_raw() {
-        assert_eq!(
-            extract_status_filter("page=1&where[_status][equals]=draft"),
-            Some(vec!["draft".to_string()])
-        );
+    fn status_in_mixed_or_message_is_translated() {
+        let translations = Translations::load(Path::new("/nonexistent"));
+        let err = WhereParamsError::StatusInMixedOr;
+
+        let english = err.message(&translations, "en");
+        let german = err.message(&translations, "de");
+
+        assert_eq!(english, translations.get("en", STATUS_IN_MIXED_OR_KEY));
+        assert_eq!(german, translations.get("de", STATUS_IN_MIXED_OR_KEY));
+        assert_ne!(english, STATUS_IN_MIXED_OR_KEY, "key missing from en.json");
+        assert_ne!(german, english, "key not translated in de.json");
     }
 
+    /// Every other refusal keeps its diagnostic message as is.
     #[test]
-    fn extract_status_filter_url_encoded() {
-        assert_eq!(
-            extract_status_filter("page=1&where%5B_status%5D%5Bequals%5D=draft"),
-            Some(vec!["draft".to_string()])
-        );
+    fn invalid_where_message_is_passed_through() {
+        let translations = Translations::load(Path::new("/nonexistent"));
+        let err = WhereParamsError::from("Unknown filter field 'x'".to_string());
+
+        assert_eq!(err.message(&translations, "de"), "Unknown filter field 'x'");
     }
 
+    /// The URL-encoded form is refused the same way.
     #[test]
-    fn extract_status_filter_published() {
-        assert_eq!(
-            extract_status_filter("where[_status][equals]=published"),
-            Some(vec!["published".to_string()])
-        );
+    fn parse_where_rejects_encoded_status_mixed_into_an_or_group() {
+        let def = test_def();
+        let query = "where%5Bor%5D%5B0%5D%5B0%5D%5B_status%5D%5Bequals%5D=draft\
+                     &where%5Bor%5D%5B0%5D%5B1%5D%5Btitle%5D%5Bequals%5D=B";
+
+        assert!(parse_where_params(query, &def).is_err());
     }
 
+    /// An OR group of only `_status` rows is a plain status union, and a
+    /// single-bucket group is an AND — both stay accepted.
     #[test]
-    fn extract_status_filter_absent() {
-        assert_eq!(extract_status_filter("page=1&sort=created_at"), None);
-        assert_eq!(extract_status_filter(""), None);
-    }
+    fn parse_where_accepts_status_only_or_groups_and_single_buckets() {
+        let def = test_def();
 
-    #[test]
-    fn extract_status_filter_only_equals_op() {
-        assert_eq!(
-            extract_status_filter("where[_status][not_equals]=draft"),
-            None
-        );
-    }
-
-    #[test]
-    fn extract_status_filter_empty_value_is_none() {
-        assert_eq!(extract_status_filter("where[_status][equals]="), None);
-    }
-
-    #[test]
-    fn extract_status_filter_ignores_user_status_field() {
-        assert_eq!(extract_status_filter("where[status][equals]=draft"), None);
-    }
-
-    #[test]
-    fn extract_status_filter_collects_from_or_buckets() {
-        // Two `_status` values across OR-buckets widen to `[draft, published]`.
-        let got = extract_status_filter(
+        let status_only = parse_where_params(
             "where[or][0][0][_status][equals]=draft&where[or][0][1][_status][equals]=published",
-        );
-        assert_eq!(
-            got,
-            Some(vec!["draft".to_string(), "published".to_string()])
-        );
-    }
+            &def,
+        )
+        .unwrap();
+        assert!(status_only.is_empty());
 
-    #[test]
-    fn extract_status_filter_collects_mixed_top_and_or() {
-        let got = extract_status_filter(
-            "where[_status][equals]=draft&where[or][0][0][_status][equals]=published",
-        );
-        assert_eq!(
-            got,
-            Some(vec!["draft".to_string(), "published".to_string()])
-        );
-    }
+        let single_bucket = parse_where_params(
+            "where[or][0][0][_status][equals]=draft&where[or][0][0][title][equals]=B",
+            &def,
+        )
+        .unwrap();
+        assert_eq!(single_bucket.len(), 1);
 
-    #[test]
-    fn extract_status_filter_dedupes() {
-        let got = extract_status_filter(
-            "where[_status][equals]=draft&where[or][0][0][_status][equals]=draft",
-        );
-        assert_eq!(got, Some(vec!["draft".to_string()]));
+        let separate_groups = parse_where_params(
+            "where[or][0][0][_status][equals]=draft&where[or][0][1][_status][equals]=published\
+             &where[or][1][0][title][equals]=A&where[or][1][1][title][equals]=B",
+            &def,
+        )
+        .unwrap();
+        assert_eq!(separate_groups.len(), 1);
     }
 }
 

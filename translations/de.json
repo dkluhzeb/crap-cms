@@ -142,7 +142,6 @@
   "error_invalid_credentials": "Ungültige E-Mail oder Passwort",
   "error_internal": "Interner Fehler",
   "error_passwords_no_match": "Passwörter stimmen nicht überein",
-  "error_password_min_length": "Das Passwort muss mindestens 6 Zeichen lang sein",
   "error_reset_link_expired": "Der Link zum Zurücksetzen ist abgelaufen. Bitte fordern Sie einen neuen an.",
   "error_reset_link_invalid": "Ungültiger oder abgelaufener Link. Bitte fordern Sie einen neuen an.",
   "success_password_reset": "Passwort erfolgreich zurückgesetzt",
@@ -212,6 +211,7 @@
   "op_not_exists": "nicht vorhanden",
   "op_and": "UND",
   "op_or": "ODER",
+  "filter_status_or_mixed": "Der Statusfilter lässt sich nicht per ODER mit anderen Feldern verknüpfen – er gilt immer mit UND. Filtern Sie den Status in einer eigenen Zeile.",
 
   "clear_search": "Suche löschen",
   "sort": "Sortieren",
@@ -290,5 +290,17 @@
   "trash_emptied": "Papierkorb geleert",
   "error": "Fehler",
   "no_details": "Keine Details verfügbar.",
-  "loading": "Laden..."
+  "loading": "Laden...",
+
+  "fields": "Felder",
+  "op_like": "ähnlich",
+  "op_is_any_of": "ist eines von",
+  "op_is_none_of": "ist keines von",
+  "validation.password_empty": "Das Passwort darf nicht leer sein",
+  "validation.password_min_length": "Das Passwort muss mindestens {{min}} Zeichen lang sein",
+  "validation.password_max_bytes": "Das Passwort darf höchstens {{max}} Bytes lang sein",
+  "validation.password_uppercase": "Das Passwort muss mindestens einen Großbuchstaben enthalten",
+  "validation.password_lowercase": "Das Passwort muss mindestens einen Kleinbuchstaben enthalten",
+  "validation.password_digit": "Das Passwort muss mindestens eine Ziffer enthalten",
+  "validation.password_special": "Das Passwort muss mindestens ein Sonderzeichen enthalten"
 }

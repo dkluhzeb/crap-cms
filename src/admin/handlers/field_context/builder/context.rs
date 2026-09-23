@@ -57,7 +57,7 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
         .options
         .iter()
         .map(|opt| SelectOption {
-            label: opt.label.resolve_default().to_string(),
+            label: opt.label.resolve_current().to_string(),
             value: opt.value.clone(),
             selected: selected.contains(&opt.value),
             unlisted: false,

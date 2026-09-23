@@ -11,10 +11,8 @@ use crate::core::collection::Auth;
 use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
-        LiveMode, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        SharedStorage,
-        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
+        CollectionDefinition, Document, FieldDefinition, GlobalDefinition, HookRef, Registry,
+        SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
         upload::FALLBACK_MAX_ATTEMPTS,
     },
     db::{
@@ -22,11 +20,10 @@ use crate::{
         query::{LocaleContext, helpers::global_table},
     },
     hooks::HookRunner,
-    hooks::lifecycle::PublishEventInput,
     service::{
         AppInfra, ServiceError, VerificationRecipient,
         hooks::{ReadHooks, WriteHooks},
-        types::{EmailContext, EventQueue, PendingEvent, PendingVerification, VerificationQueue},
+        types::{EmailContext, EventQueue, PendingVerification, VerificationQueue},
     },
 };
 
@@ -441,125 +438,6 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
-    /// Publish (or queue) a mutation event.
-    ///
-    /// When an `event_queue` is set (inside a transaction), the event is
-    /// queued for later flushing. Otherwise it publishes immediately.
-    /// No-op when no event transport is attached.
-    pub fn publish_mutation_event(
-        &self,
-        operation: EventOperation,
-        doc_id: &str,
-        data: &DocumentFields,
-    ) {
-        // Derive the view-gating metadata from the full document *before* the
-        // `live_mode` payload stripping below — the raw `_status`/`_deleted_at`
-        // must survive even when Metadata mode empties the wire `data`, so
-        // subscribers can still be gated by their per-view access.
-        let view = EventViewMeta::from_fields(data);
-
-        self.publish_event_with_view(operation, doc_id, data, view);
-    }
-
-    /// Publish (or queue) a delete event. A delete carries no document payload,
-    /// so its view-gating metadata is supplied explicitly: a soft-delete moves
-    /// the row to trash (gated by `trash`); a hard-delete is gated by the
-    /// document's pre-deletion status.
-    pub fn publish_delete_event(
-        &self,
-        doc_id: &str,
-        soft_delete: bool,
-        pre_status: Option<String>,
-    ) {
-        let view = EventViewMeta::for_delete(soft_delete, pre_status);
-
-        self.publish_event_with_view(EventOperation::Delete, doc_id, &DocumentFields::new(), view);
-    }
-
-    /// Shared body for [`Self::publish_mutation_event`] and
-    /// [`Self::publish_delete_event`]: apply `live_mode` stripping to the wire
-    /// `data`, attach the (unstripped) `view` metadata, then queue or publish.
-    fn publish_event_with_view(
-        &self,
-        operation: EventOperation,
-        doc_id: &str,
-        data: &DocumentFields,
-        view: EventViewMeta,
-    ) {
-        if !self.emit_events {
-            return;
-        }
-
-        if self.event_transport.is_none() {
-            return;
-        }
-
-        let (hooks, live, live_mode) = match &self.def {
-            Def::Collection(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
-            Def::Global(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
-            Def::None => return,
-        };
-
-        let data = if live_mode == LiveMode::Full {
-            data.clone()
-        } else {
-            DocumentFields::new()
-        };
-
-        let edited_by = self.user.map(|u| {
-            let email = u.get_str("email").unwrap_or_default().to_string();
-            EventUser::new(u.id.to_string(), email)
-        });
-
-        let target = match &self.def {
-            Def::Collection(_) | Def::None => EventTarget::Collection,
-            Def::Global(_) => EventTarget::Global,
-        };
-
-        let pending = PendingEvent {
-            target,
-            operation,
-            collection: self.slug.to_string(),
-            document_id: doc_id.to_string(),
-            data,
-            edited_by,
-            hooks,
-            live,
-            view,
-        };
-
-        if let Some(ref queue) = self.event_queue {
-            queue.borrow_mut().push(pending);
-            return;
-        }
-
-        let Some(runner) = self.runner else { return };
-        runner.publish_event(
-            &self.event_transport,
-            &pending.hooks,
-            pending.live.as_ref(),
-            PublishEventInput::builder(pending.target, pending.operation)
-                .collection(pending.collection)
-                .document_id(pending.document_id)
-                .data(pending.data)
-                .edited_by(pending.edited_by)
-                .view(pending.view)
-                .build(),
-        );
-    }
-
-    /// Publish a user-invalidation signal if an invalidation transport is
-    /// configured. Fire-and-forget — no-op when no transport is attached.
-    ///
-    /// Called from the service layer (e.g. `lock_user`, `delete_document_in_conn`
-    /// for hard-delete of auth collections) so every surface that routes
-    /// through the service layer gets live-stream tear-down for free.
-    pub fn publish_user_invalidation(&self, user_id: &str) {
-        if let Some(transport) = &self.invalidation_transport {
-            transport.publish(user_id.to_string());
-        }
-    }
-
     fn def_variant(&self) -> &'static str {
         match &self.def {
             Def::Collection(_) => "Collection",
@@ -857,8 +735,8 @@ impl<'a> ServiceContextBuilder<'a> {
 
     /// Inherit the write-infrastructure fields shared by every pool-mode
     /// `inner_ctx` rebuild — `user`, `override_access`, `cache`,
-    /// `event_transport`, and `password_policy` — from a parent context in one
-    /// call. The caller still supplies the per-op pieces (the transaction `conn`,
+    /// `event_transport`, `emit_events`, and `password_policy` — from a parent
+    /// context in one call. The caller still supplies the per-op pieces (the transaction `conn`,
     /// the `write_hooks`, and any `event_queue` / `locale_config` /
     /// `invalidation_transport`). Centralizing this list means a rebuild can no
     /// longer silently drop a field (e.g. `update_many` previously omitted
@@ -872,6 +750,7 @@ impl<'a> ServiceContextBuilder<'a> {
             .registry(parent.registry)
             .populate_singleflight(parent.populate_singleflight.clone())
             .event_transport(parent.event_transport.clone())
+            .emit_events(parent.emit_events)
             .password_policy(parent.password_policy)
             .image_max_attempts(parent.image_max_attempts)
     }
@@ -909,13 +788,6 @@ impl<'a> ServiceContextBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::core::{
-        CollectionDefinition, DocumentFields,
-        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
-    };
-
     use super::*;
 
     /// Regression: every pool-mode `inner_ctx` rebuild forwards the write-infra
@@ -923,8 +795,6 @@ mod tests {
     /// makes the forward-list a single point, so no rebuild can omit a field.
     #[test]
     fn inherit_write_infra_forwards_write_infra_fields() {
-        use crate::config::PasswordPolicy;
-
         let def = CollectionDefinition::new("users");
         let policy = PasswordPolicy::default();
         let user = Document::builder("u1").build();
@@ -933,6 +803,7 @@ mod tests {
             .user(Some(&user))
             .override_access(true)
             .password_policy(Some(&policy))
+            .emit_events(false)
             .build();
 
         let child = ServiceContext::collection("users", &def)
@@ -940,107 +811,15 @@ mod tests {
             .build();
 
         assert!(child.override_access, "override_access must be forwarded");
+        assert!(
+            !child.emit_events,
+            "emit_events must be forwarded — the inner write decides from it \
+             whether to capture the stored row for its event"
+        );
         assert!(child.user.is_some(), "user must be forwarded");
         assert!(
             child.password_policy.is_some(),
             "password_policy must be forwarded (the field update_many used to drop)"
-        );
-    }
-
-    #[test]
-    fn publish_user_invalidation_is_noop_without_transport() {
-        let def = CollectionDefinition::new("users");
-        let ctx = ServiceContext::collection("users", &def).build();
-
-        ctx.publish_user_invalidation("user-123");
-        assert!(ctx.invalidation_transport.is_none());
-    }
-
-    #[tokio::test]
-    async fn publish_user_invalidation_publishes_when_transport_set() {
-        let bus = Arc::new(InProcessInvalidationBus::new());
-        let transport: SharedInvalidationTransport = bus.clone();
-        let mut rx = transport.subscribe();
-
-        let def = CollectionDefinition::new("users");
-        let ctx = ServiceContext::collection("users", &def)
-            .invalidation_transport(Some(transport))
-            .build();
-
-        ctx.publish_user_invalidation("user-123");
-
-        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
-            .await
-            .expect("recv timed out")
-            .expect("expected an invalidation signal");
-        assert_eq!(received, "user-123");
-    }
-
-    #[test]
-    fn builder_default_transport_is_none() {
-        let def = CollectionDefinition::new("users");
-        let ctx = ServiceContext::collection("users", &def).build();
-        assert!(ctx.invalidation_transport.is_none());
-    }
-
-    /// SAFE-DEFAULT GUARD: `emit_events` defaults to `true` so single ops keep
-    /// publishing their mutation events unless a surface explicitly opts out.
-    #[test]
-    fn builder_emits_events_by_default() {
-        let def = CollectionDefinition::new("posts");
-        assert!(
-            ServiceContext::collection("posts", &def)
-                .build()
-                .emit_events
-        );
-    }
-
-    /// `emit_events(true)` (the default) enqueues the mutation event.
-    #[test]
-    fn emit_events_true_enqueues_mutation_event() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        use crate::core::event::InProcessEventBus;
-
-        let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
-        let queue = Rc::new(RefCell::new(Vec::new()));
-        let def = CollectionDefinition::new("posts");
-        let ctx = ServiceContext::collection("posts", &def)
-            .event_transport(Some(transport))
-            .event_queue(queue.clone())
-            .build();
-
-        ctx.publish_mutation_event(EventOperation::Update, "doc-1", &DocumentFields::new());
-        assert_eq!(
-            queue.borrow().len(),
-            1,
-            "default emit_events should enqueue"
-        );
-    }
-
-    /// `emit_events(false)` makes `publish_mutation_event` a no-op — nothing is
-    /// enqueued even with a transport and queue attached.
-    #[test]
-    fn emit_events_false_suppresses_mutation_event() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        use crate::core::event::InProcessEventBus;
-
-        let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
-        let queue = Rc::new(RefCell::new(Vec::new()));
-        let def = CollectionDefinition::new("posts");
-        let ctx = ServiceContext::collection("posts", &def)
-            .event_transport(Some(transport))
-            .event_queue(queue.clone())
-            .emit_events(false)
-            .build();
-
-        ctx.publish_mutation_event(EventOperation::Update, "doc-1", &DocumentFields::new());
-        assert!(
-            queue.borrow().is_empty(),
-            "emit_events=false must suppress the event"
         );
     }
 

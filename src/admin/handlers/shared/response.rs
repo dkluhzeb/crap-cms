@@ -10,11 +10,12 @@ use axum::{
     http::{HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
+use handlebars::Handlebars;
 use serde::Serialize;
 use serde_json::{Value, json, to_value};
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
-    task::{JoinError, block_in_place, spawn_blocking},
+    task::{JoinError, block_in_place},
 };
 use tracing::error;
 
@@ -28,9 +29,10 @@ use crate::{
     },
     core::{
         CollectionDefinition, GlobalDefinition, auth::AuthUser, richtext::renderer::html_escape,
+        spawn_blocking_in_label_locale,
     },
     hooks::lifecycle::{RenderCrud, RenderInfo, RenderParams},
-    service::ServiceError,
+    service::{AppInfra, ServiceError},
 };
 
 /// Body of the fallback page a failed template render answers with.
@@ -166,6 +168,40 @@ enum RenderFailure {
     TaskDied,
 }
 
+/// Owned inputs for one render on a blocking thread.
+struct RenderJob {
+    infra: Arc<AppInfra>,
+    handlebars: Arc<Handlebars<'static>>,
+    template: String,
+    data: Value,
+    info: RenderInfo,
+    crud: RenderCrud,
+}
+
+/// The blocking half of [`render_blocking`]: `before_render`, then the
+/// template, inside the request's access level (the label locale is entered by
+/// the spawn).
+fn render_job(job: RenderJob) -> Result<String, String> {
+    let RenderJob {
+        infra,
+        handlebars,
+        template,
+        data,
+        info,
+        crud,
+    } = job;
+
+    let data = infra.hook_runner.run_before_render(RenderParams {
+        context: data,
+        info,
+        crud: crud.clone(),
+    });
+
+    let _scope = RenderScope::enter(crud);
+
+    render_template(&handlebars, &template, &data)
+}
+
 /// Run `before_render` and render the template, both on a blocking thread.
 ///
 /// They belong on the *same* hop. Lua can reach the database from either
@@ -179,22 +215,18 @@ async fn render_blocking(
     data: Value,
     crud: RenderCrud,
 ) -> Result<String, RenderFailure> {
-    let infra = Arc::clone(&state.infra);
-    let handlebars = Arc::clone(&state.handlebars);
-    let info = RenderInfo::from_context(&template, &data);
+    let job = RenderJob {
+        infra: Arc::clone(&state.infra),
+        handlebars: Arc::clone(&state.handlebars),
+        info: RenderInfo::from_context(&template, &data),
+        template,
+        data,
+        crud,
+    };
 
-    let rendered = spawn_blocking(move || {
-        let data = infra.hook_runner.run_before_render(RenderParams {
-            context: data,
-            info,
-            crud: crud.clone(),
-        });
-
-        let _scope = RenderScope::enter(crud);
-
-        render_template(&handlebars, &template, &data)
-    })
-    .await;
+    // The viewer's label locale comes along, so labels a hook or
+    // template-data function resolves follow the UI locale like the page's.
+    let rendered = spawn_blocking_in_label_locale(move || render_job(job)).await;
 
     match rendered {
         Ok(Ok(html)) => Ok(html),

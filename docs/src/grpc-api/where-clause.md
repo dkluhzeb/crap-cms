@@ -34,6 +34,12 @@ Multiple fields are combined with AND.
 
 > **Note:** `exists`/`not_exists` accept only the boolean `true`; `{"exists": false}` (or a non-boolean value) is an `INVALID_ARGUMENT` error, never IS NOT NULL. A bare scalar shorthand is treated as `equals`, and JSON numbers and booleans are accepted as well as strings: `{"count": 42}`, `{"active": true}`, and `{"title": "hello"}` all mean `equals`. An unknown operator name is rejected with an `INVALID_ARGUMENT` error (it is never silently dropped).
 
+**Has-many fields** (a `has_many` text/number/select/radio list, a has-many
+relationship's `.id`, a has-many relationship inside an array or blocks row) are matched element by element: `equals`, `like`,
+`contains`, `in`, the comparisons and `exists` match when **some** element
+matches; `not_equals`, `not_in` and `not_exists` when **no** element does. See
+[Query & Filters](../query-and-filters/overview.md#has-many-fields-element-by-element).
+
 ## Field-Type-Aware Coercion
 
 Even though filter values are always sent as JSON strings, they are **coerced to the column's SQL type before binding** — so numeric comparisons are numeric, not lexicographic. Coercion is keyed off the field definition and the operator:

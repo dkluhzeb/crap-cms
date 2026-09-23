@@ -1,12 +1,17 @@
 //! Cross-language helpers shared by every generator backend in
 //! `typegen/`. Includes naming conventions (`to_pascal_case`),
-//! field-classification predicates (`is_optional`, `rel_has_many`),
+//! field-classification predicates (`is_optional`, `rel_has_many`), the
+//! `_status` value set (`DRAFT_STATUS_VALUES`), the populated `collection`
+//! tag (`declares_collection_tag`),
 //! registry traversal (`sorted_*_slugs`), recursive sub-type
 //! collection (`SubTypeKind`, `SubTypeField`, `collect_sub_type_fields`),
 //! and the [`w!`] macro every generator uses to emit lines without
 //! repeating `.expect("write to String")`.
 
-use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, Slug, field_children};
+use crate::core::{
+    FieldChildren, FieldDefinition, FieldType, Registry, Slug, field_children,
+    flatten_array_sub_fields,
+};
 
 /// `writeln!` to a `String` that infallibly succeeds — wraps the
 /// boilerplate `.expect("write to String")` every per-language
@@ -72,13 +77,21 @@ pub(super) fn rel_has_many(field: &FieldDefinition) -> bool {
     field.relationship.as_ref().is_some_and(|rc| rc.has_many)
 }
 
-/// Whether a field is a single-valued (has-one) relationship or upload. Such a
-/// field is optional on read even when `required`: population nulls it when the
-/// target is soft-deleted or access-denied (a has-many drops the entry instead).
-/// Shared by the client type generator and the proto-conversion generator so
-/// their optionality can't drift.
-pub(super) fn is_single_ref(field: &FieldDefinition) -> bool {
-    field.field_type.is_reference() && !rel_has_many(field)
+/// The values a drafts-enabled document's `_status` key takes. Every
+/// generator types `_status` from this one list.
+pub(super) const DRAFT_STATUS_VALUES: [&str; 2] = ["draft", "published"];
+
+/// The key a document populated into a relationship is tagged with: the slug
+/// of its collection.
+pub(super) const COLLECTION_TAG_KEY: &str = "collection";
+
+/// Whether a collection's read document declares the populated
+/// [`COLLECTION_TAG_KEY`] tag: every one does, unless one of its own fields
+/// (layout wrappers are transparent) has that name.
+pub(super) fn declares_collection_tag(read: &[FieldDefinition]) -> bool {
+    !flatten_array_sub_fields(read)
+        .iter()
+        .any(|f| f.name == COLLECTION_TAG_KEY)
 }
 
 /// Get sorted collection slugs from the registry.
@@ -418,5 +431,18 @@ mod tests {
             result.is_empty(),
             "empty Array/Group should not produce sub-types"
         );
+    }
+
+    // ── declares_collection_tag ────────────────────────────────────────
+
+    #[test]
+    fn collection_tag_is_declared_unless_a_field_shadows_it() {
+        assert!(declares_collection_tag(&[text_field("title", true)]));
+        assert!(!declares_collection_tag(&[text_field("collection", false)]));
+
+        let row = FieldDefinition::builder("row", FieldType::Row)
+            .fields(vec![text_field("collection", false)])
+            .build();
+        assert!(!declares_collection_tag(&[row]), "a wrapper is transparent");
     }
 }

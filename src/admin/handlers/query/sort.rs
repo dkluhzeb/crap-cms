@@ -1,6 +1,6 @@
 //! Sort validation and column eligibility checks.
 
-use crate::core::{collection::CollectionDefinition, field::FieldType};
+use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
 
 /// Validate a sort field name against the collection definition.
 /// Strips leading `-` (descending) before validation.
@@ -37,7 +37,8 @@ pub(crate) fn is_meta_column(key: &str, def: &CollectionDefinition) -> bool {
 /// render a clickable sort header). A has-many relationship is
 /// column-eligible but has no parent column, so it is NOT sortable —
 /// rendering a sort header for it produced a 400 on click when the two
-/// predicates disagreed.
+/// predicates disagreed. A scalar has-many list has a column, but its values
+/// have no order, so it is not sortable either.
 ///
 /// `id` is sortable but is not a *column* the list view offers, so it sits
 /// here rather than in [`is_meta_column`].
@@ -48,7 +49,15 @@ pub(crate) fn is_sortable_column(key: &str, def: &CollectionDefinition) -> bool 
         || def
             .fields
             .iter()
-            .any(|f| f.name == key && f.has_parent_column() && is_column_eligible(&f.field_type))
+            .any(|f| f.name == key && is_sortable_field(f))
+}
+
+/// Whether a top-level field orders the list: one value per document in a
+/// column of the collection's own table, of a type the list shows.
+fn is_sortable_field(field: &FieldDefinition) -> bool {
+    field.has_parent_column()
+        && !field.is_has_many_scalar()
+        && is_column_eligible(&field.field_type)
 }
 
 /// Check if a field type is eligible for display as a list column.
@@ -71,7 +80,7 @@ pub(crate) fn is_column_eligible(field_type: &FieldType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{VersionsConfig, collection::CollectionDefinition, field::FieldDefinition};
+    use crate::core::{RelationshipConfig, VersionsConfig};
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -153,8 +162,6 @@ mod tests {
     /// the DB layer when the ORDER BY column doesn't exist.
     #[test]
     fn validate_sort_rejects_has_many_relationship() {
-        use crate::core::field::RelationshipConfig;
-
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
             FieldDefinition {
@@ -177,6 +184,24 @@ mod tests {
             Some("author".to_string()),
             "has-one relationship remains sortable",
         );
+    }
+
+    /// A scalar has-many list has a column but no order: sorting by it would
+    /// order the stored JSON text, so it gets no sort header and `?sort=` on it
+    /// is refused.
+    #[test]
+    fn validate_sort_rejects_scalar_has_many() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .build(),
+            FieldDefinition::builder("status", FieldType::Select).build(),
+        ];
+
+        assert_eq!(validate_sort("-tags", &def), None);
+        assert!(!is_sortable_column("tags", &def));
+        assert_eq!(validate_sort("status", &def), Some("status".to_string()));
     }
 
     #[test]

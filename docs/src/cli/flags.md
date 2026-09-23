@@ -352,7 +352,7 @@ crap-cms user delete [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 | `--id` | — | User ID |
 | `--confirm` | `-y` | Skip confirmation prompt |
 
-Deletes through the same service as the admin UI, and delete hooks run. A user of a soft-delete collection is moved to the trash; `trash purge` later refuses it while other documents still reference it. On other collections, a user other documents still reference is refused right away. With Redis live updates, the user's open live streams on `serve` are closed.
+Deletes through the same service as the admin UI, delete hooks run, and the cache is cleared. A user of a soft-delete collection is moved to the trash; `trash purge` later refuses it while other documents still reference it. On other collections, a user other documents still reference is refused right away. With Redis live updates, the user's open live streams on `serve` are closed.
 
 #### `user lock` / `user unlock`
 
@@ -544,6 +544,8 @@ Missing flags are resolved via interactive prompts. The wizard lists collections
 Generated hooks use per-collection typed annotations for IDE support:
 
 - **Collection hooks:** `crap.hook.Posts`, `crap.hook.global_site_settings`
+- **`after_read` hooks:** `crap.read_hook.Posts`, `crap.read_hook.global_site_settings`
+  (wrapped in `read_hook(fn)`; `ctx.data` is the read document)
 - **Field hooks:** `crap.field_hook.Posts`, `crap.field_hook.global_site_settings`
 - **Condition hooks:** `crap.data.Posts`, `crap.global_data.SiteSettings`
 - **Delete hooks:** generic `crap.HookContext` (data only contains the document ID)
@@ -839,6 +841,8 @@ crap-cms typegen client -l ts                   # types/client.ts
 crap-cms typegen client -l ts,go,py -o ./shared # multiple langs, custom dir
 crap-cms typegen proto -m "crate::proto"        # types/proto.rs
 ```
+
+`typegen lua`, like `typegen client`, fails without writing its types files when two collections, globals or fields would generate the same type name (collections `a1` and `a_1` are both `A1`); rename one. Slugs and field names that aren't Lua identifiers are declared as quoted keys (`crap.collections["2fa"]`, `---@field ["2fa"]? string`) — see [non-identifier names](../lua-api/collections.md#slugs-and-field-names-that-arent-lua-identifiers).
 
 Running `crap-cms typegen` with no subcommand prints help. Under `admin.dev_mode = true`, the `serve` command auto-regenerates `crap.lua` + `hooks.lua` on startup so hook authors don't have to remember `typegen lua` after editing collections — production startups skip this.
 
@@ -1219,6 +1223,8 @@ crap-cms trash restore <COLLECTION> <ID>
 
 Restore a single trashed document back to the active list. Both `COLLECTION` and `ID` are positional arguments.
 
+Restores through the same service as the admin UI's undelete: the collection's `before_change` and `after_change` hooks run with `ctx.operation = "undelete"` (a `before_change` hook that errors leaves the document in the trash), the cache is cleared, and an undelete event is published. With `[live] transport = "redis"` the event reaches `serve`'s subscribers; a configured Redis that can't be reached fails the command before anything is restored. Collection access rules don't apply to the CLI.
+
 #### `trash purge`
 
 ```bash
@@ -1243,6 +1249,8 @@ crap-cms trash empty <COLLECTION> [-y]
 | `--confirm` | `-y` | Required — confirms the destructive operation |
 
 Permanently delete every trashed document in the given collection.
+
+`trash purge` and `trash empty` publish a delete event for each purged document once the purge has committed, gated by the `trash` view, like every other permanent delete (see [Live Updates](../live-updates/overview.md#access-control)). With `[live] transport = "redis"` the events reach `serve`'s subscribers; a configured Redis that can't be reached fails the command before anything is deleted. A preview (`--dry-run`, or no `--confirm`) publishes nothing.
 
 ```bash
 crap-cms trash list

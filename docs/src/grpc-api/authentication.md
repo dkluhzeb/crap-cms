@@ -89,7 +89,9 @@ Do not rely on the claims beyond identifying the user — they are validated ser
 
 ## Creating Users via gRPC
 
-Include `password` in the `data` field of a `Create` request:
+Include `password` in the `data` field of a `Create` request (it is optional —
+a user created without one can only sign in through another auth method until a
+password is set):
 
 ```bash
 grpcurl -plaintext -d '{

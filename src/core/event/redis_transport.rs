@@ -10,7 +10,10 @@
 //! The background task reconnects with exponential backoff on disconnect and
 //! logs errors at `error!` / successful reconnects at `info!`.
 
-use std::time::Duration;
+use std::{
+    io::{self, Write},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use redis::{Client, aio::PubSub};
@@ -23,19 +26,28 @@ use tokio::{
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
-use crate::core::DocumentFields;
-use crate::core::event::{
-    EventReceiver, EventTransport, InvalidationReceiver, InvalidationTransport, MutationEvent,
-    MutationEventInput, RemoteMessage, SequenceGen, event_channel, invalidation_channel,
+use crate::core::{
+    DocumentFields,
+    event::{
+        EventReceiver, EventTransport, InvalidationReceiver, InvalidationTransport, MutationEvent,
+        MutationEventInput, RemoteMessage, SequenceGen, event_channel, invalidation_channel,
+    },
+    redis_client,
 };
 
-/// Ceiling for one published mutation-event payload.
+/// Ceiling for the document data one published mutation event carries.
 ///
 /// Every subscriber on every node receives a copy of what is published, so a
-/// single outsized document would be fanned out across the whole cluster.
-/// 512 KiB is far above any ordinary document and far below the size at which
-/// that fanout becomes a problem.
-const MAX_EVENT_PAYLOAD_BYTES: usize = 512 * 1024;
+/// single outsized `full`-mode document would be fanned out across the whole
+/// cluster. 512 KiB is far above any ordinary document and far below the size
+/// at which that fanout becomes a problem. Measured on the data's own JSON, so
+/// the documented cap holds whatever else the event carries.
+const MAX_EVENT_DATA_BYTES: usize = 512 * 1024;
+
+/// Ceiling for the stored-row gating snapshot one published event carries,
+/// measured on the snapshot's own JSON — bounded independently of the data
+/// so a large row cannot cost a `full`-mode subscriber its document data.
+const MAX_EVENT_SNAPSHOT_BYTES: usize = 512 * 1024;
 
 /// Local mpsc buffer capacity fed from the Redis pub/sub pump.
 /// Matches the default in-process broadcast channel capacity.
@@ -67,7 +79,8 @@ impl RedisEventTransport {
     /// subscriber both derive their channel from it through
     /// [`event_channel`], so they cannot address different channels.
     pub fn new(url: &str, channel_prefix: &str) -> Result<Self> {
-        let client = Client::open(url).context("Failed to create Redis client for events")?;
+        let client =
+            redis_client::open_client(url).context("Failed to create Redis client for events")?;
 
         // Validate connectivity with a PING on a sync connection.
         let mut conn = client
@@ -134,7 +147,8 @@ impl RedisInvalidationTransport {
     ///
     /// Returns an error if the client cannot be built or the `PING` fails.
     pub fn new(url: &str, channel_prefix: &str) -> Result<Self> {
-        let client = Client::open(url).context("Failed to create Redis client for invalidation")?;
+        let client = redis_client::open_client(url)
+            .context("Failed to create Redis client for invalidation")?;
 
         let mut conn = client
             .get_connection()
@@ -171,33 +185,83 @@ impl InvalidationTransport for RedisInvalidationTransport {
     }
 }
 
-/// Encode one mutation event for the wire, downgrading an oversized `full`
-/// payload to the metadata-only form.
+/// Encode one mutation event for the wire, dropping each over-cap part.
 ///
 /// A `full`-mode collection puts the whole document on the wire, and every
-/// subscriber on every node gets a copy. Past the cap the document data is
-/// dropped and the event published without it, so a subscriber still learns
-/// that the document changed — exactly what a metadata-mode event carries —
-/// instead of the cluster fanning out a payload of unbounded size.
+/// subscriber on every node gets a copy; every event also carries the stored
+/// row as its gating snapshot. The two are bounded independently, each on its
+/// own size:
+///
+/// - document data over [`MAX_EVENT_DATA_BYTES`] is dropped, so a subscriber
+///   still learns that the document changed — exactly what a metadata-mode
+///   event carries — instead of the cluster fanning out an unbounded payload;
+/// - a snapshot over [`MAX_EVENT_SNAPSHOT_BYTES`] is dropped, so the event
+///   reaches only subscribers without a row constraint (a constrained view
+///   cannot judge it and drops it — fail-closed).
 fn encode_event(event: &MutationEvent) -> Result<String> {
-    let body = encode_payload(event)?;
+    let data_bytes = json_len(&event.data)?;
+    let gate_bytes = event.gate.as_ref().map(json_len).transpose()?.unwrap_or(0);
 
-    if body.len() <= MAX_EVENT_PAYLOAD_BYTES {
-        return Ok(body);
+    let drop_data = data_bytes > MAX_EVENT_DATA_BYTES;
+    let drop_gate = gate_bytes > MAX_EVENT_SNAPSHOT_BYTES;
+
+    if !drop_data && !drop_gate {
+        return encode_payload(event);
     }
 
+    let mut bounded = event.clone();
+
+    if drop_data {
+        warn_oversized(event, "document data", data_bytes, MAX_EVENT_DATA_BYTES);
+        bounded.data = DocumentFields::new();
+    }
+
+    if drop_gate {
+        warn_oversized(
+            event,
+            "row-constraint snapshot",
+            gate_bytes,
+            MAX_EVENT_SNAPSHOT_BYTES,
+        );
+        bounded.gate = None;
+    }
+
+    encode_payload(&bounded)
+}
+
+/// Log that an event is being published without its over-cap `part`.
+fn warn_oversized(event: &MutationEvent, part: &str, bytes: usize, limit: usize) {
     warn!(
         collection = %event.collection,
         document_id = %event.document_id,
-        bytes = body.len(),
-        limit = MAX_EVENT_PAYLOAD_BYTES,
-        "Mutation event payload is over the publish limit -- publishing it without document data"
+        bytes,
+        limit,
+        "Mutation event {part} is over the publish limit -- publishing the event without it"
     );
+}
 
-    let mut stripped = event.clone();
-    stripped.data = DocumentFields::new();
+/// An `io::Write` sink that only counts the bytes written to it.
+struct ByteCounter(usize);
 
-    encode_payload(&stripped)
+impl Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 += buf.len();
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Length of `value`'s JSON encoding, measured without allocating it.
+fn json_len<T: Serialize>(value: &T) -> Result<usize> {
+    let mut counter = ByteCounter(0);
+
+    serde_json::to_writer(&mut counter, value).context("Failed to measure pub/sub payload")?;
+
+    Ok(counter.0)
 }
 
 /// JSON for one pub/sub payload — the single encoder both channels use.
@@ -227,7 +291,6 @@ fn publish_body(client: &Client, channel: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
-/// Spawn a background task that reads `channel` over Redis pub/sub and
 /// Why a [`pump_messages`] run ended.
 enum PumpOutcome {
     /// The connection broke mid-stream — reconnect after backoff.
@@ -239,6 +302,7 @@ enum PumpOutcome {
     Stop,
 }
 
+/// Spawn a background task that reads `channel` over Redis pub/sub and
 /// forwards decoded `T` values into `tx`. On overflow sends `Lagged`;
 /// `evict_on_overflow` makes an undeliverable overflow terminate the pump
 /// (fail-closed) instead of best-effort dropping — used for the invalidation
@@ -403,7 +467,8 @@ mod tests {
 
     use crate::core::event::sequence::stamp_event;
     use crate::core::event::{EventOperation, EventTarget};
-    use crate::core::{DocumentId, Slug};
+    use crate::core::{Document, DocumentId, EventGateSnapshot, EventViewMeta, Slug};
+    use crate::db::{Filter, FilterClause, FilterOp};
 
     use super::*;
 
@@ -419,7 +484,8 @@ mod tests {
                 document_id: DocumentId::new("doc1"),
                 data: DocumentFields::new(),
                 edited_by: None,
-                view: crate::core::EventViewMeta::default(),
+                view: EventViewMeta::default(),
+                gate: None,
             },
             1,
             "node-a",
@@ -433,10 +499,17 @@ mod tests {
         assert_eq!(back.operation, EventOperation::Create);
     }
 
-    /// Build a stamped event carrying `bytes` worth of document data.
-    fn event_with_payload(bytes: usize) -> MutationEvent {
+    /// Build a stamped event carrying `bytes` worth of document data, and a
+    /// gating snapshot of the same row (`owner = "u1"`, plus `snapshot_bytes`
+    /// of stored body).
+    fn event_with_payload_and_snapshot(bytes: usize, snapshot_bytes: usize) -> MutationEvent {
         let mut data = DocumentFields::new();
         data.insert("body".to_string(), json!("x".repeat(bytes)));
+
+        let mut row = Document::new("doc1");
+        row.fields.insert("owner".to_string(), json!("u1"));
+        row.fields
+            .insert("body".to_string(), json!("x".repeat(snapshot_bytes)));
 
         stamp_event(
             MutationEventInput {
@@ -446,11 +519,158 @@ mod tests {
                 document_id: DocumentId::new("doc1"),
                 data,
                 edited_by: None,
-                view: crate::core::EventViewMeta::default(),
+                view: EventViewMeta::default(),
+                gate: Some(EventGateSnapshot::of(&row)),
             },
             1,
             "node-a",
         )
+    }
+
+    /// Build a stamped event carrying `bytes` worth of document data.
+    fn event_with_payload(bytes: usize) -> MutationEvent {
+        event_with_payload_and_snapshot(bytes, 0)
+    }
+
+    fn owner_is(owner: &str) -> [FilterClause; 1] {
+        [FilterClause::Single(Filter {
+            field: "owner".into(),
+            op: FilterOp::Equals(owner.into()),
+        })]
+    }
+
+    /// The gating snapshot crosses nodes: a subscriber on another node judges
+    /// its row constraint against the same stored row.
+    #[test]
+    fn the_gate_snapshot_survives_the_wire() {
+        let event = event_with_payload(16);
+
+        let body = encode_event(&event).expect("encode");
+        let decoded: MutationEvent = serde_json::from_str(&body).expect("decode");
+
+        assert_eq!(decoded.gate, event.gate);
+        let gate = decoded.gate.expect("snapshot on the wire");
+        assert!(gate.matches(&owner_is("u1"), &[]));
+        assert!(!gate.matches(&owner_is("u2"), &[]));
+    }
+
+    /// Build an event whose document data encodes to exactly `data_json`
+    /// bytes and whose snapshot encodes to exactly `snapshot_json` bytes.
+    fn event_sized(data_json: usize, snapshot_json: usize) -> MutationEvent {
+        let base = event_with_payload_and_snapshot(0, 0);
+        let data_overhead = json_len(&base.data).expect("measure");
+        let gate_overhead = json_len(&base.gate).expect("measure");
+
+        let event = event_with_payload_and_snapshot(
+            data_json - data_overhead,
+            snapshot_json - gate_overhead,
+        );
+
+        assert_eq!(json_len(&event.data).expect("measure"), data_json);
+        assert_eq!(json_len(&event.gate).expect("measure"), snapshot_json);
+
+        event
+    }
+
+    fn encode_decode(event: &MutationEvent) -> MutationEvent {
+        let body = encode_event(event).expect("encode");
+
+        serde_json::from_str(&body).expect("decode")
+    }
+
+    /// The byte counter agrees with the encoder it stands in for.
+    #[test]
+    fn json_len_matches_the_encoded_length() {
+        let event = event_with_payload_and_snapshot(100, 50);
+
+        let encoded = encode_payload(&event).expect("encode");
+
+        assert_eq!(json_len(&event).expect("measure"), encoded.len());
+    }
+
+    /// Dropping over-cap document data keeps the snapshot, so a constrained
+    /// subscriber still learns of the change.
+    #[test]
+    fn an_oversized_payload_keeps_its_gate_snapshot() {
+        let event = event_with_payload(MAX_EVENT_DATA_BYTES + 1);
+
+        let decoded = encode_decode(&event);
+
+        assert!(decoded.data.is_empty());
+        assert_eq!(decoded.gate, event.gate);
+    }
+
+    /// Regression: the cap was measured on the whole event, data and snapshot
+    /// together, so a `full`-mode document well under the documented 512 KiB
+    /// lost its data because its snapshot doubled the event's size. Each part
+    /// is judged on its own size.
+    #[test]
+    fn data_and_snapshot_each_under_their_cap_are_both_kept() {
+        let event = event_sized(300 * 1024, 300 * 1024);
+
+        let decoded = encode_decode(&event);
+
+        assert_eq!(decoded.data.get_str("body"), event.data.get_str("body"));
+        assert_eq!(decoded.gate, event.gate);
+    }
+
+    /// Document data exactly at the cap is kept.
+    #[test]
+    fn document_data_at_the_cap_is_kept() {
+        let event = event_sized(MAX_EVENT_DATA_BYTES, 1024);
+
+        let decoded = encode_decode(&event);
+
+        assert_eq!(decoded.data.get_str("body"), event.data.get_str("body"));
+    }
+
+    /// Document data one byte over the cap is dropped; the snapshot stays.
+    #[test]
+    fn document_data_one_byte_over_the_cap_is_dropped() {
+        let event = event_sized(MAX_EVENT_DATA_BYTES + 1, 1024);
+
+        let decoded = encode_decode(&event);
+
+        assert!(decoded.data.is_empty());
+        assert_eq!(decoded.gate, event.gate);
+    }
+
+    /// A snapshot exactly at its cap is kept.
+    #[test]
+    fn a_gate_snapshot_at_the_cap_is_kept() {
+        let event = event_sized(1024, MAX_EVENT_SNAPSHOT_BYTES);
+
+        let decoded = encode_decode(&event);
+
+        assert_eq!(decoded.gate, event.gate);
+        assert_eq!(decoded.data.get_str("body"), event.data.get_str("body"));
+    }
+
+    /// A snapshot one byte over its cap is dropped — the event still goes out
+    /// (to unconstrained subscribers) with its data, bounded in size.
+    #[test]
+    fn a_gate_snapshot_one_byte_over_the_cap_is_dropped() {
+        let event = event_sized(1024, MAX_EVENT_SNAPSHOT_BYTES + 1);
+
+        let body = encode_event(&event).expect("encode");
+        assert!(body.len() < MAX_EVENT_SNAPSHOT_BYTES, "{}", body.len());
+
+        let decoded: MutationEvent = serde_json::from_str(&body).expect("decode");
+        assert!(decoded.gate.is_none());
+        assert_eq!(decoded.document_id, event.document_id);
+        assert_eq!(decoded.data.get_str("body"), event.data.get_str("body"));
+    }
+
+    /// Both parts over their caps: both are dropped, the event still goes out.
+    #[test]
+    fn data_and_snapshot_both_over_their_caps_are_both_dropped() {
+        let event = event_sized(MAX_EVENT_DATA_BYTES + 1, MAX_EVENT_SNAPSHOT_BYTES + 1);
+
+        let decoded = encode_decode(&event);
+
+        assert!(decoded.data.is_empty());
+        assert!(decoded.gate.is_none());
+        assert_eq!(decoded.sequence, event.sequence);
     }
 
     /// Regression: a `full`-mode event was published whatever its size, so one
@@ -459,10 +679,10 @@ mod tests {
     /// subscriber learns the document changed.
     #[test]
     fn an_oversized_payload_is_published_without_its_document_data() {
-        let event = event_with_payload(MAX_EVENT_PAYLOAD_BYTES + 1);
+        let event = event_with_payload(MAX_EVENT_DATA_BYTES + 1);
 
         let body = encode_event(&event).expect("encode");
-        assert!(body.len() < MAX_EVENT_PAYLOAD_BYTES, "{}", body.len());
+        assert!(body.len() < MAX_EVENT_DATA_BYTES, "{}", body.len());
 
         let decoded: MutationEvent = serde_json::from_str(&body).expect("decode");
         assert!(decoded.data.is_empty());
@@ -477,8 +697,7 @@ mod tests {
     fn a_payload_within_the_cap_keeps_its_document_data() {
         let event = event_with_payload(1024);
 
-        let body = encode_event(&event).expect("encode");
-        let decoded: MutationEvent = serde_json::from_str(&body).expect("decode");
+        let decoded = encode_decode(&event);
 
         assert_eq!(decoded.data.get_str("body"), event.data.get_str("body"));
     }

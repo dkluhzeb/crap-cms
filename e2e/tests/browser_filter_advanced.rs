@@ -12,9 +12,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
+use chromiumoxide::Page;
 use serde_json::json;
 use tokio::time::sleep;
 
@@ -253,6 +253,166 @@ async fn filter_builder_removes_condition() {
     .await;
     let rows: i64 = after.parse().unwrap_or(-1);
     assert_eq!(rows, 1, "should have 1 row after removing one, got {after}");
+
+    server_handle.abort();
+}
+
+// ── filter_builder_keeps_status_out_of_mixed_or_groups ───────────────────
+//
+// The server refuses `_status` inside an OR group that also filters another
+// field (a 400). The builder must never produce that URL: a row can join the
+// row above it with OR only when both filter `_status` or neither does.
+
+/// Posts with drafts enabled, so the builder offers the `_status` field.
+fn make_drafts_filter_def() -> CollectionDefinition {
+    let mut def = make_filter_def();
+    def.versions = Some(VersionsConfig::new(true, 10));
+    def
+}
+
+/// Poll a shadow-DOM snippet on the drawer until it returns `expected`
+/// (~3s budget); returns the last observed value for the assertion.
+async fn wait_drawer_eq(page: &Page, js: &str, expected: &str) -> String {
+    let mut val = browser::shadow_eval(page, "crap-drawer", js).await;
+    for _ in 0..60 {
+        if val == expected {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+        val = browser::shadow_eval(page, "crap-drawer", js).await;
+    }
+    val
+}
+
+/// Click "Add condition" and wait for the row count to reach `expected`.
+async fn add_row(page: &Page, expected: usize) {
+    let _ = browser::shadow_eval(
+        page,
+        "crap-drawer",
+        "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
+    )
+    .await;
+
+    wait_drawer_eq(
+        page,
+        "return String(root.querySelectorAll('.filter-builder__row').length);",
+        &expected.to_string(),
+    )
+    .await;
+}
+
+/// Set row `row`'s `select` (by class) to `value` and fire a bubbling change.
+async fn set_row_select(page: &Page, row: usize, class: &str, value: &str) {
+    let js = format!(
+        "const sel = root.querySelectorAll('.filter-builder__row')[{row}] \
+         .querySelector('.{class}'); \
+         sel.value = '{value}'; \
+         sel.dispatchEvent(new Event('change', {{ bubbles: true }})); \
+         return '';"
+    );
+    let _ = browser::shadow_eval(page, "crap-drawer", &js).await;
+}
+
+/// `connector value|OR disabled|hint hidden` for row `row`.
+fn row_state_js(row: usize) -> String {
+    format!(
+        "const c = root.querySelectorAll('.filter-builder__row')[{row}] \
+         .querySelector('.filter-builder__connector'); \
+         const hint = root.querySelector('.filter-builder__hint'); \
+         return c.value + '|' + c.querySelector('option[value=\"OR\"]').disabled \
+         + '|' + hint.hidden;"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_builder_keeps_status_out_of_mixed_or_groups() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_drafts_filter_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "bfiltst@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "bfiltst@test.com");
+
+    seed_post(&app, "First", "draft");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "bfiltst@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    browser::wait_for_element(&page, "[data-action=\"open-filter-builder\"]").await;
+    browser::wait_for_js(&page, "customElements.get('crap-list-settings')").await;
+
+    page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
+        .await
+        .unwrap();
+
+    wait_drawer_eq(
+        &page,
+        "return root.querySelector('.filter-builder > button.button--ghost') ? 'true' : 'false';",
+        "true",
+    )
+    .await;
+
+    // Two `title` rows joined with OR: allowed, no hint.
+    add_row(&page, 1).await;
+    add_row(&page, 2).await;
+    set_row_select(&page, 0, "filter-builder__field", "title").await;
+    set_row_select(&page, 1, "filter-builder__field", "title").await;
+    set_row_select(&page, 1, "filter-builder__connector", "OR").await;
+
+    let state = wait_drawer_eq(&page, &row_state_js(1), "OR|false|true").await;
+    assert_eq!(state, "OR|false|true", "title OR title must stay allowed");
+
+    // Switching the OR'd row to `_status` forces AND and shows the hint.
+    set_row_select(&page, 1, "filter-builder__field", "_status").await;
+
+    let state = wait_drawer_eq(&page, &row_state_js(1), "AND|true|false").await;
+    assert_eq!(
+        state, "AND|true|false",
+        "a _status row must not join a title row with OR"
+    );
+
+    // A `_status` row below another `_status` row may use OR again.
+    add_row(&page, 3).await;
+    set_row_select(&page, 2, "filter-builder__field", "_status").await;
+    set_row_select(&page, 2, "filter-builder__connector", "OR").await;
+
+    let state = wait_drawer_eq(&page, &row_state_js(2), "OR|false|false").await;
+    assert_eq!(
+        state, "OR|false|false",
+        "_status OR _status must stay allowed"
+    );
+
+    // Removing the middle row puts the OR'd `_status` row under `title`:
+    // it falls back to AND.
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "root.querySelectorAll('.filter-builder__row')[1] \
+         .querySelector('button.filter-builder__remove').click(); return '';",
+    )
+    .await;
+
+    let state = wait_drawer_eq(&page, &row_state_js(1), "AND|true|false").await;
+    assert_eq!(
+        state, "AND|true|false",
+        "removing a row must re-check the new neighbours"
+    );
+
+    // Back to `title`: OR is offered again and the hint goes away.
+    set_row_select(&page, 1, "filter-builder__field", "title").await;
+
+    let state = wait_drawer_eq(&page, &row_state_js(1), "AND|false|true").await;
+    assert_eq!(
+        state, "AND|false|true",
+        "title below title must allow OR again"
+    );
 
     server_handle.abort();
 }

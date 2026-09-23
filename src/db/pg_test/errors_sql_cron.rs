@@ -5,11 +5,12 @@
 
 use serde_json::json;
 
-use super::{pg_test_pool, unique_slug};
+use super::{pg_test_pool, support::no_locale, unique_slug};
 use crate::{
-    core::FieldType,
+    core::{FieldType, Registry},
     db::{
         DbConnection, DbValue, FilterOp,
+        migrate::sync_all,
         query::{column_read_expr, filter::build_op_condition, jobs::try_claim_cron_window},
     },
     service::ServiceError,
@@ -185,12 +186,14 @@ async fn pg_the_cron_window_claim_is_atomic() {
         return;
     };
 
+    // The system tables come from the schema sync, under its advisory lock —
+    // the way every node creates them. A bare `CREATE TABLE IF NOT EXISTS`
+    // here raced a concurrent test's sync on a fresh database: Postgres's
+    // IF NOT EXISTS is not atomic against a parallel create of the same
+    // name and fails on the catalog's unique index instead.
+    sync_all(&pool, &Registry::default(), &no_locale()).expect("schema sync");
+
     let conn = pool.get().expect("conn");
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS _crap_cron_fired (slug TEXT PRIMARY KEY, fired_at TEXT)",
-        &[],
-    )
-    .unwrap();
 
     let slug = unique_slug("cron");
 

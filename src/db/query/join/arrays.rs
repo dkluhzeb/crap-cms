@@ -1,20 +1,25 @@
 //! Array field join table operations.
 
-use anyhow::Result;
-use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     slice,
 };
 
-use crate::core::{
-    FieldChildren, FieldDefinition, FieldType, field::flatten_array_sub_fields, field_children,
-};
-use crate::db::{
-    DbConnection, DbRow, DbValue,
-    query::{
-        helpers::{column_value, companion_writes, decode_value, join_table, tz_column},
-        join::store_nested_values,
+use anyhow::Result;
+use serde_json::{Map, Value, from_str};
+
+use crate::{
+    core::{
+        FieldChildren, FieldDefinition, FieldType, field::flatten_array_sub_fields, field_children,
+    },
+    db::{
+        DbConnection, DbRow, DbValue,
+        query::{
+            helpers::{
+                companion_writes, decode_row_value, join_table, row_column_value, tz_column,
+            },
+            join::store_nested_values,
+        },
     },
 };
 
@@ -43,7 +48,7 @@ fn coerce_array_field(sf: &FieldDefinition, row: &HashMap<String, Value>) -> DbV
 
     let zone = row.get(&tz_column(&sf.name)).and_then(Value::as_str);
 
-    column_value(sf, &value, zone)
+    row_column_value(sf, &value, zone)
 }
 
 /// The stored columns of an array's flattened sub-fields, in the order
@@ -329,7 +334,7 @@ pub fn find_array_rows_batch(
 /// Whether a sub-field column holds a composite (a group, a nested array or
 /// blocks, a layout wrapper) stored whole as JSON, parsed on read. A leaf's
 /// column — a JSON field's text, a has-many reference's id list included —
-/// decodes as every leaf column does ([`decode_value`]).
+/// decodes as every row leaf does ([`decode_row_value`]).
 fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
     matches!(
         sf.field_type,
@@ -366,12 +371,12 @@ pub(crate) fn reconstruct_array_row(
 
         let json_val = match val {
             DbValue::Text(s) if sub_field_stores_json(sf) => {
-                serde_json::from_str(&s).unwrap_or(Value::String(s))
+                from_str(&s).unwrap_or(Value::String(s))
             }
             DbValue::Blob(_) => Value::Null,
             // A leaf column decodes as a main-table column does: a checkbox as
             // a boolean, a whole number as an integer, JSON text parsed.
-            other => decode_value(sf, &other.to_json()),
+            other => decode_row_value(sf, &other.to_json()),
         };
         map.insert(sf.name.clone(), json_val);
 

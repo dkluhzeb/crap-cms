@@ -8,7 +8,10 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, anyhow};
 use redis::{Client, Commands, Connection};
 
-use crate::core::cache::{CacheBackend, cache_clear_pattern, cache_key, redis_entry_ttl_secs};
+use crate::core::{
+    cache::{CacheBackend, cache_clear_pattern, cache_key, redis_entry_ttl_secs},
+    redis_client,
+};
 
 /// Redis-backed cache with key prefixing and connection reuse.
 ///
@@ -37,7 +40,7 @@ impl RedisCache {
     /// Validates the connection at creation time — returns an error if Redis
     /// is unreachable.
     pub fn new(url: &str, prefix: &str, max_age_secs: u64) -> Result<Self> {
-        let client = Client::open(url).context("Failed to create Redis client")?;
+        let client = redis_client::open_client(url).context("Failed to create Redis client")?;
 
         let mut conn = client
             .get_connection()

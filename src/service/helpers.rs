@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 
 use crate::{
-    config::PasswordPolicy,
+    config::{PasswordPolicy, PasswordViolation},
     core::{
         Document, FieldDefinition, FieldDenial, ReqContext,
         collection::Hooks,
@@ -57,8 +57,8 @@ pub(crate) fn hydrate_reported(
 
 /// Shape a reported document as a read returns it: an upload document's
 /// per-size values folded into `sizes`. Strips nothing — a write strips for its
-/// caller afterwards ([`strip_reported`]), and a system report leaves stripping
-/// to per-subscriber event delivery.
+/// caller afterwards ([`strip_reported`]), and a live event's document, shaped
+/// here by the publisher, is stripped per subscriber on delivery.
 pub(crate) fn shape_reported(ctx: &ServiceContext, doc: &mut Document) {
     let Ok(def) = ctx.collection_def() else {
         return;
@@ -183,7 +183,11 @@ pub(crate) fn validate_password_policy(
     if pw.is_empty() {
         return match empty {
             EmptyPassword::MeansNoChange => Ok(()),
-            EmptyPassword::IsRejected => Err(password_error("Password must not be empty")),
+            EmptyPassword::IsRejected => Err(password_error(FieldError::with_key(
+                "password",
+                "Password must not be empty",
+                "validation.password_empty",
+            ))),
         };
     }
 
@@ -192,7 +196,7 @@ pub(crate) fn validate_password_policy(
 
     policy
         .validate(pw)
-        .map_err(|e| password_error(e.to_string()))
+        .map_err(|violation| password_error(violation_error(violation)))
 }
 
 /// What a present-but-empty `password` means to the caller.
@@ -206,12 +210,21 @@ pub(crate) enum EmptyPassword {
     IsRejected,
 }
 
-fn password_error(message: impl Into<String>) -> ServiceError {
-    ServiceError::Validation(ValidationError::new(vec![FieldError::with_key(
-        "password",
-        message,
-        "validation.password_policy",
-    )]))
+/// The `password` field error for a policy violation: its English message,
+/// plus the translation key and params the admin renders it with.
+fn violation_error(violation: PasswordViolation) -> FieldError {
+    violation.params().into_iter().fold(
+        FieldError::with_key(
+            "password",
+            violation.to_string(),
+            violation.translation_key(),
+        ),
+        |error, (name, value)| error.with_param(name, value),
+    )
+}
+
+fn password_error(error: FieldError) -> ServiceError {
+    ServiceError::Validation(ValidationError::new(vec![error]))
 }
 
 /// Run after-change hooks and return the request-scoped context.
@@ -695,7 +708,11 @@ mod tests {
                 assert_eq!(ve.errors[0].field, "password");
                 assert_eq!(
                     ve.errors[0].key.as_deref(),
-                    Some("validation.password_policy")
+                    Some("validation.password_min_length")
+                );
+                assert_eq!(
+                    ve.errors[0].params.get("min").map(String::as_str),
+                    Some("8")
                 );
             }
             other => panic!("expected Validation, got {other:?}"),

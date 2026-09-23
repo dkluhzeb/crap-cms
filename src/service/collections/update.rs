@@ -4,7 +4,7 @@ use crate::{
     core::event::EventOperation,
     service::{
         ServiceContext, ServiceError, WriteInput, WriteResult, invalidate_user_streams_if_auth,
-        run_pool_write, update_document_in_conn,
+        run_pool_write, update_document_gated,
     },
 };
 
@@ -38,17 +38,19 @@ fn update_document_pool(
     id: &str,
     input: WriteInput<'_>,
 ) -> Result<WriteResult> {
-    run_pool_write(
+    let (result, _) = run_pool_write(
         ctx,
         None,
-        |inner| update_document_in_conn(inner, id, input),
-        |ctx, result| {
-            ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+        |inner| update_document_gated(inner, id, input),
+        |ctx, (result, row)| {
+            ctx.publish_mutation_event(EventOperation::Update, &result.0.id, row.clone());
             // Editing an auth document can change a user's access — tear down
             // their live streams post-commit.
             invalidate_user_streams_if_auth(ctx, &result.0.id);
         },
-    )
+    )?;
+
+    Ok(result)
 }
 
 /// Conn-based update: uses existing connection (Lua CRUD path).
@@ -57,11 +59,11 @@ fn update_document_conn(
     id: &str,
     input: WriteInput<'_>,
 ) -> Result<WriteResult> {
-    let result = update_document_in_conn(ctx, id, input)?;
+    let (result, row) = update_document_gated(ctx, id, input)?;
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, row);
     invalidate_user_streams_if_auth(ctx, &result.0.id);
 
     Ok(result)

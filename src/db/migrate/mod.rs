@@ -8,6 +8,7 @@ mod collection;
 #[cfg(test)]
 pub(crate) mod collection;
 mod global;
+mod has_many_lists;
 pub mod helpers;
 mod identifier_check;
 mod legacy_timestamps;

@@ -19,13 +19,18 @@
 
 use std::sync::Arc;
 
-use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::DocumentFields;
-use crap_cms::core::Registry;
-use crap_cms::core::collection::CollectionDefinition;
-use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::db::{DbConnection, DbPool, DbValue, FindQuery, migrate, ops, pool, query};
-use crap_cms::scheduler::purge_soft_deleted;
+use crap_cms::{
+    config::{CrapConfig, LocaleConfig},
+    core::{
+        CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Registry,
+        RelationshipConfig, upload::CollectionUpload,
+    },
+    db::{
+        BoxedConnection, DbConnection, DbPool, DbValue, Filter, FilterClause, FilterOp, FindQuery,
+        migrate, ops, pool, query,
+    },
+    scheduler::{RetentionPurge, purge_soft_deleted},
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -91,11 +96,11 @@ fn insert_doc(
 
 /// Local FTS index-membership probe (the ranked `fts_search` API was removed;
 /// membership is all these assertions need).
-fn fts_match_ids(conn: &crap_cms::db::BoxedConnection, slug: &str, term: &str) -> Vec<String> {
+fn fts_match_ids(conn: &BoxedConnection, slug: &str, term: &str) -> Vec<String> {
     let table = format!("_fts_{slug}");
     conn.query_all(
         &format!("SELECT id FROM {table} WHERE {table} MATCH ?1"),
-        &[crap_cms::db::DbValue::Text(format!("\"{term}\" *"))],
+        &[DbValue::Text(format!("\"{term}\" *"))],
     )
     .unwrap()
     .iter()
@@ -345,9 +350,11 @@ fn purge_soft_deleted_removes_expired_docs() {
     // it); files are returned for post-commit cleanup.
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction_immediate().unwrap();
-    let (purged, _files) = purge_soft_deleted(&tx, &registry, &LocaleConfig::default()).unwrap();
+    let mut run = RetentionPurge::new(false);
+    let batch = purge_soft_deleted(&tx, &registry, &LocaleConfig::default(), &mut run).unwrap();
     tx.commit().unwrap();
-    assert_eq!(purged, 1, "should purge exactly the one expired doc");
+    assert_eq!(batch.purged, 1, "should purge exactly the one expired doc");
+    assert!(run.is_done(), "one batch covers the whole expired trash");
     drop(conn);
 
     // The old doc should be completely gone (hard-deleted)
@@ -571,7 +578,7 @@ fn purge_soft_deleted_handles_a_localized_upload_collection() {
     def.timestamps = true;
     def.soft_delete = true;
     def.soft_delete_retention = Some("1h".to_string());
-    def.upload = Some(crap_cms::core::upload::CollectionUpload::new());
+    def.upload = Some(CollectionUpload::new());
     def.fields = vec![
         FieldDefinition::builder("filename", FieldType::Text).build(),
         FieldDefinition::builder("url", FieldType::Text).build(),
@@ -608,11 +615,16 @@ fn purge_soft_deleted_handles_a_localized_upload_collection() {
 
     let mut conn = db_pool.get().unwrap();
     let tx = conn.transaction_immediate().unwrap();
-    let (purged, files) = purge_soft_deleted(&tx, &registry, &locale).unwrap();
+    let batch =
+        purge_soft_deleted(&tx, &registry, &locale, &mut RetentionPurge::new(false)).unwrap();
     tx.commit().unwrap();
 
-    assert_eq!(purged, 1, "the expired upload row is purged");
-    assert_eq!(files.len(), 1, "its files are handed back for cleanup");
+    assert_eq!(batch.purged, 1, "the expired upload row is purged");
+    assert_eq!(
+        batch.files.len(),
+        1,
+        "its files are handed back for cleanup"
+    );
 }
 
 // ── Regression: empty_trash must skip referenced documents ──────────────
@@ -623,8 +635,6 @@ fn purge_soft_deleted_handles_a_localized_upload_collection() {
 /// without checking _`ref_count`, which could orphan references.
 #[test]
 fn empty_trash_skips_referenced_documents() {
-    use crap_cms::core::field::RelationshipConfig;
-
     // Two collections: "media" (soft-delete) and "posts" which references media
     let mut media_def = CollectionDefinition::new("media");
     media_def.fields = vec![FieldDefinition::builder("filename", FieldType::Text).build()];
@@ -674,12 +684,10 @@ fn empty_trash_skips_referenced_documents() {
     let mut deleted_count = 0;
     let fq = FindQuery::builder()
         .include_deleted(true)
-        .filters(vec![crap_cms::db::FilterClause::Single(
-            crap_cms::db::Filter {
-                field: "_deleted_at".to_string(),
-                op: crap_cms::db::FilterOp::Exists,
-            },
-        )])
+        .filters(vec![FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        })])
         .build();
 
     let docs = query::find(&conn, "media", &media_def, &fq, None).unwrap();

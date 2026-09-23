@@ -54,6 +54,11 @@ of the API.
 - **Read clients: unreadable fields are no longer filterable.** Filtering or
   sorting on a `hidden` field, or one denied by `access.read`, now fails
   instead of quietly leaking the value it was meant to strip (item 20).
+- **Filter clients: has-many fields match element by element.** `{ tags =
+  "news" }` now finds documents whose list holds `news`, and `not_equals` on
+  a has-many relationship's `.id` means "holds no such id" (item 58). The
+  first start stores any has-many value that isn't a list yet as one, and
+  stops on one that can't be — text in a number list (item 60).
 - **Plugin authors: option typos now error.** Every Lua CRUD option
   table rejects unknown keys. A previously-ignored typo (e.g.
   `overrideAcces`) now fails loudly. Fix any stray keys in your
@@ -773,6 +778,10 @@ filters or sorts on a field you have since marked `hidden` or gated with
 `access.read`. Those calls now fail loudly instead of quietly leaking. If a
 field genuinely needs to be filterable by everyone, drop the `hidden` flag or
 the `access.read` rule.
+
+The admin list no longer offers such fields as columns, sort headers or
+filters, so the UI never builds one of these requests itself; a URL that asks
+anyway gets a 403 naming the field.
 
 Related, same reasoning: hidden and read-gated fields are no longer part of
 the **default** full-text index, so a bare `search` no longer matches their
@@ -1559,6 +1568,109 @@ generated columns.
 **Action:** rename such a field before upgrading. Only upload collections with
 image sizes are affected; the name stays free everywhere else.
 
+### 55. Schema authors: `admin.default_sort` may not name a `hidden` field
+
+A hidden field is never sortable, so a collection whose `admin.default_sort`
+named one booted and then refused every list load. Startup now rejects it,
+naming the collection. For a viewer whose `access.read` denies the default
+sort's field, the admin list falls back to the built-in order instead of
+refusing the page.
+
+**Action:** point `default_sort` at a visible field (or drop it).
+
+### 56. Admin filter URLs: `_status` is not mixed into an OR group
+
+`where[or][G][N][_status][equals]=…` in the same OR group as another field
+used to be lifted out of the group and applied to the whole list — an OR
+silently became an AND. The list now answers 400 for that combination. An OR
+group of only `_status` rows, or a group with a single bucket, still works.
+
+**Action:** rewrite saved or bookmarked admin URLs that combine `_status`
+with other fields in one OR group.
+
+### 57. Localized labels follow the viewer's admin language
+
+A per-locale label (`{ en = "Title", de = "Titel" }` on `admin.label`,
+collection/global `labels`, select options, blocks, placeholders,
+descriptions) used to resolve to its alphabetically first key for everyone.
+The admin now shows the viewer's UI language, falling back to
+`locale.default_locale`; the schema endpoints, MCP and `crap.schema` outside
+an admin request use `default_locale`.
+
+**Action:** none, unless a client relied on the old pick (e.g. read the German
+label from the schema endpoint on an `en`-default project).
+
+### 58. Filter clients: filters on has-many fields match element by element
+
+A filter on a `has_many` text/number/select/radio field compared the whole
+stored JSON text, so `{ tags = "news" }` never matched `["news","tech"]`. Every
+operator now reads the list's elements, on every surface (API, MCP, Lua, the
+admin list, access rules, live events):
+
+- `equals`, `like`, `contains`, `in`, `greater_than` & co. and `exists` match
+  when **some** element does;
+- `not_equals`, `not_in` and `not_exists` match when **no** element does — an
+  empty or unset list included.
+
+A has-many relationship or upload filtered by `.id` follows the same rule. Its
+negative operators used to mean "some related id differs": `tags.id not_equals
+a` matched a post tagged `a` **and** `b`. They now mean "no related id is".
+`exists` on a has-many list no longer matches an empty list. A has-many
+relationship or upload inside an array or blocks row (`items.related`,
+`content.links`) was compared as its whole stored text; it now reads its ids
+the same way — a polymorphic entry by the id after its `collection/`.
+
+**Action:** review filters and access rules on has-many fields — `where`
+tables, saved admin URLs, `crap.collections.find` calls. A filter that worked
+around the old whole-text comparison (a `contains` on the JSON text, a `like
+'%"news"%'`) can become a plain `equals`; an access rule using
+`not_equals`/`not_in` on a has-many relationship's `.id` now excludes every
+document holding the id.
+
+### 59. Read clients: sorting by a has-many list field is rejected
+
+`order_by` on a `has_many` text/number/select/radio field sorted by the stored
+JSON text. It is now a validation error on every surface; the admin list shows
+no sort header for such a field, and an `admin.default_sort` naming one fails
+startup.
+
+**Action:** sort by another field, and move any `admin.default_sort` off a
+has-many list.
+
+### 60. Operators: has-many values stored before their field held a list are stored as lists at startup
+
+The list filters above read every stored has-many value as a list, so the
+schema sync keeps it one: every value of a `has_many` text/number/select/radio
+field — and the id list of a has-many relationship or upload inside an array
+or blocks row — is NULL or a list. On the first start after the upgrade, and
+again whenever a collection's or global's has-many fields change (a field
+switched to `has_many`, a list retyped), the sync rewrites any other value
+once, inside its transaction:
+
+- a single value becomes a one-element list — `'news'` → `["news"]`, `5` →
+  `[5]` (a Postgres number column reconciled to text included);
+- a JSON array spelled as text keeps its elements;
+- other text reads by where it is stored. In a document's own column
+  (top-level, per locale, or a group's prefixed column) it is **one value** —
+  `'Hello, world'` → `["Hello, world"]` — since no release stored a list there
+  in any other form. Inside an array or blocks row (an array table's column,
+  a row's JSON), where earlier admin forms stored a list as comma-separated
+  text, it is **comma-separated values**: a value or relationship list stored
+  there as `"a,b"` becomes `["a","b"]`. A version or draft snapshot kept from
+  before the switch reads the same way;
+- a list's elements take the field's type (`["1","2"]` in a number list →
+  `[1,2]`), and blank text becomes NULL.
+
+A value that holds nothing of its field's type — text in a `number` list, a
+polymorphic entry that isn't `collection/id` — can't become a list without
+losing it, so startup stops with an error naming the collection, the column
+and the document, and nothing is rewritten.
+
+**Action:** none unless startup reports such a value — then correct or clear
+it (or change the field definition back) and start again. Every write stores
+a has-many relationship or upload inside a row as its id list from now on, so
+a hook or client reading `"a,b"` from one reads `["a","b"]`.
+
 ## Admin UI behavior
 
 ### Template overrides: array and blocks row controls are gated on `readonly`
@@ -2109,16 +2221,19 @@ crap-cms typegen proto            # only if you use the Rust gRPC decoder
 
 What changed:
 
-- **Relationships are populate-aware, no longer bare id strings.** A
-  relationship or upload field can arrive as an id (`depth = 0`) or a populated
-  document (`depth >= 1`); the generated type now models both.
+- **Relationships are populate-aware on read, no longer bare id strings.** A
+  relationship or upload field of a read document can arrive as an id
+  (`depth = 0`) or a populated document (`depth >= 1`); the generated read type
+  now models both. A write takes the id only, so the input types keep it a
+  string.
 
-  | Language | Before | After |
-  |---|---|---|
-  | Rust | `String` | `Rel<T>` — `enum { Doc(Box<T>), Id(String) }` |
-  | Go | `string` | `Rel[T]` — a struct whose custom JSON decodes an id or an object |
-  | TypeScript | `string` | `string \| TDocument` |
-  | Python | `str` | `str \| T` |
+  | Language | Before | After (read type) | After (input type) |
+  |---|---|---|---|
+  | Rust | `String` | `Rel<T>` — `enum { Doc(Box<T>), Id(String) }` | — (read types only) |
+  | Go | `string` | `Rel[T]` — a struct whose custom JSON decodes an id or an object | — (read types only) |
+  | TypeScript | `string` | `string \| TDocument` on `…Document` | `string` / `string[]` on `…Data` |
+  | Python | `str` | `str \| T` | — (read types only) |
+  | Lua | `string` | `string\|crap.doc.<Target>` on `crap.doc.*` | `string` / `string[]` on `crap.input.*` / `crap.partial.*` |
 
   Unwrap before use: Rust `match rel { Rel::Id(id) => …, Rel::Doc(doc) => … }`
   (generated `rel.as_id()` / `rel.as_doc()` helpers return `Option`); Go
@@ -2190,8 +2305,60 @@ What changed:
   read a size as `sizes.thumbnail.url`, its dimensions as
   `sizes.thumbnail.width` / `.height`, and a format variant as
   `sizes.thumbnail.formats.webp.url`. The Lua type definitions describe the
-  same shape on `crap.doc.*`; the input classes still describe the stored
-  columns, because that is what a writer may send.
+  same shape on `crap.doc.*`. The input types (TypeScript `…Data`, Lua
+  `crap.input.*` / `crap.partial.*`) no longer declare the per-size or any
+  other server-derived upload column either — see the next entry; only the
+  hook-data class `crap.data.*` keeps the stored columns a hook sees.
+
+- **Generated input types describe what a write accepts; read types what a
+  read returns.** Regenerate the client types and the Lua types
+  (`crap-cms typegen lua`) and adjust:
+
+  - **TypeScript `…Data` (input) types** carry every relationship and upload
+    as its id — `string` / `string[]`, a polymorphic one as its
+    `"collection/id"` string — instead of `string | TDocument`: every write
+    surface rejects a populated document, so pass `doc.id`. A `required`
+    single relationship or upload is now **required** in `…Data`; a create
+    that omitted it was rejected by the server anyway, now it fails to
+    type-check. A virtual `join` field and an upload collection's
+    server-derived columns (`filename`, `mime_type`, `filesize`, `width`,
+    `height`, `url`, the per-size columns) are gone from `…Data` — the server
+    strips them from every write that is not a file upload; drop them from
+    your create payloads. An auth collection's `…Data` gains an optional
+    `password`.
+  - **Read types no longer declare `hidden = true` fields**, in any language
+    or in `crap.doc.*` / `crap.global_doc.*`: every read strips them, nested
+    ones included. Code that read one always got nothing; remove it.
+  - **A collection read type declares the `collection` tag** a populated copy
+    carries (TypeScript `collection?: "posts"`, Python
+    `Optional[Literal["posts"]]`, Go `Collection *string`, Lua
+    `collection? "posts"`), so you can narrow a polymorphic union on it. In Go
+    the tag never renames one of your fields: beside a field whose member is
+    also `Collection` the tag member is `Collection_2`.
+  - **`_status` is `"draft" | "published"`** in TypeScript and Python (it was
+    `string`). Compare against those literals.
+  - **Go: a system key keeps its member name.** A field named like a system
+    key (`deleted_at`, `draft_status`) used to take `DeletedAt` /
+    `DraftStatus` and push the system key to `DeletedAt_2`; now the system key
+    keeps `DeletedAt` / `DraftStatus` and your field becomes `DeletedAt_2` /
+    `DraftStatus_2`. Rename the member you use.
+  - **Lua write classes:** `create`, `create_many` and `validate` take
+    `crap.input.<Slug>` (required fields stay required), `update` takes
+    `crap.partial.<Slug>` and `update_many` `crap.partial_many.<Slug>` (every
+    field optional, no `password` — `update_many` refuses one). Annotations
+    that typed a write payload as `crap.data.<Slug>` should switch to these;
+    `crap.data.<Slug>` remains the type of a write hook's `ctx.data`. The
+    nested `crap.array_row.*` / `crap.group.*` classes no longer declare a
+    virtual `join`, and a returned document's nested rows and groups are the
+    new `crap.doc_row.*` / `crap.doc_group.*` classes.
+  - **Lua `after_read` hooks** see the read document, not the stored shape:
+    wrap them in `crap.collections.<slug>.read_hook(fn)` (or annotate
+    `---@type crap.read_hook_fn.<Slug>`) to type `ctx.data` as
+    `crap.doc.<Slug>`. `crap.collections.<slug>.hook(fn)` keeps working at
+    runtime; only the editor types differ.
+  - **Lua queries:** `crap.where.<Slug>` and the `order_by` values of
+    `crap.query.<Slug>` no longer list a `hidden` field's columns — a query on
+    one was always refused at runtime.
 
 - **A JSON rich text field is no longer typed as a string.** With
   `admin.richtext_format = "json"` the value on the wire is a JSON document.
@@ -2451,6 +2618,11 @@ if you use versions on a localized collection.
   reference); on other collections such a user is refused right away; delete
   hooks run. Scripts that relied on an immediate hard delete should purge the
   trash afterwards.
+- **`crap-cms trash restore` goes through the service layer.** The
+  collection's `before_change` / `after_change` hooks now run for it with
+  `ctx.operation = "undelete"`, as they do for an undelete from the admin UI,
+  gRPC, MCP or Lua; a `before_change` hook that errors leaves the document in
+  the trash. The restore clears the cache and publishes an undelete event.
 - **`crap-cms restore` and `migrate fresh` refuse while a server, worker, stdio
   MCP process or another CLI command uses the database**, not only the server,
   and those refuse to start while either runs. They share the lock file
@@ -2619,6 +2791,20 @@ if you use versions on a localized collection.
   Override any of the three defaults under `[jobs.queues.bulk]` in `crap.toml`;
   `bulk`, like `images` and `email`, is exempt from the "configured queue that
   no job uses" startup warning.
+
+- **Live-event hooks see the stored document.** The `live` filter and
+  `before_broadcast` hooks receive `ctx.data` as the document is stored —
+  hidden and read-denied fields included — in `metadata` mode too (where it
+  used to be empty). A `full`-mode subscriber's payload is stripped from that
+  document by the subscriber's own access, so it can now receive a field the
+  user who made the change may not read. **Action:** a `before_broadcast` hook
+  that forwards `ctx.data` outside the CMS (a webhook, a log) must drop the
+  fields it should not send; one that copies a protected value into a new key
+  delivers it to every subscriber.
+- **Purging the trash publishes live delete events** — the retention purge,
+  "Empty trash" and `crap-cms trash purge` / `trash empty`, one event per
+  purged document, gated by the `trash` view. **Action:** none; a very large
+  purge can make a slow subscriber lag and reconnect.
 
 ## Additive features (alpha.10)
 

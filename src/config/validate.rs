@@ -26,12 +26,13 @@ const MIN_MCP_API_KEY_LEN: usize = 32;
 /// bounding how far one request can be multiplied.
 const MAX_MCP_BATCH_MEMBERS: usize = 500;
 
-/// Whether two Redis URLs address the same keyspace: same scheme, host, port
-/// (default 6379) and database index (default 0), ignoring credentials.
-/// `redis://h`, `redis://h:6379` and `redis://h:6379/0` are one keyspace.
+/// Whether two Redis URLs address the same keyspace: same host, port
+/// (default 6379) and database index (default 0), ignoring credentials and
+/// the scheme. `redis://h`, `redis://h:6379` and `rediss://h:6379/0` are one
+/// keyspace — TLS changes how the server is reached, not which server it is.
 /// Unparseable URLs fall back to an exact string comparison.
 fn same_redis_instance(a: &str, b: &str) -> bool {
-    fn keyspace(raw: &str) -> Option<(String, String, u16, u32)> {
+    fn keyspace(raw: &str) -> Option<(String, u16, u32)> {
         let url = Url::parse(raw).ok()?;
         let db = match url.path().trim_matches('/') {
             "" => 0,
@@ -39,7 +40,6 @@ fn same_redis_instance(a: &str, b: &str) -> bool {
         };
 
         Some((
-            url.scheme().to_string(),
             url.host_str()?.to_ascii_lowercase(),
             url.port().unwrap_or(6379),
             db,
@@ -1160,6 +1160,53 @@ mod tests {
         ));
         assert!(!same_redis_instance("redis://h:6379/0", "redis://h:6379/1"));
         assert!(!same_redis_instance("redis://h", "redis://other"));
+    }
+
+    /// TLS does not make a server a different keyspace: a `rediss://` and a
+    /// `redis://` URL for the same host, port and database are compared as
+    /// one, so the namespace-overlap checks still apply.
+    #[test]
+    fn same_redis_instance_ignores_the_tls_scheme() {
+        assert!(same_redis_instance(
+            "rediss://u:pw@h:6380",
+            "redis://h:6380/0"
+        ));
+        assert!(same_redis_instance("rediss://h", "rediss://h:6379/0"));
+        assert!(!same_redis_instance("rediss://h:6380", "rediss://h:6381"));
+    }
+
+    /// A `rediss://` URL passes validation wherever a Redis URL is used.
+    #[test]
+    fn validate_accepts_rediss_urls() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.cache.redis_url = "rediss://crap:pw@redis.internal:6380/0".into();
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.auth.rate_limit_redis_url = "rediss://crap:pw@redis.internal:6380/1".into();
+        config.live.transport = LiveTransport::Redis;
+
+        config
+            .validate()
+            .expect("rediss:// URLs are valid Redis URLs");
+    }
+
+    /// An overlapping rate-limit prefix is still refused when the cache and
+    /// the rate limiter reach the same Redis through different schemes.
+    #[test]
+    fn validate_rejects_overlapping_prefixes_across_tls_and_plain_urls() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = JwtSecret::new(EXPLICIT_SECRET);
+        config.cache.backend = CacheBackend::Redis;
+        config.cache.redis_url = "rediss://redis.internal:6379".into();
+        config.auth.rate_limit_backend = RateLimitBackend::Redis;
+        config.auth.rate_limit_redis_url = "redis://redis.internal:6379/0".into();
+        config.auth.rate_limit_prefix = "crap:cache:rl:".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("the same Redis reached over TLS is still one keyspace");
+        assert!(err.to_string().contains("rate_limit_prefix"), "{err}");
     }
 
     /// The default live channels sit outside both key namespaces, so a

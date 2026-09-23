@@ -205,3 +205,57 @@ async fn window_crap_namespace_dispatches_toast() {
 
     server_handle.abort();
 }
+
+// ── live_mutation_toasts_keep_collections_and_globals_apart ──────────────
+//
+// Regression test: the live-event toast coalescing key omitted the event's
+// target, so a collection and a global sharing a slug were counted into one
+// toast.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_mutation_toasts_keep_collections_and_globals_apart() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_toast_def(), make_users_def()],
+        vec![],
+        "blivetoast@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/posts"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    browser::wait_for_js(&page, "customElements.get('crap-live-events')").await;
+
+    let pending = page
+        .evaluate(
+            "() => {
+                const live = document.querySelector('crap-live-events');
+                live._toastMutation({ target: 'collection', collection: 'posts', operation: 'update' });
+                live._toastMutation({ target: 'global', collection: 'posts', operation: 'update' });
+                live._toastMutation({ target: 'global', collection: 'posts', operation: 'update' });
+                return [...live._pendingToasts.values()].map((p) => p.count).sort().join(',');
+            }",
+        )
+        .await
+        .unwrap()
+        .into_value::<String>()
+        .unwrap();
+
+    assert_eq!(
+        pending, "1,2",
+        "a collection's and a same-slug global's toasts must coalesce separately"
+    );
+
+    server_handle.abort();
+}

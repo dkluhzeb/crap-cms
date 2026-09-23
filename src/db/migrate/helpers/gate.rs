@@ -63,6 +63,19 @@ pub(in crate::db::migrate) fn field_paths(
     paths.join(",")
 }
 
+/// Whether a leaf `keep` accepts sits anywhere in `fields`, at any depth.
+#[must_use]
+pub(in crate::db::migrate) fn holds_leaf(fields: &[FieldDefinition], keep: KeepLeaf<'_>) -> bool {
+    fields.iter().any(|field| match field_children(field) {
+        FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) | FieldChildren::Array(sub) => {
+            holds_leaf(sub, keep)
+        }
+        FieldChildren::Tabs(tabs) => tabs.iter().any(|tab| holds_leaf(&tab.fields, keep)),
+        FieldChildren::Blocks(defs) => defs.iter().any(|d| holds_leaf(&d.fields, keep)),
+        FieldChildren::Leaf => keep(field),
+    })
+}
+
 /// The leaves of every block definition, each named by its block type.
 #[must_use]
 pub(in crate::db::migrate) fn block_paths(defs: &[BlockDefinition], keep: KeepLeaf<'_>) -> String {
@@ -92,6 +105,8 @@ fn leaf_path(field: &FieldDefinition) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::core::{FieldTab, FieldType};
 
@@ -170,6 +185,25 @@ mod tests {
             field_paths(&[blocks], &keep_all),
             "content[quote:body:text]"
         );
+    }
+
+    /// A leaf is found at any depth — through groups, layout wrappers, tabs,
+    /// arrays and blocks — and only when the predicate accepts it.
+    #[test]
+    fn holds_leaf_searches_every_depth() {
+        let blocks = FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "quote",
+                vec![field("body", FieldType::Text)],
+            )])
+            .build();
+        let group = FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![blocks])
+            .build();
+
+        assert!(holds_leaf(slice::from_ref(&group), &text_only));
+        assert!(!holds_leaf(&[group], &|f: &FieldDefinition| f.field_type
+            == FieldType::Number));
     }
 
     /// A leaf the predicate turns down is left out, so a pass that covers only

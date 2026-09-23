@@ -7,7 +7,6 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use serde_json::{Value, from_str, json, to_string};
 use tokio::task;
 
 use crate::{
@@ -65,18 +64,10 @@ fn save_column_preferences(
         .transaction_immediate()
         .context("Failed to start settings transaction")?;
 
-    let existing = user_settings::get_user_settings(&tx, user_id)?;
+    let mut settings = user_settings::load_user_settings(&tx, user_id)?;
+    settings.set_columns(collection_slug, columns);
 
-    let mut settings: Value = existing
-        .as_deref()
-        .and_then(|s| from_str(s).ok())
-        .unwrap_or_else(|| json!({}));
-
-    settings[collection_slug] = json!({ "columns": columns });
-
-    let json_str = to_string(&settings)?;
-
-    user_settings::set_user_settings(&tx, user_id, &json_str)?;
+    user_settings::set_user_settings(&tx, user_id, &settings.to_json())?;
     tx.commit().context("Failed to commit settings")?;
 
     Ok(())

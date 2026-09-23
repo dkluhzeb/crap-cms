@@ -17,7 +17,7 @@ use crate::{
     },
     hooks::{AccessCheckInput, ValidationCtx},
     service::{
-        ServiceContext, ServiceError, helpers,
+        Gated, ServiceContext, ServiceError, helpers,
         hooks::{SnapshotLocales, WriteHooks},
         invalidate_user_streams_if_auth, run_pool_write, stored_fields_for_update_rules,
         stored_global_fields_for_update_rules,
@@ -176,16 +176,18 @@ fn restore_collection_version_pool(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
-    run_pool_write(
+    let (doc, _) = run_pool_write(
         ctx,
         None,
         |inner| restore_collection_version_core(inner, document_id, version_id, locale_config),
-        |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Restore, document_id, &doc.fields);
+        |ctx, (_, row)| {
+            ctx.publish_mutation_event(EventOperation::Restore, document_id, row.clone());
             // Restoring an auth document can change that user's access.
             invalidate_user_streams_if_auth(ctx, document_id);
         },
-    )
+    )?;
+
+    Ok(doc)
 }
 
 fn restore_collection_version_conn(
@@ -194,10 +196,10 @@ fn restore_collection_version_conn(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
-    let doc = restore_collection_version_core(ctx, document_id, version_id, locale_config)?;
+    let (doc, row) = restore_collection_version_core(ctx, document_id, version_id, locale_config)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Restore, document_id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Restore, document_id, row);
     invalidate_user_streams_if_auth(ctx, document_id);
 
     Ok(doc)
@@ -235,12 +237,14 @@ fn check_restore_versions_gate(
 }
 
 /// Core logic for collection version restore on an existing connection/transaction.
+/// Returns the stored row the restore event is built from alongside the
+/// document.
 pub(crate) fn restore_collection_version_core(
     ctx: &ServiceContext,
     document_id: &str,
     version_id: &str,
     locale_config: &LocaleConfig,
-) -> Result<Document> {
+) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -394,9 +398,14 @@ pub(crate) fn restore_collection_version_core(
     )?;
 
     helpers::hydrate_reported(ctx, &mut doc, restore_locale_ctx.as_ref())?;
+
+    // The row as stored, before anything is shaped or stripped for the writer:
+    // the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
-    Ok(doc)
+    Ok((doc, row))
 }
 
 /// Restore a global document to a specific version snapshot.
@@ -420,30 +429,34 @@ pub fn restore_global_version(
     }
 
     if ctx.pool.is_some() {
-        return run_pool_write(
+        let (doc, _) = run_pool_write(
             ctx,
             None,
             |inner| restore_global_version_core(inner, version_id, locale_config),
-            |ctx, doc| {
-                ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
+            |ctx, (_, row)| {
+                ctx.publish_mutation_event(EventOperation::Restore, "default", row.clone());
             },
-        );
+        )?;
+
+        return Ok(doc);
     }
 
-    let doc = restore_global_version_core(ctx, version_id, locale_config)?;
+    let (doc, row) = restore_global_version_core(ctx, version_id, locale_config)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Restore, "default", &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Restore, "default", row);
 
     Ok(doc)
 }
 
 /// Core logic for global version restore on an existing connection/transaction.
+/// Returns the stored row the restore event is built from alongside the
+/// document.
 pub(crate) fn restore_global_version_core(
     ctx: &ServiceContext,
     version_id: &str,
     locale_config: &LocaleConfig,
-) -> Result<Document> {
+) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -531,9 +544,13 @@ pub(crate) fn restore_global_version_core(
         locale_config,
     )?;
 
+    // The global as stored, before anything is shaped or stripped for the
+    // writer: the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     helpers::strip_reported(ctx, write_hooks, &mut doc, restore_locale_ctx.as_ref())?;
 
-    Ok(doc)
+    Ok((doc, row))
 }
 
 #[cfg(test)]

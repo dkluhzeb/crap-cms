@@ -165,11 +165,16 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`is_trash`** (boolean)
 - **`search`** (Option&lt;string&gt;) _(optional)_
 - **`sort`** (Option&lt;string&gt;) _(optional)_
+- **`search_params`** (Vec&lt;any&gt;) — Hidden `{name, value}` inputs the search form carries so a search keeps the sort, page size, filters, and trash view.
+- **`clear_search_url`** (string) — Page 1 of the same view without the search term.
+- **`is_filtered`** (boolean) — Whether a search or filter narrows the list (selects the "no results" empty state instead of "no items yet").
+- **`trash_total`** (Option&lt;integer&gt;) _(optional)_ — Trash view only: how many documents are in the trash regardless of the search and filters — what "Empty trash" deletes.
 - **`table_columns`** (Vec&lt;any&gt;)
 - **`column_options`** (Vec&lt;any&gt;)
 - **`filter_fields`** (Vec&lt;any&gt;)
 - **`active_filters`** (Vec&lt;any&gt;)
 - **`active_filter_count`** (integer)
+- **`title_label`** (Option&lt;string&gt;) _(optional)_ — Header label of the title column — the `use_as_title` field's label; absent when the column shows document ids.
 - **`title_sort_url`** (Option&lt;string&gt;) _(optional)_
 - **`title_sorted_asc`** (boolean)
 - **`title_sorted_desc`** (boolean)

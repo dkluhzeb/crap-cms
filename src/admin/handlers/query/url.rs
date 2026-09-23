@@ -1,13 +1,18 @@
 //! URL building and encoding utilities for list pages.
 
-/// Shared context for building list URLs — base path, search, sort, and filter params.
+/// Shared context for building list URLs — base path, search, sort, page
+/// size, and filter params.
 ///
-/// Used by `resolve_columns`, `compute_title_sort`, and pagination helpers
-/// to avoid passing the same 4 parameters everywhere.
+/// Used by `resolve_columns`, `compute_title_sort`, the search form, and the
+/// pagination helpers so every list link carries the same view state.
 pub(crate) struct ListUrlContext<'a> {
     pub base_url: &'a str,
     pub search: Option<&'a str>,
     pub sort: Option<&'a str>,
+    /// The page size the viewer asked for; `None` keeps the configured
+    /// default out of the URL.
+    pub per_page: Option<i64>,
+    /// The `where[…]` params (and `trash=1`) of the current view, raw.
     pub where_params: &'a str,
 }
 
@@ -17,7 +22,7 @@ impl ListUrlContext<'_> {
         build_list_url(
             self.base_url,
             page,
-            None,
+            self.per_page,
             self.search,
             self.sort,
             self.where_params,
@@ -29,7 +34,7 @@ impl ListUrlContext<'_> {
         build_list_url_with_cursor(
             self.base_url,
             1,
-            None,
+            self.per_page,
             self.search,
             self.sort,
             self.where_params,
@@ -42,12 +47,58 @@ impl ListUrlContext<'_> {
         build_list_url(
             self.base_url,
             1,
-            None,
+            self.per_page,
             self.search,
             Some(sort_field),
             self.where_params,
         )
     }
+
+    /// The "clear search" link: page 1 of the same view without the search
+    /// term — sort, page size, filters, and the trash view stay.
+    pub fn clear_search_url(&self) -> String {
+        build_list_url(
+            self.base_url,
+            1,
+            self.per_page,
+            None,
+            self.sort,
+            self.where_params,
+        )
+    }
+
+    /// The `(name, value)` pairs (decoded) the search form carries as hidden
+    /// inputs, so a search keeps the sort, page size, filters, and trash view
+    /// and only resets the page position.
+    pub fn search_form_params(&self) -> Vec<(String, String)> {
+        let mut params = Vec::new();
+
+        if let Some(sort) = self.sort {
+            params.push(("sort".to_string(), sort.to_string()));
+        }
+
+        if let Some(per_page) = self.per_page {
+            params.push(("per_page".to_string(), per_page.to_string()));
+        }
+
+        let carried = self
+            .where_params
+            .split('&')
+            .filter(|part| is_view_param(part))
+            .map(|part| {
+                let (key, value) = part.split_once('=').unwrap_or((part, ""));
+                (url_decode(key), url_decode(value))
+            });
+        params.extend(carried);
+
+        params
+    }
+}
+
+/// Whether a raw query entry is view state every list link carries: a
+/// `where[…]` filter or the trash flag.
+fn is_view_param(part: &str) -> bool {
+    part.starts_with("where%5B") || part.starts_with("where[") || part == "trash=1"
 }
 
 /// Simple percent-decoding for URL query values.
@@ -138,11 +189,12 @@ pub(crate) fn build_list_url_with_cursor(
     }
 
     // Preserve where params and trash flag from original query string
-    for part in raw_where.split('&') {
-        if part.starts_with("where%5B") || part.starts_with("where[") || part == "trash=1" {
-            parts.push(part.to_string());
-        }
-    }
+    parts.extend(
+        raw_where
+            .split('&')
+            .filter(|part| is_view_param(part))
+            .map(str::to_string),
+    );
 
     format!("{}?{}", base, parts.join("&"))
 }
@@ -225,6 +277,59 @@ mod tests {
             build_list_url_with_cursor("/admin/collections/posts", 2, None, None, None, "", None);
         assert_eq!(url, "/admin/collections/posts?page=2");
         assert!(!url.contains("cursor"));
+    }
+
+    fn ctx<'a>(sort: Option<&'a str>, where_params: &'a str) -> ListUrlContext<'a> {
+        ListUrlContext {
+            base_url: "/admin/collections/posts",
+            search: Some("hello"),
+            sort,
+            per_page: Some(50),
+            where_params,
+        }
+    }
+
+    /// Regression: `per_page` was accepted by the list but dropped from every
+    /// page, sort, and cursor link, so page 2 came back at the default size
+    /// and overlapped page 1.
+    #[test]
+    fn every_list_link_carries_per_page() {
+        let c = ctx(Some("title"), "");
+
+        assert!(c.page_url(2).contains("per_page=50"));
+        assert!(c.sort_url("-title").contains("per_page=50"));
+        assert!(c.cursor_url("after_cursor", "x").contains("per_page=50"));
+        assert!(c.clear_search_url().contains("per_page=50"));
+    }
+
+    /// Regression: the search form carried only the search term and sort —
+    /// searching inside the trash left the trash, and any search dropped the
+    /// active filters. Clearing the search dropped everything.
+    #[test]
+    fn search_keeps_filters_trash_sort_and_page_size() {
+        let c = ctx(
+            Some("-title"),
+            "trash=1&where%5Btitle%5D%5Bcontains%5D=a%20b",
+        );
+
+        assert_eq!(
+            c.search_form_params(),
+            vec![
+                ("sort".to_string(), "-title".to_string()),
+                ("per_page".to_string(), "50".to_string()),
+                ("trash".to_string(), "1".to_string()),
+                ("where[title][contains]".to_string(), "a b".to_string()),
+            ]
+        );
+
+        let clear = c.clear_search_url();
+        assert!(!clear.contains("search="), "{clear}");
+        assert!(clear.contains("sort=-title"), "{clear}");
+        assert!(clear.contains("trash=1"), "{clear}");
+        assert!(
+            clear.contains("where%5Btitle%5D%5Bcontains%5D=a%20b"),
+            "{clear}"
+        );
     }
 
     // --- url_decode tests ---

@@ -192,7 +192,7 @@ max_depth = 10           # Hard cap on population depth (prevents abuse)
 backend = "memory"       # "memory" (default), "redis", "none", "custom" (crap.cache.register)
 # max_entries = 10000    # Soft cap for memory backend (default: 10000)
 # max_age_secs = 0       # Periodic full clear interval (0 = disabled)
-# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
+# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL (rediss:// for TLS)
 # prefix = "crap:"       # Key prefix for Redis backend
 
 [pagination]
@@ -401,7 +401,7 @@ nonce applies to `script-src` only).
 | `session_cookie_samesite` | string | `"lax"` | `SameSite` attribute for the `crap_session` admin cookie. Accepts `"lax"` (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), `"strict"` (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or `"none"` (reserved; currently falls back to `"lax"` at runtime). |
 | `session_absolute_max_age` | duration | `2592000` (`"30d"`) | Hard ceiling on an admin session measured from the original login, regardless of sliding refreshes via `/admin/api/session-refresh`. `0` disables the cap (a session then lives until `token_expiry` passes without a refresh). A refresh never issues a token that outlives the ceiling. Values above 30 days log a startup warning. |
 | `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
-| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
+| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. `rediss://` connects over TLS (see `cache.redis_url`). |
 | `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. When cache and rate limits share a Redis instance, it must not overlap the cache namespace (`{cache.prefix}cache:`) — loading the config fails otherwise, because a cache clear would reset the rate-limit counters. |
 
 ### `[auth.password_policy]`
@@ -432,7 +432,7 @@ Password strength requirements applied to all password-setting paths (create, up
 | `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated — requires a [`crap.cache.register`](../lua-api/cache.md) call in `init.lua`, otherwise the server refuses to start; the other `[cache]` keys don't apply to it). |
 | `max_entries` | integer | `10000` | Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear. |
 | `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. With the memory or custom backend, every process clears its own cache on this interval — each app server (any `--only` mode), `crap-cms work` and `crap-cms mcp`. With Redis it is each entry's TTL instead, and no full clear runs. |
-| `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL. Only used when `backend = "redis"`. |
+| `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL (`redis://[user:password@]host[:port][/db]`). Used when `backend = "redis"`, by `[live] transport = "redis"`, and as the fallback for `auth.rate_limit_redis_url`. `rediss://` connects over TLS, verifying the server certificate against the operating system's trust store; the `#insecure` fragment is not supported. Any password in it is masked in logs and config dumps. |
 | `prefix` | string | `"crap:"` | Key prefix for the Redis backend. Keys are stored as `{prefix}cache:{key}`, and a clear deletes only `{prefix}cache:*`. |
 
 ### `[pagination]`

@@ -2,7 +2,9 @@
  * Live event stream — `<crap-live-events>`.
  *
  * Subscribes to `/admin/events` (server-sent events) and:
- *   - toasts on `mutation` events for collections + globals;
+ *   - toasts on `mutation` events for collections + globals — a burst of
+ *     events for one collection and operation (a bulk write, a purge of the
+ *     trash) collapses into one toast carrying the count;
  *   - shows a stale-content banner above `#edit-form` when the document
  *     the user is editing was modified or deleted by someone else.
  *
@@ -24,6 +26,12 @@ const SAVE_GRACE_MS = 5000;
 
 /** Reconnect delay after the SSE connection drops. */
 const RECONNECT_DELAY_MS = 5000;
+
+/**
+ * Mutation toasts for one target (collection or global), slug and operation
+ * within this window collapse into one.
+ */
+const TOAST_COALESCE_MS = 400;
 
 /**
  * Banner styles. Lives on `document.adoptedStyleSheets` (CSP-exempt
@@ -75,7 +83,7 @@ const sheet = css`
 
 /**
  * @typedef {{
- *   operation: 'create' | 'update' | 'delete',
+ *   operation: 'create' | 'update' | 'delete' | 'undelete' | 'unpublish' | 'restore',
  *   collection: string,
  *   document_id?: string,
  *   target?: 'global' | 'collection',
@@ -140,6 +148,12 @@ class CrapLiveEvents extends HTMLElement {
     this._reconnectTimer = null;
     /** @type {((e: Event) => void)|null} */
     this._onBeforeRequest = null;
+    /**
+     * Toasts waiting out the coalescing window, keyed by target kind
+     * (a collection and a global may share a slug), slug and operation.
+     * @type {Map<string, { event: MutationEvent, count: number, timer: ReturnType<typeof setTimeout> }>}
+     */
+    this._pendingToasts = new Map();
   }
 
   connectedCallback() {
@@ -167,6 +181,8 @@ class CrapLiveEvents extends HTMLElement {
       document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
       this._onBeforeRequest = null;
     }
+    for (const pending of this._pendingToasts.values()) clearTimeout(pending.timer);
+    this._pendingToasts.clear();
   }
 
   _connect() {
@@ -216,8 +232,32 @@ class CrapLiveEvents extends HTMLElement {
     return !isOwnSave;
   }
 
-  /** @param {MutationEvent} event */
+  /**
+   * Queue a toast for `event`, counting it into a pending toast for the same
+   * target, slug and operation when one is waiting out the coalescing window.
+   *
+   * @param {MutationEvent} event
+   */
   _toastMutation(event) {
+    const key = `${event.target}\u0000${event.collection}\u0000${event.operation}`;
+    const pending = this._pendingToasts.get(key);
+
+    if (pending) {
+      pending.count += 1;
+      return;
+    }
+
+    const timer = setTimeout(() => this._flushToast(key), TOAST_COALESCE_MS);
+    this._pendingToasts.set(key, { event, count: 1, timer });
+  }
+
+  /** @param {string} key */
+  _flushToast(key) {
+    const pending = this._pendingToasts.get(key);
+    if (!pending) return;
+    this._pendingToasts.delete(key);
+
+    const { event, count } = pending;
     /** @type {Record<string, string>} */
     const labels = {
       create: t('op_created'),
@@ -227,8 +267,10 @@ class CrapLiveEvents extends HTMLElement {
       unpublish: t('op_unpublished'),
       restore: t('op_restored'),
     };
+    const suffix = count > 1 ? ` (${count})` : '';
+
     toast({
-      message: `${event.collection} ${labels[event.operation] || event.operation}`,
+      message: `${event.collection} ${labels[event.operation] || event.operation}${suffix}`,
       type: 'info',
     });
   }

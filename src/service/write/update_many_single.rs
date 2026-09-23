@@ -10,7 +10,7 @@ use crate::{
     db::LocaleContext,
     hooks::{HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
+        AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_bulk_update, persist_draft_version, run_after_change_hooks,
     },
 };
@@ -26,13 +26,15 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// Runs the full lifecycle: access check -> field stripping -> before-write hooks ->
 /// partial persist -> hydrate -> after-write hooks -> read-denied stripping.
-/// Does NOT manage transactions — caller must open/commit.
+/// Returns the stored row the document's live event is built from alongside
+/// the result. Does NOT manage transactions — caller must
+/// open/commit.
 pub(crate) fn update_many_single_in_conn(
     ctx: &ServiceContext,
     id: &str,
     mut input: WriteInput<'_>,
     locale_config: &LocaleConfig,
-) -> Result<WriteResult> {
+) -> Result<Gated<WriteResult>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -147,9 +149,13 @@ pub(crate) fn update_many_single_in_conn(
         conn,
     )?;
 
+    // The row as stored, before anything is shaped or stripped for the writer:
+    // the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
-    Ok((doc, after_ctx))
+    Ok(((doc, after_ctx), row))
 }
 
 #[cfg(all(test, feature = "sqlite"))]

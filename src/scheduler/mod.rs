@@ -12,7 +12,8 @@
 //!   typo warnings, and the stale-job recovery that precedes the loop.
 //! - `cron_tick.rs` -- the cron tick's blocking body: schedule evaluation
 //!   (skipped on a `--no-cron` worker) and the periodic retention purge
-//!   (claim + purge in one transaction, run on every worker).
+//!   (the claim commits with the first bounded purge batch; further batches
+//!   follow in their own transactions; run on every worker).
 //! - `heartbeat.rs` -- the heartbeat tick's blocking body: this node's
 //!   heartbeats, stale-peer recovery, and the stale threshold they share.
 //! - `runner/` -- pure execution helpers: `execute_job` (the Lua
@@ -49,7 +50,8 @@ mod types;
 
 pub use loop_runner::start;
 pub use runner::{
-    ExecuteJobParams, check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs,
+    ExecuteJobParams, PurgeBatch, RetentionPurge, check_cron_schedules, execute_job,
+    purge_soft_deleted, recover_stale_jobs,
 };
 pub use types::{DbTimeouts, SchedulerParams, SchedulerParamsBuilder};
 

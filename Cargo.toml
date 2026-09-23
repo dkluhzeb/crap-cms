@@ -79,6 +79,11 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 
 # Crypto
 ring = "0.17"
+# Direct dependency only to install ring as the process-default rustls
+# `CryptoProvider` (`core::tls`). Clients that build their rustls config from
+# the process default (the Redis `rediss://` connector) panic without one:
+# the dependency tree enables both ring and aws-lc-rs, so rustls cannot pick.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 base64 = "0.22"
 rand = "0.9"
 aes-gcm = "0.10"
@@ -126,7 +131,9 @@ unicode-normalization = "0.1"
 
 # Storage / cache backends (optional in main crate)
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
-redis = { version = "1", features = ["tokio-comp"] }
+# `tokio-rustls-comp`: `rediss://` URLs (TLS, verified against the system
+# trust store via rustls-native-certs).
+redis = { version = "1", features = ["tokio-comp", "tokio-rustls-comp"] }
 
 # Dev / test
 tempfile = "3"
@@ -248,6 +255,7 @@ reqwest.workspace = true
 
 # Crypto
 ring.workspace = true
+rustls.workspace = true
 base64.workspace = true
 rand.workspace = true
 aes-gcm.workspace = true

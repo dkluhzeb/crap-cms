@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    backfill_ref_counts, canonical_text, checkbox_columns, collection, global,
+    backfill_ref_counts, canonical_text, checkbox_columns, collection, global, has_many_lists,
     helpers::{get_table_columns, table_exists},
     identifier_check, legacy_timestamps, locale_change, meta, nested_values,
     orphan_tables::warn_orphan_tables,
@@ -201,6 +201,12 @@ fn run_sync(
     // JSON-stored rows and the canonical form applies to the typed value.
     backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
     legacy_timestamps::normalize_if_needed(&tx, registry)?;
+
+    // Filters expand every stored has-many list, so a value a definition change
+    // left behind is stored as a list before anything reads it. It runs before
+    // the nested values are typed: typing a nested value that isn't a list yet
+    // would drop what doesn't fit the field's type instead of refusing it.
+    has_many_lists::normalize_if_needed(&tx, registry, locale_config)?;
     nested_values::convert_if_needed(&tx, registry)?;
     canonical_text::canonicalize_if_needed(&tx, registry, locale_config)?;
     locale_change::warn_on_default_locale_change(&tx, registry, locale_config)?;

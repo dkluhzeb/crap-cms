@@ -29,13 +29,18 @@ const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
 ///
 /// # Errors
 ///
-/// Returns an error if the types directory can't be created or either
-/// output file can't be written.
+/// Returns an error if the types directory can't be created, either output
+/// file can't be written, or two schema constructs would declare the same Lua
+/// type name.
 pub fn generate_lua(
     config_dir: &Path,
     registry: &Registry,
     output_dir: Option<&Path>,
 ) -> Result<Vec<PathBuf>> {
+    // Render before touching the directory, so a schema the generator
+    // refuses leaves the previous types in place.
+    let hooks = lua::render(registry)?;
+
     let types_dir = resolve_types_dir(config_dir, output_dir);
     fs::create_dir_all(&types_dir)?;
 
@@ -43,7 +48,7 @@ pub fn generate_lua(
     fs::write(&crap_path, LUA_API_TYPES)?;
 
     let hooks_path = types_dir.join("hooks.lua");
-    fs::write(&hooks_path, lua::render(registry))?;
+    fs::write(&hooks_path, hooks)?;
 
     Ok(vec![crap_path, hooks_path])
 }

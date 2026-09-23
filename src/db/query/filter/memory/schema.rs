@@ -1,0 +1,69 @@
+//! What the in-memory evaluator knows of the constrained collection: each
+//! filter path's leaf, and the fields a row path descends into.
+
+use std::collections::HashMap;
+
+use crate::{
+    core::{FieldDefinition, FieldType, prefixed_name, walk_leaf_fields},
+    db::query::helpers::is_polymorphic,
+};
+
+/// What the matcher knows of a constrained field path.
+pub(super) enum Leaf {
+    /// A single value of this type.
+    Value(FieldType),
+    /// A scalar has-many list of this element type.
+    List(FieldType),
+    /// The `.id` of a has-many relationship/upload stored under `root`, whose
+    /// ids the SQL path reads from the junction rows.
+    References { root: String, polymorphic: bool },
+}
+
+/// What the matcher knows of the constrained collection: its leaves by filter
+/// path, and its fields, whose array and blocks rows a path may descend into.
+pub(super) struct Schema<'a> {
+    pub(super) types: HashMap<String, Leaf>,
+    pub(super) fields: &'a [FieldDefinition],
+}
+
+impl<'a> Schema<'a> {
+    pub(super) fn new(fields: &'a [FieldDefinition]) -> Self {
+        Self {
+            types: field_type_map(fields),
+            fields,
+        }
+    }
+}
+
+/// Build a filter-path → leaf map for the field tree: every leaf by its flat
+/// column name (`meta__color`), and every top-level has-many relationship or
+/// upload by the `rel.id` path the SQL filter accepts for it.
+fn field_type_map(fields: &[FieldDefinition]) -> HashMap<String, Leaf> {
+    let mut types = HashMap::new();
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        let name = prefixed_name(prefix, &field.name);
+
+        if field.is_has_many_reference() && prefix.is_empty() {
+            let leaf = Leaf::References {
+                root: name.clone(),
+                polymorphic: is_polymorphic(field),
+            };
+
+            types.insert(format!("{name}.id"), leaf);
+        }
+
+        types.insert(name, leaf_of(field));
+        Ok(())
+    });
+
+    types
+}
+
+fn leaf_of(field: &FieldDefinition) -> Leaf {
+    if field.is_has_many_scalar() {
+        return Leaf::List(field.field_type.clone());
+    }
+
+    Leaf::Value(field.field_type.clone())
+}

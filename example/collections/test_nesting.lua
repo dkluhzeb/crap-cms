@@ -255,4 +255,12 @@ crap.collections.define("test_nesting", {
       },
     }),
   },
+  -- A development fixture, not content: admins only. Without rules it would be
+  -- unreachable for everyone under the default `access.default_deny = true`.
+  access = {
+    read = "access.admin_only",
+    create = "access.admin_only",
+    update = "access.admin_only",
+    delete = "access.admin_only",
+  },
 })

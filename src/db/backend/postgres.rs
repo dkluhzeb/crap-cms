@@ -198,6 +198,10 @@ macro_rules! pg_shared_methods {
             pg_json_each_source(source, alias)
         }
 
+        fn text_after(&self, expr: &str, separator: &str) -> String {
+            pg_text_after(expr, separator)
+        }
+
         fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
             pg_build_insert_ignore(table, columns, values)
         }
@@ -325,6 +329,14 @@ fn pg_json_number_cast(expr: &str) -> String {
 /// ever showed on Postgres.
 fn pg_json_each_source(source: &str, alias: &str) -> String {
     format!("jsonb_array_elements_text(({source})::jsonb) AS {alias}")
+}
+
+/// The text of `expr` after the first `separator`: `strpos` is 0 when there is
+/// none, so `substr` then starts at the first character.
+fn pg_text_after(expr: &str, separator: &str) -> String {
+    let separator = separator.replace('\'', "''");
+
+    format!("substr({expr}, strpos({expr}, '{separator}') + 1)")
 }
 
 fn pg_build_insert_ignore(table: &str, columns: &str, values: &str) -> String {
@@ -825,6 +837,18 @@ mod tests {
             each.ends_with(")::jsonb) AS e0"),
             "the text-yielding source must be cast back to jsonb: {each}"
         );
+    }
+
+    /// The text after a separator uses functions every supported Postgres
+    /// has (`strpos`, `substr`), and a quote in the separator can't end the
+    /// literal.
+    #[test]
+    fn text_after_splits_at_the_first_separator() {
+        assert_eq!(
+            pg_text_after("crap_el.value", "/"),
+            "substr(crap_el.value, strpos(crap_el.value, '/') + 1)"
+        );
+        assert_eq!(pg_text_after("x", "'"), "substr(x, strpos(x, '''') + 1)");
     }
 
     #[test]

@@ -88,7 +88,7 @@ impl BlockDefinition {
     pub fn display_label(&self) -> String {
         self.label.as_ref().map_or_else(
             || to_title_case(&self.block_type),
-            |ls| ls.resolve_default().to_string(),
+            |ls| ls.resolve_current().to_string(),
         )
     }
 }

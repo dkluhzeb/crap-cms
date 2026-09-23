@@ -73,7 +73,9 @@ Every collection registered via `define()` gets a typed accessor at
 `crap.collections.<slug>` exposing the full CRUD surface. The slug
 is bound; return values are typed against the per-collection
 `crap.doc.X` / `crap.find_result.X` classes — full IDE narrowing
-without `---@type` ceremony.
+without `---@type` ceremony. A `crap.doc.X` types a relationship as
+its id or the populated `crap.doc.<Target>` (reads populate at the
+default depth); narrow with `type(doc.author) == "table"`.
 
 All operations below need a database context — a lifecycle hook,
 a job handler, a custom route handler, or a `crap.transaction(fn)`
@@ -155,7 +157,10 @@ local doc = crap.collections.posts.find_by_id("abc123", { select = { "title", "s
 
 ### `crap.collections.<slug>.create(data, opts?)`
 
-Create a new document. Returns the created typed document.
+Create a new document. Returns the created typed document. `data` is
+typed `crap.input.<Slug>`: the fields a write accepts (no virtual `join`,
+no server-derived upload column), each relationship as its id, required
+fields required, plus an optional `password` on an auth collection.
 
 ```lua
 local doc = crap.collections.posts.create({
@@ -194,9 +199,9 @@ gRPC/MCP/admin behavior.
 
 ### `crap.collections.<slug>.update(id, data, opts?)`
 
-Update an existing document. `data` is a partial payload — only the
-fields being changed need to be present. Returns the updated typed
-document.
+Update an existing document. `data` is a partial payload
+(`crap.partial.<Slug>`) — only the fields being changed need to be
+present. Returns the updated typed document.
 
 ```lua
 local doc = crap.collections.posts.update("abc123", {
@@ -289,7 +294,7 @@ trashed documents gated by `access.delete`. Without it, `delete_many`
 never touches trashed rows. `ref_count(id)` is gated by read access: it
 errors for a document the current user cannot read.
 
-## Typing factories — `crap.collections.<slug>.{hook,field_hook,condition,access,...}`
+## Typing factories — `crap.collections.<slug>.{hook,read_hook,field_hook,condition,access,...}`
 
 Per-collection **typing helpers** that wrap your function literal
 and let LuaLS infer the parameter types of the body. Pure
@@ -320,7 +325,34 @@ end)
 
 For `before_delete` / `after_delete` / `before_broadcast` the
 runtime always sends a generic `crap.HookContext` — use
-`crap.any.collection_hook(fn)` instead.
+`crap.any.collection_hook(fn)` instead. For `after_read` use
+`read_hook(fn)`: its `ctx.data` is the document as the read returns it.
+
+### `crap.collections.<slug>.read_hook(fn)`
+
+`after_read` hook with `context` narrowed to `crap.read_hook.<Pascal>`.
+An `after_read` hook sees the document as the read returns it — hidden
+fields stripped, an upload's per-size columns folded into `sizes`,
+relationships populated at the read's depth — so `context.data` is typed
+`crap.doc.<Pascal>`, not the stored-shape `crap.data.<Pascal>`.
+`context.operation` is `"find"` / `"find_by_id"`, or the write
+(`"create"` / `"update"` / `"delete"`) behind a live event.
+
+```lua
+-- hooks/posts/author_name.lua
+return crap.collections.posts.read_hook(function(context)
+    -- context.data is typed crap.doc.Posts; a populated author is a table
+    local author = context.data.author
+    if type(author) == "table" then
+        context.data.byline = author.name
+    end
+    return context
+end)
+```
+
+`crap.globals.<slug>.read_hook(fn)` is the global equivalent
+(`crap.read_hook.global_<slug>`, `context.data` typed
+`crap.global_doc.<Pascal>`).
 
 ### `crap.collections.<slug>.field_hook(field, fn)` and `field_hook(fn)`
 
@@ -386,6 +418,34 @@ Computed row label for array/blocks fields. Receives the row table
 and returns the display string (or `nil` to fall back to
 `label_field`). Per-field narrowing of the row type is a future
 enhancement — today the row is typed as `table<string, any>`.
+
+## Slugs and field names that aren't Lua identifiers
+
+A slug or field name may start with a digit (`2fa`) or be a Lua reserved
+word (`end`, `function`, …). Lua can't reach those with dot syntax, so
+index them with a quoted string — the generated `types/hooks.lua` declares
+them in that form, so they are typed the same way:
+
+```lua
+local codes = crap.collections["2fa"].find({ where = { ["end"] = "2026-12-31" } })
+local first = codes.documents[1]
+local secret = first and first["2fa"]  -- string?
+return crap.collections["2fa"].hook(function(context)
+    -- context: crap.hook.2fa
+    return context
+end)
+```
+
+In the annotations, such a key is written `---@field ["2fa"]? string`. The
+same form is used for a field named `public`, `protected`, `private` or
+`package`: LuaLS reads a bare one as the field's scope. The generated class
+names keep the `PascalCase`d slug (`crap.data.2fa`, `crap.doc.2fa`) — a
+dotted LuaLS type name may have a segment starting with a digit.
+
+Two schema constructs whose names `PascalCase` alike (collections `a1` and
+`a_1`, or a `posts` group `seo_meta` and a `posts_seo` group `meta`) would
+declare the same class; `crap-cms typegen lua` refuses such a schema with an
+error naming the class, instead of letting LuaLS merge the two.
 
 ## Slug-keyed dispatch (dynamic case)
 
@@ -508,7 +568,7 @@ Update multiple documents matching a query. Returns `{ modified = N }`.
 
 Runs the full per-document lifecycle by default: `before_validate` → field validation → `before_change` → DB update → `after_change` — the same pipeline as single-document `update`. Set `hooks = false` in opts to skip hooks and validation for performance on large batch operations.
 
-Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update.
+Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update. On the per-collection accessor `data` is typed `crap.partial_many.<Slug>`: the `update` payload without `password` — `update_many` refuses a password on an auth collection (it would set one value on many accounts).
 
 **Needs a database context** (lifecycle hook, job handler, custom route, or `crap.transaction(fn)` — see [CRUD Availability](overview.md#crud-availability)).
 

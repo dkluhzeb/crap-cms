@@ -96,7 +96,12 @@ impl ClientPrinter for GoPrinter {
         w.blank();
     }
 
+    // Go emits read types only; a write-shape sub-type has nothing to render.
     fn sub_type(&mut self, def: &SubType) {
+        if def.input {
+            return;
+        }
+
         let name = idents::go_exported(&def.name);
         let kind_desc = match def.kind {
             SubTypeKind::Array => format!("a row in the {} array field", def.field_name),
@@ -130,12 +135,12 @@ impl ClientPrinter for GoPrinter {
         };
         self.w.line(&comment);
 
-        let (fields, system, timestamps) = (&def.fields, &def.system, def.timestamps);
+        let members = document_members(def);
+        let timestamps = def.timestamps;
         self.struct_def(&name, |w| {
             w.line("ID        string  `json:\"id\"`");
-            let mut seen = document_seen();
-            for f in fields.iter().chain(system) {
-                emit_field(w, f, &mut seen);
+            for (f, go_name) in &members {
+                emit_named_field(w, f, go_name);
             }
             if timestamps {
                 w.line("CreatedAt *string `json:\"created_at,omitempty\"`");
@@ -205,24 +210,68 @@ impl ClientPrinter for GoPrinter {
     }
 }
 
-/// Emit one read struct field — every field is optional on read: an optional
-/// polymorphic-target comment, then the de-collided, alignment-padded name,
-/// type, and json struct tag.
+/// A document struct's members after `ID`, each with its de-collided name:
+/// its fields, then the stored system keys, then the populated `collection`
+/// tag.
+///
+/// The system keys claim their names before any user field does, so a field
+/// added to the schema can never rename a system key's member. The optional
+/// tag yields instead: it takes its name after every field, so a field whose
+/// member is also `Collection` (`Collection`, `collection_`) keeps its name and
+/// the tag member is suffixed — its json key stays `collection`.
+fn document_members<'d>(def: &'d Document<'d>) -> Vec<(&'d Field<'d>, String)> {
+    let mut seen = document_seen();
+    let system: Vec<(&Field, String)> = def
+        .system
+        .iter()
+        .map(|f| (f, idents::dedup(go_member(f), &mut seen)))
+        .collect();
+
+    let fields: Vec<(&Field, String)> = def
+        .fields
+        .iter()
+        .map(|f| (f, idents::dedup(go_member(f), &mut seen)))
+        .collect();
+
+    let tag = def
+        .collection_tag
+        .iter()
+        .map(|f| (f, idents::dedup(go_member(f), &mut seen)));
+
+    fields.into_iter().chain(system).chain(tag).collect()
+}
+
+/// Emit one read struct field under its de-collided member name.
 fn emit_field(w: &mut CodeWriter, field: &Field, seen: &mut HashSet<String>) {
+    let go_name = idents::dedup(go_member(field), seen);
+    emit_named_field(w, field, &go_name);
+}
+
+/// The exported Go member name a field's wire key maps to, before
+/// de-collision.
+fn go_member(field: &Field) -> String {
+    let base = match field.name.as_ref() {
+        // `_status` would PascalCase onto a `status` field's name.
+        "_status" => "DraftStatus".to_string(),
+        // Go spells the initialism in capitals, as a document's `ID` does.
+        "id" => "ID".to_string(),
+        name => to_pascal_case(name),
+    };
+
+    idents::go_exported(&base)
+}
+
+/// Emit one read struct field — every field is optional on read: an optional
+/// polymorphic-target comment, then the alignment-padded name, type, and json
+/// struct tag.
+fn emit_named_field(w: &mut CodeWriter, field: &Field, go_name: &str) {
     if let FieldTy::PolyRel { targets, .. } = &field.ty {
         w.line(&format!(
             "// Polymorphic relationship — targets: {}",
             targets.join(", ")
         ));
     }
-    // `_status` would PascalCase onto a `status` field's name.
-    let base = match field.name.as_ref() {
-        "_status" => "DraftStatus".to_string(),
-        // Go spells the initialism in capitals, as a document's `ID` does.
-        "id" => "ID".to_string(),
-        name => to_pascal_case(name),
-    };
-    let go_name = idents::dedup(idents::go_exported(&base), seen);
+
     let (go_type, omitempty) = go_ty(&field.ty, true);
     let tag = if omitempty {
         format!("`json:\"{},omitempty\"`", field.name)
@@ -244,7 +293,8 @@ fn go_ty(ty: &FieldTy, optional: bool) -> (String, bool) {
         }
     };
     match ty {
-        FieldTy::Str => ptr_or_bare("string"),
+        // A literal set stays a plain string: Go has no string-literal type.
+        FieldTy::Str | FieldTy::Literal(_) => ptr_or_bare("string"),
         FieldTy::Num => ptr_or_bare("float64"),
         FieldTy::Bool => ptr_or_bare("bool"),
         FieldTy::Json => ("interface{}".to_string(), true),
@@ -323,11 +373,75 @@ mod tests {
     use super::*;
     use crate::core::{
         BlockDefinition, CollectionDefinition, FieldDefinition, FieldTab, FieldType,
-        GlobalDefinition, LocalizedString, RelationshipConfig, SelectOption,
+        GlobalDefinition, LocalizedString, RelationshipConfig, SelectOption, VersionsConfig,
     };
 
     fn render(registry: &Registry) -> String {
         drive(registry, Box::new(GoPrinter::new()))
+    }
+
+    /// Regression: a user field whose name maps onto a system key's member
+    /// (`deleted_at` → `DeletedAt`) claimed that name first and renamed the
+    /// system key to `DeletedAt_2` — adding a field silently renamed a system
+    /// member. The system keys now claim their names before any field does.
+    #[test]
+    fn go_system_keys_keep_their_names() {
+        let mut col = make_col(
+            "posts",
+            vec![
+                text_field("deleted_at", false),
+                text_field("draft_status", false),
+            ],
+        );
+        col.soft_delete = true;
+        col.versions = Some(VersionsConfig::new(true, 10));
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        assert!(
+            out.contains("DeletedAt *string `json:\"_deleted_at,omitempty\"`"),
+            "{out}"
+        );
+        assert!(
+            out.contains("DeletedAt_2 *string `json:\"deleted_at,omitempty\"`"),
+            "{out}"
+        );
+        assert!(
+            out.contains("DraftStatus *string `json:\"_status,omitempty\"`"),
+            "{out}"
+        );
+        assert!(
+            out.contains("DraftStatus_2 *string `json:\"draft_status,omitempty\"`"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Collection *string `json:\"collection,omitempty\"`"),
+            "{out}"
+        );
+    }
+
+    /// Regression: the populated `collection` tag claimed the `Collection`
+    /// member before the user fields, so a field whose member is also
+    /// `Collection` was renamed by a generated key. The tag yields: the field
+    /// keeps its name, the tag member is suffixed and keeps its json key.
+    #[test]
+    fn go_collection_tag_never_renames_a_field() {
+        for field_name in ["Collection", "collection_"] {
+            let col = make_col("posts", vec![text_field(field_name, false)]);
+            let mut out = String::new();
+            render_collection(&mut out, &col);
+
+            assert!(
+                out.contains(&format!(
+                    "Collection *string `json:\"{field_name},omitempty\"`"
+                )),
+                "{field_name}: {out}"
+            );
+            assert!(
+                out.contains("Collection_2 *string `json:\"collection,omitempty\"`"),
+                "{field_name}: {out}"
+            );
+        }
     }
 
     /// A relational array row's `id` is spelled `ID`, as a document's is.

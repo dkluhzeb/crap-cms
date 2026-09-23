@@ -85,12 +85,12 @@ fn build_base_field_data(
             .admin
             .placeholder
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         description: field
             .admin
             .description
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         readonly: readonly_display(field, ancestor_readonly, locale_locked),
         localized: field.localized,
         locale_locked,
@@ -674,7 +674,7 @@ fn construct_array(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
             .labels
             .singular
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         label_field: fc.field.admin.label_field.clone(),
     })
 }
@@ -732,7 +732,7 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
             .labels
             .singular
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         picker: fc.field.admin.picker.clone(),
         label_field: fc.field.admin.label_field.clone(),
     })

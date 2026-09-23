@@ -117,13 +117,27 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
 
 /// Re-add the auth-collection inputs the write handler took out of the form.
 /// They come from the same constructors the create and edit forms use, so the
-/// re-rendered form offers exactly the inputs the user submitted from.
-fn append_auth_fields(fields: &mut Vec<FieldContext>, editing: bool, meta: SubmittedMeta<'_>) {
-    fields.push(password_field(!editing));
+/// re-rendered form offers exactly the inputs the user submitted from — each
+/// carrying its own field error (a password the policy refused), which the
+/// declared-field builders never see because no schema declares these inputs.
+fn append_auth_fields(
+    fields: &mut Vec<FieldContext>,
+    editing: bool,
+    meta: SubmittedMeta<'_>,
+    errors: &HashMap<String, String>,
+) {
+    let mut auth = vec![password_field(!editing)];
 
     if editing {
-        fields.push(locked_field(meta.locked.unwrap_or(false)));
+        auth.push(locked_field(meta.locked.unwrap_or(false)));
     }
+
+    for field in &mut auth {
+        let base = field.base_mut();
+        base.error = errors.get(&base.name).cloned();
+    }
+
+    fields.extend(auth);
 }
 
 /// The submitted values as the display-condition evaluator sees them. Only an
@@ -196,7 +210,7 @@ fn prepare_error_fields(
     );
 
     if p.def.is_auth_collection() {
-        append_auth_fields(&mut fields, p.doc_id.is_some(), p.meta);
+        append_auth_fields(&mut fields, p.doc_id.is_some(), p.meta, p.error_map);
     }
 
     split_sidebar_fields(fields)
@@ -585,6 +599,7 @@ mod tests {
             &mut fields,
             true,
             SubmittedMeta::new(Some("de"), Some(true)),
+            &HashMap::new(),
         );
 
         let names: Vec<&str> = fields.iter().map(|f| f.base().name.as_str()).collect();
@@ -599,11 +614,27 @@ mod tests {
         );
     }
 
+    /// Regression: the password box was rebuilt without its field error, so a
+    /// password the policy refused re-rendered the form with no message at all.
+    #[test]
+    fn the_re_added_password_box_shows_its_error() {
+        let errors = HashMap::from([("password".to_string(), "zu kurz".to_string())]);
+        let mut fields = Vec::new();
+        append_auth_fields(&mut fields, false, SubmittedMeta::default(), &errors);
+
+        assert_eq!(fields[0].base().error.as_deref(), Some("zu kurz"));
+    }
+
     /// On create there is no lock box — the create form has none either.
     #[test]
     fn the_create_error_form_adds_only_the_password_box() {
         let mut fields = Vec::new();
-        append_auth_fields(&mut fields, false, SubmittedMeta::default());
+        append_auth_fields(
+            &mut fields,
+            false,
+            SubmittedMeta::default(),
+            &HashMap::new(),
+        );
 
         let names: Vec<&str> = fields.iter().map(|f| f.base().name.as_str()).collect();
         assert_eq!(names, vec!["password"]);
@@ -616,7 +647,12 @@ mod tests {
     fn an_unsubmitted_lock_box_comes_back_unchecked() {
         for locked in [None, Some(false)] {
             let mut fields = Vec::new();
-            append_auth_fields(&mut fields, true, SubmittedMeta::new(None, locked));
+            append_auth_fields(
+                &mut fields,
+                true,
+                SubmittedMeta::new(None, locked),
+                &HashMap::new(),
+            );
 
             let FieldContext::Checkbox(box_) = &fields[1] else {
                 panic!("expected the lock checkbox")

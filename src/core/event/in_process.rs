@@ -98,7 +98,7 @@ impl InvalidationTransport for InProcessInvalidationBus {
 mod tests {
 
     use crate::core::event::{EventOperation, EventTarget, EventUser, RecvError};
-    use crate::core::{DocumentFields, DocumentId, Slug};
+    use crate::core::{DocumentFields, DocumentId, EventViewMeta, Slug};
 
     use super::*;
 
@@ -112,7 +112,8 @@ mod tests {
             document_id: DocumentId::new("id1"),
             data: DocumentFields::new(),
             edited_by: None,
-            view: crate::core::EventViewMeta::default(),
+            view: EventViewMeta::default(),
+            gate: None,
         }
     }
 
@@ -135,7 +136,8 @@ mod tests {
                 document_id: DocumentId::new("id1"),
                 data: DocumentFields::new(),
                 edited_by: Some(EventUser::new("u1", "test@example.com")),
-                view: crate::core::EventViewMeta::default(),
+                view: EventViewMeta::default(),
+                gate: None,
             })
             .expect("should publish with subscriber");
 

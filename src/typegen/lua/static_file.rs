@@ -412,7 +412,7 @@ function crap.any.display_condition(fn) end
 ///
 /// Per-collection variants (`crap.field_hook_fn.<Pascal>`,
 /// `crap.display_condition_fn.<Pascal>`) are emitted next to the
-/// per-collection types in `render::render_collection` — the static
+/// per-collection types in `collection_classes::render_collection` — the static
 /// file only owns the slug-agnostic ones.
 fn render_callable_aliases(out: &mut String) {
     out.push_str(

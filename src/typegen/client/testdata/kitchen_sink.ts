@@ -7,6 +7,8 @@ export type Localized<T> = { [locale: string]: T | null };
 export interface N2faData {
   type: string;
   "2fa"?: string;
+  end?: string;
+  private?: string;
 }
 
 /** N2fa document returned from the API */
@@ -14,19 +16,55 @@ export interface N2faDocument {
   id: string;
   type?: string | null;
   "2fa"?: string | null;
+  end?: string | null;
+  private?: string | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "2fa";
   created_at?: string;
   updated_at?: string;
 }
 
+export interface MediaSizes {
+  thumbnail?: MediaSizesThumbnail | null;
+}
+
+export interface MediaSizesThumbnail {
+  url?: string | null;
+  width?: number | null;
+  height?: number | null;
+  formats?: MediaSizesThumbnailFormats | null;
+}
+
+export interface MediaSizesThumbnailFormats {
+  webp?: MediaSizesThumbnailFormatsWebp | null;
+}
+
+export interface MediaSizesThumbnailFormatsWebp {
+  url?: string | null;
+}
+
 /** Input data for creating a Media; an update accepts any subset (`Partial<MediaData>`) */
 export interface MediaData {
-  filename: string;
+  focal_x?: number;
+  focal_y?: number;
+  alt?: string;
 }
 
 /** Media document returned from the API */
 export interface MediaDocument {
   id: string;
   filename?: string | null;
+  mime_type?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  url?: string | null;
+  focal_x?: number | null;
+  focal_y?: number | null;
+  sizes?: MediaSizes | null;
+  alt?: string | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "media";
   created_at?: string;
   updated_at?: string;
 }
@@ -36,29 +74,40 @@ export interface PostsSeoData {
   meta_desc?: string;
 }
 
-export interface PostsSeo {
-  meta_title?: string | null;
-  meta_desc?: string | null;
-}
-
 export interface PostsItemsData {
   id?: string;
   label: string;
   meta?: PostsItemsMetaData;
-}
-
-export interface PostsItems {
-  id?: string | null;
-  label?: string | null;
-  meta?: PostsItemsMeta | null;
+  notes?: PostsItemsNotesData[];
+  secret?: string;
 }
 
 export interface PostsItemsMetaData {
   key: string;
 }
 
+export interface PostsItemsNotesData {
+  body?: string;
+}
+
+export interface PostsSeo {
+  meta_title?: string | null;
+  meta_desc?: string | null;
+}
+
+export interface PostsItems {
+  id?: string | null;
+  label?: string | null;
+  meta?: PostsItemsMeta | null;
+  notes?: PostsItemsNotes[] | null;
+}
+
 export interface PostsItemsMeta {
   key?: string | null;
+}
+
+export interface PostsItemsNotes {
+  body?: string | null;
 }
 
 /** Input data for creating a Posts; an update accepts any subset (`Partial<PostsData>`) */
@@ -67,18 +116,31 @@ export interface PostsData {
   summary?: string;
   published_at?: string;
   published_at_tz?: string;
+  snippet?: string;
+  snippet_lang?: string;
+  body?: unknown;
+  teaser?: string;
+  scores?: number[];
+  keywords?: string[];
+  active?: boolean;
+  data?: unknown;
+  internal_note?: string;
   status: "draft" | "published";
-  author?: string | UsersDocument;
-  tags?: (string | TagsDocument)[];
-  cover?: string | MediaDocument;
-  /** Polymorphic relationship — targets: users, tags */
-  related?: (string | UsersDocument | TagsDocument)[];
+  layout?: "grid" | "list";
+  categories?: ("news" | "guides")[];
+  author: string;
+  tags?: string[];
+  cover?: string;
+  related?: string[];
+  featured?: string;
   seo?: PostsSeoData;
   items?: PostsItemsData[];
   content?: Record<string, unknown>[];
-  scores?: number[];
-  active?: boolean;
-  data?: unknown;
+  extra?: Record<string, unknown>;
+  raw_rows?: Record<string, unknown>[];
+  byline?: string;
+  aside?: string;
+  tab_note: string;
 }
 
 /** Posts document returned from the API */
@@ -88,20 +150,36 @@ export interface PostsDocument {
   summary?: string | null;
   published_at?: string | null;
   published_at_tz?: string | null;
+  snippet?: string | null;
+  snippet_lang?: string | null;
+  body?: unknown | null;
+  teaser?: string | null;
+  scores?: number[] | null;
+  keywords?: string[] | null;
+  active?: boolean | null;
+  data?: unknown | null;
   status?: "draft" | "published" | null;
+  layout?: "grid" | "list" | null;
+  categories?: ("news" | "guides")[] | null;
   author?: string | UsersDocument | null;
   tags?: (string | TagsDocument)[] | null;
   cover?: string | MediaDocument | null;
   /** Polymorphic relationship — targets: users, tags */
   related?: (string | UsersDocument | TagsDocument)[] | null;
+  /** Polymorphic relationship — targets: users, tags */
+  featured?: string | UsersDocument | TagsDocument | null;
   seo?: PostsSeo | null;
   items?: PostsItems[] | null;
   content?: Record<string, unknown>[] | null;
-  scores?: number[] | null;
-  active?: boolean | null;
-  data?: unknown | null;
-  _status?: string | null;
+  extra?: Record<string, unknown> | null;
+  raw_rows?: Record<string, unknown>[] | null;
+  byline?: string | null;
+  aside?: string | null;
+  tab_note?: string | null;
+  _status?: "draft" | "published" | null;
   _deleted_at?: string | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "posts";
   created_at?: string;
   updated_at?: string;
 }
@@ -118,20 +196,36 @@ export interface PostsLocalizedDocument {
   summary?: Localized<string> | null;
   published_at?: string | null;
   published_at_tz?: string | null;
+  snippet?: string | null;
+  snippet_lang?: string | null;
+  body?: unknown | null;
+  teaser?: string | null;
+  scores?: number[] | null;
+  keywords?: string[] | null;
+  active?: boolean | null;
+  data?: unknown | null;
   status?: "draft" | "published" | null;
+  layout?: "grid" | "list" | null;
+  categories?: ("news" | "guides")[] | null;
   author?: string | UsersDocument | null;
   tags?: (string | TagsDocument)[] | null;
   cover?: string | MediaDocument | null;
   /** Polymorphic relationship — targets: users, tags */
   related?: (string | UsersDocument | TagsDocument)[] | null;
+  /** Polymorphic relationship — targets: users, tags */
+  featured?: string | UsersDocument | TagsDocument | null;
   seo?: PostsSeoLocalized | null;
   items?: PostsItems[] | null;
   content?: Record<string, unknown>[] | null;
-  scores?: number[] | null;
-  active?: boolean | null;
-  data?: unknown | null;
-  _status?: string | null;
+  extra?: Record<string, unknown> | null;
+  raw_rows?: Record<string, unknown>[] | null;
+  byline?: string | null;
+  aside?: string | null;
+  tab_note?: string | null;
+  _status?: "draft" | "published" | null;
   _deleted_at?: string | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "posts";
   created_at?: string;
   updated_at?: string;
 }
@@ -145,21 +239,27 @@ export interface TagsData {
 export interface TagsDocument {
   id: string;
   name?: string | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "tags";
   created_at?: string;
   updated_at?: string;
 }
 
 /** Input data for creating a Users; an update accepts any subset (`Partial<UsersData>`) */
 export interface UsersData {
+  email: string;
   name: string;
-  email?: string;
+  password?: string;
 }
 
 /** Users document returned from the API */
 export interface UsersDocument {
   id: string;
-  name?: string | null;
   email?: string | null;
+  name?: string | null;
+  authored?: Record<string, unknown>[] | null;
+  /** Set when the document is embedded as a populated relationship */
+  collection?: "users";
   created_at?: string;
   updated_at?: string;
 }
@@ -187,6 +287,17 @@ export interface SettingsDocument {
   id: string;
   site_name?: string | null;
   nav?: SettingsNav[] | null;
+  _status?: "draft" | "published" | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Settings read with `locale = "all"`: localized fields hold one value per locale */
+export interface SettingsLocalizedDocument {
+  id: string;
+  site_name?: Localized<string> | null;
+  nav?: SettingsNav[] | null;
+  _status?: "draft" | "published" | null;
   created_at?: string;
   updated_at?: string;
 }

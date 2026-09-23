@@ -12,7 +12,7 @@ use crate::{
     db::{
         DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
         query::{
-            ReadLocale, decode_document_values, filter::memory::matches_constraints_typed,
+            ReadLocale, decode_document_values, filter::memory::matches_document,
             helpers::locale_column, regroup_by_locale,
         },
     },
@@ -326,7 +326,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         // *constrained* draft/trash rule could fetch ANY draft by id. A snapshot
         // that fails the constraint falls through to the (constrained) main-row
         // find below — which returns the published row or nothing.
-        if matches_constraints_typed(&doc.fields, &p.snapshot_constraints, &p.def.fields) {
+        if matches_document(&doc, &p.snapshot_constraints, &p.def.fields) {
             // `_status` is the DOCUMENT's workflow status, and the row is its
             // authority — snapshots can carry a stale value (historically the
             // create path snapshotted before the draft stamp landed, and
@@ -417,12 +417,107 @@ fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
 mod tests {
     use serde_json::json;
 
+    use tempfile::TempDir;
+
     use super::*;
     use crate::{
-        config::LocaleConfig,
-        core::{FieldAdmin, FieldType},
-        db::LocaleMode,
+        config::{CrapConfig, LocaleConfig},
+        core::{FieldAdmin, FieldType, VersionsConfig},
+        db::{BoxedConnection, LocaleMode, pool::create_pool},
     };
+
+    fn draft_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let pool = create_pool(dir.path(), &CrapConfig::default()).unwrap();
+        let conn = pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts VALUES
+              ('p1', 'Live', 'published', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');",
+        )
+        .unwrap();
+
+        let snapshot = json!({
+            "title": "Draft",
+            "_status": "draft",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-02T00:00:00.000Z",
+        });
+        query::create_version(&conn, "posts", "p1", "draft", &snapshot).unwrap();
+
+        (dir, conn)
+    }
+
+    fn draft_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.timestamps = true;
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def
+    }
+
+    fn only(field: &str, op: FilterOp) -> Vec<FilterClause> {
+        vec![FilterClause::Single(Filter {
+            field: field.to_string(),
+            op,
+        })]
+    }
+
+    /// A draft read under a view constraint on `id` or a timestamp — columns a
+    /// `Document` keeps outside its field map — serves the draft snapshot when
+    /// the row satisfies the constraint, as the SQL read of the row does.
+    /// Judged on the snapshot's field map alone, the draft was never served.
+    #[test]
+    fn draft_read_judges_id_and_timestamp_constraints_on_the_full_row() {
+        let (_dir, conn) = draft_db();
+        let def = draft_def();
+
+        let read = |constraint: Vec<FilterClause>| {
+            find_by_id_full(FindByIdFullParams {
+                conn: &conn,
+                slug: "posts",
+                def: &def,
+                id: "p1",
+                locale_ctx: None,
+                constraints: Some(constraint.clone()),
+                snapshot_constraints: constraint,
+                use_draft: true,
+                include_deleted: false,
+            })
+            .unwrap()
+            .map(|doc| doc.fields.get_str("title").map(str::to_string))
+        };
+
+        let own = only("id", FilterOp::Equals("p1".into()));
+        assert_eq!(read(own), Some(Some("Draft".into())));
+
+        let created = only("created_at", FilterOp::Exists);
+        assert_eq!(read(created), Some(Some("Draft".into())));
+
+        let other = only("id", FilterOp::Equals("other".into()));
+        assert_eq!(
+            read(other),
+            None,
+            "SQL hides the row; so does the draft read"
+        );
+    }
 
     /// A draft read resolves a hyphenated locale from its column-form key
     /// (`title__pt_BR`), a timezone date's companion resolves for the reading

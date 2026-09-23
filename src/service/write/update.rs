@@ -12,7 +12,7 @@ use crate::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
     },
     service::{
-        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
+        AfterChangeInput, Gated, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
         write::{UploadSettle, admit::admit_update, document_file_keys, settle_upload_write},
     },
@@ -177,14 +177,28 @@ fn check_update_password(
     )
 }
 
-/// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
-/// Handles draft-only version saves when `input.draft` is true.
-/// Does NOT manage transactions — caller must open/commit.
+/// [`update_document_gated`] without the event snapshot — the shape the unit
+/// tests drive the update lifecycle through. Does NOT manage transactions —
+/// caller must open/commit.
+#[cfg(test)]
 pub(crate) fn update_document_in_conn(
     ctx: &ServiceContext,
     id: &str,
-    mut input: WriteInput<'_>,
+    input: WriteInput<'_>,
 ) -> Result<WriteResult> {
+    update_document_gated(ctx, id, input).map(|(result, _)| result)
+}
+
+/// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks,
+/// handling draft-only version saves when `input.draft` is true, and returns
+/// the result plus the stored row the update's live event is built from — the
+/// written row, or for a draft save the draft snapshot it reports —
+/// for the service entry points that publish it.
+pub(crate) fn update_document_gated(
+    ctx: &ServiceContext,
+    id: &str,
+    mut input: WriteInput<'_>,
+) -> Result<Gated<WriteResult>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -305,11 +319,15 @@ pub(crate) fn update_document_in_conn(
     // Doing it here (inner ctx, pre-commit) was both a no-op and unsafe on
     // rollback.
 
+    // The row as stored, before anything is shaped or stripped for the writer:
+    // the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.
     strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
-    Ok((doc, after_ctx))
+    Ok(((doc, after_ctx), row))
 }
 
 #[cfg(all(test, feature = "sqlite"))]

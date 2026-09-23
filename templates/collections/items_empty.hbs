@@ -1,4 +1,9 @@
-{{#if is_trash}}
+{{#if is_filtered}}
+  <div class="empty-state">
+    <span class="material-symbols-outlined empty-state__icon">search_off</span>
+    <p>{{t "no_results"}}</p>
+  </div>
+{{else if is_trash}}
   <div class="empty-state">
     <span class="material-symbols-outlined empty-state__icon">delete</span>
     <p>{{t "trash_empty"}}</p>

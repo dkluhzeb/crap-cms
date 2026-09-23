@@ -231,7 +231,7 @@ fn apply_array_row_metadata(af: &mut ArrayField, sf: &FieldDefinition, indexed_n
         .labels
         .singular
         .as_ref()
-        .map(|ls| ls.resolve_default().to_string());
+        .map(|ls| ls.resolve_current().to_string());
 }
 
 /// Apply shared blocks metadata (row limits, collapse, add label) to a typed blocks variant.
@@ -245,7 +245,7 @@ fn apply_blocks_row_metadata(bf: &mut BlocksField, sf: &FieldDefinition, indexed
         .labels
         .singular
         .as_ref()
-        .map(|ls| ls.resolve_default().to_string());
+        .map(|ls| ls.resolve_current().to_string());
 }
 
 /// Enrich a nested Array sub-field context (within another Array/Blocks row).
@@ -298,7 +298,7 @@ fn build_nested_blocks_row(
     let block_def = sf.blocks.iter().find(|bd| bd.block_type == block_type);
 
     let block_label = block_def
-        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_default().to_string()))
+        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_current().to_string()))
         .unwrap_or_else(|| block_type.to_string());
 
     let mut sub_fields: Vec<FieldContext> = block_def
@@ -590,12 +590,12 @@ fn build_group_child_base(
             .admin
             .placeholder
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         description: nested_sf
             .admin
             .description
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         readonly: readonly_display(nested_sf, opts.ancestor_readonly, locale_locked),
         localized: nested_sf.localized,
         locale_locked,

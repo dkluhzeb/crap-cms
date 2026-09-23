@@ -35,6 +35,8 @@ mod go;
 mod ir;
 mod python;
 mod rust;
+#[cfg(test)]
+mod shape_tests;
 mod typescript;
 mod writer;
 

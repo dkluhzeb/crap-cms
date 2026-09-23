@@ -62,7 +62,10 @@ See [Plugins](../plugins/overview.md) for patterns using these functions.
 Every global registered via `define()` gets a typed accessor at
 `crap.globals.<slug>` with `get` / `update` / `unpublish` /
 `validate` methods. The slug is bound; return values are typed as
-the per-global document class.
+the per-global document class. A slug that starts with a digit or is a
+Lua reserved word is indexed with a quoted string —
+`crap.globals["2fa"].get()` — and typed that way (see
+[non-identifier names](collections.md#slugs-and-field-names-that-arent-lua-identifiers)).
 
 All operations need a database context — a lifecycle hook, a job
 handler, a custom route handler, or a `crap.transaction(fn)` block

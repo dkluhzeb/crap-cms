@@ -55,11 +55,32 @@ pub struct CollectionItemsListPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
 
+    /// Hidden `{name, value}` inputs the search form carries so a search keeps
+    /// the sort, page size, filters, and trash view.
+    pub search_params: Vec<Value>,
+
+    /// Page 1 of the same view without the search term.
+    pub clear_search_url: String,
+
+    /// Whether a search or filter narrows the list (selects the "no results"
+    /// empty state instead of "no items yet").
+    pub is_filtered: bool,
+
+    /// Trash view only: how many documents are in the trash regardless of the
+    /// search and filters — what "Empty trash" deletes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trash_total: Option<i64>,
+
     pub table_columns: Vec<Value>,
     pub column_options: Vec<Value>,
     pub filter_fields: Vec<Value>,
     pub active_filters: Vec<Value>,
     pub active_filter_count: usize,
+
+    /// Header label of the title column — the `use_as_title` field's label;
+    /// absent when the column shows document ids.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_label: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_sort_url: Option<String>,

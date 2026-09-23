@@ -9,13 +9,45 @@ class N2fa:
     id: str = ""
     type: Optional[str] = None
     n2fa: Optional[str] = None  # wire: 2fa
+    end: Optional[str] = None
+    private: Optional[str] = None
+    collection: Optional[Literal["2fa"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+@dataclass
+class MediaSizes:
+    thumbnail: Optional[MediaSizesThumbnail] = None
+
+@dataclass
+class MediaSizesThumbnail:
+    url: Optional[str] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    formats: Optional[MediaSizesThumbnailFormats] = None
+
+@dataclass
+class MediaSizesThumbnailFormats:
+    webp: Optional[MediaSizesThumbnailFormatsWebp] = None
+
+@dataclass
+class MediaSizesThumbnailFormatsWebp:
+    url: Optional[str] = None
 
 @dataclass
 class Media:
     id: str = ""
     filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    filesize: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    url: Optional[str] = None
+    focal_x: Optional[float] = None
+    focal_y: Optional[float] = None
+    sizes: Optional[MediaSizes] = None
+    alt: Optional[str] = None
+    collection: Optional[Literal["media"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -29,33 +61,53 @@ class PostsItems:
     id: Optional[str] = None
     label: Optional[str] = None
     meta: Optional[PostsItemsMeta] = None
+    notes: Optional[list[PostsItemsNotes]] = None
 
 @dataclass
 class PostsItemsMeta:
     key: Optional[str] = None
 
 @dataclass
+class PostsItemsNotes:
+    body: Optional[str] = None
+
+@dataclass
 class Posts:
-    """Select fields — status: 'draft', 'published'"""
+    """Select fields — status: 'draft', 'published'; categories: 'news', 'guides'"""
     id: str = ""
     title: Optional[str] = None
     summary: Optional[str] = None
     published_at: Optional[str] = None
     published_at_tz: Optional[str] = None
+    snippet: Optional[str] = None
+    snippet_lang: Optional[str] = None
+    body: Optional[Any] = None
+    teaser: Optional[str] = None
+    scores: Optional[list[float]] = None
+    keywords: Optional[list[str]] = None
+    active: Optional[bool] = None
+    data: Optional[Any] = None
     status: Optional[Literal["draft", "published"]] = None
+    layout: Optional[Literal["grid", "list"]] = None
+    categories: Optional[list[Literal["news", "guides"]]] = None
     author: Optional[str | Users] = None
     tags: Optional[list[str | Tags]] = None
     cover: Optional[str | Media] = None
     # Polymorphic relationship — targets: users, tags
     related: Optional[list[str | Users | Tags]] = None
+    # Polymorphic relationship — targets: users, tags
+    featured: Optional[str | Users | Tags] = None
     seo: Optional[PostsSeo] = None
     items: Optional[list[PostsItems]] = None
     content: Optional[list[dict]] = None
-    scores: Optional[list[float]] = None
-    active: Optional[bool] = None
-    data: Optional[Any] = None
-    _status: Optional[str] = None
+    extra: Optional[dict] = None
+    raw_rows: Optional[list[dict]] = None
+    byline: Optional[str] = None
+    aside: Optional[str] = None
+    tab_note: Optional[str] = None
+    _status: Optional[Literal["draft", "published"]] = None
     _deleted_at: Optional[str] = None
+    collection: Optional[Literal["posts"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -72,20 +124,35 @@ class PostsLocalized:
     summary: Optional[dict[str, Optional[str]]] = None
     published_at: Optional[str] = None
     published_at_tz: Optional[str] = None
+    snippet: Optional[str] = None
+    snippet_lang: Optional[str] = None
+    body: Optional[Any] = None
+    teaser: Optional[str] = None
+    scores: Optional[list[float]] = None
+    keywords: Optional[list[str]] = None
+    active: Optional[bool] = None
+    data: Optional[Any] = None
     status: Optional[Literal["draft", "published"]] = None
+    layout: Optional[Literal["grid", "list"]] = None
+    categories: Optional[list[Literal["news", "guides"]]] = None
     author: Optional[str | Users] = None
     tags: Optional[list[str | Tags]] = None
     cover: Optional[str | Media] = None
     # Polymorphic relationship — targets: users, tags
     related: Optional[list[str | Users | Tags]] = None
+    # Polymorphic relationship — targets: users, tags
+    featured: Optional[str | Users | Tags] = None
     seo: Optional[PostsSeoLocalized] = None
     items: Optional[list[PostsItems]] = None
     content: Optional[list[dict]] = None
-    scores: Optional[list[float]] = None
-    active: Optional[bool] = None
-    data: Optional[Any] = None
-    _status: Optional[str] = None
+    extra: Optional[dict] = None
+    raw_rows: Optional[list[dict]] = None
+    byline: Optional[str] = None
+    aside: Optional[str] = None
+    tab_note: Optional[str] = None
+    _status: Optional[Literal["draft", "published"]] = None
     _deleted_at: Optional[str] = None
+    collection: Optional[Literal["posts"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -93,14 +160,17 @@ class PostsLocalized:
 class Tags:
     id: str = ""
     name: Optional[str] = None
+    collection: Optional[Literal["tags"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
 @dataclass
 class Users:
     id: str = ""
-    name: Optional[str] = None
     email: Optional[str] = None
+    name: Optional[str] = None
+    authored: Optional[list[dict]] = None
+    collection: Optional[Literal["users"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -115,6 +185,17 @@ class Settings:
     id: str = ""
     site_name: Optional[str] = None
     nav: Optional[list[SettingsNav]] = None
+    _status: Optional[Literal["draft", "published"]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+@dataclass
+class SettingsLocalized:
+    """Read with locale=all: localized fields hold one value per locale."""
+    id: str = ""
+    site_name: Optional[dict[str, Optional[str]]] = None
+    nav: Optional[list[SettingsNav]] = None
+    _status: Optional[Literal["draft", "published"]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

@@ -26,9 +26,11 @@ use crate::{
         CollectionDefinition, Document, Registry, SharedEventTransport,
         SharedInvalidationTransport,
         event::{create_event_transport, create_invalidation_transport},
+        upload::create_storage_with_lease,
     },
     db::{DbConnection, DbPool, FindQuery, LocaleContext, migrate, pool, query},
     hooks::{self, HookRunner},
+    service::{AppInfra, StandaloneInfra},
 };
 
 #[cfg(unix)]
@@ -168,7 +170,6 @@ pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
     Ok(cfg)
 }
 
-/// Run `on_init` hooks if configured. Failure aborts startup.
 /// Build event + invalidation transports from config. The Redis URL is shared
 /// with the cache backend (same `[cache] redis_url`). Used by every process
 /// that runs writes — `serve`, the standalone `work` worker, and stdio MCP —
@@ -188,6 +189,55 @@ pub fn create_live_transports(
     Ok((event_transport, invalidation_transport))
 }
 
+/// The process-stable bundle a CLI write through the service layer runs on —
+/// assembled the way `work` and stdio MCP assemble theirs, so the write
+/// behaves like one made on the server: the configured cache drops what it
+/// made stale (a shared Redis cache is `serve`'s own), the config-built live
+/// transports carry its event and any user-stream teardown to `serve`'s
+/// subscribers over Redis, and the storage backend cleans up upload files.
+///
+/// Build it before asking the operator to confirm: a configured Redis that
+/// can't be reached then fails the command before anything is written.
+///
+/// # Errors
+///
+/// Returns an error if a configured Redis transport or cache can't be
+/// constructed, the hook runner fails to start, or storage init fails.
+pub fn cli_infra(
+    config_dir: &Path,
+    registry: &Arc<Registry>,
+    cfg: &CrapConfig,
+    pool: &DbPool,
+) -> Result<Arc<AppInfra>> {
+    let (event_transport, invalidation_transport) = create_live_transports(cfg)?;
+
+    let hook_runner = HookRunner::builder()
+        .config_dir(config_dir)
+        .registry(Arc::clone(registry))
+        .config(cfg)
+        .invalidation_transport(invalidation_transport.clone())
+        .build()?;
+    let storage = create_storage_with_lease(config_dir, &cfg.upload, hook_runner.lua_lease())?;
+
+    AppInfra::standalone(StandaloneInfra {
+        pool: pool.clone(),
+        registry: Arc::clone(registry),
+        hook_runner,
+        storage,
+        token_provider: None,
+        event_transport,
+        invalidation_transport: Some(invalidation_transport),
+        config: cfg,
+        config_dir,
+    })
+}
+
+/// Run `on_init` hooks if configured. Failure aborts startup.
+///
+/// # Errors
+///
+/// Returns an error if a hook fails or its transaction can't be opened or
+/// committed.
 pub fn run_on_init_hooks(cfg: &CrapConfig, pool: &DbPool, hook_runner: &HookRunner) -> Result<()> {
     if cfg.hooks.on_init.is_empty() {
         return Ok(());

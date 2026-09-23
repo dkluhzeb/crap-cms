@@ -21,7 +21,10 @@ pub use definition::{
     PickerAppearance, RequiredLocales, ValidateFunction, to_title_case,
 };
 pub use field_type::FieldType;
-pub use localized_string::LocalizedString;
+pub use localized_string::{
+    LocalizedString, current_label_locale, in_label_locale, set_default_label_locale,
+    spawn_blocking_in_label_locale, with_label_locale,
+};
 pub use references::reference_items;
 pub use relationship::{JoinConfig, RelationshipConfig};
 pub use select_option::SelectOption;

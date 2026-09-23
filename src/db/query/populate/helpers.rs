@@ -8,7 +8,7 @@ use crate::core::{
     CollectionDefinition, Document, DocumentFields, FieldDefinition, cache::CacheBackend,
 };
 use crate::db::query::AccessResult;
-use crate::db::query::filter::memory::matches_constraints_typed;
+use crate::db::query::filter::memory::matches_document;
 use crate::db::query::populate::JoinAccessCheck;
 use crate::db::query::populate::PopulateCtx;
 use crate::db::query::populate::{CachedDoc, Singleflight};
@@ -131,9 +131,7 @@ fn view_allows(access: &AccessResult, raw: &Document, fields: &[FieldDefinition]
     match access {
         AccessResult::Denied => false,
         AccessResult::Allowed => true,
-        AccessResult::Constrained(filters) => {
-            matches_constraints_typed(&raw.fields, filters, fields)
-        }
+        AccessResult::Constrained(filters) => matches_document(raw, filters, fields),
     }
 }
 
@@ -266,10 +264,84 @@ mod tests {
     };
     use std::thread;
 
-    use crate::core::Document;
-    use crate::core::cache::MemoryCache;
+    use tempfile::TempDir;
+
+    use crate::{
+        config::CrapConfig,
+        core::{Document, FieldType, cache::MemoryCache},
+        db::{
+            DbConnection, Filter, FilterClause, FilterOp, FindQuery, pool::create_pool, query::find,
+        },
+    };
 
     use super::*;
+
+    // ── target_row_visible ────────────────────────────────────────────────────
+
+    fn only(field: &str, op: FilterOp) -> Vec<FilterClause> {
+        vec![FilterClause::Single(Filter {
+            field: field.to_string(),
+            op,
+        })]
+    }
+
+    /// A populated target is judged on its full row: a view constraint on `id`
+    /// or a timestamp — columns a `Document` keeps outside its field map — shows
+    /// exactly the targets the SQL read shows. Judged on the field map alone,
+    /// such a constraint hid every target.
+    #[test]
+    fn target_row_id_and_timestamp_constraints_agree_with_sql() {
+        let dir = TempDir::new().unwrap();
+        let pool = create_pool(dir.path(), &CrapConfig::default()).unwrap();
+        let conn = pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO tags VALUES
+               ('t1', 'a', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+               ('t2', 'b', '2026-01-03T00:00:00.000Z', NULL);",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("tags");
+        def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+        def.timestamps = true;
+
+        let constraints = [
+            only("id", FilterOp::Equals("t1".into())),
+            only("id", FilterOp::In(vec!["t2".into(), "x".into()])),
+            only("id", FilterOp::NotEquals("t1".into())),
+            only(
+                "created_at",
+                FilterOp::Equals("2026-01-01T00:00:00.000Z".into()),
+            ),
+            only("updated_at", FilterOp::Exists),
+        ];
+
+        for constraint in constraints {
+            let query = FindQuery::builder().filters(constraint.clone()).build();
+            let shown: Vec<String> = find(&conn, "tags", &def, &query, None)
+                .unwrap()
+                .into_iter()
+                .map(|doc| doc.id.to_string())
+                .collect();
+
+            let views = TargetViews {
+                read: AccessResult::Constrained(constraint.clone()),
+                draft: AccessResult::Denied,
+            };
+
+            for id in ["t1", "t2"] {
+                let raw = find_by_id(&conn, "tags", &def, id, None).unwrap().unwrap();
+
+                assert_eq!(
+                    target_row_visible(&views, &raw, true, &def),
+                    shown.iter().any(|s| s == id),
+                    "{id} under {constraint:?}"
+                );
+            }
+        }
+    }
 
     // ── cache_or_fetch_doc tests ──────────────────────────────────────────────
 

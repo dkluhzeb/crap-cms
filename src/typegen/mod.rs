@@ -16,7 +16,7 @@
 //! - Cross-language helpers (`to_pascal_case`, `is_optional`,
 //!   `rel_has_many`, `sorted_*_slugs`, `collect_sub_type_fields`) —
 //!   `helpers.rs`
-//! - Client-SDK backends — `client/` (`rust.rs`, `typescript.rs`,
+//! - Client-SDK backends — `client/` (`rust.rs`, `typescript/`,
 //!   `go.rs`, `python.rs`, driven by `client/mod.rs`); Lua — `lua/`;
 //!   Rust proto conversion — `rust_proto.rs`.
 //!
@@ -28,6 +28,8 @@
 
 mod client;
 mod dispatch;
+#[cfg(test)]
+mod golden_tests;
 mod helpers;
 mod idents;
 mod language;

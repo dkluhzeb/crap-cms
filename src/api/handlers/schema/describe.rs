@@ -25,12 +25,12 @@ impl ContentService {
                     .labels
                     .singular
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 plural_label: def
                     .labels
                     .plural
                     .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                    .map(|ls| ls.resolve_current().to_string()),
                 // A global's table always carries timestamps.
                 timestamps: true,
                 auth: false,
@@ -48,12 +48,12 @@ impl ContentService {
                 .labels
                 .singular
                 .as_ref()
-                .map(|ls| ls.resolve_default().to_string()),
+                .map(|ls| ls.resolve_current().to_string()),
             plural_label: def
                 .labels
                 .plural
                 .as_ref()
-                .map(|ls| ls.resolve_default().to_string()),
+                .map(|ls| ls.resolve_current().to_string()),
             timestamps: def.timestamps,
             auth: def.is_auth_collection(),
             fields: def.fields.iter().map(field_def_to_proto).collect(),

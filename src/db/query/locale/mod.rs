@@ -15,7 +15,8 @@ pub use select::{get_locale_select_columns, get_locale_select_columns_full};
 
 pub(crate) use context::ReadLocale;
 pub(crate) use localized_columns::{
-    column_is_localized, column_read_expr, per_locale_columns, stored_columns,
+    column_is_localized, column_read_expr, per_locale_columns, qualified_column_read_expr,
+    stored_columns,
 };
 pub(crate) use regroup::{group_locale_fields, regroup_by_locale};
 pub(crate) use write::{

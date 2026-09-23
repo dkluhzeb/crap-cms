@@ -439,8 +439,6 @@ async fn list_items_returns_200() {
 /// - `?where[_status][equals]=published` narrows to published only.
 #[tokio::test]
 async fn list_items_url_status_filter_narrows_drafts_only() {
-    use crap_cms::core::collection::VersionsConfig;
-
     fn posts_with_drafts_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
         def.timestamps = true;
@@ -562,6 +560,32 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     assert!(body.contains("Live Article"));
     assert!(!body.contains("Pending Draft"));
 
+    // Two top-level `_status` rows AND together like any other rows: no
+    // document is both a draft and published, so the list is empty.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?where%5B_status%5D%5Bequals%5D=draft\
+                 &where%5B_status%5D%5Bequals%5D=published",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        0,
+        "draft AND published must match no document"
+    );
+    assert!(!body.contains("Live Article"));
+    assert!(!body.contains("Pending Draft"));
+
     // Empty `where[_status][equals]=` value (the "All" option in the
     // filter drawer) should fall through to showing both rows — the
     // extractor returns None for empty values, the filter UI's
@@ -613,9 +637,10 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     assert!(body.contains("Pending Draft"));
 }
 
-/// Regression for the same-field IN-merge: `?where[title][equals]=A&where[title][equals]=B`
-/// collapses to `WHERE title IN ('A', 'B')` and returns rows matching either.
-/// Cross-field OR via the `where[or][G][N][…]` URL form widens to a true OR.
+/// Regression: `?where[title][equals]=A&where[title][equals]=B` — two rows the
+/// filter builder labels AND — were merged into `title IN ('A', 'B')` and
+/// listed rows matching either. AND rows now AND (no single title is both);
+/// "any of" is the `where[or][G][N][…]` URL form, which widens to a true OR.
 #[tokio::test]
 async fn list_items_or_clause_widens_results() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
@@ -646,7 +671,7 @@ async fn list_items_or_clause_widens_results() {
         body[start..end].matches("<tr").count()
     }
 
-    // Same-field IN merge: two `equals` rows on `title` → `title IN ('Alpha', 'Bravo')`.
+    // Two AND-ed `equals` rows on `title`: no row's title is both.
     let resp = app
         .router
         .clone()
@@ -662,10 +687,11 @@ async fn list_items_or_clause_widens_results() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert_eq!(count_table_rows(&body), 2, "IN merge returns 2 rows");
-    assert!(body.contains("Alpha"));
-    assert!(body.contains("Bravo"));
-    assert!(!body.contains("Charlie"));
+    assert_eq!(
+        count_table_rows(&body),
+        0,
+        "title = Alpha AND title = Bravo matches no row"
+    );
 
     // Cross-field OR via `where[or][G][N][…]`: title=Alpha OR title=Charlie.
     let resp = app
@@ -1761,6 +1787,15 @@ async fn list_items_search_no_results() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    // Regression: a search with no hits showed the "no posts yet / create
+    // the first one" empty state.
+    let body = body_string(resp.into_body()).await;
+    assert!(body.contains("No results"), "filtered empty state");
+    assert!(
+        !body.contains("folder_open"),
+        "not the unfiltered empty state"
+    );
 }
 
 #[tokio::test]
@@ -1798,6 +1833,17 @@ async fn list_items_with_search_and_pagination() {
     // 5 results, per_page=3 → 2 pages with pagination and Next link
     assert!(body.contains("Page 1 of 2"), "should show page info");
     assert!(body.contains("Next"), "should have Next link");
+    // Regression: the page links dropped `per_page`, so page 2 came back at
+    // the default size and overlapped page 1. The search form carries it too.
+    let decoded = body.replace("&#x3D;", "=").replace("&amp;", "&");
+    assert!(
+        decoded.contains("page=2&per_page=3"),
+        "the Next link keeps per_page"
+    );
+    assert!(
+        decoded.contains("name=\"per_page\""),
+        "the search form keeps per_page"
+    );
     assert!(
         !body.contains("Previous"),
         "page 1 should not have Previous link"

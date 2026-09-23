@@ -6,8 +6,8 @@ use tracing::{debug, warn};
 
 use crate::{
     core::{
-        DocumentFields, DocumentId, Hooks, LiveSetting, MutationEventInput, SharedEventTransport,
-        Slug,
+        DocumentFields, DocumentId, EventGateSnapshot, Hooks, LiveMode, LiveSetting,
+        MutationEventInput, SharedEventTransport, Slug,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     hooks::{
@@ -38,9 +38,20 @@ pub struct PublishEventInput {
     pub operation: EventOperation,
     pub collection: Slug,
     pub document_id: DocumentId,
+    /// The document the event concerns, as stored (read-shaped, stripped for
+    /// no one): what the `live` filter and `before_broadcast` hooks see, and —
+    /// in `Full` mode, after those hooks — the payload each subscriber's own
+    /// field-read strip starts from.
     pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
     pub view: EventViewMeta,
+    /// What the event delivers: `Full` publishes `data` for per-subscriber
+    /// stripping; `Metadata` (the default) publishes none of it.
+    pub mode: LiveMode,
+    /// The stored row, for judging subscribers' row constraints only — never
+    /// handed to the `live` filter or `before_broadcast` hooks, never
+    /// delivered (see [`EventGateSnapshot`]).
+    pub gate: Option<EventGateSnapshot>,
 }
 
 impl PublishEventInput {
@@ -50,16 +61,24 @@ impl PublishEventInput {
         PublishEventInputBuilder::new(target, operation)
     }
 
-    /// Convert into the transport-facing [`MutationEventInput`].
+    /// Convert into the transport-facing [`MutationEventInput`]: the document
+    /// travels only in `Full` mode — a `Metadata`-mode event publishes none of
+    /// it, whatever the hooks before it saw.
     fn into_transport_input(self) -> MutationEventInput {
+        let data = match self.mode {
+            LiveMode::Full => self.data,
+            LiveMode::Metadata => DocumentFields::new(),
+        };
+
         MutationEventInput {
             target: self.target,
             operation: self.operation,
             collection: self.collection,
             document_id: self.document_id,
-            data: self.data,
+            data,
             edited_by: self.edited_by,
             view: self.view,
+            gate: self.gate,
         }
     }
 }
@@ -73,6 +92,8 @@ pub struct PublishEventInputBuilder {
     data: DocumentFields,
     edited_by: Option<EventUser>,
     view: EventViewMeta,
+    mode: LiveMode,
+    gate: Option<EventGateSnapshot>,
 }
 
 impl PublishEventInputBuilder {
@@ -85,6 +106,8 @@ impl PublishEventInputBuilder {
             data: DocumentFields::new(),
             edited_by: None,
             view: EventViewMeta::default(),
+            mode: LiveMode::default(),
+            gate: None,
         }
     }
 
@@ -114,6 +137,19 @@ impl PublishEventInputBuilder {
         self
     }
 
+    /// Set what the event delivers (see [`PublishEventInput::mode`]).
+    pub fn mode(mut self, mode: LiveMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Attach the stored-row snapshot subscribers' row constraints are judged
+    /// against (see [`EventGateSnapshot`]).
+    pub fn gate(mut self, gate: Option<EventGateSnapshot>) -> Self {
+        self.gate = gate;
+        self
+    }
+
     pub fn build(self) -> PublishEventInput {
         PublishEventInput {
             target: self.target,
@@ -123,6 +159,8 @@ impl PublishEventInputBuilder {
             data: self.data,
             edited_by: self.edited_by,
             view: self.view,
+            mode: self.mode,
+            gate: self.gate,
         }
     }
 }
@@ -231,7 +269,7 @@ impl HookRunner {
     #[cfg(not(tarpaulin_include))]
     pub fn publish_event(
         &self,
-        event_transport: &Option<SharedEventTransport>,
+        event_transport: Option<&SharedEventTransport>,
         hooks: &Hooks,
         live_setting: Option<&LiveSetting>,
         input: PublishEventInput,
@@ -283,6 +321,8 @@ fn publish_event_blocking(
         data,
         edited_by,
         view,
+        mode,
+        gate,
     } = input;
 
     let broadcast_data = match runner.run_before_broadcast(
@@ -310,6 +350,8 @@ fn publish_event_blocking(
         data: broadcast_data,
         edited_by,
         view,
+        mode,
+        gate,
     }
     .into_transport_input();
 
@@ -319,8 +361,48 @@ fn publish_event_blocking(
 #[cfg(test)]
 mod tests {
     use mlua::Lua;
+    use serde_json::json;
 
     use super::*;
+
+    fn input(mode: LiveMode) -> PublishEventInput {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+
+        PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
+            .collection("posts")
+            .document_id("doc-1")
+            .data(data)
+            .mode(mode)
+            .build()
+    }
+
+    /// The document reaches the transport only in `Full` mode; a `Metadata`
+    /// event publishes none of it, although its hooks saw it.
+    #[test]
+    fn the_document_travels_only_in_full_mode() {
+        let full = input(LiveMode::Full).into_transport_input();
+        assert_eq!(full.data.get_str("title"), Some("Hello"));
+
+        let metadata = input(LiveMode::Metadata).into_transport_input();
+        assert!(metadata.data.is_empty());
+    }
+
+    /// Without an explicit mode an event delivers no document (fail-safe).
+    #[test]
+    fn the_default_mode_delivers_no_document() {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+
+        let event = PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
+            .collection("posts")
+            .document_id("doc-1")
+            .data(data)
+            .build()
+            .into_transport_input();
+
+        assert!(event.data.is_empty());
+    }
 
     fn verdict(code: &str) -> Result<bool> {
         let lua = Lua::new();

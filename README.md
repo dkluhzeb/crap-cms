@@ -189,6 +189,8 @@ cargo xtask gen-template-doc    # regen docs/src/admin-ui/reference/template-con
 
 CI gates on `--check` variants of both. See [`xtask/README.md`](xtask/README.md) for the full subcommand list and how to add a new one.
 
+The generated Lua types (`types/crap.lua` plus the per-schema `hooks.lua` of the typegen kitchen-sink schema) are checked for zero Warning-level diagnostics by a real [lua-language-server](https://github.com/LuaLS/lua-language-server) in `cargo test` (`typegen::golden_tests::lua_types_pass_a_luals_check`) when one is installed. The test looks for the binary in `$CRAP_LUALS`, then `lua-language-server` on `PATH`, then a Mason install (`~/.local/share/nvim/mason/bin`), and skips with a note when none is found. A hermetic annotation-grammar check of the same files always runs.
+
 Default templates and static files are compiled into the binary via `include_dir!`. The config directory overlay takes priority — any file placed in `{config_dir}/static/` or `{config_dir}/templates/` is served from disk without rebuilding. Only changes to the *embedded* defaults (under `static/` or `templates/` in the source tree) require `cargo build`.
 
 Dev mode (`admin.dev_mode = true` in `crap.toml`) reloads templates from disk on every request instead of caching them.
@@ -249,7 +251,7 @@ cd docs && mdbook serve            # local preview at localhost:3000
 | `sqlite` | yes | SQLite backend (bundled, no runtime dependency). |
 | `postgres` | no | PostgreSQL backend (via `tokio-postgres` + `deadpool-postgres`). |
 | `s3-storage` | no | S3-compatible upload storage (AWS S3, MinIO, R2, B2, Spaces). |
-| `redis` | no | Redis-backed cache and cross-node live-update transport. |
+| `redis` | no | Redis-backed cache, rate limits and cross-node live-update transport (`rediss://` URLs connect over TLS). |
 | `browser-tests` | no | Headless Chrome end-to-end tests (via `chromiumoxide`). |
 
 Enable a feature at build time with `cargo build --features <name>` (combine with commas).

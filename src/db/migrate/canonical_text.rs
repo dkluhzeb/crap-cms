@@ -29,12 +29,14 @@ use crate::{
         migrate::{
             collection::compound_index_columns,
             helpers::{
-                Scan, block_paths, field_paths, for_each_row, update_by_id, versioned_fingerprint,
+                Scan, block_paths, field_paths, for_each_row, holds_leaf, update_by_id,
+                versioned_fingerprint,
             },
             meta,
         },
-        query::helpers::{
-            global_table, join_table, locale_column, prefixed_name, walk_leaf_fields,
+        query::{
+            helpers::{global_table, join_table, prefixed_name, walk_leaf_fields},
+            stored_columns,
         },
     },
 };
@@ -286,16 +288,18 @@ fn push_field_columns(
         FieldChildren::Array(sub) => {
             push_array_columns(columns, &join_table(&main_table, &base), sub);
         }
-        FieldChildren::Blocks(defs) if defs.iter().any(|d| holds_text(&d.fields)) => {
+        FieldChildren::Blocks(defs)
+            if defs.iter().any(|d| holds_leaf(&d.fields, &keeps_canonical)) =>
+        {
             let stored = Stored::Blocks(defs.to_vec());
             let table = join_table(&main_table, &base);
             columns.push(Column::builder(table, "data".to_string(), stored).build());
         }
         _ if has_canonical_form(&field.field_type) && field.has_parent_column() => {
             let unique = field.unique || (target.auth() && base == "email");
-            let localized = (inherited || field.localized) && locale_config.is_enabled();
+            let localized = inherited || field.localized;
 
-            for name in locale_columns(&base, localized, locale_config)? {
+            for name in stored_columns(&base, localized, locale_config)? {
                 let stored = Stored::Value(field.field_type.clone());
                 let column = Column::builder(main_table.clone(), name, stored);
                 columns.push(column.unique(unique).build());
@@ -307,23 +311,6 @@ fn push_field_columns(
     Ok(())
 }
 
-/// A field's column names: one per locale when localized.
-fn locale_columns(
-    base: &str,
-    localized: bool,
-    locale_config: &LocaleConfig,
-) -> Result<Vec<String>> {
-    if !localized {
-        return Ok(vec![base.to_string()]);
-    }
-
-    locale_config
-        .locales
-        .iter()
-        .map(|locale| locale_column(base, locale))
-        .collect()
-}
-
 /// The columns of an array join table holding email or text values: a
 /// sub-field's own column, or the JSON of a group, array or blocks inside it.
 fn push_array_columns(columns: &mut Vec<Column>, table: &str, sub: &[FieldDefinition]) {
@@ -333,7 +320,7 @@ fn push_array_columns(columns: &mut Vec<Column>, table: &str, sub: &[FieldDefini
                 Stored::Value(sf.field_type.clone())
             }
             FieldChildren::Group(_) | FieldChildren::Array(_) | FieldChildren::Blocks(_)
-                if holds_text(slice::from_ref(sf)) =>
+                if holds_leaf(slice::from_ref(sf), &keeps_canonical) =>
             {
                 Stored::Json(Box::new(sf.clone()))
             }
@@ -342,18 +329,6 @@ fn push_array_columns(columns: &mut Vec<Column>, table: &str, sub: &[FieldDefini
 
         columns.push(Column::builder(table.to_string(), sf.name.clone(), stored).build());
     }
-}
-
-/// Whether email or text values can sit anywhere in `fields`.
-fn holds_text(fields: &[FieldDefinition]) -> bool {
-    fields.iter().any(|field| match field_children(field) {
-        FieldChildren::Group(sub) | FieldChildren::Wrapper(sub) | FieldChildren::Array(sub) => {
-            holds_text(sub)
-        }
-        FieldChildren::Tabs(tabs) => tabs.iter().any(|tab| holds_text(&tab.fields)),
-        FieldChildren::Blocks(defs) => defs.iter().any(|d| holds_text(&d.fields)),
-        FieldChildren::Leaf => has_canonical_form(&field.field_type),
-    })
 }
 
 /// Canonicalize the email and text values of a JSON value — the value of the

@@ -175,15 +175,14 @@ fn render_collection_hook(opts: &MakeHookOptions) -> Result<String> {
     // collection's typed shape applies (delete carries only `{ id =
     // "..." }`; broadcast may run cross-collection). For those use
     // the generic `crap.any.collection_hook` factory; otherwise the
-    // per-collection accessor narrows `ctx` per collection.
-    let is_generic = matches!(
-        opts.position,
-        "before_delete" | "after_delete" | "before_broadcast"
-    );
-    let factory_expr = if is_generic {
-        "crap.any.collection_hook(".to_string()
-    } else {
-        factory_expr(opts.collection, opts.is_global, "hook")
+    // per-collection accessor narrows `ctx` per collection — `after_read`
+    // through `read_hook`, whose `ctx.data` is the read-shape document.
+    let factory_expr = match opts.position {
+        "before_delete" | "after_delete" | "before_broadcast" => {
+            "crap.any.collection_hook(".to_string()
+        }
+        "after_read" => factory_expr(opts.collection, opts.is_global, "read_hook"),
+        _ => factory_expr(opts.collection, opts.is_global, "hook"),
     };
 
     render(
@@ -651,6 +650,32 @@ mod tests {
         assert!(content.contains("function(context)"));
     }
 
+    /// An `after_read` hook's `ctx.data` is the read document, so the
+    /// scaffold wraps it in the read-hook factory.
+    #[test]
+    fn after_read_hook_uses_the_read_hook_factory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_hook(&make_opts(
+            tmp.path(),
+            "enrich",
+            HookType::Collection,
+            "posts",
+            "after_read",
+            None,
+            false,
+        ))
+        .unwrap();
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/enrich.lua")).unwrap();
+        assert!(
+            content.contains("crap.collections.posts.read_hook("),
+            "{content}"
+        );
+        assert!(
+            !content.contains("crap.collections.posts.hook("),
+            "{content}"
+        );
+    }
+
     #[test]
     fn collection_hook_multi_word_slug() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -739,15 +764,17 @@ mod tests {
         assert!(content.contains("crap.any.collection_hook("));
     }
 
+    /// `before_read` has no document yet, so it takes the generic typed
+    /// `hook` factory (`after_read` has its own `read_hook`).
     #[test]
-    fn read_uses_typed_context() {
+    fn before_read_uses_typed_context() {
         let tmp = tempfile::tempdir().expect("tempdir");
         make_hook(&make_opts(
             tmp.path(),
             "filter",
             HookType::Collection,
             "posts",
-            "after_read",
+            "before_read",
             None,
             false,
         ))

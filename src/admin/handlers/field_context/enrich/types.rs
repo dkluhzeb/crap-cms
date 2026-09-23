@@ -481,7 +481,7 @@ fn build_blocks_row(
         .find(|bd| bd.block_type == block_type);
 
     let block_label = block_def
-        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_default().to_string()))
+        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_current().to_string()))
         .unwrap_or_else(|| block_type.to_string());
 
     let sub_fields = block_def
@@ -613,7 +613,7 @@ fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
             f.options
                 .iter()
                 .map(|o| RichtextNodeAttrOption {
-                    label: o.label.resolve_default().to_string(),
+                    label: o.label.resolve_current().to_string(),
                     value: o.value.clone(),
                 })
                 .collect(),
@@ -631,12 +631,12 @@ fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
             .admin
             .placeholder
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         description: f
             .admin
             .description
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string()),
+            .map(|ls| ls.resolve_current().to_string()),
         hidden: if f.admin.hidden { Some(true) } else { None },
         readonly: if f.admin.readonly { Some(true) } else { None },
         width: f.admin.width.as_ref().map(|w| w.as_str().to_owned()),

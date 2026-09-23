@@ -18,5 +18,6 @@ pub use find_by_id::{find_document_by_id, read_own_document};
 pub use get_global::get_global_document;
 pub use search::search_documents;
 pub use validate_filters::{
+    QueryFieldRefs, is_hidden_query_path, query_field_paths, unreadable_query_paths,
     validate_access_constraint_locales, validate_access_constraints, validate_user_filters,
 };

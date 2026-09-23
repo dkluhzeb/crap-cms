@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use serde_json::{Map, Value};
 use tokio::{select, sync::mpsc, task, time::timeout};
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
@@ -113,21 +114,45 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
     }
     .evaluate(event)?;
 
+    Some(to_proto_event(event, &visible))
+}
+
+/// The proto message a subscriber receives: the event's public metadata and
+/// the already-gated `visible` data.
+fn to_proto_event(event: &MutationEvent, visible: &Map<String, Value>) -> content::MutationEvent {
+    // Exhaustive on purpose: a field added to `MutationEvent` fails to compile
+    // here until it is decided whether subscribers may see it. What stays
+    // server-side: the unstripped `data` (only `visible` is sent), the editor's
+    // identity, the view metadata, and the gating snapshot.
+    let MutationEvent {
+        sequence,
+        publisher,
+        timestamp,
+        target,
+        operation,
+        collection,
+        document_id,
+        data: _,
+        edited_by: _,
+        view: _,
+        gate: _,
+    } = event;
+
     let fields: HashMap<String, content::FieldValue> = visible
         .iter()
         .map(|(k, v)| (k.clone(), json_to_field_value(v)))
         .collect();
 
-    Some(content::MutationEvent {
-        sequence: event.sequence,
-        publisher: event.publisher.clone(),
-        timestamp: event.timestamp.clone(),
-        target: enum_mapping::mutation_target(&event.target).into(),
-        operation: enum_mapping::mutation_operation(&event.operation).into(),
-        collection: event.collection.to_string(),
-        document_id: event.document_id.to_string(),
+    content::MutationEvent {
+        sequence: *sequence,
+        publisher: publisher.clone(),
+        timestamp: timestamp.clone(),
+        target: enum_mapping::mutation_target(target).into(),
+        operation: enum_mapping::mutation_operation(operation).into(),
+        collection: collection.to_string(),
+        document_id: document_id.to_string(),
         data: Some(content::DataMap { fields }),
-    })
+    }
 }
 
 /// Resolved subscribe access: the shared per-view access maps plus the
@@ -579,7 +604,20 @@ fn requested_operations(ops: Vec<String>) -> Result<HashSet<String>, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::json;
+
     use super::*;
+    use crate::{
+        config::CrapConfig,
+        core::{
+            CollectionDefinition, DocumentFields, DocumentId, EventGateSnapshot, FieldDefinition,
+            FieldType, LiveMode, Slug,
+            event::{EventOperation, EventTarget, EventViewMeta},
+        },
+        db::{EventViewGate, Filter, FilterClause, FilterOp},
+    };
 
     #[test]
     fn requested_operations_validates_names() {
@@ -728,5 +766,120 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+    }
+
+    /// A subscriber to `posts` (delivered in `mode`) whose published view
+    /// carries `constraints`.
+    fn posts_subscriber(mode: LiveMode, constraints: Vec<FilterClause>) -> SubscriberCtx {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.live_mode = mode;
+        posts.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("owner", FieldType::Text).build(),
+        ];
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts);
+        let registry = Arc::new(registry);
+
+        let config_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests");
+        let hook_runner = HookRunner::builder()
+            .config_dir(&config_dir)
+            .registry(Arc::clone(&registry))
+            .config(&CrapConfig::test_default())
+            .build()
+            .expect("hook runner");
+
+        let maps = EventAccessMap {
+            collection_views: HashMap::from([(
+                "posts".to_string(),
+                EventViewGate {
+                    published: Some(constraints),
+                    draft: None,
+                    trash: None,
+                },
+            )]),
+            collection_modes: HashMap::from([("posts".to_string(), mode)]),
+            ..EventAccessMap::empty()
+        };
+
+        SubscriberCtx {
+            access: SubscribeAccess {
+                maps,
+                user_doc: None,
+            },
+            requested_ops: HashSet::new(),
+            hook_runner,
+            registry,
+        }
+    }
+
+    /// An update to a `posts` row owned by `u1`: the delivered `data` holds the
+    /// title only; the gating snapshot holds the stored row.
+    fn owned_update() -> MutationEvent {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+
+        let mut row = Document::new("d1");
+        row.fields.insert("title".to_string(), json!("Hello"));
+        row.fields
+            .insert("owner".to_string(), json!("gate-only-sentinel-u1"));
+
+        MutationEvent {
+            sequence: 1,
+            publisher: "node-a".to_string(),
+            timestamp: "2026-09-23T00:00:00Z".to_string(),
+            target: EventTarget::Collection,
+            operation: EventOperation::Update,
+            collection: Slug::new("posts"),
+            document_id: DocumentId::new("d1"),
+            data,
+            edited_by: None,
+            view: Some(EventViewMeta::default()),
+            gate: Some(EventGateSnapshot::of(&row)),
+        }
+    }
+
+    fn owner_is(owner: &str) -> Vec<FilterClause> {
+        vec![FilterClause::Single(Filter {
+            field: "owner".to_string(),
+            op: FilterOp::Equals(owner.to_string()),
+        })]
+    }
+
+    /// Security: the gating snapshot decides delivery on the gRPC stream but
+    /// never reaches the proto message, in either mode.
+    #[test]
+    fn proto_event_never_carries_the_gating_snapshot() {
+        for mode in [LiveMode::Full, LiveMode::Metadata] {
+            let ctx = posts_subscriber(mode, owner_is("gate-only-sentinel-u1"));
+
+            let delivered = process_event(&owned_update(), &ctx).expect("row matches");
+            let printed = format!("{delivered:?}");
+
+            assert!(
+                !printed.contains("gate-only-sentinel"),
+                "{mode:?}: {printed}"
+            );
+            assert!(
+                !delivered
+                    .data
+                    .as_ref()
+                    .is_some_and(|d| d.fields.contains_key("owner")),
+                "{mode:?}: {printed}"
+            );
+        }
+    }
+
+    /// The gRPC stream judges a constrained subscriber against the snapshot:
+    /// another owner's row is dropped in both modes.
+    #[test]
+    fn proto_stream_gates_on_the_snapshot() {
+        for mode in [LiveMode::Full, LiveMode::Metadata] {
+            let ctx = posts_subscriber(mode, owner_is("u2"));
+
+            assert!(process_event(&owned_update(), &ctx).is_none(), "{mode:?}");
+        }
     }
 }

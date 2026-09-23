@@ -34,7 +34,7 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
             .options
             .iter()
             .map(|o| content::SelectOptionInfo {
-                label: o.label.resolve_default().to_string(),
+                label: o.label.resolve_current().to_string(),
                 value: o.value.clone(),
             })
             .collect(),
@@ -45,7 +45,7 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
             .iter()
             .map(|bd| content::BlockInfo {
                 block_type: bd.block_type.clone(),
-                label: bd.label.as_ref().map(|ls| ls.resolve_default().to_string()),
+                label: bd.label.as_ref().map(|ls| ls.resolve_current().to_string()),
                 fields: bd.fields.iter().map(field_def_to_proto).collect(),
                 group: bd.group.clone(),
                 image_url: bd.image_url.clone(),

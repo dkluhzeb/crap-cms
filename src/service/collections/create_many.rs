@@ -11,7 +11,7 @@
 use crate::{
     core::{DocumentFields, event::EventOperation},
     db::LocaleContext,
-    service::{ServiceContext, ServiceError, WriteInput, create_document_in_conn, run_pool_write},
+    service::{ServiceContext, ServiceError, WriteInput, create_document_gated, run_pool_write},
     typegen::lua::LuaAnnotation,
 };
 
@@ -98,11 +98,13 @@ fn create_many_pooled(
 ) -> Result<CreateManyResult> {
     enforce_bulk_limit("create_many", items.len(), opts.max_documents)?;
 
-    run_pool_write(
+    let (result, _) = run_pool_write(
         ctx,
         (!opts.run_hooks).then_some(false),
         |inner| {
             let mut documents = Vec::with_capacity(items.len());
+            // Each document's stored row for its event, in lockstep with `documents`.
+            let mut rows = Vec::with_capacity(items.len());
             let mut created = 0i64;
 
             for item in items {
@@ -117,13 +119,14 @@ fn create_many_pooled(
 
                 // A failure here returns via `?`; the envelope rolls back
                 // every document created so far.
-                let (doc, _after_ctx) = create_document_in_conn(inner, input)?;
+                let ((doc, _after_ctx), row) = create_document_gated(inner, input)?;
 
                 // Inside the transaction with the account itself — see the
                 // single-document create.
                 inner.maybe_send_verification(&doc)?;
 
                 documents.push(doc);
+                rows.push(row);
                 created += 1;
             }
 
@@ -131,16 +134,18 @@ fn create_many_pooled(
             // envelope's `tx.commit()`, so an expiry here still rolls back.
             opts.deadline.check(created)?;
 
-            Ok(CreateManyResult { created, documents })
+            Ok((CreateManyResult { created, documents }, rows))
         },
-        |ctx, result| {
+        |ctx, (result, rows)| {
             // Per-doc events are gated by `ctx.emit_events` (bulk defaults to
             // off). Verification emails went in with the transaction body.
-            for doc in &result.documents {
-                ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
+            for (doc, row) in result.documents.iter().zip(rows) {
+                ctx.publish_mutation_event(EventOperation::Create, &doc.id, row.clone());
             }
         },
-    )
+    )?;
+
+    Ok(result)
 }
 
 /// Conn mode (Lua): create on existing connection without transaction management.
@@ -164,10 +169,10 @@ fn create_many_on_conn(
             .ui_locale(ctx.ui_locale.clone())
             .build();
 
-        let (doc, _after_ctx) = create_document_in_conn(ctx, input)?;
+        let ((doc, _after_ctx), row) = create_document_gated(ctx, input)?;
 
         // Gated by `ctx.emit_events`; verification emails always send.
-        ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
+        ctx.publish_mutation_event(EventOperation::Create, &doc.id, row);
         ctx.maybe_send_verification(&doc)?;
         documents.push(doc);
         created += 1;

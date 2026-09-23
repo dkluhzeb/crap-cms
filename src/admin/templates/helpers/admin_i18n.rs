@@ -67,6 +67,7 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "op_not_exists",
     "op_and",
     "op_or",
+    "filter_status_or_mixed",
     "status",
     "created",
     "updated",

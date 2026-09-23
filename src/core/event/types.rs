@@ -1,8 +1,16 @@
 //! Mutation event payload types.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
-use crate::core::{DocumentFields, DocumentId, Slug};
+use crate::{
+    core::{Document, DocumentFields, DocumentId, FieldDefinition, Slug},
+    db::{
+        FilterClause,
+        query::filter::memory::{constraint_row, matches_constraints_typed},
+    },
+};
 
 /// The type of entity that was mutated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,9 +97,11 @@ pub struct EventViewMeta {
 }
 
 impl EventViewMeta {
-    /// Derive view metadata from a document's full fields (create/update path),
-    /// read **before** `live_mode` stripping. `_status` names the status view;
-    /// a non-null `_deleted_at` marks the row as trashed.
+    /// Derive view metadata from a stored row's fields — the row a write
+    /// stored, or the row a delete removed as it last stood (a soft-deleted
+    /// row as trashed). `_status` names the status view; a non-null
+    /// `_deleted_at` marks the row as trashed, which gates the event by the
+    /// trash view.
     #[must_use]
     pub fn from_fields(fields: &DocumentFields) -> Self {
         Self {
@@ -99,16 +109,49 @@ impl EventViewMeta {
             trashed: fields.get("_deleted_at").is_some_and(|v| !v.is_null()),
         }
     }
+}
 
-    /// View metadata for a delete event, whose payload is intentionally empty.
-    /// A soft-delete is trashed; a hard-delete is gated by the document's
-    /// pre-deletion status.
+/// The stored row a mutation event concerns, carried with the event only so a
+/// subscriber's row constraints can be judged against it — never delivered.
+///
+/// A `Metadata`-mode event and every delete carry no document `data`, and a
+/// `Full`-mode payload may be reshaped by `before_broadcast`; neither says what
+/// the row holds. The snapshot does: the document's stored fields, including
+/// hidden and read-denied ones (a row constraint filters on stored columns, as
+/// the SQL read path does), plus `id` and the timestamps — for a delete, as
+/// read just before the row was removed (a soft delete: as trashed).
+///
+/// Opaque by construction: nothing outside this type can read what it holds.
+/// The only operation on it is [`matches`](Self::matches), so no delivery
+/// encoder can copy it into a subscriber's payload, and `Debug` redacts it.
+/// It is serialized only for the multi-node transport (Redis), which is
+/// server-to-server.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EventGateSnapshot(DocumentFields);
+
+impl EventGateSnapshot {
+    /// Snapshot a document as stored: its fields plus the `id` and timestamp
+    /// columns a row constraint can name, which a [`Document`] keeps outside
+    /// its field map — the same row every other in-memory judge of a document
+    /// builds (see [`constraint_row`]).
     #[must_use]
-    pub fn for_delete(soft_delete: bool, pre_status: Option<String>) -> Self {
-        Self {
-            status: pre_status,
-            trashed: soft_delete,
-        }
+    pub fn of(doc: &Document) -> Self {
+        Self(constraint_row(doc))
+    }
+
+    /// Whether the snapshotted row satisfies `constraints` — the in-memory
+    /// counterpart of the SQL `WHERE` a read applies, coerced by the owning
+    /// definition's `fields`.
+    #[must_use]
+    pub fn matches(&self, constraints: &[FilterClause], fields: &[FieldDefinition]) -> bool {
+        matches_constraints_typed(&self.0, constraints, fields)
+    }
+}
+
+impl fmt::Debug for EventGateSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "EventGateSnapshot(<{} fields redacted>)", self.0.len())
     }
 }
 
@@ -146,6 +189,15 @@ pub struct MutationEvent {
     /// unchanged for new events.
     #[serde(default)]
     pub view: Option<EventViewMeta>,
+    /// The stored row, for judging subscribers' row constraints only (see
+    /// [`EventGateSnapshot`]). `None` when the publishing operation emitted no
+    /// snapshot — an event from a node that predates it, or one whose snapshot
+    /// was dropped to fit the transport's size cap. A subscriber whose view
+    /// carries a row constraint never receives such an event (fail-closed);
+    /// unconstrained views are unaffected. Omitted from the wire when `None`,
+    /// and ignored as an unknown key by a node that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<EventGateSnapshot>,
 }
 
 /// Inputs required to publish a mutation event. The transport fills in the
@@ -158,6 +210,7 @@ pub struct MutationEventInput {
     pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
     pub view: EventViewMeta,
+    pub gate: Option<EventGateSnapshot>,
 }
 
 #[cfg(test)]
@@ -165,6 +218,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::db::{Filter, FilterOp};
 
     #[test]
     fn view_meta_from_fields_reads_status_and_trashed() {
@@ -194,17 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn view_meta_for_delete_sets_trash_from_soft_delete() {
-        let soft = EventViewMeta::for_delete(true, Some("published".into()));
-        assert!(soft.trashed);
-        assert_eq!(soft.status.as_deref(), Some("published"));
-
-        let hard = EventViewMeta::for_delete(false, Some("draft".into()));
-        assert!(!hard.trashed);
-        assert_eq!(hard.status.as_deref(), Some("draft"));
-    }
-
-    #[test]
     fn mutation_event_roundtrips_through_json() {
         // Required for the Redis transport's JSON wire format.
         let event = MutationEvent {
@@ -217,7 +260,11 @@ mod tests {
             document_id: DocumentId::new("abc"),
             data: DocumentFields::new(),
             edited_by: Some(EventUser::new("u1", "u@example.com")),
-            view: Some(EventViewMeta::for_delete(false, Some("draft".into()))),
+            view: Some(EventViewMeta {
+                status: Some("draft".into()),
+                trashed: false,
+            }),
+            gate: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
@@ -249,5 +296,114 @@ mod tests {
             decoded.view.is_none(),
             "absent view must decode to None (fail-closed at the consumer)"
         );
+    }
+
+    fn owned_doc() -> Document {
+        let mut doc = Document::new("doc-1");
+        doc.fields.insert("owner".into(), json!("u1"));
+        doc.fields.insert("secret".into(), json!("s3cr3t-sentinel"));
+        doc.created_at = Some("2026-01-01T00:00:00Z".into());
+        doc
+    }
+
+    fn owner_is(owner: &str) -> Vec<FilterClause> {
+        vec![FilterClause::Single(Filter {
+            field: "owner".into(),
+            op: FilterOp::Equals(owner.into()),
+        })]
+    }
+
+    /// The snapshot carries the columns a row constraint can name that a
+    /// `Document` keeps outside its field map — `id` and the timestamps — so a
+    /// constraint such as `{ id = user.id }` is judged as SQL judges it.
+    #[test]
+    fn gate_snapshot_carries_id_and_timestamps() {
+        let snapshot = EventGateSnapshot::of(&owned_doc());
+
+        let id_is = |id: &str| {
+            vec![FilterClause::Single(Filter {
+                field: "id".into(),
+                op: FilterOp::Equals(id.into()),
+            })]
+        };
+        assert!(snapshot.matches(&id_is("doc-1"), &[]));
+        assert!(!snapshot.matches(&id_is("other"), &[]));
+
+        let created = vec![FilterClause::Single(Filter {
+            field: "created_at".into(),
+            op: FilterOp::Exists,
+        })];
+        assert!(snapshot.matches(&created, &[]));
+
+        // An absent timestamp is not invented.
+        let updated = vec![FilterClause::Single(Filter {
+            field: "updated_at".into(),
+            op: FilterOp::Exists,
+        })];
+        assert!(!snapshot.matches(&updated, &[]));
+    }
+
+    #[test]
+    fn gate_snapshot_matches_the_stored_row() {
+        let snapshot = EventGateSnapshot::of(&owned_doc());
+
+        assert!(snapshot.matches(&owner_is("u1"), &[]));
+        assert!(!snapshot.matches(&owner_is("u2"), &[]));
+    }
+
+    /// Logging an event must not print the stored row it carries for gating.
+    #[test]
+    fn gate_snapshot_debug_is_redacted() {
+        let mut event = sample_event();
+        event.gate = Some(EventGateSnapshot::of(&owned_doc()));
+
+        let printed = format!("{event:?}");
+
+        assert!(!printed.contains("s3cr3t-sentinel"), "{printed}");
+        assert!(printed.contains("redacted"), "{printed}");
+    }
+
+    fn sample_event() -> MutationEvent {
+        MutationEvent {
+            sequence: 1,
+            publisher: "node-a".into(),
+            timestamp: "2024-01-01T00:00:00Z".into(),
+            target: EventTarget::Collection,
+            operation: EventOperation::Delete,
+            collection: Slug::new("posts"),
+            document_id: DocumentId::new("doc-1"),
+            data: DocumentFields::new(),
+            edited_by: None,
+            view: Some(EventViewMeta::default()),
+            gate: None,
+        }
+    }
+
+    /// The multi-node transport carries the snapshot: it survives the JSON
+    /// round trip and still judges constraints on the receiving node.
+    #[test]
+    fn gate_snapshot_roundtrips_through_json() {
+        let mut event = sample_event();
+        event.gate = Some(EventGateSnapshot::of(&owned_doc()));
+
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.gate, event.gate);
+        let gate = decoded.gate.expect("snapshot survives the wire");
+        assert!(gate.matches(&owner_is("u1"), &[]));
+        assert!(!gate.matches(&owner_is("u2"), &[]));
+    }
+
+    /// No snapshot → no `gate` key on the wire; an event without one (from a
+    /// node that predates it) decodes to `None`, which the gate treats as
+    /// unjudgeable for a constrained view.
+    #[test]
+    fn absent_gate_snapshot_is_omitted_and_decodes_to_none() {
+        let json = serde_json::to_string(&sample_event()).unwrap();
+        assert!(!json.contains("\"gate\""), "{json}");
+
+        let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
+        assert!(decoded.gate.is_none());
     }
 }

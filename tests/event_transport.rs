@@ -30,7 +30,7 @@ use crap_cms::config::LiveConfig;
 #[cfg(not(feature = "redis"))]
 use crap_cms::config::LiveTransport;
 use crap_cms::core::{
-    DocumentFields, DocumentId, EventViewMeta, Slug,
+    Document, DocumentFields, DocumentId, EventGateSnapshot, EventViewMeta, Slug,
     event::{
         EventOperation, EventTarget, InProcessEventBus, InProcessInvalidationBus,
         InvalidationTransport, MutationEventInput, RecvError, SharedEventTransport,
@@ -47,6 +47,7 @@ fn sample_input() -> MutationEventInput {
         data: DocumentFields::new(),
         edited_by: None,
         view: EventViewMeta::default(),
+        gate: Some(EventGateSnapshot::of(&Document::new("doc-1"))),
     }
 }
 
@@ -60,6 +61,11 @@ async fn in_process_event_transport_roundtrip() {
     let ev = rx.recv().await.expect("receive event");
     assert_eq!(ev.collection, "posts");
     assert_eq!(ev.operation, EventOperation::Create);
+    assert_eq!(
+        ev.gate,
+        sample_input().gate,
+        "the gating snapshot travels with the event"
+    );
 }
 
 #[tokio::test]

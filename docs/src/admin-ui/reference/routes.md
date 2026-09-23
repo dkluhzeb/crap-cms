@@ -43,6 +43,47 @@ invalid `_status` value, or invalid pagination params returns **400
 Bad Request** naming the offending parameter — invalid params are
 never silently ignored.
 
+Filter rows combine exactly as written. Every top-level `where[field][op]=value`
+row must match, and so must every row inside one OR bucket — two rows on the
+same field AND together (`where[tags][equals]=a&where[tags][equals]=b` asks
+for a list holding both `a` and `b`, or on a single-value field for a value
+that is both). "Any of" is an OR group: `where[or][G][N][field][op]=value`,
+one bucket `N` per alternative. A has-many field is matched element by element
+(see [Query & Filters](../../query-and-filters/overview.md#has-many-fields-element-by-element)).
+
+A `_status` row inside an OR group (`where[or][G][N][_status][equals]=…`)
+is accepted only when every row of that group filters `_status` (a status
+union) or the group has a single bucket (a plain AND). Mixing `_status`
+with another field across OR buckets returns **400**: the status filter
+applies to the whole list, so honoring it inside an OR would silently turn
+the OR into an AND. The 400 message is translated into the viewer's UI
+language (translation key `filter_status_or_mixed`).
+
+`_status` rows combine like every other row: top-level rows, and the rows of
+one OR bucket, AND together — `where[_status][equals]=draft&where[_status][equals]=published`
+lists no document, since none is both — while the buckets of an OR group are
+a union. Contradicting rows keep one filter pill each.
+
+The filter builder (`<crap-filter-builder>`) never produces that shape: a
+row can join the row above it with OR only when both rows filter `_status`
+or neither does. Otherwise its OR choice is disabled (an OR already picked
+falls back to AND — also when a row's field is changed to or from
+`_status`, or a row is added or removed) and the builder shows a hint
+explaining why. `_status` rows can still be OR'd with each other.
+
+The list only offers — as columns, sort headers, and filter fields — fields
+the viewer may filter and sort on: never a `hidden` field, never one whose
+`access.read` denies this viewer without row data, and (for filters) only
+fields with a column on the collection's own table. A sort or filter the
+viewer requests on such a field anyway returns **403** naming the field;
+an `admin.default_sort` on a field the viewer cannot read is dropped for
+that viewer instead of refusing the list.
+
+Every list link — pages, cursors, sort headers, the search form, clearing
+the search, removing a filter pill — keeps the view's `search`, `sort`,
+`per_page`, filters, and trash view; links that change the filters or the
+search reset the page position (`page`, `after_cursor`, `before_cursor`).
+
 ## API routes (admin)
 
 | Route | Method | Description |

@@ -16,6 +16,16 @@ use crate::core::{FieldChildren, FieldDefinition, FieldType, field_children, fin
 /// Returns `None` when the column cannot be mapped to a known field —
 /// callers fall back to `DbValue::Text` binding.
 pub(crate) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
+    lookup_column_field(col, fields).map(|f| f.field_type.clone())
+}
+
+/// The leaf field a parent-table column stores — the definition behind
+/// [`lookup_column_field_type`], for callers that need more than the type
+/// (whether the column holds a has-many list, say).
+pub(crate) fn lookup_column_field<'a>(
+    col: &str,
+    fields: &'a [FieldDefinition],
+) -> Option<&'a FieldDefinition> {
     // Fast path: a top-level scalar/layout leaf named exactly `col`.
     if let Some(f) = find_field(col, fields)
         && !matches!(
@@ -23,7 +33,7 @@ pub(crate) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) ->
             FieldType::Group | FieldType::Array | FieldType::Blocks | FieldType::Relationship
         )
     {
-        return Some(f.field_type.clone());
+        return Some(f);
     }
 
     // Group column: split on `__` and walk the tree. If the final segment
@@ -34,49 +44,29 @@ pub(crate) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) ->
         return None;
     }
 
-    if let Some(ft) = walk_group_path(&parts, fields) {
-        return Some(ft);
-    }
-
-    // Retry without trailing segment to handle locale-suffixed columns.
-    if parts.len() >= 2 {
-        let without_tail = &parts[..parts.len() - 1];
-        return walk_group_path(without_tail, fields);
-    }
-
-    None
+    walk_group_path(&parts, fields).or_else(|| walk_group_path(&parts[..parts.len() - 1], fields))
 }
 
 /// Walk a `__`-separated path through Group fields (and transparent layout
-/// wrappers) to find the leaf field type.
-fn walk_group_path(parts: &[&str], fields: &[FieldDefinition]) -> Option<FieldType> {
-    if parts.is_empty() {
-        return None;
-    }
-
+/// wrappers) to find the leaf field.
+fn walk_group_path<'a>(
+    parts: &[&str],
+    fields: &'a [FieldDefinition],
+) -> Option<&'a FieldDefinition> {
+    let (last, groups) = parts.split_last()?;
     let mut current = fields;
-    let mut leaf_type: Option<FieldType> = None;
 
-    for (i, seg) in parts.iter().enumerate() {
-        let is_last = i == parts.len() - 1;
-        let found = find_field(seg, current)?;
+    // Only a Group extends a `__`-joined flat-column path; any other
+    // container/leaf terminates the walk.
+    for seg in groups {
+        let FieldChildren::Group(sub) = field_children(find_field(seg, current)?) else {
+            return None;
+        };
 
-        if is_last {
-            leaf_type = Some(found.field_type.clone());
-            break;
-        }
-
-        // Only a Group extends a `__`-joined flat-column path; any other
-        // container/leaf terminates the walk.
-        match field_children(found) {
-            FieldChildren::Group(sub) => {
-                current = sub;
-            }
-            _ => return None,
-        }
+        current = sub;
     }
 
-    leaf_type
+    find_field(last, current)
 }
 
 #[cfg(test)]

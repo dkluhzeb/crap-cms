@@ -48,7 +48,7 @@ Each collection can control what data events carry:
 
 - **`metadata`** (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id (plus `self` on admin SSE). No document data is included. Metadata mode skips the per-subscriber `after_read` hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The `before_broadcast` hook **still runs** (once per event, pre-dispatch) and the collection's `live` filter function still gates whether the event is broadcast at all. Clients re-fetch via `FindByID` if they need document data.
 
-- **`full`** — events carry complete document data, processed through `after_read` hooks and field-level access stripping — the same data a `Find` or `FindByID` call would return. Opt-in per collection.
+- **`full`** — events carry complete document data, processed through `after_read` hooks and field-level access stripping — the same data a `Find` or `FindByID` call by that subscriber would return. Opt-in per collection. Each subscriber's payload starts from the document **as stored** (as a `before_broadcast` hook left it), never from the document as returned to the user who made the change: a subscriber allowed a field the editor may not read receives it, and a field the subscriber may not read is stripped whatever the editor could read. Hidden fields never reach any subscriber.
 
 **Performance note:** In `full` mode, `after_read` hooks run once per event per subscriber. For collections with expensive hooks and many subscribers, use `metadata` mode and let clients re-fetch.
 
@@ -131,14 +131,60 @@ independent `read` (published) / `draft` / `trash` keys that gate normal reads:
 - A **draft** document's create/update event needs `draft` (default: falls back
   to `update`). A `read`-only subscriber never sees draft events.
 - A **soft-delete** event needs `trash`; a hard-delete is gated by the view the
-  document was last in.
+  document was last in — `trash` for a document that was in the trash (a purge
+  of the trash, or a forced permanent delete of a trashed document), its
+  `read`/`draft` view otherwise.
 
 The event carries this view metadata independent of `mode`, so gating holds even
 in `metadata` mode and for delete events, where the payload is empty. The views
 are independent: a draft-only reviewer (granted `draft`, denied `read`) receives
 draft events but not published ones.
 
-Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered. (An event whose payload is empty — `metadata` mode, or any delete — cannot satisfy a non-empty row constraint, so a constrained subscriber is fail-closed for those events.)
+Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered.
+
+**What a constraint is judged against.** Every event carries, next to what it
+delivers, a snapshot of the stored row it concerns — used only to judge
+subscribers' row constraints and **never delivered** to any subscriber, in
+either mode, on either stream. The snapshot is the row as stored, the way the
+SQL read path filters it: hidden and read-denied fields included, plus `id`
+and the timestamps. So:
+
+- a `metadata`-mode event reaches a constrained subscriber exactly when the
+  changed row satisfies the constraint — still as metadata only;
+- a **delete** (soft or hard, single or bulk, on every surface) reaches a
+  constrained subscriber exactly when the deleted row satisfied it. A hard
+  delete is judged against the row as it was just before removal, a soft
+  delete against the row as it now sits in the trash (gated by the `trash`
+  view);
+- a `full`-mode event is judged against the stored row, not its delivered
+  payload — a `before_broadcast` hook that reshapes `data` changes neither
+  which subscribers receive it nor lets a payload claim a row it isn't.
+
+Within the snapshot, a field held as `null` matches as a SQL `NULL` does (only
+`not_exists`). An event that carries no snapshot — one published by a node that
+predates it during a rolling upgrade, or one whose snapshot was dropped to fit
+the Redis transport's payload cap — cannot be judged, so a constrained
+subscriber never receives it (fail-closed); unconstrained subscribers receive
+it as usual.
+
+**Purges publish their deletes.** Every permanent delete publishes a delete
+event — a purge of already-trashed documents included: the scheduled
+retention purge, "Empty trash" in the admin, `crap-cms trash purge` /
+`trash empty`, and a `delete_many` with `trash = true` that opts into events.
+Each purged document's event is gated by the `trash` view and judged against
+the row as it sat in the trash, and it is published only once the purge has
+committed. The CLI publishes on the configured transport: with `transport =
+"redis"` the purge reaches `serve`'s subscribers like any other process's
+writes; with the in-memory transport a CLI process has no subscribers of its
+own. A large purge publishes one event per document — burst coalescing
+collapses only repeated events for the *same* document, so a purge larger
+than `channel_capacity` can make a slow subscriber lag and be disconnected
+(see *Subscriber lifecycle*); it reconnects and refetches, as after any
+missed events.
+
+**CLI writes publish like the server's.** `crap-cms trash restore` publishes
+an undelete event and `crap-cms user delete` a delete event, on the same
+configured transport as the CLI purges.
 
 Access is snapshotted at subscribe time and re-resolved only on reconnect.
 
@@ -162,7 +208,9 @@ Access is snapshotted at subscribe time and re-resolved only on reconnect.
 > consumers **drop it** (fail-closed) rather than guess a view. Live updates are
 > best-effort (clients refetch on reconnect), so this only means a brief gap in
 > events originating from not-yet-upgraded nodes; gating is fully effective once
-> every node is upgraded.
+> every node is upgraded. The same holds for the stored-row snapshot: an event
+> from a node that predates it reaches only subscribers without a row
+> constraint.
 
 ## Event Structure
 
@@ -175,8 +223,11 @@ Access is snapshotted at subscribe time and re-resolved only on reconnect.
 | `operation` | `"create"`, `"update"`, `"delete"`, `"undelete"`, `"unpublish"`, `"restore"` | ✅ | ✅ |
 | `collection` | Collection or global slug | ✅ | ✅ |
 | `document_id` | Document ID | ✅ | ✅ |
-| `data` | Document fields (hook-processed) | empty | ✅ |
+| `data` | Document fields, stripped and hook-processed for the subscriber | empty | ✅ |
 | `self` | Whether the subscriber made the change (admin SSE only) | ✅ | ✅ |
+
+The stored-row snapshot used for row-constraint gating is not part of the
+delivered event.
 
 Events never identify the editing user to subscribers — exposing editor
 ids/emails would leak PII. The server-side `live` filter and
@@ -189,17 +240,23 @@ Transaction:
   before-hooks → DB operation → after-hooks → commit
 
 After commit:
-  -> publish_event()
+  -> publish_event()           (the event carries the stored document)
        1. live setting check (enabled/disabled/function)
        2. before_broadcast hooks (can modify/suppress)
-       3. EventBus.publish()
+       3. EventBus.publish()   (metadata mode: the document is dropped here)
             -> Per subscriber:
                  a. content-view access (cached read/draft/trash)
-                 b. row-level constraints (cached, in-memory)
+                 b. row-level constraints (cached, in-memory, judged
+                    against the event's stored-row snapshot)
                  c. mode:
                     metadata → deliver metadata only
-                    full → after_read hooks → field strip → deliver
+                    full → field strip (the subscriber's access) → hidden
+                           strip → after_read hooks → deliver
 ```
+
+The `live` filter and the `before_broadcast` hooks see the document as stored
+— read-shaped, with hidden and read-denied fields, in both modes — like
+`after_change` does; they run once per event, before any subscriber's strip.
 
 The content-view access and row constraints (a, b) are resolved **once at
 subscribe time** and reused. The field strip in (c) is **not** cached — each

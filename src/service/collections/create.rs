@@ -3,7 +3,7 @@
 use crate::{
     core::event::EventOperation,
     service::{
-        ServiceContext, ServiceError, WriteInput, WriteResult, create_document_in_conn,
+        ServiceContext, ServiceError, WriteInput, WriteResult, create_document_gated,
         run_pool_write,
     },
 };
@@ -35,34 +35,36 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
 /// Pool-based create: the shared write envelope with create's post-commit
 /// effects (mutation event + verification email for auth collections).
 fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    run_pool_write(
+    let (result, _) = run_pool_write(
         ctx,
         None,
         |inner| {
-            let result = create_document_in_conn(inner, input)?;
+            let written = create_document_gated(inner, input)?;
 
             // Inside the transaction, not after it: the account, its
             // verification token, and the queued email commit together or
             // not at all. Minting the token post-commit leaves a window in
             // which a stop or crash yields an account nobody can verify and
             // nothing queued to retry.
-            inner.maybe_send_verification(&result.0)?;
+            inner.maybe_send_verification(&written.0.0)?;
 
-            Ok(result)
+            Ok(written)
         },
-        |ctx, result| {
-            ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
+        |ctx, (result, row)| {
+            ctx.publish_mutation_event(EventOperation::Create, &result.0.id, row.clone());
         },
-    )
+    )?;
+
+    Ok(result)
 }
 
 /// Conn-based create: uses existing connection (Lua CRUD path).
 fn create_document_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let result = create_document_in_conn(ctx, input)?;
+    let (result, row) = create_document_gated(ctx, input)?;
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
+    ctx.publish_mutation_event(EventOperation::Create, &result.0.id, row);
     ctx.maybe_send_verification(&result.0)?;
 
     Ok(result)

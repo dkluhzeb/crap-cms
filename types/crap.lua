@@ -771,18 +771,18 @@ function crap.fields.join(config) end
 --- number / boolean values on the right-hand side are treated as
 --- `equals` automatically.
 --- @class crap.FilterOperators
---- @field equals? crap.FilterScalar Exact match (`field = value`).
---- @field not_equals? crap.FilterScalar Not equal (`field != value`).
---- @field like? string SQL `LIKE` pattern (`field LIKE value`).
---- @field contains? string Substring match (`field LIKE %value%`).
---- @field greater_than? crap.FilterScalar Greater than (`field > value`).
---- @field less_than? crap.FilterScalar Less than (`field < value`).
---- @field greater_than_or_equal? crap.FilterScalar Greater than or equal (`field >= value`).
---- @field less_than_or_equal? crap.FilterScalar Less than or equal (`field <= value`).
---- @field ["in"]? crap.FilterScalar[] Value in list (`field IN (...)`).
---- @field not_in? crap.FilterScalar[] Value not in list (`field NOT IN (...)`).
---- @field exists? boolean Field is not null (`IS NOT NULL`). Only `true` is accepted — `false` is an error.
---- @field not_exists? boolean Field is null (`IS NULL`). Only `true` is accepted — `false` is an error.
+--- @field equals? crap.FilterScalar Exact match (`field = value`); on a has-many list, some element equals the value.
+--- @field not_equals? crap.FilterScalar Not equal (`field != value`); on a has-many list, no element equals the value.
+--- @field like? string SQL `LIKE` pattern (`field LIKE value`); on a has-many list, some element matches.
+--- @field contains? string Substring match (`field LIKE %value%`); on a has-many list, some element contains it.
+--- @field greater_than? crap.FilterScalar Greater than (`field > value`); on a has-many list, some element is.
+--- @field less_than? crap.FilterScalar Less than (`field < value`); on a has-many list, some element is.
+--- @field greater_than_or_equal? crap.FilterScalar Greater than or equal (`field >= value`); on a has-many list, some element is.
+--- @field less_than_or_equal? crap.FilterScalar Less than or equal (`field <= value`); on a has-many list, some element is.
+--- @field ["in"]? crap.FilterScalar[] Value in list (`field IN (...)`); on a has-many list, some element is in it.
+--- @field not_in? crap.FilterScalar[] Value not in list (`field NOT IN (...)`); on a has-many list, no element is in it.
+--- @field exists? boolean Field is not null (`IS NOT NULL`); a has-many list holds at least one element. Only `true` is accepted — `false` is an error.
+--- @field not_exists? boolean Field is null (`IS NULL`); a has-many list holds no element. Only `true` is accepted — `false` is an error.
 
 --- One filter value in a `where` clause: scalar (treated as
 --- `equals`) or operator table.
@@ -1778,7 +1778,7 @@ crap.storage = {}
 --- Register a custom storage backend's handler. **Init-only** — call from
 --- `init.lua` when `[upload] storage = "custom"`. Stores the handler as
 --- `crap._storage`; the custom backend delegates every operation to it.
---- @param handler { put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), exists?: fun(key: string): boolean }  Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key.
+--- @param handler { put: fun(key: string, data: string, content_type: string), get: (fun(key: string): string?), delete: fun(key: string), exists?: (fun(key: string): boolean) }  Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key.
 function crap.storage.register(handler) end
 
 

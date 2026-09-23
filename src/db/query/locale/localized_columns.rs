@@ -11,7 +11,7 @@ use crate::{
     db::{
         LocaleContext,
         query::{
-            helpers::{locale_column, prefixed_name, quote_ident, walk_leaf_fields},
+            helpers::{locale_column, prefixed_name, qualified_ident, walk_leaf_fields},
             is_valid_identifier, localized_join_keys,
         },
     },
@@ -64,6 +64,32 @@ pub(crate) fn column_read_expr(
     fields: &[FieldDefinition],
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<String> {
+    read_expr_in(None, column, fields, locale_ctx)
+}
+
+/// [`column_read_expr`] with every column qualified by `table` — the same read
+/// expression, for a comparand evaluated inside a subquery whose own FROM item
+/// (a `json_each` expansion, say) exposes columns that would shadow a bare name.
+///
+/// # Errors
+///
+/// Returns an error if `column` is not a plain identifier, or if a configured
+/// locale code has no column form.
+pub(crate) fn qualified_column_read_expr(
+    table: &str,
+    column: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<String> {
+    read_expr_in(Some(table), column, fields, locale_ctx)
+}
+
+fn read_expr_in(
+    table: Option<&str>,
+    column: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<String> {
     if !is_valid_identifier(column) {
         bail!("Invalid field name '{column}': must be alphanumeric/underscore");
     }
@@ -72,10 +98,10 @@ pub(crate) fn column_read_expr(
         .filter(|ctx| ctx.config.is_enabled() && column_is_localized(column, fields) == Some(true));
 
     let Some(ctx) = localized else {
-        return Ok(quote_ident(column));
+        return Ok(qualified_ident(table, column));
     };
 
-    ctx.rows_read_locale().column_expr(column)
+    ctx.rows_read_locale().qualified_column_expr(table, column)
 }
 
 /// The stored columns of the leaf column `name`: one per configured locale when
@@ -177,6 +203,23 @@ mod tests {
         let expr = column_read_expr("title", &title_fields(), Some(&de)).unwrap();
 
         assert_eq!(expr, "COALESCE(\"title__de\", \"title__en\")");
+    }
+
+    /// The qualified read expression is the same expression with every column
+    /// prefixed by its table, localized or not.
+    #[test]
+    fn a_qualified_read_expression_prefixes_every_column() {
+        let de = ctx(LocaleMode::Single("de".into()));
+        let fields = title_fields();
+
+        assert_eq!(
+            qualified_column_read_expr("posts", "title", &fields, Some(&de)).unwrap(),
+            "COALESCE(\"posts\".\"title__de\", \"posts\".\"title__en\")"
+        );
+        assert_eq!(
+            qualified_column_read_expr("posts", "slug", &fields, Some(&de)).unwrap(),
+            "\"posts\".\"slug\""
+        );
     }
 
     /// The default locale has nothing to fall back to, and a shared column has

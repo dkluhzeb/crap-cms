@@ -77,7 +77,7 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
     ),
     // Per-field value mappings — one field → one value/column/schema, no descent.
     (
-        "src/admin/handlers/collections/list_helpers.rs",
+        "src/admin/handlers/collections/list_helpers/cells.rs",
         1,
         "per-field list-column render (value map)",
     ),

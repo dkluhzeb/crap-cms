@@ -34,12 +34,12 @@ use serde_json::Value;
 use crate::{
     core::{CollectionDefinition, Document, FieldDefinition, prefixed_name, walk_leaf_fields},
     db::{Filter, FilterClause, FilterOp},
-    service::{ReadHooks, ServiceError, helpers::collect_api_hidden_field_names},
+    service::{ServiceContext, ServiceError, helpers::collect_api_hidden_field_names},
 };
 
 /// What a read query references by field: the filter paths plus the sort
 /// column. Shared by the unreadable-field check across find/count/search.
-pub(crate) struct QueryFieldRefs<'a> {
+pub struct QueryFieldRefs<'a> {
     pub filters: &'a [FilterClause],
     pub order_by: Option<&'a str>,
 }
@@ -48,8 +48,30 @@ pub(crate) struct QueryFieldRefs<'a> {
 ///
 /// A filter is an oracle: `where = { secret = { like = "a%" } }` recovers a
 /// value the read strip would have removed, and a sort exposes its ordering.
-/// Two rules, one chokepoint (every read surface funnels through the service
-/// find/count/search):
+/// Every read surface funnels through the service find/count/search, which
+/// call this; the rule itself is [`unreadable_query_paths`].
+///
+/// `_rank` is the one virtual sort and is skipped.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` naming the first unreadable field, or the error from
+/// resolving the context's read hooks / collection definition.
+pub(crate) fn reject_unreadable_query_fields(
+    ctx: &ServiceContext,
+    locale: Option<&str>,
+    refs: &QueryFieldRefs<'_>,
+) -> Result<(), ServiceError> {
+    let paths = query_field_paths(refs);
+
+    match unreadable_query_paths(ctx, locale, &paths)?.first() {
+        Some(path) => Err(unreadable(path)),
+        None => Ok(()),
+    }
+}
+
+/// The subset of `paths` (in order) the caller may not filter or sort on. Two
+/// rules:
 ///
 /// - **`hidden` fields** (API-hidden, at any depth) are never filterable or
 ///   sortable — static, user-independent.
@@ -59,52 +81,55 @@ pub(crate) struct QueryFieldRefs<'a> {
 ///   referenced keys with `null` values. A data-dependent rule that needs the
 ///   row therefore denies (fail-closed).
 ///
-/// `_rank` is the one virtual sort and is skipped.
+/// The one predicate behind [`reject_unreadable_query_fields`]; the admin list
+/// view asks it too, so it never offers a column, sort, or filter the read
+/// would refuse.
 ///
 /// # Errors
 ///
-/// Returns `AccessDenied` naming the first unreadable field.
-pub(crate) fn reject_unreadable_query_fields(
-    hooks: &dyn ReadHooks,
-    def: &CollectionDefinition,
-    slug: &str,
-    user: Option<&Document>,
+/// Returns the error from resolving the context's read hooks or collection
+/// definition.
+pub fn unreadable_query_paths(
+    ctx: &ServiceContext,
     locale: Option<&str>,
-    refs: &QueryFieldRefs<'_>,
-) -> Result<(), ServiceError> {
-    let paths = referenced_field_paths(refs);
+    paths: &[String],
+) -> Result<Vec<String>, ServiceError> {
     if paths.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    let hidden = collect_api_hidden_field_names(&def.fields, "");
-    for path in &paths {
-        if hidden
-            .iter()
-            .any(|d| denial_covers(&d.display_path(), path))
-        {
-            return Err(unreadable(path));
-        }
-    }
+    let hooks = ctx.read_hooks()?;
+    let def = ctx.collection_def()?;
 
     let mut probe = Document::new(String::new());
-    for path in &paths {
+    for path in paths {
         probe.fields.insert(root_key(path).to_string(), Value::Null);
     }
-    hooks.strip_read_access_doc(&def.fields, &mut probe, slug, user, locale);
+    hooks.strip_read_access_doc(&def.fields, &mut probe, ctx.slug, ctx.user, locale);
 
-    for path in &paths {
-        if !probe.fields.contains_key(root_key(path)) {
-            return Err(unreadable(path));
-        }
-    }
+    Ok(paths
+        .iter()
+        .filter(|path| {
+            is_hidden_query_path(def, path) || !probe.fields.contains_key(root_key(path))
+        })
+        .cloned()
+        .collect())
+}
 
-    Ok(())
+/// Whether `path` is, or lies beneath, a `hidden` field — never filterable or
+/// sortable for anyone. The static half of [`unreadable_query_paths`], exposed
+/// for definition-time checks (an `admin.default_sort` on a hidden field).
+#[must_use]
+pub fn is_hidden_query_path(def: &CollectionDefinition, path: &str) -> bool {
+    collect_api_hidden_field_names(&def.fields, "")
+        .iter()
+        .any(|d| denial_covers(&d.display_path(), path))
 }
 
 /// Every field path a query references: filter leaves (recursively through
 /// AND/OR groups) and the sort column (minus the `-` prefix and `_rank`).
-fn referenced_field_paths(refs: &QueryFieldRefs<'_>) -> Vec<String> {
+#[must_use]
+pub fn query_field_paths(refs: &QueryFieldRefs<'_>) -> Vec<String> {
     let mut paths = Vec::new();
     for clause in refs.filters {
         collect_filter_paths(clause, &mut paths);
@@ -275,10 +300,10 @@ fn check_access_filter(
     let field = &filter.field;
 
     // A dotted relationship/JSON path (`author.id`, `meta.tags`) resolves via a
-    // SQL subquery, but the in-memory matcher (live events, populated targets)
-    // only sees flat fields and fails closed on it — a divergence. Reject it so
-    // the two paths can never disagree; denormalize to a flat own column
-    // (e.g. `author_id`) instead.
+    // SQL subquery, while the in-memory matcher (live events, populated
+    // targets) judges it from whatever the payload carries — a populated,
+    // partial or empty value — so the two could disagree. Reject it;
+    // denormalize to a flat own column (e.g. `author_id`) instead.
     if field.contains('.') {
         return Err(ServiceError::HookError(format!(
             "Access hook for '{slug}' constrains the path '{field}' — access rules must reference a flat own column, not a dotted relationship/JSON path (it evaluates inconsistently across the SQL and in-memory enforcement paths). Denormalize to a flat field (e.g. 'author_id') instead."

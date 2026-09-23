@@ -8,7 +8,8 @@ mod update;
 
 // Re-export list helpers
 pub(super) use super::list_helpers::{
-    build_column_options, build_filter_fields, build_filter_pills, compute_cells, resolve_columns,
+    FilterPillInputs, ListFieldAccess, active_filter_count, build_column_options,
+    build_filter_fields, build_filter_pills, compute_cells, resolve_columns, title_label,
 };
 
 // Re-export form error rendering

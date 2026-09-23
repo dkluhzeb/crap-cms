@@ -717,7 +717,7 @@ mod tests {
             .conn(&conn)
             .write_hooks(&wh)
             .build();
-        let doc = restore_collection_version_core(&ctx, "p1", "v1", &lc).unwrap();
+        let (doc, _) = restore_collection_version_core(&ctx, "p1", "v1", &lc).unwrap();
         assert_eq!(doc.get_str("title"), Some("Restored Title"));
     }
 }

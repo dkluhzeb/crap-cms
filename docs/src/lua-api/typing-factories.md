@@ -142,6 +142,7 @@ end)
 | Hook applies to multiple fields of one collection | `crap.collections.<slug>.field_hook(fn)` |
 | Hook applies to multiple collections | `crap.any.field_hook(fn)` |
 | Collection hook on a specific collection (typed `ctx`) | `crap.collections.<slug>.hook(fn)` |
+| `after_read` hook on a specific collection (`ctx.data` typed as the read document) | `crap.collections.<slug>.read_hook(fn)` |
 | Collection hook used across collections | `crap.any.collection_hook(fn)` |
 | `before_delete` / `after_delete` / `before_broadcast` | `crap.any.collection_hook(fn)` (runtime always sends generic ctx) |
 | Display condition tied to a collection's data | `crap.collections.<slug>.condition(fn)` |

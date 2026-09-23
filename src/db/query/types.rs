@@ -109,62 +109,62 @@ pub const FILTER_OP_SPECS: [FilterOpSpec; 12] = [
     FilterOpSpec {
         name: "equals",
         value: FilterOpValueKind::Scalar,
-        doc: "Exact match (`field = value`).",
+        doc: "Exact match (`field = value`); on a has-many list, some element equals the value.",
     },
     FilterOpSpec {
         name: "not_equals",
         value: FilterOpValueKind::Scalar,
-        doc: "Not equal (`field != value`).",
+        doc: "Not equal (`field != value`); on a has-many list, no element equals the value.",
     },
     FilterOpSpec {
         name: "like",
         value: FilterOpValueKind::Text,
-        doc: "SQL `LIKE` pattern (`field LIKE value`).",
+        doc: "SQL `LIKE` pattern (`field LIKE value`); on a has-many list, some element matches.",
     },
     FilterOpSpec {
         name: "contains",
         value: FilterOpValueKind::Text,
-        doc: "Substring match (`field LIKE %value%`).",
+        doc: "Substring match (`field LIKE %value%`); on a has-many list, some element contains it.",
     },
     FilterOpSpec {
         name: "greater_than",
         value: FilterOpValueKind::Scalar,
-        doc: "Greater than (`field > value`).",
+        doc: "Greater than (`field > value`); on a has-many list, some element is.",
     },
     FilterOpSpec {
         name: "less_than",
         value: FilterOpValueKind::Scalar,
-        doc: "Less than (`field < value`).",
+        doc: "Less than (`field < value`); on a has-many list, some element is.",
     },
     FilterOpSpec {
         name: "greater_than_or_equal",
         value: FilterOpValueKind::Scalar,
-        doc: "Greater than or equal (`field >= value`).",
+        doc: "Greater than or equal (`field >= value`); on a has-many list, some element is.",
     },
     FilterOpSpec {
         name: "less_than_or_equal",
         value: FilterOpValueKind::Scalar,
-        doc: "Less than or equal (`field <= value`).",
+        doc: "Less than or equal (`field <= value`); on a has-many list, some element is.",
     },
     FilterOpSpec {
         name: "in",
         value: FilterOpValueKind::ScalarList,
-        doc: "Value in list (`field IN (...)`).",
+        doc: "Value in list (`field IN (...)`); on a has-many list, some element is in it.",
     },
     FilterOpSpec {
         name: "not_in",
         value: FilterOpValueKind::ScalarList,
-        doc: "Value not in list (`field NOT IN (...)`).",
+        doc: "Value not in list (`field NOT IN (...)`); on a has-many list, no element is in it.",
     },
     FilterOpSpec {
         name: "exists",
         value: FilterOpValueKind::True,
-        doc: "Field is not null (`IS NOT NULL`). Only `true` is accepted — `false` is an error.",
+        doc: "Field is not null (`IS NOT NULL`); a has-many list holds at least one element. Only `true` is accepted — `false` is an error.",
     },
     FilterOpSpec {
         name: "not_exists",
         value: FilterOpValueKind::True,
-        doc: "Field is null (`IS NULL`). Only `true` is accepted — `false` is an error.",
+        doc: "Field is null (`IS NULL`); a has-many list holds no element. Only `true` is accepted — `false` is an error.",
     },
 ];
 

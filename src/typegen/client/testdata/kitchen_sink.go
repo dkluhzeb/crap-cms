@@ -36,14 +36,50 @@ type N2fa struct {
 	ID        string  `json:"id"`
 	Type      *string `json:"type,omitempty"`
 	N2fa      *string `json:"2fa,omitempty"`
+	End       *string `json:"end,omitempty"`
+	Private   *string `json:"private,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
+}
+
+// MediaSizes represents the sizes group field.
+type MediaSizes struct {
+	Thumbnail *MediaSizesThumbnail `json:"thumbnail,omitempty"`
+}
+
+// MediaSizesThumbnail represents the thumbnail group field.
+type MediaSizesThumbnail struct {
+	Url       *string `json:"url,omitempty"`
+	Width     *float64 `json:"width,omitempty"`
+	Height    *float64 `json:"height,omitempty"`
+	Formats   *MediaSizesThumbnailFormats `json:"formats,omitempty"`
+}
+
+// MediaSizesThumbnailFormats represents the formats group field.
+type MediaSizesThumbnailFormats struct {
+	Webp      *MediaSizesThumbnailFormatsWebp `json:"webp,omitempty"`
+}
+
+// MediaSizesThumbnailFormatsWebp represents the webp group field.
+type MediaSizesThumbnailFormatsWebp struct {
+	Url       *string `json:"url,omitempty"`
 }
 
 // Media represents a media document.
 type Media struct {
 	ID        string  `json:"id"`
 	Filename  *string `json:"filename,omitempty"`
+	MimeType  *string `json:"mime_type,omitempty"`
+	Filesize  *float64 `json:"filesize,omitempty"`
+	Width     *float64 `json:"width,omitempty"`
+	Height    *float64 `json:"height,omitempty"`
+	Url       *string `json:"url,omitempty"`
+	FocalX    *float64 `json:"focal_x,omitempty"`
+	FocalY    *float64 `json:"focal_y,omitempty"`
+	Sizes     *MediaSizes `json:"sizes,omitempty"`
+	Alt       *string `json:"alt,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -59,11 +95,17 @@ type PostsItems struct {
 	ID        *string `json:"id,omitempty"`
 	Label     *string `json:"label,omitempty"`
 	Meta      *PostsItemsMeta `json:"meta,omitempty"`
+	Notes     []PostsItemsNotes `json:"notes,omitempty"`
 }
 
 // PostsItemsMeta represents the meta group field.
 type PostsItemsMeta struct {
 	Key       *string `json:"key,omitempty"`
+}
+
+// PostsItemsNotes represents a row in the notes array field.
+type PostsItemsNotes struct {
+	Body      *string `json:"body,omitempty"`
 }
 
 // Posts represents a posts document.
@@ -73,20 +115,35 @@ type Posts struct {
 	Summary   *string `json:"summary,omitempty"`
 	PublishedAt *string `json:"published_at,omitempty"`
 	PublishedAtTz *string `json:"published_at_tz,omitempty"`
+	Snippet   *string `json:"snippet,omitempty"`
+	SnippetLang *string `json:"snippet_lang,omitempty"`
+	Body      interface{} `json:"body,omitempty"`
+	Teaser    *string `json:"teaser,omitempty"`
+	Scores    []float64 `json:"scores,omitempty"`
+	Keywords  []string `json:"keywords,omitempty"`
+	Active    *bool `json:"active,omitempty"`
+	Data      interface{} `json:"data,omitempty"`
 	Status    *PostsStatus `json:"status,omitempty"`
+	Layout    *PostsLayout `json:"layout,omitempty"`
+	Categories []PostsCategories `json:"categories,omitempty"`
 	Author    *Rel[Users] `json:"author,omitempty"`
 	Tags      []Rel[Tags] `json:"tags,omitempty"`
 	Cover     *Rel[Media] `json:"cover,omitempty"`
 	// Polymorphic relationship — targets: users, tags
 	Related   []interface{} `json:"related,omitempty"`
+	// Polymorphic relationship — targets: users, tags
+	Featured  interface{} `json:"featured,omitempty"`
 	Seo       *PostsSeo `json:"seo,omitempty"`
 	Items     []PostsItems `json:"items,omitempty"`
 	Content   []map[string]interface{} `json:"content,omitempty"`
-	Scores    []float64 `json:"scores,omitempty"`
-	Active    *bool `json:"active,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
+	Extra     map[string]interface{} `json:"extra,omitempty"`
+	RawRows   []map[string]interface{} `json:"raw_rows,omitempty"`
+	Byline    *string `json:"byline,omitempty"`
+	Aside     *string `json:"aside,omitempty"`
+	TabNote   *string `json:"tab_note,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	DeletedAt *string `json:"_deleted_at,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -104,20 +161,35 @@ type PostsLocalized struct {
 	Summary   map[string]*string `json:"summary,omitempty"`
 	PublishedAt *string `json:"published_at,omitempty"`
 	PublishedAtTz *string `json:"published_at_tz,omitempty"`
+	Snippet   *string `json:"snippet,omitempty"`
+	SnippetLang *string `json:"snippet_lang,omitempty"`
+	Body      interface{} `json:"body,omitempty"`
+	Teaser    *string `json:"teaser,omitempty"`
+	Scores    []float64 `json:"scores,omitempty"`
+	Keywords  []string `json:"keywords,omitempty"`
+	Active    *bool `json:"active,omitempty"`
+	Data      interface{} `json:"data,omitempty"`
 	Status    *PostsStatus `json:"status,omitempty"`
+	Layout    *PostsLayout `json:"layout,omitempty"`
+	Categories []PostsCategories `json:"categories,omitempty"`
 	Author    *Rel[Users] `json:"author,omitempty"`
 	Tags      []Rel[Tags] `json:"tags,omitempty"`
 	Cover     *Rel[Media] `json:"cover,omitempty"`
 	// Polymorphic relationship — targets: users, tags
 	Related   []interface{} `json:"related,omitempty"`
+	// Polymorphic relationship — targets: users, tags
+	Featured  interface{} `json:"featured,omitempty"`
 	Seo       *PostsSeoLocalized `json:"seo,omitempty"`
 	Items     []PostsItems `json:"items,omitempty"`
 	Content   []map[string]interface{} `json:"content,omitempty"`
-	Scores    []float64 `json:"scores,omitempty"`
-	Active    *bool `json:"active,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
+	Extra     map[string]interface{} `json:"extra,omitempty"`
+	RawRows   []map[string]interface{} `json:"raw_rows,omitempty"`
+	Byline    *string `json:"byline,omitempty"`
+	Aside     *string `json:"aside,omitempty"`
+	TabNote   *string `json:"tab_note,omitempty"`
 	DraftStatus *string `json:"_status,omitempty"`
 	DeletedAt *string `json:"_deleted_at,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -126,6 +198,7 @@ type PostsLocalized struct {
 type Tags struct {
 	ID        string  `json:"id"`
 	Name      *string `json:"name,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -133,8 +206,10 @@ type Tags struct {
 // Users represents a users document.
 type Users struct {
 	ID        string  `json:"id"`
-	Name      *string `json:"name,omitempty"`
 	Email     *string `json:"email,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	Authored  []map[string]interface{} `json:"authored,omitempty"`
+	Collection *string `json:"collection,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -151,6 +226,17 @@ type Settings struct {
 	ID        string  `json:"id"`
 	SiteName  *string `json:"site_name,omitempty"`
 	Nav       []SettingsNav `json:"nav,omitempty"`
+	DraftStatus *string `json:"_status,omitempty"`
+	CreatedAt *string `json:"created_at,omitempty"`
+	UpdatedAt *string `json:"updated_at,omitempty"`
+}
+
+// SettingsLocalized is a settings document read with locale=all: localized fields hold one value per locale.
+type SettingsLocalized struct {
+	ID        string  `json:"id"`
+	SiteName  map[string]*string `json:"site_name,omitempty"`
+	Nav       []SettingsNav `json:"nav,omitempty"`
+	DraftStatus *string `json:"_status,omitempty"`
 	CreatedAt *string `json:"created_at,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
 }
@@ -161,6 +247,22 @@ type PostsStatus string
 const (
 	PostsStatusDraft PostsStatus = "draft"
 	PostsStatusPublished PostsStatus = "published"
+)
+
+// PostsLayout is a select/radio value; unknown values still assign (it is a string).
+type PostsLayout string
+
+const (
+	PostsLayoutGrid PostsLayout = "grid"
+	PostsLayoutList PostsLayout = "list"
+)
+
+// PostsCategories is a select/radio value; unknown values still assign (it is a string).
+type PostsCategories string
+
+const (
+	PostsCategoriesNews PostsCategories = "news"
+	PostsCategoriesGuides PostsCategories = "guides"
 )
 
 // CollectionSlug is one of the known collection slugs.

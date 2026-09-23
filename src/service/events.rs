@@ -7,11 +7,19 @@
 //! 1. look up the subscriber's per-view access for the event's target+slug,
 //! 2. drop the event if it carries no view metadata (fail-closed),
 //! 3. gate it by the content view it belongs to (published/draft/trash),
-//! 4. drop it if a row constraint doesn't match the payload,
+//! 4. drop it if a row constraint doesn't match the event's gating snapshot —
+//!    the stored row, carried for this check only and never delivered — or the
+//!    event carries no snapshot to judge (fail-closed),
 //! 5. in `Full` mode, run the data-aware field-read strip, then the API-hidden
 //!    strip, then `after_read` on the stripped data (the same order as the
 //!    normal read pipeline) — yielding the visible data map; in `Metadata`
 //!    mode, emit no data.
+//!
+//! The `Full`-mode payload the strip starts from is the event's document: the
+//! stored row, read-shaped and stripped for no one (as `before_broadcast` left
+//! it) — never the document as reported to the writer. So what a subscriber
+//! receives is exactly what its own read would return, whatever the writer
+//! could read.
 //!
 //! Keeping this in one place means a change to the strip pipeline (e.g. a new
 //! strip step) can't silently land in one surface but not the other. Each
@@ -22,6 +30,7 @@
 use std::collections::HashMap;
 
 use serde_json::{Map, Value};
+use tracing::warn;
 
 use crate::{
     core::{
@@ -29,10 +38,7 @@ use crate::{
         MutationEvent, Registry,
         event::{EventOperation, EventTarget},
     },
-    db::{
-        AccessResult, DbConnection, EventViewGate, FilterClause,
-        query::filter::memory::matches_constraints_typed,
-    },
+    db::{AccessResult, DbConnection, EventViewGate, FilterClause},
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
     service::helpers::strip_unreadable_fields,
 };
@@ -101,23 +107,11 @@ impl EventGate<'_> {
         // `None` means the subscriber cannot see that view, so the event is
         // dropped — closing the draft/trash leak. The `view` metadata is carried
         // independent of `live_mode`, so this holds for empty-`data` events too
-        // (metadata-only collections, all deletes).
+        // (metadata-only collections, all deletes); so is the gating snapshot
+        // the row constraint below is judged against.
         let constraints = views.constraints_for(view)?;
 
-        // Row-level constraints match against the event payload; empty `data`
-        // cannot satisfy a non-empty constraint (fail-closed). Field types
-        // (from the schema) make Checkbox/Number constraints match SQL, not a
-        // blind string compare.
-        let fields = match event.target {
-            EventTarget::Collection => self
-                .registry
-                .get_collection(slug)
-                .map(|d| d.fields.as_slice()),
-            EventTarget::Global => self.registry.get_global(slug).map(|d| d.fields.as_slice()),
-        }
-        .unwrap_or(&[]);
-
-        if !constraints.is_empty() && !matches_constraints_typed(&event.data, constraints, fields) {
+        if !constraints.is_empty() && !self.row_constraints_match(event, constraints) {
             return None;
         }
 
@@ -128,9 +122,39 @@ impl EventGate<'_> {
         Some(self.strip_full_payload(event, slug))
     }
 
+    /// Whether the event's row satisfies a non-empty row constraint.
+    ///
+    /// Judged against the event's gating snapshot — the row as stored (for a
+    /// delete, as it was just before removal), hidden and read-denied fields
+    /// included, as the SQL read path filters — never against the delivered
+    /// `data`, which `live_mode` may empty and `before_broadcast` may reshape.
+    /// An event without a snapshot (from a node that predates it, or dropped to
+    /// fit the transport's size cap) cannot be judged, so a constrained view
+    /// never receives it (fail-closed). Field types (from the schema) make
+    /// Checkbox/Number constraints match SQL, not a blind string compare.
+    fn row_constraints_match(&self, event: &MutationEvent, constraints: &[FilterClause]) -> bool {
+        let Some(snapshot) = &event.gate else {
+            return false;
+        };
+
+        let slug: &str = event.collection.as_ref();
+        let fields = match event.target {
+            EventTarget::Collection => self
+                .registry
+                .get_collection(slug)
+                .map(|d| d.fields.as_slice()),
+            EventTarget::Global => self.registry.get_global(slug).map(|d| d.fields.as_slice()),
+        }
+        .unwrap_or(&[]);
+
+        snapshot.matches(constraints, fields)
+    }
+
     /// `Full`-mode payload: the data-aware field-read strip, then the
     /// document-independent API-hidden strip, then `after_read` enrichment —
-    /// the same order as the normal read pipeline (`post_process`).
+    /// the same order as the normal read pipeline (`post_process`) — applied
+    /// to the event's document, which is the stored row stripped for no one
+    /// (see [`crate::service::EventRow`]).
     ///
     /// Strip-before-`after_read` is load-bearing: the per-subscriber
     /// `after_read` hook must only ever see the already-access-stripped form
@@ -372,7 +396,8 @@ fn resolve_view(
         // rejected by the operator allowlist — hides the view rather than
         // streaming events past an unvalidated constraint.
         Err(e) => {
-            tracing::warn!("Subscribe access for '{slug}' denied: {e}");
+            warn!("Subscribe access for '{slug}' denied: {e}");
+
             None
         }
     }
@@ -392,10 +417,11 @@ fn view_from_access(
     match result {
         AccessResult::Allowed => Some(Vec::new()),
         AccessResult::Constrained(_) if reject_constrained => {
-            tracing::warn!(
+            warn!(
                 "Subscribe access for global '{slug}' returned a filter table; \
                  globals are allow/deny only — hiding the view"
             );
+
             None
         }
         AccessResult::Constrained(filters) => Some(filters),
@@ -404,233 +430,4 @@ fn view_from_access(
 }
 
 #[cfg(all(test, feature = "sqlite"))]
-mod tests {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use serde_json::json;
-
-    use crate::config::CrapConfig;
-    use crate::core::event::EventViewMeta;
-    use crate::core::{Access, DocumentFields, LiveMode, MutationEvent, VersionsConfig};
-    use crate::db::{EventViewGate, pool};
-    use crate::hooks::{self, lifecycle::HookRunner};
-
-    use super::*;
-
-    fn fixture_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
-    }
-
-    /// Resolve a collection `posts` and a global `banner` that share one
-    /// access shape (drafts enabled, `read` allowing, `draft` = `draft_rule`)
-    /// and return each one's draft-view filter count (`None` = view hidden).
-    fn resolve_draft_pair(draft_rule: &str) -> (Option<usize>, Option<usize>) {
-        let mut access = Access::new();
-        access.read = Some("hooks.access.allow_all".into());
-        access.draft = Some(draft_rule.into());
-
-        let mut posts = CollectionDefinition::new("posts");
-        posts.versions = Some(VersionsConfig::new(true, 0));
-        posts.access = access.clone();
-
-        let mut banner = GlobalDefinition::new("banner");
-        banner.versions = Some(VersionsConfig::new(true, 0));
-        banner.access = access;
-
-        let mut reg = Registry::new();
-        reg.register_collection(posts);
-        reg.register_global(banner);
-        let registry = Arc::new(reg);
-
-        let config_dir = fixture_dir();
-        let config = CrapConfig::test_default();
-        let runner = HookRunner::builder()
-            .config_dir(&config_dir)
-            .registry(Arc::clone(&registry))
-            .config(&config)
-            .build()
-            .unwrap();
-
-        let tmp = tempfile::tempdir().unwrap();
-        let mut db_config = CrapConfig::test_default();
-        db_config.database.path = "test.db".to_string();
-        let db_pool = pool::create_pool(tmp.path(), &db_config).unwrap();
-        let conn = db_pool.get().unwrap();
-
-        let map = EventAccessMap::resolve(&EventAccessInput {
-            registry: registry.as_ref(),
-            collection_slugs: &["posts".to_string()],
-            global_slugs: &["banner".to_string()],
-            user_doc: None,
-            hook_runner: &runner,
-            conn: &conn,
-        });
-
-        let draft_len =
-            |gate: Option<&EventViewGate>| gate.and_then(|g| g.draft.as_ref().map(Vec::len));
-
-        (
-            draft_len(map.collection_views.get("posts")),
-            draft_len(map.global_views.get("banner")),
-        )
-    }
-
-    /// Regression: the global branch hard-coded `draft: None`, so a global
-    /// with drafts never delivered its draft events even to a subscriber its
-    /// `access.draft` rule allowed — while a collection with the identical
-    /// access shape did. Both must resolve the draft axis identically.
-    #[test]
-    fn draft_axis_resolves_identically_for_collections_and_globals() {
-        let allowed = resolve_draft_pair("hooks.access.allow_all");
-        assert_eq!(
-            allowed,
-            (Some(0), Some(0)),
-            "an allowing draft rule opens the (unconstrained) draft view on both"
-        );
-
-        let denied = resolve_draft_pair("hooks.access.deny_all");
-        assert_eq!(
-            denied,
-            (None, None),
-            "a denying draft rule hides the draft view on both"
-        );
-    }
-
-    /// A global draft event is delivered exactly when the resolved draft view
-    /// is visible — the gate reads the same axis the resolution now fills.
-    #[test]
-    fn global_draft_event_is_gated_by_the_draft_view() {
-        let draft_event = EventViewMeta {
-            status: Some("draft".to_string()),
-            trashed: false,
-        };
-
-        let open = EventViewGate {
-            published: Some(vec![]),
-            draft: Some(vec![]),
-            trash: None,
-        };
-        assert!(open.constraints_for(&draft_event).is_some());
-
-        let closed = EventViewGate {
-            published: Some(vec![]),
-            draft: None,
-            trash: None,
-        };
-        assert!(closed.constraints_for(&draft_event).is_none());
-    }
-
-    /// Regression: the Full-mode event pipeline ran per-subscriber
-    /// `after_read` hooks BEFORE the field-read strip (normal reads strip
-    /// first). A hook copying a read-denied field's value into an
-    /// unprotected field leaked it past the strip to a denied subscriber.
-    #[test]
-    fn full_payload_strips_before_after_read() {
-        let config_dir = fixture_dir();
-        let config = CrapConfig::test_default();
-        let registry = hooks::init_lua(&config_dir, &config).unwrap();
-        let runner = HookRunner::builder()
-            .config_dir(&config_dir)
-            .registry(Arc::clone(&registry))
-            .config(&config)
-            .build()
-            .unwrap();
-
-        let mut data = DocumentFields::new();
-        data.insert("title".to_string(), json!("Hello"));
-        data.insert("secret".to_string(), json!("s3cr3t-value"));
-
-        let event = MutationEvent {
-            sequence: 1,
-            publisher: String::new(),
-            timestamp: "2026-08-11T00:00:00Z".to_string(),
-            target: EventTarget::Collection,
-            operation: EventOperation::Update,
-            collection: "event_leak".into(),
-            document_id: "d1".into(),
-            data,
-            edited_by: None,
-            view: Some(EventViewMeta::default()),
-        };
-
-        let mut views = HashMap::new();
-        views.insert(
-            "event_leak".to_string(),
-            EventViewGate {
-                published: Some(vec![]),
-                draft: None,
-                trash: None,
-            },
-        );
-        let mut modes = HashMap::new();
-        modes.insert("event_leak".to_string(), LiveMode::Full);
-        let empty_views = HashMap::new();
-        let empty_modes = HashMap::new();
-
-        let gate = EventGate {
-            collection_views: &views,
-            global_views: &empty_views,
-            collection_modes: &modes,
-            global_modes: &empty_modes,
-            registry: &registry,
-            hook_runner: &runner,
-            user_doc: None,
-        };
-
-        let visible = gate.evaluate(&event).expect("event must be delivered");
-
-        assert!(
-            visible.get("secret").is_none(),
-            "read-denied field must be stripped from the payload"
-        );
-
-        let summary = visible
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .expect("after_read hook must have set summary");
-        assert!(
-            !summary.contains("s3cr3t-value"),
-            "after_read must not see the denied field's value; got: {summary}"
-        );
-        assert_eq!(
-            summary, "seen:nil",
-            "the hook ran on the already-stripped data"
-        );
-    }
-
-    /// Regression: a global access hook that returns a filter table is a config
-    /// error every synchronous global path rejects. On the live streams it must
-    /// fail closed (drop the view), never apply a row filter globals don't honor.
-    /// Collections, by contrast, keep the constraint as a row filter.
-    #[test]
-    fn global_constrained_view_is_dropped_collection_is_kept() {
-        use crate::db::{AccessResult, FilterClause};
-
-        let filters = vec![FilterClause::and(Vec::new())];
-
-        // Global (reject_constrained = true): filter table → hidden.
-        assert!(
-            view_from_access(AccessResult::Constrained(filters.clone()), true, "settings")
-                .is_none(),
-            "a global returning a filter table must drop the view (fail-closed)"
-        );
-
-        // Collection (reject_constrained = false): filter table → honored.
-        let kept = view_from_access(AccessResult::Constrained(filters), false, "posts");
-        assert_eq!(
-            kept.as_ref().map(Vec::len),
-            Some(1),
-            "a collection returning a filter table keeps it as a row constraint"
-        );
-
-        // Allow/deny map the same way regardless of the flag.
-        assert_eq!(
-            view_from_access(AccessResult::Allowed, true, "settings").map(|f| f.len()),
-            Some(0),
-            "Allowed yields an unconstrained (empty-filter) view"
-        );
-        assert!(view_from_access(AccessResult::Denied, false, "posts").is_none());
-    }
-}
+mod tests;

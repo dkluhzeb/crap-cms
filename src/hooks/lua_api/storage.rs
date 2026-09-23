@@ -34,7 +34,7 @@ const STORAGE_HANDLER_KEYS: &[&str] = &["put", "get", "delete", "exists"];
 fn storage_register(
     lua: &Lua,
     #[lua(
-        ty = "{ put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), exists?: fun(key: string): boolean }",
+        ty = "{ put: fun(key: string, data: string, content_type: string), get: (fun(key: string): string?), delete: fun(key: string), exists?: (fun(key: string): boolean) }",
         doc = "Storage handler. `put`/`get`/`delete` required; `exists` optional. `get` returns nil for a missing key."
     )]
     handler: Table,

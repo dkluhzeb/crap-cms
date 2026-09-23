@@ -737,12 +737,6 @@ const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
     // the three `_totp_*` system columns in one atomic UPDATE (outside
     // FTS/ref-count scope by design).
     ("commands/user/modify.rs", "query::reset_totp("),
-    // Offline trash restore: FTS re-upsert in the same IMMEDIATE tx,
-    // mirroring service undelete (soft-delete never touched ref counts,
-    // so none to adjust). Previously invisible — the scan's `undelete`
-    // entry was vacuous (the primitive is named `restore`), caught by
-    // the new vocabulary-liveness pin on its first run.
-    ("commands/trash.rs", "query::restore("),
     // NOTE: `import_cmd.rs` writes via hand-built SQL + `tx.execute`
     // (with its own ref-count replay) — invisible to this textual
     // primitive scan, per the scan limits documented at the top of

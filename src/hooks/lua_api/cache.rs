@@ -35,7 +35,7 @@ const CACHE_HANDLER_KEYS: &[&str] = &["get", "set", "delete", "clear", "has"];
 fn cache_register(
     lua: &Lua,
     #[lua(
-        ty = "{ get: fun(key: string): string?, set: fun(key: string, value: string), delete: fun(key: string), clear: fun(), has?: fun(key: string): boolean }",
+        ty = "{ get: (fun(key: string): string?), set: fun(key: string, value: string), delete: fun(key: string), clear: fun(), has?: (fun(key: string): boolean) }",
         doc = "Cache handler. `get`/`set`/`delete`/`clear` required; `has` optional. `get` returns nil for a miss; values are opaque binary strings."
     )]
     handler: Table,

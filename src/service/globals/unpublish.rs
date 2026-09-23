@@ -7,7 +7,7 @@ use crate::{
     db::{AccessResult, LocaleContext, query, query::helpers::global_table},
     hooks::{AccessCheckInput, HookContext, HookEvent},
     service::{
-        AfterChangeInput, ServiceContext, ServiceError, helpers, run_after_change_hooks,
+        AfterChangeInput, Gated, ServiceContext, ServiceError, helpers, run_after_change_hooks,
         run_pool_write, unpublish_with_snapshot,
     },
 };
@@ -35,8 +35,9 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 }
 
 /// Conn-mode core: everything except transaction/commit and post-commit
-/// event/cache side effects. Shared by both dispatch modes.
-fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
+/// event/cache side effects. Shared by both dispatch modes. Returns the
+/// stored row the unpublish event is built from alongside the document.
+fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -128,19 +129,23 @@ fn unpublish_global_in_conn(ctx: &ServiceContext) -> Result<Document> {
         conn,
     )?;
 
+    // The global as stored, before anything is shaped or stripped for the
+    // writer: the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
-    Ok(doc)
+    Ok((doc, row))
 }
 
 /// Conn mode (Lua CRUD): the caller owns the transaction and the event-queue
 /// flush. Queue the mutation event and invalidate cache; the outer tx-commit
 /// flushes the queue.
 fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
-    let doc = unpublish_global_in_conn(ctx)?;
+    let (doc, row) = unpublish_global_in_conn(ctx)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row);
 
     Ok(doc)
 }
@@ -149,12 +154,14 @@ fn unpublish_global_conn(ctx: &ServiceContext) -> Result<Document> {
 /// post-commit side effects.
 #[cfg(not(tarpaulin_include))]
 fn unpublish_global_pool(ctx: &ServiceContext) -> Result<Document> {
-    run_pool_write(ctx, None, unpublish_global_in_conn, |ctx, doc| {
+    let (doc, _) = run_pool_write(ctx, None, unpublish_global_in_conn, |ctx, (doc, row)| {
         // Same post-commit sequence as `update_global_document` / the
         // collection unpublish path: notify subscribers of the status
         // change; the envelope flushes nested-hook events after.
-        ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, &doc.fields);
-    })
+        ctx.publish_mutation_event(EventOperation::Unpublish, &doc.id, row.clone());
+    })?;
+
+    Ok(doc)
 }
 
 #[cfg(test)]

@@ -50,8 +50,10 @@ pub async fn empty_trash_action(
     let args = DeleteManyArgs::builder(Vec::new())
         .trash(true)
         .max_documents(state.config.server.bulk_max_documents)
-        // Bulk trash purge is quiet — no per-document live-update events.
-        .events(false)
+        // Every purged document's delete event reaches the trash-view
+        // subscribers, as a single delete's does — bounded, like the purge
+        // itself, by `bulk_max_documents`.
+        .events(true)
         .build();
 
     let result = op::run_blocking::<DeleteMany>(

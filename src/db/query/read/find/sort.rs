@@ -120,12 +120,13 @@ pub(super) fn apply_order_by(
 /// Recurse through field definitions looking for a column name.
 /// Layout wrappers (Row, Collapsible, Tabs) promote their children to
 /// parent-level columns, so we recurse into them. Group sub-fields use
-/// `group__subfield` naming for DB columns.
+/// `group__subfield` naming for DB columns. A scalar has-many column holds a
+/// list — its JSON text has no meaningful order, so it is not a sort column.
 fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
     fields.iter().any(|f| {
         let full_name = prefixed_name(prefix, &f.name);
 
-        if full_name == col && f.has_parent_column() {
+        if full_name == col && f.has_parent_column() && !f.is_has_many_scalar() {
             return true;
         }
 
@@ -160,6 +161,12 @@ pub(crate) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> boo
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
+    use crate::core::CollectionDefinition;
+    use crate::core::field::*;
+    use crate::db::query::column_read_expr;
+    use crate::db::query::read::find::find;
+    use crate::db::query::read::find::test_helpers::*;
+    use crate::db::{FindQuery, LocaleMode};
 
     /// `_status` and `_deleted_at` are created only by drafts and soft delete;
     /// on a plain collection a sort by them used to reach the database.
@@ -175,12 +182,29 @@ mod tests {
         assert!(is_valid_sort_column("_status", &def));
         assert!(is_valid_sort_column("_deleted_at", &def));
     }
-    use crate::core::CollectionDefinition;
-    use crate::core::field::*;
-    use crate::db::query::column_read_expr;
-    use crate::db::query::read::find::find;
-    use crate::db::query::read::find::test_helpers::*;
-    use crate::db::{FindQuery, LocaleMode};
+
+    /// A scalar has-many column stores a JSON list; ordering by that text is
+    /// meaningless, so it is no sort column — at the top level or in a group.
+    #[test]
+    fn a_scalar_has_many_column_is_not_a_sort_column() {
+        let tags = || {
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .build()
+        };
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            tags(),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![tags()])
+                .build(),
+            FieldDefinition::builder("title", FieldType::Text).build(),
+        ];
+
+        assert!(!is_valid_sort_column("tags", &def));
+        assert!(!is_valid_sort_column("meta__tags", &def));
+        assert!(is_valid_sort_column("title", &def));
+    }
 
     /// A sort on a localized column orders by the value the read returns —
     /// the fallback `COALESCE`, not the bare locale column, which ordered

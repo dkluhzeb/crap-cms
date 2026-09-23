@@ -418,7 +418,7 @@ impl FieldDefinition {
         self.admin
             .label
             .as_ref()
-            .map(|ls| ls.resolve_default().to_string())
+            .map(|ls| ls.resolve_current().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| to_title_case(&self.name))
     }

@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use serde_json::{Value, from_str, json, to_string};
 use tokio::task;
 
 use crate::{
@@ -24,18 +23,10 @@ fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), 
     let mut conn = pool.write()?;
     let tx = conn.transaction_immediate()?;
 
-    let existing = user_settings::get_user_settings(&tx, user_id)?;
+    let mut settings = user_settings::load_user_settings(&tx, user_id)?;
+    settings.set_ui_locale(locale);
 
-    let mut settings: Value = existing
-        .as_deref()
-        .and_then(|s| from_str(s).ok())
-        .unwrap_or_else(|| json!({}));
-
-    settings["ui_locale"] = json!(locale);
-
-    let json_str = to_string(&settings)?;
-
-    user_settings::set_user_settings(&tx, user_id, &json_str)?;
+    user_settings::set_user_settings(&tx, user_id, &settings.to_json())?;
     tx.commit()?;
 
     Ok(())

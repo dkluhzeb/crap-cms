@@ -7,15 +7,23 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use super::TrashAction;
 use crate::{
     cli::{self, Table},
-    commands::{Project, cli_find, open_project},
+    commands::{Project, cli_find, cli_infra, open_project},
     config::{CrapConfig, LocaleConfig, UploadStorage},
     core::{
         CollectionDefinition, Document, Registry, upload,
-        upload::{StorageBackend, create_storage_with_lease},
+        upload::{SharedStorage, StorageBackend, create_storage_with_lease},
     },
     db::{BoxedConnection, DbConnection, DbPool, DbValue, query},
     hooks::HookRunner,
-    service::{owned_file_keys, purge_document},
+    service::AppInfra,
+};
+
+mod purged;
+mod restore;
+
+use self::{
+    purged::{Purged, delete_purged_files},
+    restore::restore_document,
 };
 
 /// Validate that a collection exists and has `soft_delete` enabled.
@@ -188,6 +196,10 @@ struct PurgeParams<'a> {
     older_than: &'a str,
     dry_run: bool,
     confirm: bool,
+    /// What the purged documents' delete events are published on once the
+    /// purge commits (see [`cli_infra`]). `None` for a preview, which
+    /// deletes nothing.
+    infra: Option<&'a AppInfra>,
 }
 
 impl PurgeParams<'_> {
@@ -280,76 +292,21 @@ fn purge_collection(
     (slug, def): (&str, &CollectionDefinition),
     ids: &[String],
 ) -> Result<u64> {
-    // `transaction_immediate()` — `purge_documents` issues reads (upload
-    // lookups) and writes (DELETEs + FTS sync) on the same tx. DEFERRED would
-    // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
+    let mut purged = Purged::new(p.infra);
+
+    // `transaction_immediate()` — the purge issues reads (upload lookups) and
+    // writes (DELETEs + FTS sync) on the same tx. DEFERRED would risk
+    // `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let purged = purge_documents(&tx, (slug, def), ids, p.locale)?;
+    purged.purge(&tx, (slug, def), ids, p.locale)?;
     tx.commit().context("Commit purge")?;
 
     delete_purged_files(p.storage, &purged);
 
-    Ok(purged.skipped)
-}
+    let skipped = purged.skipped;
+    purged.publish(p.infra);
 
-/// Delete the files of the uploads a committed purge removed.
-fn delete_purged_files(storage: &dyn StorageBackend, purged: &Purged) {
-    upload::delete_storage_keys(storage, &purged.upload_keys);
-}
-
-/// What purging one collection's documents did.
-struct Purged {
-    /// Documents skipped because others still reference them.
-    skipped: u64,
-    /// Every storage key the purged uploads owned — each document's row AND
-    /// its version snapshots — whose files go once the purge commits.
-    upload_keys: Vec<String>,
-}
-
-impl Purged {
-    fn new() -> Self {
-        Self {
-            skipped: 0,
-            upload_keys: Vec::new(),
-        }
-    }
-}
-
-/// Permanently delete a list of documents, cleaning up FTS and reference
-/// counts, and collect the storage keys the purged uploads owned — their rows'
-/// and their version snapshots' — for file cleanup. Documents that are still
-/// referenced by others (`_ref_count > 0`) are skipped — the same delete
-/// protection the server surfaces enforce.
-fn purge_documents(
-    tx: &dyn DbConnection,
-    (slug, def): (&str, &CollectionDefinition),
-    ids: &[String],
-    locale: &LocaleConfig,
-) -> Result<Purged> {
-    let mut purged = Purged::new();
-    // The row lookup needs the locale context: a collection with localized
-    // fields has no bare columns to select.
-    let locale_ctx = query::LocaleContext::default_for(locale);
-
-    for id in ids {
-        if query::ref_count::get_ref_count(tx, slug, id)?.unwrap_or(0) > 0 {
-            cli::warning(&format!(
-                "Skipping {slug} / {id} — still referenced by other documents"
-            ));
-            purged.skipped += 1;
-            continue;
-        }
-
-        // Every file the document owns, its version snapshots' included —
-        // collected before the purge removes the rows that name them.
-        purged
-            .upload_keys
-            .extend(owned_file_keys(tx, def, id, locale_ctx.as_ref())?);
-
-        purge_document(tx, def, id, locale)?;
-    }
-
-    Ok(purged)
+    Ok(skipped)
 }
 
 /// Find IDs of soft-deleted documents eligible for purging in a collection.
@@ -387,24 +344,12 @@ fn find_purge_candidates(
     Ok(ids)
 }
 
-/// Restore a single soft-deleted document.
-fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
-    validate_soft_delete(registry, collection)?;
+/// Restore a single soft-deleted document through the service layer (see
+/// [`restore_document`]).
+fn run_restore(infra: &AppInfra, collection: &str, id: &str) -> Result<()> {
+    validate_soft_delete(&infra.registry, collection)?;
 
-    let mut conn = pool.write().context("Failed to get DB connection")?;
-    // `transaction_immediate()` — avoid `SQLITE_BUSY_SNAPSHOT` against
-    // concurrent writers.
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let restored = query::restore(&tx, collection, id)?;
-
-    if !restored {
-        bail!("Document '{id}' not found or not in trash");
-    }
-
-    // The FTS row survives a soft delete (the trash view is searchable), so
-    // nothing to re-index here.
-    tx.commit().context("Commit restore")?;
+    restore_document(infra, collection, id)?;
 
     cli::success(&format!("Restored document '{id}' in '{collection}'."));
 
@@ -419,6 +364,10 @@ struct EmptyParams<'a> {
     locale: &'a LocaleConfig,
     collection: &'a str,
     confirm: bool,
+    /// What the purged documents' delete events are published on once the
+    /// purge commits (see [`cli_infra`]). `None` for a preview, which
+    /// deletes nothing.
+    infra: Option<&'a AppInfra>,
 }
 
 /// Permanently delete all trashed documents in a collection.
@@ -430,6 +379,7 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
         locale,
         collection,
         confirm,
+        infra,
     } = *p;
 
     validate_soft_delete(registry, collection)?;
@@ -459,17 +409,20 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
     }
 
     let ids: Vec<String> = docs.iter().map(|d| d.id.to_string()).collect();
-    // `transaction_immediate()` — `purge_documents` interleaves reads
-    // (upload path lookups) and writes (DELETEs + FTS sync) on the
-    // same tx. See the matching note in `run_purge`.
+    let mut purged = Purged::new(infra);
+
+    // `transaction_immediate()` — the purge interleaves reads (upload path
+    // lookups) and writes (DELETEs + FTS sync) on the same tx. See the
+    // matching note in `purge_collection`.
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let purged = purge_documents(&tx, (collection, &def), &ids, locale)?;
+    purged.purge(&tx, (collection, &def), &ids, locale)?;
 
     tx.commit().context("Commit empty trash")?;
     delete_purged_files(storage, &purged);
 
     let skipped = purged.skipped;
+    purged.publish(infra);
     cli::success(&format!(
         "Permanently deleted {} document(s) from '{}'.",
         ids.len() as u64 - skipped,
@@ -484,70 +437,112 @@ fn run_empty(p: &EmptyParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// What a purge that deletes publishes its delete events on — built
+/// before the purge runs, so a configured Redis that can't be reached fails the
+/// command before anything is deleted. `None` for a preview, which deletes
+/// nothing.
+fn purge_infra(
+    project: &Project,
+    config_dir: &Path,
+    deletes: bool,
+) -> Result<Option<Arc<AppInfra>>> {
+    if !deletes {
+        return Ok(None);
+    }
+
+    cli_infra(
+        config_dir,
+        &project.registry,
+        &project.config,
+        &project.pool,
+    )
+    .map(Some)
+}
+
+/// The storage backend a purge deletes upload files from. A custom backend
+/// delegates to Lua, so it needs a VM pool: a hook runner is built only in
+/// that case, and the lease keeps the pool alive after the runner is dropped
+/// (it holds an Arc to the pool).
+fn trash_storage(project: &Project, config_dir: &Path) -> Result<SharedStorage> {
+    let cfg = &project.config;
+
+    if !matches!(cfg.upload.storage, UploadStorage::Custom) {
+        return upload::create_storage(config_dir, &cfg.upload);
+    }
+
+    let hook_runner = HookRunner::builder()
+        .config_dir(config_dir)
+        .registry(Arc::clone(&project.registry))
+        .config(cfg)
+        .build()?;
+
+    create_storage_with_lease(config_dir, &cfg.upload, hook_runner.lua_lease())
+}
+
 /// Handle the `trash` subcommand.
 ///
 /// # Errors
 ///
-/// Returns an error if config loading, pool creation, storage init, or the
-/// dispatched action fails.
+/// Returns an error if config loading, pool creation, storage or live
+/// transport init, or the dispatched action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
-    let Project {
-        lock: _instance_lock,
-        config: cfg,
-        registry,
-        pool,
-    } = open_project(&config_dir)?;
 
-    // A custom storage backend delegates to Lua, so it needs a VM pool.
-    // Build a hook runner only in that case; the lease keeps the pool
-    // alive after the runner is dropped (it holds an Arc to the pool).
-    let storage = if matches!(cfg.upload.storage, UploadStorage::Custom) {
-        let hook_runner = HookRunner::builder()
-            .config_dir(&config_dir)
-            .registry(Arc::clone(&registry))
-            .config(&cfg)
-            .build()?;
-        create_storage_with_lease(&config_dir, &cfg.upload, hook_runner.lua_lease())?
-    } else {
-        upload::create_storage(&config_dir, &cfg.upload)?
-    };
+    // Holds the instance lock for as long as the command runs.
+    let project = open_project(&config_dir)?;
+    let (registry, pool, cfg) = (&project.registry, &project.pool, &project.config);
 
     match action {
-        TrashAction::List { collection } => run_list(&registry, &pool, &cfg, collection.as_deref()),
+        TrashAction::List { collection } => run_list(registry, pool, cfg, collection.as_deref()),
 
         TrashAction::Purge {
             collection,
             older_than,
             dry_run,
             confirm,
-        } => run_purge(&PurgeParams {
-            registry: &registry,
-            pool: &pool,
-            storage: &*storage,
-            locale: &cfg.locale,
-            collection: collection.as_deref(),
-            older_than: &older_than,
-            dry_run,
-            confirm,
-        }),
+        } => {
+            let storage = trash_storage(&project, &config_dir)?;
+            let infra = purge_infra(&project, &config_dir, confirm && !dry_run)?;
 
-        TrashAction::Restore { collection, id } => run_restore(&registry, &pool, &collection, &id),
+            run_purge(&PurgeParams {
+                registry,
+                pool,
+                storage: &*storage,
+                locale: &cfg.locale,
+                collection: collection.as_deref(),
+                older_than: &older_than,
+                dry_run,
+                confirm,
+                infra: infra.as_deref(),
+            })
+        }
+
+        TrashAction::Restore { collection, id } => {
+            let infra = cli_infra(&config_dir, registry, cfg, pool)?;
+
+            run_restore(&infra, &collection, &id)
+        }
 
         TrashAction::Empty {
             collection,
             confirm,
-        } => run_empty(&EmptyParams {
-            registry: &registry,
-            pool: &pool,
-            storage: &*storage,
-            locale: &cfg.locale,
-            collection: &collection,
-            confirm,
-        }),
+        } => {
+            let storage = trash_storage(&project, &config_dir)?;
+            let infra = purge_infra(&project, &config_dir, confirm)?;
+
+            run_empty(&EmptyParams {
+                registry,
+                pool,
+                storage: &*storage,
+                locale: &cfg.locale,
+                collection: &collection,
+                confirm,
+                infra: infra.as_deref(),
+            })
+        }
     }
 }
 
@@ -556,64 +551,13 @@ mod tests {
     use super::*;
     use crate::{
         config::DatabaseConfig,
-        core::{
-            JobStatus,
-            field::{FieldDefinition, FieldType, RelationshipConfig},
-            upload::CollectionUpload,
-        },
-        db::{DbValue, migrate, pool},
+        core::field::{FieldDefinition, FieldType},
+        db::{migrate, pool},
     };
 
-    /// Regression: the CLI purge deleted a document without cancelling its
-    /// queued image conversions, which then ran against a missing row.
-    #[test]
-    fn purge_cancels_queued_image_conversions() {
-        let mut media = CollectionDefinition::new("media");
-        media.soft_delete = true;
-        media.upload = Some(CollectionUpload {
-            enabled: true,
-            ..Default::default()
-        });
-        let (_tmp, pool, _registry) = setup_db(&[media.clone()]);
-        let conn = pool.get().unwrap();
-        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
-            .unwrap();
-        upload::queue_image_conversion(
-            &conn,
-            &upload::ImageConvertJobData {
-                collection: "media".to_string(),
-                document_id: "m1".to_string(),
-                source_path: "a.png".to_string(),
-                target_path: "a.webp".to_string(),
-                format: "webp".to_string(),
-                quality: 80,
-                url_column: "thumbnail_webp_url".to_string(),
-                url_value: "/uploads/a.webp".to_string(),
-            },
-            1,
-        )
-        .unwrap();
-
-        purge_documents(
-            &conn,
-            ("media", &media),
-            &["m1".to_string()],
-            &LocaleConfig::default(),
-        )
-        .unwrap();
-
-        let pending = query::jobs::count_job_runs(
-            &conn,
-            Some(upload::SYSTEM_IMAGE_CONVERT_JOB),
-            Some(JobStatus::Pending),
-        )
-        .unwrap();
-        assert_eq!(pending, 0);
-    }
-
-    // ── purge_documents ref-count semantics ──────────────────────────────
-
-    fn setup_db(collections: &[CollectionDefinition]) -> (tempfile::TempDir, DbPool, Registry) {
+    pub(super) fn setup_db(
+        collections: &[CollectionDefinition],
+    ) -> (tempfile::TempDir, DbPool, Registry) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let config = CrapConfig {
             database: DatabaseConfig {
@@ -635,149 +579,6 @@ mod tests {
         migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
 
         (tmp, db_pool, registry)
-    }
-
-    fn defs_with_relationship() -> (CollectionDefinition, CollectionDefinition) {
-        let media = CollectionDefinition::new("media");
-        let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("image", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
-        (media, posts)
-    }
-
-    fn insert_referencing_post(conn: &dyn DbConnection) {
-        conn.execute(
-            "INSERT INTO media (id) VALUES (?1)",
-            &[DbValue::Text("m1".into())],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO posts (id, image) VALUES (?1, ?2)",
-            &[DbValue::Text("p1".into()), DbValue::Text("m1".into())],
-        )
-        .unwrap();
-        query::ref_count::after_create(
-            conn,
-            "posts",
-            "p1",
-            &[FieldDefinition::builder("image", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("media", false))
-                .build()],
-            &LocaleConfig::default(),
-        )
-        .unwrap();
-    }
-
-    fn ref_count(conn: &dyn DbConnection, table: &str, id: &str) -> Option<i64> {
-        query::ref_count::get_ref_count(conn, table, id).unwrap()
-    }
-
-    /// Regression: purging a trashed document must decrement the ref counts
-    /// of the documents it references — the raw-delete path used to skip
-    /// `before_hard_delete`, leaving targets with inflated `_ref_count`.
-    #[test]
-    fn purge_decrements_referenced_targets() {
-        let (media, posts) = defs_with_relationship();
-        let posts_def = posts.clone();
-        let (_tmp, db_pool, _) = setup_db(&[media, posts]);
-
-        let mut conn = db_pool.get().unwrap();
-        insert_referencing_post(&conn);
-        assert_eq!(ref_count(&conn, "media", "m1"), Some(1));
-
-        let tx = conn.transaction_immediate().unwrap();
-        let purged = purge_documents(
-            &tx,
-            ("posts", &posts_def),
-            &["p1".to_string()],
-            &LocaleConfig::default(),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        assert_eq!(purged.skipped, 0);
-        let conn = db_pool.get().unwrap();
-        assert_eq!(ref_count(&conn, "media", "m1"), Some(0));
-        assert_eq!(ref_count(&conn, "posts", "p1"), None, "p1 must be gone");
-    }
-
-    /// Regression: purging must skip documents that are still referenced by
-    /// others — the raw-delete path used to bypass delete protection.
-    #[test]
-    fn purge_skips_still_referenced_documents() {
-        let (media, posts) = defs_with_relationship();
-        let media_def = media.clone();
-        let (_tmp, db_pool, _) = setup_db(&[media, posts]);
-
-        let mut conn = db_pool.get().unwrap();
-        insert_referencing_post(&conn);
-
-        let tx = conn.transaction_immediate().unwrap();
-        let purged = purge_documents(
-            &tx,
-            ("media", &media_def),
-            &["m1".to_string()],
-            &LocaleConfig::default(),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        assert_eq!(purged.skipped, 1);
-        let conn = db_pool.get().unwrap();
-        assert_eq!(
-            ref_count(&conn, "media", "m1"),
-            Some(1),
-            "still-referenced m1 must survive the purge"
-        );
-    }
-
-    /// Regression: purge deleted a trashed upload's files inside its
-    /// transaction, so a purge that failed on a later document rolled the rows
-    /// back while their files were already gone. The rows' files are now only
-    /// collected in the transaction and deleted once it commits.
-    #[test]
-    fn purge_keeps_upload_files_until_the_purge_commits() {
-        let mut media = CollectionDefinition::new("media");
-        media.soft_delete = true;
-        media.upload = Some(CollectionUpload::new());
-        media.fields = vec![
-            FieldDefinition::builder("filename", FieldType::Text).build(),
-            FieldDefinition::builder("url", FieldType::Text).build(),
-        ];
-        let media_def = media.clone();
-        let (tmp, db_pool, _) = setup_db(&[media]);
-
-        let file = tmp.path().join("uploads").join("media").join("a.png");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, b"x").unwrap();
-
-        let mut conn = db_pool.get().unwrap();
-        conn.execute(
-            "INSERT INTO media (id, filename, url, _deleted_at) VALUES \
-             ('m1', 'a.png', '/uploads/media/a.png', '2026-01-01T00:00:00.000Z')",
-            &[],
-        )
-        .unwrap();
-
-        let tx = conn.transaction_immediate().unwrap();
-        let purged = purge_documents(
-            &tx,
-            ("media", &media_def),
-            &["m1".to_string()],
-            &LocaleConfig::default(),
-        )
-        .unwrap();
-        drop(tx);
-
-        assert!(file.exists(), "a purge that doesn't commit keeps the file");
-        assert_eq!(purged.upload_keys, vec!["media/a.png".to_string()]);
-
-        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
-        delete_purged_files(&*storage, &purged);
-        assert!(!file.exists(), "the collected keys name the file to delete");
     }
 
     /// Regression: the purge held a pooled connection for the candidate lookup
@@ -825,6 +626,7 @@ mod tests {
             older_than: "all",
             dry_run: false,
             confirm: true,
+            infra: None,
         })
         .unwrap();
 
@@ -866,6 +668,7 @@ mod tests {
             older_than: "all",
             dry_run: false,
             confirm: false,
+            infra: None,
         })
         .unwrap();
 
@@ -928,6 +731,7 @@ mod tests {
             locale: &locale,
             collection: "posts",
             confirm: true,
+            infra: None,
         })
         .unwrap();
 

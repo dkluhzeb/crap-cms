@@ -6,7 +6,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
-use tokio::task;
 use tracing::error;
 
 use crate::{
@@ -17,7 +16,9 @@ use crate::{
         },
     },
     config::LocaleConfig,
-    core::{CollectionDefinition, Registry, auth::AuthUser},
+    core::{
+        CollectionDefinition, Document, Registry, auth::AuthUser, spawn_blocking_in_label_locale,
+    },
     db::{DbPool, query::AccessResult},
     hooks::HookRunner,
     service::{
@@ -34,7 +35,7 @@ struct BackRefParams {
     locale: LocaleConfig,
     slug: String,
     target_id: String,
-    user_doc: Option<crate::core::Document>,
+    user_doc: Option<Document>,
     def: Arc<CollectionDefinition>,
     read_access: AccessResult,
 }
@@ -104,7 +105,9 @@ pub async fn back_references(
         read_access,
     };
 
-    match task::spawn_blocking(move || load_back_references_blocking(&params)).await {
+    // The viewer's label locale comes along, so the report's field and
+    // collection labels follow the UI locale.
+    match spawn_blocking_in_label_locale(move || load_back_references_blocking(&params)).await {
         Ok(Ok(report)) => Json(json!(report)).into_response(),
         Ok(Err(ServiceError::AccessDenied(_))) => {
             // Row-scoped `read` rule didn't match the target — fail closed

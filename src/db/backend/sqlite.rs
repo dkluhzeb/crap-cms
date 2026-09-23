@@ -132,6 +132,14 @@ fn sqlite_vacuum_into(conn: &dyn DbConnection, dest: &std::path::Path) -> Result
 
 const SQLITE_SIDECAR_EXTENSIONS: &[&str] = &["db-wal", "db-shm"];
 
+/// The text of `expr` after the first `separator`: `instr` is 0 when there is
+/// none, so `substr` then starts at the first character.
+fn sqlite_text_after(expr: &str, separator: &str) -> String {
+    let separator = separator.replace('\'', "''");
+
+    format!("substr({expr}, instr({expr}, '{separator}') + 1)")
+}
+
 /// Normalize `SQLite`'s legacy `"YYYY-MM-DD HH:MM:SS"` to ISO 8601
 /// `"YYYY-MM-DDTHH:MM:SS.000Z"`. Already-normalized values pass through
 /// unchanged. Since `now_expr()` now emits the ISO form directly, this is a
@@ -274,6 +282,10 @@ macro_rules! sqlite_shared_methods {
 
         fn json_each_source(&self, source: &str, alias: &str) -> String {
             format!("json_each({}) AS {}", source, alias)
+        }
+
+        fn text_after(&self, expr: &str, separator: &str) -> String {
+            sqlite_text_after(expr, separator)
         }
 
         fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {

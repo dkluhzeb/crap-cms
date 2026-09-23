@@ -5,7 +5,7 @@
 //! suppression) lives in one focused, unit-testable place.
 
 use axum::response::sse::Event;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tracing::warn;
 
 use crate::{
@@ -89,34 +89,61 @@ fn build_event_payload(
     }
     .evaluate(event)?;
 
-    let target_str = match event.target {
+    Some(sse_envelope(event, user_doc, &data))
+}
+
+/// The JSON envelope a subscriber receives: the event's public metadata, the
+/// `self` flag, and the already-gated `data`.
+fn sse_envelope(
+    event: &MutationEvent,
+    user_doc: Option<&Document>,
+    data: &Map<String, Value>,
+) -> Value {
+    // Exhaustive on purpose: a field added to `MutationEvent` fails to compile
+    // here until it is decided whether subscribers may see it. What stays
+    // server-side: the unstripped `data` (only the gated `data` argument is
+    // sent),
+    // the editor's identity, the view metadata, and the gating snapshot.
+    let MutationEvent {
+        sequence,
+        publisher,
+        timestamp,
+        target,
+        operation,
+        collection,
+        document_id,
+        data: _,
+        edited_by,
+        view: _,
+        gate: _,
+    } = event;
+
+    let target_str = match target {
         EventTarget::Collection => "collection",
         EventTarget::Global => "global",
     };
-
-    let op_str = event_op_str(&event.operation);
 
     // Editor identity is server-side only — leaking the editor's id/email to
     // every subscriber is a PII exposure. Subscribers get a boolean "was this
     // my own edit" computed here instead; editor-based logic belongs in the
     // server-side `live` filter / `before_broadcast` hooks, whose contexts
     // keep the full `edited_by`.
-    let is_self = match (&event.edited_by, user_doc) {
+    let is_self = match (edited_by, user_doc) {
         (Some(editor), Some(user)) => editor.id == *user.id,
         _ => false,
     };
 
-    Some(json!({
-        "sequence": event.sequence,
-        "publisher": event.publisher,
-        "timestamp": event.timestamp,
+    json!({
+        "sequence": sequence,
+        "publisher": publisher,
+        "timestamp": timestamp,
         "target": target_str,
-        "operation": op_str,
-        "collection": event.collection,
-        "document_id": event.document_id,
+        "operation": event_op_str(operation),
+        "collection": collection,
+        "document_id": document_id,
         "self": is_self,
         "data": data,
-    }))
+    })
 }
 
 /// Convert a mutation event to an SSE Event, applying access control, `after_read` hooks,
@@ -149,8 +176,8 @@ mod tests {
     use crate::config::CrapConfig;
     use crate::{
         core::{
-            Access, CollectionDefinition, DocumentFields, DocumentId, FieldAccess, FieldDefinition,
-            FieldType, HookRef, LiveMode, Slug,
+            Access, CollectionDefinition, DocumentFields, DocumentId, EventGateSnapshot,
+            FieldAccess, FieldDefinition, FieldType, HookRef, LiveMode, Slug,
             event::{EventOperation, EventUser, EventViewMeta},
         },
         db::{EventViewGate, Filter, FilterClause, FilterOp},
@@ -198,7 +225,12 @@ mod tests {
         def
     }
 
+    /// An event delivering `data`, gated by a snapshot of the same row — what
+    /// a write publishes for a document stored as `data`.
     fn make_event(slug: &str, data: DocumentFields) -> MutationEvent {
+        let mut row = Document::new("doc-1");
+        row.fields = data.clone();
+
         MutationEvent {
             sequence: 1,
             publisher: String::new(),
@@ -210,6 +242,7 @@ mod tests {
             data,
             edited_by: None,
             view: Some(EventViewMeta::default()),
+            gate: Some(EventGateSnapshot::of(&row)),
         }
     }
 
@@ -367,12 +400,51 @@ mod tests {
             "event outside the row filter must be dropped"
         );
 
-        // Fail-closed: an empty payload cannot satisfy a non-empty constraint.
-        let ev_empty = make_event("posts", DocumentFields::new());
+        // Fail-closed: an event without a gating snapshot cannot satisfy a
+        // non-empty constraint.
+        let mut ev_unjudgeable = make_event("posts", DocumentFields::new());
+        ev_unjudgeable.gate = None;
         assert!(
-            build_event_payload(&ev_empty, &access, &runner, &registry, None).is_none(),
-            "empty payload cannot satisfy a row constraint — fail closed"
+            build_event_payload(&ev_unjudgeable, &access, &runner, &registry, None).is_none(),
+            "an event without a snapshot cannot satisfy a row constraint — fail closed"
         );
+    }
+
+    /// Security: the gating snapshot (the stored row, hidden and read-denied
+    /// fields included) decides delivery but never reaches the SSE payload, in
+    /// either mode — only `data`, stripped per subscriber, is sent.
+    #[test]
+    fn sse_payload_never_carries_the_gating_snapshot() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        for mode in [LiveMode::Full, LiveMode::Metadata] {
+            let access = SseAccess {
+                collection_views: published_views("posts"),
+                global_views: HashMap::new(),
+                collection_modes: HashMap::from([("posts".to_string(), mode)]),
+                global_modes: HashMap::new(),
+            };
+
+            let mut payload_data = DocumentFields::new();
+            payload_data.insert("title".to_string(), json!("Hello"));
+            let mut event = make_event("posts", payload_data);
+
+            let mut row = Document::new("doc-1");
+            row.fields.insert("title".to_string(), json!("Hello"));
+            row.fields
+                .insert("secret".to_string(), json!("gate-only-sentinel"));
+            row.fields
+                .insert("stored_only".to_string(), json!("gate-only-sentinel"));
+            event.gate = Some(EventGateSnapshot::of(&row));
+
+            let payload = build_event_payload(&event, &access, &runner, &registry, None)
+                .expect("payload yielded");
+            let raw = payload.to_string();
+
+            assert!(!raw.contains("gate-only-sentinel"), "{mode:?}: {raw}");
+            assert!(!raw.contains("stored_only"), "{mode:?}: {raw}");
+            assert!(payload.get("gate").is_none(), "{mode:?}: {raw}");
+        }
     }
 
     /// Security: the SSE payload must never expose the editing user's

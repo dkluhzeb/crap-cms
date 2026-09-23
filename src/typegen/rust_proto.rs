@@ -5,8 +5,10 @@
 //! no JSON intermediate, no serde deserialization in the hot path.
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, Registry, collection::GlobalDefinition,
-    flatten_array_sub_fields, upload::read_shape_fields,
+    CollectionDefinition, FieldDefinition, Registry,
+    collection::GlobalDefinition,
+    flatten_array_sub_fields,
+    upload::{read_shape_fields, readable_fields},
 };
 
 use super::client::{FieldTy, resolve_ty};
@@ -313,7 +315,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
 
     // The READ shape, the same one `client/rust.rs` types the structs from: an
     // upload collection's per-size columns arrive folded into one `sizes`
-    // object, never as the stored columns.
+    // object, never as the stored columns, and hidden fields never arrive.
     let fields = read_shape_fields(col);
 
     // Sub-type from_struct impls for arrays
@@ -351,7 +353,11 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
 fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     let pascal = idents::rust_type(&to_pascal_case(&global.slug));
 
-    for stf in collect_sub_type_fields(&global.fields, &pascal) {
+    // The READ shape, the same one `client/rust.rs` types the struct from:
+    // hidden fields never reach a reader.
+    let fields = readable_fields(&global.fields);
+
+    for stf in collect_sub_type_fields(&fields, &pascal) {
         let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields, stf.row_id);
     }
@@ -361,7 +367,7 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     w!(out, "        Self {{");
     w!(out, "            id: doc.id.clone(),");
 
-    render_field_extractions(out, &global.fields, &pascal, "doc");
+    render_field_extractions(out, &fields, &pascal, "doc");
     render_system_extractions(out, global.has_drafts(), false);
 
     w!(out, "            created_at: doc.created_at.clone(),");
@@ -532,6 +538,7 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
     match &resolve_ty(field, parent_pascal) {
         // Strings (incl. id-string relationships: empty-collection upload / no target).
         FieldTy::Str
+        | FieldTy::Literal(_)
         | FieldTy::Rel {
             target: None,
             many: false,
@@ -677,6 +684,7 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
     match &resolve_ty(field, parent_pascal) {
         // Strings (incl. id-string relationships: empty-collection upload / no target).
         FieldTy::Str
+        | FieldTy::Literal(_)
         | FieldTy::Rel {
             target: None,
             many: false,
@@ -1394,5 +1402,35 @@ mod tests {
         assert!(!out.contains("thumbnail_width"), "{out}");
         assert!(out.contains("sizes: "), "{out}");
         assert!(out.contains("MediaSizesThumbnail::from_struct"), "{out}");
+    }
+
+    /// Regression: a `hidden = true` field is stripped from every read, yet
+    /// the decoder assigned it (and the client struct declared it) — for a
+    /// collection and a global alike, nested in a group too.
+    #[test]
+    fn proto_skips_hidden_fields() {
+        let secret = FieldDefinition::builder("secret", FieldType::Text)
+            .hidden(true)
+            .build();
+        let fields = vec![
+            text_field("title", true),
+            secret.clone(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("meta", false), secret])
+                .build(),
+        ];
+
+        let mut out = String::new();
+        render_collection_impl(&mut out, &make_col("posts", fields.clone()));
+        assert!(out.contains("title: "), "{out}");
+        assert!(out.contains("meta: "), "{out}");
+        assert!(!out.contains("secret"), "{out}");
+
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = fields;
+        let mut out = String::new();
+        render_global_impl(&mut out, &global);
+        assert!(out.contains("title: "), "{out}");
+        assert!(!out.contains("secret"), "{out}");
     }
 }

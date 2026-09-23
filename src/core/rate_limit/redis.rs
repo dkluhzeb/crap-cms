@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use nanoid::nanoid;
 use redis::Commands;
 
-use super::RateLimitBackend;
+use crate::core::{rate_limit::RateLimitBackend, redis_client};
 
 /// Sorted-set member for one recorded event.
 ///
@@ -39,7 +39,7 @@ pub struct RedisRateLimitBackend {
 
 impl RedisRateLimitBackend {
     pub fn new(url: &str, prefix: &str) -> Result<Self> {
-        let client = redis::Client::open(url).context("Failed to create Redis client")?;
+        let client = redis_client::open_client(url).context("Failed to create Redis client")?;
 
         let mut conn = client
             .get_connection()

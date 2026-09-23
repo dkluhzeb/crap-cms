@@ -2,20 +2,26 @@
 //! ([`super::ir`]) and stream `SubType`/`Document` constructs to a
 //! [`ClientPrinter`]. Written once here instead of four times across the
 //! per-language backends.
+//!
+//! Every owner is walked in its two wire shapes (`core::upload::read_shape`):
+//! the read shape feeds the read types, the write shape the input (`…Data`)
+//! types. Neither is ever derived from the other.
 
 use std::{borrow::Cow, collections::HashSet, slice::from_ref};
 
 use crate::{
     core::{
         CollectionDefinition, FieldChildren, FieldDefinition, FieldType, Registry,
-        collection::GlobalDefinition, field_children, flatten_array_sub_fields,
-        upload::read_shape_fields,
+        collection::GlobalDefinition,
+        field_children, flatten_array_sub_fields,
+        upload::{read_shape_fields, readable_fields, writable_fields, write_shape_fields},
     },
     typegen::{
         Language,
         helpers::{
-            SubTypeKind, collect_sub_type_fields, is_optional, is_single_ref, rel_has_many,
-            sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+            COLLECTION_TAG_KEY, DRAFT_STATUS_VALUES, SubTypeKind, collect_sub_type_fields,
+            declares_collection_tag, is_optional, rel_has_many, sorted_collection_slugs,
+            sorted_global_slugs, to_pascal_case,
         },
     },
 };
@@ -46,6 +52,20 @@ pub(in crate::typegen) fn generate(registry: &Registry, lang: Language) -> anyho
     Ok(drive(registry, printer))
 }
 
+/// The two wire shapes of one owner's fields: what a read returns and what a
+/// write accepts.
+#[derive(Clone, Copy)]
+struct Shapes<'a> {
+    read: &'a [FieldDefinition],
+    write: &'a [FieldDefinition],
+}
+
+impl<'a> Shapes<'a> {
+    fn new(read: &'a [FieldDefinition], write: &'a [FieldDefinition]) -> Self {
+        Self { read, write }
+    }
+}
+
 /// The shared schema walk: prelude → each collection's sub-types + document →
 /// each global's sub-types + document → epilogue. Public within the module so
 /// the per-language tests can drive a specific printer directly (production goes
@@ -63,23 +83,21 @@ pub(in crate::typegen) fn drive(
 
     for slug in sorted_collection_slugs(registry) {
         let col = &registry.collections[slug];
-        // The READ shape: an upload collection's per-size columns are folded
-        // into one `sizes` object before they reach the wire, so the generated
-        // types describe that and not the stored columns.
-        let fields = read_shape_fields(col);
-        let owner = (&*fields, to_pascal_case(&col.slug));
-        emit_owner_document(
-            printer.as_mut(),
-            owner,
-            &collection_document(col, &fields),
-            &mut aux,
-        );
+        let (read, write) = (read_shape_fields(col), write_shape_fields(col));
+        let shapes = Shapes::new(&read, &write);
+
+        let doc = collection_document(col, shapes);
+        emit_owner_document(printer.as_mut(), &doc, shapes, &mut aux);
     }
 
     for slug in sorted_global_slugs(registry) {
         let global = &registry.globals[slug];
-        let owner = (global.fields.as_slice(), to_pascal_case(&global.slug));
-        emit_owner_document(printer.as_mut(), owner, &global_document(global), &mut aux);
+        let read = readable_fields(&global.fields);
+        let write = writable_fields(&global.fields);
+        let shapes = Shapes::new(&read, &write);
+
+        let doc = global_document(global, shapes);
+        emit_owner_document(printer.as_mut(), &doc, shapes, &mut aux);
     }
 
     printer.enum_types(&aux.enums);
@@ -88,18 +106,28 @@ pub(in crate::typegen) fn drive(
     printer.finish()
 }
 
-/// Emit one collection or global — its fields and the Pascal-case name they are
-/// typed under — then its document and `locale = "all"` read shape.
+/// Emit one collection or global: its input sub-types, its read sub-types
+/// (collecting their auxiliary types), its document, then its
+/// `locale = "all"` read shape.
 fn emit_owner_document<'a>(
     printer: &mut dyn ClientPrinter,
-    (fields, pascal): (&'a [FieldDefinition], String),
     doc: &Document<'a>,
+    shapes: Shapes<'a>,
     aux: &mut Aux,
 ) {
-    emit_owner(printer, fields, &pascal, aux);
+    for sub in sub_types(shapes.write, &doc.name, Shape::Input) {
+        printer.sub_type(&sub);
+    }
+
+    for sub in sub_types(shapes.read, &doc.name, Shape::Read) {
+        collect_aux(&sub.fields, aux);
+        printer.sub_type(&sub);
+    }
+
     collect_aux(&doc.fields, aux);
     printer.document(doc);
-    emit_localized(printer, doc, fields);
+
+    emit_localized(printer, doc, shapes.read);
 }
 
 /// The named types collected during the walk (deduped by their unique names).
@@ -110,32 +138,32 @@ struct Aux {
     seen: HashSet<String>,
 }
 
-/// Emit every sub-type an owner's fields declare, in declaration order,
-/// collecting each sub-type's auxiliary defs along the way.
-fn emit_owner(
-    printer: &mut dyn ClientPrinter,
-    fields: &[FieldDefinition],
+/// Every sub-type an owner's `fields` declare, in declaration order, resolved
+/// in `shape`.
+fn sub_types<'a>(
+    fields: &'a [FieldDefinition],
     root_pascal: &str,
-    aux: &mut Aux,
-) {
-    for stf in collect_sub_type_fields(fields, root_pascal) {
-        let name = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
-        let sub_pascal = name.clone();
-        let mut fields = resolve_fields(&stf.field.fields, &sub_pascal);
-        if stf.row_id {
-            fields.insert(0, row_id_field());
-        }
+    shape: Shape,
+) -> Vec<SubType<'a>> {
+    collect_sub_type_fields(fields, root_pascal)
+        .into_iter()
+        .map(|stf| {
+            let name = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
 
-        let sub = SubType {
-            name,
-            kind: stf.kind,
-            field_name: &stf.field.name,
-            fields,
-            read_only: false,
-        };
-        collect_aux(&sub.fields, aux);
-        printer.sub_type(&sub);
-    }
+            let mut fields = resolve_shaped(&stf.field.fields, &name, shape);
+            if stf.row_id {
+                fields.insert(0, row_id_field());
+            }
+
+            SubType {
+                name,
+                kind: stf.kind,
+                field_name: &stf.field.name,
+                fields,
+                input: shape.is_input(),
+            }
+        })
+        .collect()
 }
 
 /// The junction `id` a relational array row carries: sent back on update, it
@@ -170,30 +198,34 @@ fn collect_aux(fields: &[Field], aux: &mut Aux) {
     }
 }
 
-/// Build the [`Document`] for a collection from its read-shaped fields.
-fn collection_document<'a>(
-    col: &'a CollectionDefinition,
-    fields: &'a [FieldDefinition],
-) -> Document<'a> {
+/// Build the [`Document`] for a collection from its read and write shapes.
+fn collection_document<'a>(col: &'a CollectionDefinition, shapes: Shapes<'a>) -> Document<'a> {
     let root = to_pascal_case(&col.slug);
+
     Document {
-        fields: resolve_fields(fields, &root),
+        fields: resolve_fields(shapes.read, &root),
+        input: collection_input(col, shapes.write, &root),
         system: system_fields(col.has_drafts(), col.soft_delete),
+        collection_tag: collection_tag(&col.slug, shapes.read),
         name: root,
         slug: &col.slug,
         timestamps: col.timestamps,
         is_global: false,
         localized: false,
-        select_options: select_field_options(fields),
+        select_options: select_field_options(shapes.read),
     }
 }
 
-/// Build the [`Document`] for a global (always timestamped, no select docstring).
-fn global_document(global: &GlobalDefinition) -> Document<'_> {
+/// Build the [`Document`] for a global (always timestamped, no select
+/// docstring, never populated into a relationship).
+fn global_document<'a>(global: &'a GlobalDefinition, shapes: Shapes<'a>) -> Document<'a> {
     let root = to_pascal_case(&global.slug);
+
     Document {
-        fields: resolve_fields(&global.fields, &root),
+        fields: resolve_fields(shapes.read, &root),
+        input: resolve_shaped(shapes.write, &root, Shape::Input),
         system: system_fields(global.has_drafts(), false),
+        collection_tag: None,
         name: root,
         slug: &global.slug,
         timestamps: true,
@@ -203,30 +235,66 @@ fn global_document(global: &GlobalDefinition) -> Document<'_> {
     }
 }
 
-/// The stored keys a read document carries besides its fields.
-fn system_fields(drafts: bool, soft_delete: bool) -> Vec<Field<'static>> {
-    let key = |name: &'static str| Field {
-        name: Cow::Borrowed(name),
-        ty: FieldTy::Str,
-        optional: true,
-    };
+/// A collection's write shape resolved for input, plus the `password` an auth
+/// collection's create and update take beside its fields.
+fn collection_input<'a>(
+    col: &CollectionDefinition,
+    write: &'a [FieldDefinition],
+    root: &str,
+) -> Vec<Field<'a>> {
+    let mut input = resolve_shaped(write, root, Shape::Input);
 
-    let mut fields = Vec::new();
-    if drafts {
-        fields.push(key("_status"));
-    }
-    if soft_delete {
-        fields.push(key("_deleted_at"));
+    if col.is_auth_collection() && !input.iter().any(|f| f.name == "password") {
+        input.push(password_field());
     }
 
-    fields
+    input
 }
 
-/// Mark every field optional: a read may omit any of them (a draft may lack
-/// required values, and field read access and `select` leave keys out).
-fn read_fields(mut fields: Vec<Field<'_>>) -> Vec<Field<'_>> {
-    for field in &mut fields {
-        field.optional = true;
+/// An auth collection's `password`: extracted from the data by create and
+/// single update, hashed, and never stored as field data or read back.
+/// Optional — an account may authenticate by another method; an empty one is
+/// rejected on create and keeps the stored hash on update.
+fn password_field() -> Field<'static> {
+    Field {
+        name: Cow::Borrowed("password"),
+        ty: FieldTy::Str,
+        optional: true,
+    }
+}
+
+/// The `collection` key a populated copy of a document carries — its slug —
+/// unless one of its own fields has that name.
+fn collection_tag(slug: &str, read: &[FieldDefinition]) -> Option<Field<'static>> {
+    if !declares_collection_tag(read) {
+        return None;
+    }
+
+    Some(Field {
+        name: Cow::Borrowed(COLLECTION_TAG_KEY),
+        ty: FieldTy::Literal(vec![slug.to_string()]),
+        optional: true,
+    })
+}
+
+/// The stored keys a read document carries besides its fields.
+fn system_fields(drafts: bool, soft_delete: bool) -> Vec<Field<'static>> {
+    let mut fields = Vec::new();
+
+    if drafts {
+        fields.push(Field {
+            name: Cow::Borrowed("_status"),
+            ty: FieldTy::Literal(DRAFT_STATUS_VALUES.into_iter().map(String::from).collect()),
+            optional: true,
+        });
+    }
+
+    if soft_delete {
+        fields.push(Field {
+            name: Cow::Borrowed("_deleted_at"),
+            ty: FieldTy::Str,
+            optional: true,
+        });
     }
 
     fields
@@ -235,43 +303,73 @@ fn read_fields(mut fields: Vec<Field<'_>>) -> Vec<Field<'_>> {
 /// How a document's fields are typed.
 #[derive(Clone, Copy)]
 enum Shape {
-    /// The single-locale shape reads and writes use.
-    Standard,
+    /// What a single-locale read returns: every field optional, a reference an
+    /// id or its populated document.
+    Read,
+    /// What a create or update accepts: each field's own optionality, every
+    /// reference an id (a polymorphic one as its `"collection/id"` string).
+    Input,
     /// The `locale = "all"` read shape; `inherited` is whether an enclosing
     /// group is localized.
     Localized { inherited: bool },
 }
 
 impl Shape {
+    fn is_input(self) -> bool {
+        matches!(self, Shape::Input)
+    }
+
+    /// Whether `field` may be left out. A read may omit any field — a draft
+    /// may lack required values, population nulls a reference whose target is
+    /// gone or denied, and field read access and `select` leave keys out — so
+    /// only an input keeps the field's own optionality.
+    fn optional(self, field: &FieldDefinition) -> bool {
+        !self.is_input() || is_optional(field)
+    }
+
     /// Whether `field` is read as a per-locale map in this shape.
     fn localizes(self, field: &FieldDefinition) -> bool {
-        match self {
-            Shape::Standard => false,
-            Shape::Localized { inherited } => {
-                field.has_parent_column() && (inherited || field.localized)
-            }
-        }
-    }
-
-    /// `ty` as this shape types `field`: a per-locale map for a localized
-    /// column, the localized sub-type for a group holding localized columns.
-    fn shape_ty(self, field: &FieldDefinition, ty: FieldTy, localized: bool) -> FieldTy {
         let Shape::Localized { inherited } = self else {
-            return ty;
+            return false;
         };
 
-        if let FieldTy::SubType { name, list: false } = &ty
-            && field.field_type == FieldType::Group
-            && has_localized_columns(&field.fields, inherited || field.localized)
-        {
-            return FieldTy::SubType {
-                name: format!("{name}Localized"),
-                list: false,
-            };
-        }
-
-        localized_if(ty, localized)
+        field.has_parent_column() && (inherited || field.localized)
     }
+
+    /// `ty` as this shape types `field`.
+    fn shape_ty(self, field: &FieldDefinition, ty: FieldTy, localized: bool) -> FieldTy {
+        match self {
+            Shape::Read => ty,
+            Shape::Input => input_ty(ty),
+            Shape::Localized { inherited } => localized_ty(field, ty, localized, inherited),
+        }
+    }
+}
+
+/// A reference as a write carries it: the id string, never a document.
+fn input_ty(ty: FieldTy) -> FieldTy {
+    match ty {
+        FieldTy::Rel { many, .. } | FieldTy::PolyRel { many, .. } => {
+            FieldTy::Rel { target: None, many }
+        }
+        other => other,
+    }
+}
+
+/// `ty` in the `locale = "all"` shape: a per-locale map for a localized
+/// column, the localized sub-type for a group holding localized columns.
+fn localized_ty(field: &FieldDefinition, ty: FieldTy, localized: bool, inherited: bool) -> FieldTy {
+    if let FieldTy::SubType { name, list: false } = &ty
+        && field.field_type == FieldType::Group
+        && has_localized_columns(&field.fields, inherited || field.localized)
+    {
+        return FieldTy::SubType {
+            name: format!("{name}Localized"),
+            list: false,
+        };
+    }
+
+    localized_if(ty, localized)
 }
 
 fn localized_if(ty: FieldTy, localized: bool) -> FieldTy {
@@ -341,8 +439,8 @@ fn localized_group_sub_types<'a>(
         name: format!("{pascal}Localized"),
         kind: SubTypeKind::Group,
         field_name: &group.name,
-        fields: read_fields(resolve_shaped(sub, &pascal, shape)),
-        read_only: true,
+        fields: resolve_shaped(sub, &pascal, shape),
+        input: false,
     }];
     out.extend(localized_sub_types(sub, &pascal, scope));
 
@@ -368,7 +466,9 @@ fn emit_localized<'a>(
         name: doc.name.clone(),
         slug: doc.slug,
         fields: resolve_shaped(fields, &doc.name, Shape::Localized { inherited: false }),
+        input: Vec::new(),
         system: doc.system.clone(),
+        collection_tag: doc.collection_tag.clone(),
         timestamps: doc.timestamps,
         is_global: doc.is_global,
         select_options: Vec::new(),
@@ -376,11 +476,12 @@ fn emit_localized<'a>(
     });
 }
 
-/// Resolve a field list to the IR, flattening transparent layout wrappers
-/// (Row/Collapsible/Tabs) so a printer never sees them. `parent_pascal` is the
-/// enclosing owner's compound `PascalCase`, used to name nested sub-types.
+/// Resolve a field list to the IR's read shape, flattening transparent layout
+/// wrappers (Row/Collapsible/Tabs) so a printer never sees them.
+/// `parent_pascal` is the enclosing owner's compound `PascalCase`, used to name
+/// nested sub-types.
 fn resolve_fields<'a>(fields: &'a [FieldDefinition], parent_pascal: &str) -> Vec<Field<'a>> {
-    resolve_shaped(fields, parent_pascal, Shape::Standard)
+    resolve_shaped(fields, parent_pascal, Shape::Read)
 }
 
 /// [`resolve_fields`] in a given [`Shape`].
@@ -417,10 +518,7 @@ fn push_resolved<'a>(
     out.push(Field {
         name: Cow::Borrowed(&field.name),
         ty: shape.shape_ty(field, resolve_ty(field, parent_pascal), localized),
-        // A single relationship/upload is optional on read even when `required`:
-        // population nulls it when the target is soft-deleted or access-denied
-        // (has-many drops the entry instead), so a non-optional type would lie.
-        optional: is_optional(field) || is_single_ref(field),
+        optional: shape.optional(field),
     });
 
     for column in field.companion_columns(&field.name) {
@@ -565,63 +663,61 @@ fn all_type_names(registry: &Registry, lang: Language) -> Vec<String> {
 
     for slug in sorted_collection_slugs(registry) {
         let col = &registry.collections[slug];
-        collect_type_names(
-            &read_shape_fields(col),
-            &to_pascal_case(&col.slug),
-            lang,
-            &mut names,
-        );
+        let (read, write) = (read_shape_fields(col), write_shape_fields(col));
+        let root = to_pascal_case(&col.slug);
+
+        collect_type_names(Shapes::new(&read, &write), &root, lang, &mut names);
     }
+
     for slug in sorted_global_slugs(registry) {
         let global = &registry.globals[slug];
-        collect_type_names(
-            &global.fields,
-            &to_pascal_case(&global.slug),
-            lang,
-            &mut names,
-        );
+        let read = readable_fields(&global.fields);
+        let write = writable_fields(&global.fields);
+        let root = to_pascal_case(&global.slug);
+
+        collect_type_names(Shapes::new(&read, &write), &root, lang, &mut names);
     }
+
     if !registry.collections.is_empty() {
         names.push("CollectionSlug".to_string());
     }
+
     names
 }
 
 /// Push one owner's type names into `names`: the owner itself, its sub-types,
 /// and any select-enum / polymorphic-enum types its fields declare — as `lang`
 /// names them. TypeScript names an owner by its input and read types
-/// (`…Data`, `…Document`, `…LocalizedDocument`) and gives each sub-type an
-/// input variant (`…Data`).
-fn collect_type_names(
-    fields: &[FieldDefinition],
-    root: &str,
-    lang: Language,
-    names: &mut Vec<String>,
-) {
+/// (`…Data`, `…Document`, `…LocalizedDocument`), names each write-shape
+/// sub-type `…Data`, and writes select enums and polymorphic references
+/// inline, so they name no type there.
+fn collect_type_names(shapes: Shapes<'_>, root: &str, lang: Language, names: &mut Vec<String>) {
     let typescript = matches!(lang, Language::Typescript);
 
     if typescript {
         names.extend([format!("{root}Data"), format!("{root}Document")]);
+        names.extend(
+            sub_types(shapes.write, root, Shape::Input)
+                .into_iter()
+                .map(|sub| format!("{}Data", sub.name)),
+        );
+        names.extend(
+            sub_types(shapes.read, root, Shape::Read)
+                .into_iter()
+                .map(|sub| sub.name),
+        );
     } else {
         names.push(root.to_string());
-    }
 
-    // TypeScript writes select enums and polymorphic references inline, so
-    // they name no type there.
-    for stf in collect_sub_type_fields(fields, root) {
-        let sub = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
-        if typescript {
-            names.push(format!("{sub}Data"));
-        } else {
-            push_aux_type_names(&resolve_fields(&stf.field.fields, &sub), names);
+        for sub in sub_types(shapes.read, root, Shape::Read) {
+            push_aux_type_names(&sub.fields, names);
+            names.push(sub.name);
         }
-        names.push(sub);
-    }
-    if !typescript {
-        push_aux_type_names(&resolve_fields(fields, root), names);
+
+        push_aux_type_names(&resolve_fields(shapes.read, root), names);
     }
 
-    names.extend(localized_type_names(fields, root, typescript));
+    names.extend(localized_type_names(shapes.read, root, typescript));
 }
 
 /// The `locale = "all"` read type names of an owner with localized columns:
@@ -753,344 +849,5 @@ mod collision {
         let mut reg = Registry::new();
         reg.register_collection(CollectionDefinition::new("posts"));
         assert!(generate(&reg, Language::Rust).is_ok());
-    }
-}
-
-/// Golden-snapshot tests: one comprehensive schema rendered per language and
-/// diffed against a committed file, so any output change fails until reviewed —
-/// the "can't regress silently" net. This complements the per-language unit
-/// tests (behavioral intent) and the Rust `syn` parse (compile-grade validity);
-/// a true TS/Go/Python compiler check would need those toolchains, out of scope
-/// for the hermetic Rust suite. Regenerate the goldens after an intentional
-/// change with: `cargo test -p crap-cms --lib golden::regenerate -- --ignored`.
-#[cfg(test)]
-mod golden {
-    use crate::core::{
-        BlockDefinition, CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition,
-        LocalizedString, Registry, RelationshipConfig, SelectOption, VersionsConfig,
-    };
-    use crate::typegen::Language;
-
-    use super::generate;
-
-    fn text(name: &str, required: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text)
-            .required(required)
-            .build()
-    }
-
-    /// A schema exercising the breadth of the generators: scalars, has-many,
-    /// select-with-options, populated + polymorphic relationships, upload,
-    /// group, nested group in array, blocks, a global, identifier hazards
-    /// (a leading-digit slug/field, a keyword field), drafts, soft delete, a
-    /// timezone date, and a localized field and group.
-    fn kitchen_sink() -> Registry {
-        let mut posts = CollectionDefinition::new("posts");
-        posts.timestamps = true;
-        posts.soft_delete = true;
-        posts.versions = Some(VersionsConfig::new(true, 10));
-        posts.fields = vec![
-            text("title", true),
-            FieldDefinition::builder("summary", FieldType::Textarea)
-                .localized(true)
-                .build(),
-            FieldDefinition::builder("published_at", FieldType::Date)
-                .timezone(true)
-                .build(),
-            FieldDefinition::builder("status", FieldType::Select)
-                .required(true)
-                .options(vec![
-                    SelectOption::new(LocalizedString::Plain("Draft".into()), "draft"),
-                    SelectOption::new(LocalizedString::Plain("Published".into()), "published"),
-                ])
-                .build(),
-            FieldDefinition::builder("author", FieldType::Relationship)
-                .required(true)
-                .relationship(RelationshipConfig::new("users", false))
-                .build(),
-            FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-            FieldDefinition::builder("cover", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-            FieldDefinition::builder("related", FieldType::Relationship)
-                .relationship({
-                    // Both targets are registered below, so the golden compiles.
-                    let mut rc = RelationshipConfig::new("users", true);
-                    rc.polymorphic = vec!["users".into(), "tags".into()];
-                    rc
-                })
-                .build(),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .localized(true)
-                .fields(vec![text("meta_title", true), text("meta_desc", false)])
-                .build(),
-            FieldDefinition::builder("items", FieldType::Array)
-                .fields(vec![
-                    text("label", true),
-                    FieldDefinition::builder("meta", FieldType::Group)
-                        .fields(vec![text("key", true)])
-                        .build(),
-                ])
-                .build(),
-            FieldDefinition::builder("content", FieldType::Blocks)
-                .blocks(vec![BlockDefinition::new(
-                    "text",
-                    vec![
-                        FieldDefinition::builder("body", FieldType::Richtext)
-                            .required(true)
-                            .build(),
-                    ],
-                )])
-                .build(),
-            FieldDefinition::builder("scores", FieldType::Number)
-                .has_many(true)
-                .build(),
-            FieldDefinition::builder("active", FieldType::Checkbox).build(),
-            FieldDefinition::builder("data", FieldType::Json).build(),
-        ];
-
-        let mut users = CollectionDefinition::new("users");
-        users.timestamps = true;
-        users.fields = vec![
-            text("name", true),
-            FieldDefinition::builder("email", FieldType::Email).build(),
-        ];
-
-        let mut tags = CollectionDefinition::new("tags");
-        tags.fields = vec![text("name", true)];
-
-        let mut media = CollectionDefinition::new("media");
-        media.fields = vec![text("filename", true)];
-
-        // Identifier hazards: a leading-digit slug + field, and a keyword field.
-        let mut twofa = CollectionDefinition::new("2fa");
-        twofa.fields = vec![text("type", true), text("2fa", false)];
-
-        let mut settings = GlobalDefinition::new("settings");
-        settings.fields = vec![
-            text("site_name", true),
-            FieldDefinition::builder("nav", FieldType::Array)
-                .fields(vec![text("label", true), text("url", true)])
-                .build(),
-        ];
-
-        let mut reg = Registry::new();
-        for c in [posts, users, tags, media, twofa] {
-            reg.register_collection(c);
-        }
-        reg.register_global(settings);
-        reg
-    }
-
-    const LANGS: [(Language, &str); 4] = [
-        (Language::Rust, "rs"),
-        (Language::Typescript, "ts"),
-        (Language::Go, "go"),
-        (Language::Python, "py"),
-    ];
-
-    /// Regenerate every golden. Ignored by default (it writes into the source
-    /// tree); run explicitly after an intentional generator change.
-    #[test]
-    #[ignore = "writes golden files into testdata/; run with --ignored to regenerate"]
-    fn regenerate() {
-        let reg = kitchen_sink();
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/typegen/client/testdata");
-        std::fs::create_dir_all(dir).expect("create testdata dir");
-        for (lang, ext) in LANGS {
-            let src = generate(&reg, lang).expect("generate golden");
-            std::fs::write(format!("{dir}/kitchen_sink.{ext}"), src).expect("write golden");
-        }
-    }
-
-    macro_rules! golden_test {
-        ($name:ident, $lang:expr, $file:literal) => {
-            #[test]
-            fn $name() {
-                let actual = generate(&kitchen_sink(), $lang).expect("generate");
-                let expected = include_str!($file);
-                assert_eq!(
-                    actual,
-                    expected,
-                    "{} golden is stale — regenerate with \
-                     `cargo test -p crap-cms --lib golden::regenerate -- --ignored`",
-                    stringify!($name)
-                );
-            }
-        };
-    }
-
-    golden_test!(golden_rust, Language::Rust, "testdata/kitchen_sink.rs");
-    golden_test!(
-        golden_typescript,
-        Language::Typescript,
-        "testdata/kitchen_sink.ts"
-    );
-    golden_test!(golden_go, Language::Go, "testdata/kitchen_sink.go");
-    golden_test!(golden_python, Language::Python, "testdata/kitchen_sink.py");
-}
-
-/// The generated types must describe the shape a READ carries, not the stored
-/// columns: an upload collection's per-size columns never reach a client (the
-/// read folds them into one `sizes` object), and a JSON-format rich text field
-/// is a JSON document rather than a string. Every language is checked, because
-/// a declared-but-never-sent key is a hard decode failure in the strict ones.
-#[cfg(test)]
-mod read_shape {
-    use crate::core::{
-        CollectionDefinition, FieldAdmin, FieldDefinition, FieldType, Registry,
-        upload::{CollectionUpload, FormatQuality, ImageSizeBuilder},
-    };
-    use crate::typegen::Language;
-
-    use super::generate;
-
-    /// A `media` collection with one image size and a WebP variant — the
-    /// columns `inject_upload_fields` would add, and the upload config that
-    /// makes the read fold them away.
-    fn media_with_sizes() -> Registry {
-        let mut upload = CollectionUpload::new();
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumbnail")
-                .width(200)
-                .height(200)
-                .build(),
-        ];
-        upload.format_options.webp = Some(FormatQuality::new(80, false));
-
-        let mut media = CollectionDefinition::new("media");
-        media.fields = vec![
-            FieldDefinition::builder("filename", FieldType::Text)
-                .required(true)
-                .build(),
-        ];
-        media.fields.extend(
-            upload
-                .size_columns()
-                .into_iter()
-                .map(|(name, ty)| FieldDefinition::builder(name, ty).build()),
-        );
-        media.upload = Some(upload);
-
-        let mut reg = Registry::new();
-        reg.register_collection(media);
-        reg
-    }
-
-    /// The per-size columns `assemble_sizes_object` removes from every read.
-    const STRIPPED: [&str; 4] = [
-        "thumbnail_url",
-        "thumbnail_width",
-        "thumbnail_height",
-        "thumbnail_webp_url",
-    ];
-
-    /// The first generated line mentioning a wire key — every language keeps
-    /// the raw key somewhere on the declaring line (a property name, a JSON
-    /// tag, a serde rename), so this reads the declaration without depending
-    /// on a printer's column alignment.
-    fn decl_line<'a>(out: &'a str, key: &str) -> &'a str {
-        out.lines()
-            .find(|line| line.contains(key))
-            .unwrap_or_else(|| panic!("nothing declares `{key}` in:\n{out}"))
-    }
-
-    fn assert_folds_sizes(lang: Language) {
-        let out = generate(&media_with_sizes(), lang).expect("generate");
-
-        for column in STRIPPED {
-            assert!(
-                !out.contains(column),
-                "{lang:?} declares `{column}`, which no read ever carries:\n{out}"
-            );
-        }
-
-        let sizes = decl_line(&out, "sizes");
-        assert!(
-            sizes.contains("MediaSizes"),
-            "{lang:?} must declare the assembled object, got `{sizes}`"
-        );
-        assert!(
-            out.contains("MediaSizesThumbnailFormatsWebp"),
-            "{lang:?} must describe the per-format nesting:\n{out}"
-        );
-    }
-
-    #[test]
-    fn typescript_folds_upload_sizes() {
-        assert_folds_sizes(Language::Typescript);
-    }
-
-    #[test]
-    fn go_folds_upload_sizes() {
-        assert_folds_sizes(Language::Go);
-    }
-
-    #[test]
-    fn python_folds_upload_sizes() {
-        assert_folds_sizes(Language::Python);
-    }
-
-    #[test]
-    fn rust_folds_upload_sizes() {
-        assert_folds_sizes(Language::Rust);
-    }
-
-    /// A rich text field with `admin.richtext_format = "json"` and a default
-    /// (HTML) one beside it.
-    fn richtext_registry() -> Registry {
-        let mut pages = CollectionDefinition::new("pages");
-        pages.fields = vec![
-            FieldDefinition::builder("body", FieldType::Richtext)
-                .admin(FieldAdmin::builder().richtext_format("json").build())
-                .build(),
-            FieldDefinition::builder("teaser", FieldType::Richtext).build(),
-        ];
-
-        let mut reg = Registry::new();
-        reg.register_collection(pages);
-        reg
-    }
-
-    fn assert_json_richtext(lang: Language, json_ty: &str, html_ty: &str) {
-        let out = generate(&richtext_registry(), lang).expect("generate");
-
-        let body = decl_line(&out, "body");
-        assert!(
-            body.contains(json_ty),
-            "{lang:?} must type JSON rich text as a JSON document, got `{body}`"
-        );
-
-        let teaser = decl_line(&out, "teaser");
-        assert!(
-            teaser.contains(html_ty),
-            "{lang:?} must keep HTML rich text a string, got `{teaser}`"
-        );
-    }
-
-    #[test]
-    fn typescript_types_json_richtext_as_a_document() {
-        assert_json_richtext(Language::Typescript, "unknown", "string");
-    }
-
-    #[test]
-    fn go_types_json_richtext_as_a_document() {
-        assert_json_richtext(Language::Go, "interface{}", "*string");
-    }
-
-    #[test]
-    fn python_types_json_richtext_as_a_document() {
-        assert_json_richtext(Language::Python, "Optional[Any]", "Optional[str]");
-    }
-
-    #[test]
-    fn rust_types_json_richtext_as_a_document() {
-        assert_json_richtext(
-            Language::Rust,
-            "Option<serde_json::Value>",
-            "Option<String>",
-        );
     }
 }

@@ -27,7 +27,7 @@ The `data` payload is JSON with the same fields as the gRPC `MutationEvent`, plu
 
 ## Admin UI Integration
 
-The admin UI automatically connects to the SSE endpoint on all authenticated pages. When a mutation event is received, a toast notification is shown via the `<crap-toast>` component.
+The admin UI automatically connects to the SSE endpoint on all authenticated pages. When a mutation event is received, a toast notification is shown via the `<crap-toast>` component. Events for the same collection (or the same global) and operation that arrive within a fraction of a second of each other — a bulk write, a purge of the trash — collapse into one toast carrying their count (`posts deleted (12)`); a collection and a global that share a slug keep separate toasts.
 
 The SSE connection:
 - Auto-reconnects on disconnection (native `EventSource` behavior)

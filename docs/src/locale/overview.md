@@ -327,7 +327,20 @@ Plain strings still work — they're used as-is regardless of locale:
 admin = { label = "Title", placeholder = "Enter title" }
 ```
 
-The admin UI resolves labels based on `default_locale` from `crap.toml`.
+A localized label resolves in this order:
+
+1. the viewer's **admin UI locale** (the language picked in the admin header),
+2. then `default_locale` from `crap.toml`,
+3. then — so a label never renders blank while it has any translation — the
+   alphabetically first key it defines.
+
+Labels are admin UI text, so this applies whether or not content localization
+(`locales`) is enabled. Within an admin request it covers every label resolved
+on the viewer's behalf — the page itself, and `crap.schema` or a label read by
+a hook the request runs (a list, the edit page, a create, update, delete,
+restore or empty-trash, `before_render`). Surfaces with no viewer — the
+gRPC/REST schema endpoints, MCP, and `crap.schema` reads outside an admin
+request — resolve against `default_locale`.
 
 ## Admin UI Translations
 
@@ -354,7 +367,11 @@ Place a JSON file at `<config_dir>/translations/<locale>.json` to override or ad
 }
 ```
 
-The file must match your `default_locale` in `crap.toml`. Keys not present in the override file fall back to English.
+Each file's name is the UI locale it defines: `de.json` extends the built-in
+German, and a new name such as `fr.json` adds that language to the admin's
+language picker. Keys not present in a file fall back to English. A file that
+cannot be read or is not a flat `"key": "string"` map is skipped with a
+warning in the log naming the file and the reason.
 
 ### Interpolation
 

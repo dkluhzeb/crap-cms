@@ -11,7 +11,6 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use serde_json::Value;
 use tokio::task::spawn_blocking;
 
 use crate::admin::{
@@ -27,12 +26,15 @@ use crate::admin::{
     },
 };
 use crate::config::LocaleConfig;
-use crate::core::{AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface};
-use crate::db::{BoxedConnection, DbPool, query};
+use crate::core::{
+    AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface, with_label_locale,
+};
+use crate::db::{BoxedConnection, DbPool};
 use crate::hooks::HookRunner;
 use crate::service::{
     self,
     auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
+    user_settings::load_user_settings,
 };
 
 /// Snapshot a `HeaderMap` into a plain `HashMap` for the evaluator
@@ -142,11 +144,9 @@ struct AdminAuthOutcome {
 /// the pool per request.
 #[cfg(not(tarpaulin_include))]
 fn load_ui_locale(conn: &BoxedConnection, user: &AuthUser) -> Option<String> {
-    let settings_json = query::get_user_settings(conn, &user.claims.sub).ok()??;
-    let value: Value = serde_json::from_str(&settings_json).ok()?;
-    value
-        .get("ui_locale")
-        .and_then(|l| l.as_str())
+    load_user_settings(conn, &user.claims.sub)
+        .ok()?
+        .ui_locale()
         .map(str::to_string)
 }
 
@@ -273,10 +273,14 @@ pub(in crate::admin) async fn auth_middleware(
         .unwrap_or_else(|| state.config.locale.default_locale.clone());
 
     let claims = auth_user.claims.clone();
+    let ui_locale = auth_user.ui_locale.clone();
     if let Some(response) = apply_auth_to_request(&state, &mut request, claims, auth_user).await {
         return response;
     }
-    next.run(request).await
+
+    // Operator-localized labels on every page this request builds resolve
+    // for the viewer's UI locale.
+    with_label_locale(ui_locale, next.run(request)).await
 }
 
 #[cfg(test)]

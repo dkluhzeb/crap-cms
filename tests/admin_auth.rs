@@ -1938,6 +1938,127 @@ async fn reset_password_too_short() {
     );
 }
 
+/// An app whose admin UI renders in German: an anonymous page and a user
+/// without saved settings both fall back to `locale.default_locale`.
+fn setup_german_app() -> TestApp {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.locale.default_locale = "de".to_string();
+    setup_app_with_config(vec![make_users_def()], vec![], config)
+}
+
+/// Regression: a password-policy violation on the reset page showed the
+/// English message whatever the UI locale.
+#[tokio::test]
+async fn reset_password_policy_error_is_translated() {
+    let app = setup_german_app();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/reset-password")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "token=sometoken&password=ab&password_confirm=ab",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("Das Passwort muss mindestens 8 Zeichen lang sein"),
+        "{body}"
+    );
+}
+
+/// A signed-in admin's session cookie.
+fn admin_cookie(app: &TestApp) -> String {
+    let admin_id = create_test_user(app, "admin@test.com", "pass1234");
+
+    make_auth_cookie(app, &admin_id, "admin@test.com")
+}
+
+/// POST an admin user form with `cookie`'s session; returns the body.
+async fn post_user_form(app: &TestApp, cookie: &str, path: &str, form: &str) -> String {
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header("cookie", auth_and_csrf(cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    body_string(resp.into_body()).await
+}
+
+/// Regression: the admin create form checked the password policy itself and
+/// toasted the English message; the service's `password` field error is now
+/// what the re-rendered form shows, in the viewer's UI locale.
+#[tokio::test]
+async fn admin_create_password_policy_error_is_translated() {
+    let app = setup_german_app();
+    let cookie = admin_cookie(&app);
+
+    let short = post_user_form(
+        &app,
+        &cookie,
+        "/admin/collections/users",
+        "email=new@test.com&password=ab",
+    )
+    .await;
+    assert!(
+        short.contains("Das Passwort muss mindestens 8 Zeichen lang sein"),
+        "{short}"
+    );
+
+    let empty = post_user_form(
+        &app,
+        &cookie,
+        "/admin/collections/users",
+        "email=other@test.com&password=",
+    )
+    .await;
+    assert!(
+        empty.contains("Das Passwort darf nicht leer sein"),
+        "{empty}"
+    );
+}
+
+/// Regression: the admin edit form toasted the English policy message; the
+/// service's field error now renders in the viewer's UI locale.
+#[tokio::test]
+async fn admin_update_password_policy_error_is_translated() {
+    let app = setup_german_app();
+    let cookie = admin_cookie(&app);
+    let target = create_test_user(&app, "target@test.com", "pass1234");
+
+    let body = post_user_form(
+        &app,
+        &cookie,
+        &format!("/admin/collections/users/{target}"),
+        "email=target@test.com&password=ab",
+    )
+    .await;
+    assert!(
+        body.contains("Das Passwort muss mindestens 8 Zeichen lang sein"),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn reset_password_action_invalid_token() {
     let app = setup_app(vec![make_users_def()], vec![]);

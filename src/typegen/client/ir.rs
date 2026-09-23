@@ -8,8 +8,9 @@ use std::borrow::Cow;
 use crate::{core::Registry, typegen::helpers::SubTypeKind};
 
 /// A field's language-neutral type, resolved once from the schema. Each printer
-/// maps it to its own syntax — only [`FieldTy::Rel`] carries a populated target
-/// (Rust `Rel<T>`); the other languages render relationships as id strings.
+/// maps it to its own syntax. A read relationship is an id-or-document union
+/// ([`FieldTy::Rel`] with a target, [`FieldTy::PolyRel`]); a write carries ids
+/// only, so the input shape resolves every reference to `Rel { target: None }`.
 #[derive(Clone)]
 pub(in crate::typegen) enum FieldTy {
     /// A single string (`Text`/`Textarea`/`Email`/`Date`/`Richtext`/`Code`).
@@ -33,7 +34,9 @@ pub(in crate::typegen) enum FieldTy {
     JsonList,
     /// A single-target relationship/upload. `target` is the raw `PascalCase`
     /// target collection name (populated document type), or `None` for a plain
-    /// id string (empty-collection upload / relationship with no config). At
+    /// id string (empty-collection upload / relationship with no config, and
+    /// every reference in the write shape — a polymorphic one as its
+    /// `"collection/id"` string). At
     /// `depth=0` the wire value is the id string, at `depth>=1` the document —
     /// modeled as an id-or-doc union in every language.
     Rel { target: Option<String>, many: bool },
@@ -63,6 +66,11 @@ pub(in crate::typegen) enum FieldTy {
     /// A localized column field read with `locale = "all"`: one value per
     /// locale code.
     Localized(Box<FieldTy>),
+    /// A string the server writes from a closed set (a system key such as
+    /// `_status`, or the `collection` tag of a populated document).
+    /// TypeScript and Python narrow to the literal values; Rust and Go keep a
+    /// plain string.
+    Literal(Vec<String>),
 }
 
 /// A named enum type generated from a `Select`/`Radio` field's options, emitted
@@ -102,11 +110,13 @@ pub(in crate::typegen) struct SubType<'a> {
     pub kind: SubTypeKind,
     /// The raw field name, for languages that describe the sub-type in a comment.
     pub field_name: &'a str,
-    /// Each field's optionality as input takes it; a read type makes every
-    /// field optional.
+    /// The sub-type's fields in its shape: an input sub-type keeps each
+    /// field's own optionality and carries references as ids; a read sub-type
+    /// makes every field optional.
     pub fields: Vec<Field<'a>>,
-    /// Only ever read (the `locale = "all"` shape): no input variant exists.
-    pub read_only: bool,
+    /// Part of the write shape (a `…Data` type). Only the printers that emit
+    /// write types render it; the others skip it.
+    pub input: bool,
 }
 
 /// A top-level document type (a collection document or a global).
@@ -115,10 +125,22 @@ pub(in crate::typegen) struct Document<'a> {
     pub name: String,
     /// The raw slug, for languages that describe the document in a comment.
     pub slug: &'a str,
+    /// The fields a read returns (the read shape), every one optional.
     pub fields: Vec<Field<'a>>,
+    /// The fields a create or update accepts (the write shape), each with its
+    /// own optionality and references as ids — plus an auth collection's
+    /// `password`. Empty for the `locale = "all"` read shape.
+    pub input: Vec<Field<'a>>,
     /// Stored keys a read document carries besides its fields (`_status`,
     /// `_deleted_at`) — always optional, never part of the input.
     pub system: Vec<Field<'a>>,
+    /// The `collection` key a copy of this document carries when it is
+    /// populated into a relationship, typed as the one-value literal of its
+    /// slug — what narrows a polymorphic union. `None` for a global (never a
+    /// relationship target) and for a collection whose own field is named
+    /// `collection`. Rust omits it: its polymorphic enums consume the key as
+    /// their serde tag.
+    pub collection_tag: Option<Field<'a>>,
     /// Whether to emit `created_at`/`updated_at` (globals always do).
     pub timestamps: bool,
     pub is_global: bool,

@@ -9,7 +9,7 @@ use crate::{
     db::{FilterClause, FindQuery, LocaleContext},
 };
 
-use super::columns::get_valid_filter_columns;
+use super::{columns::get_valid_filter_columns, filter::lookup_column_field};
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
 #[must_use]
@@ -178,29 +178,49 @@ pub fn validate_query_fields(
         validate_clause_fields(clause, &exact_columns, &prefix_roots)?;
     }
 
-    // order_by only supports flat columns (no sub-field sorting).
-    // `_rank` is the one virtual sort: relevance order for the current
-    // `search` term (best first). It is only meaningful with a search and
-    // has no stable column, so cursor pagination cannot encode it.
-    if let Some(ref order) = query.order_by {
-        if order == "_rank" {
-            if query.search.as_deref().is_none_or(str::is_empty) {
-                bail!("order_by '_rank' requires a 'search' term — it sorts by search relevance");
-            }
-            if query.after_cursor.is_some() || query.before_cursor.is_some() {
-                bail!(
-                    "order_by '_rank' cannot be combined with cursor pagination — relevance is not cursor-stable; use page/offset pagination"
-                );
-            }
-            return Ok(());
-        }
-        if order == "-_rank" {
-            bail!("order_by '_rank' is always best-first — drop the '-' prefix");
-        }
+    let Some(order) = query.order_by.as_deref() else {
+        return Ok(());
+    };
 
-        let col = order.strip_prefix('-').unwrap_or(order);
+    validate_order_by(def, query, order, &exact_columns)
+}
 
-        validate_field_name(col, &exact_columns)?;
+/// Validate `order_by`: a flat column (no sub-field sorting) holding one value
+/// per document — a has-many list has no order of its own, so sorting by its
+/// stored JSON text would be meaningless.
+///
+/// `_rank` is the one virtual sort: relevance order for the current `search`
+/// term (best first). It is only meaningful with a search and has no stable
+/// column, so cursor pagination cannot encode it.
+fn validate_order_by(
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    order: &str,
+    exact_columns: &HashSet<String>,
+) -> Result<()> {
+    if order == "_rank" {
+        if query.search.as_deref().is_none_or(str::is_empty) {
+            bail!("order_by '_rank' requires a 'search' term — it sorts by search relevance");
+        }
+        if query.after_cursor.is_some() || query.before_cursor.is_some() {
+            bail!(
+                "order_by '_rank' cannot be combined with cursor pagination — relevance is not cursor-stable; use page/offset pagination"
+            );
+        }
+        return Ok(());
+    }
+    if order == "-_rank" {
+        bail!("order_by '_rank' is always best-first — drop the '-' prefix");
+    }
+
+    let col = order.strip_prefix('-').unwrap_or(order);
+
+    validate_field_name(col, exact_columns)?;
+
+    if lookup_column_field(col, &def.fields).is_some_and(FieldDefinition::is_has_many_scalar) {
+        bail!(
+            "Cannot sort by '{col}': a has-many field holds a list of values, which has no order"
+        );
     }
 
     Ok(())
@@ -490,5 +510,28 @@ mod tests {
             prefixes.contains("tags"),
             "has-many Relationship inside Tabs should be a valid filter prefix root"
         );
+    }
+
+    /// A has-many list holds several values per document; sorting by its
+    /// stored JSON text orders nothing meaningful, so it is refused by name.
+    #[test]
+    fn order_by_a_scalar_has_many_field_is_rejected() {
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("tags", FieldType::Text)
+                    .has_many(true)
+                    .build(),
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let query = |order: &str| FindQuery {
+            order_by: Some(order.to_string()),
+            ..FindQuery::default()
+        };
+
+        let err = validate_query_fields(&def, &query("-tags"), None).unwrap_err();
+        assert!(err.to_string().contains("Cannot sort by 'tags'"), "{err}");
+
+        assert!(validate_query_fields(&def, &query("title"), None).is_ok());
     }
 }

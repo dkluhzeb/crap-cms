@@ -187,7 +187,10 @@ with an error, rather than silently ignored. A misspelled field name fails loudl
 instead of quietly writing nothing. `update_many` additionally **rejects a
 `password` key** (it applies one value to many rows); `create_many` **accepts** a
 per-item `password` on auth collections, validated against the password policy and
-hashed per document — parity with the single `create_*` tool.
+hashed per document — parity with the single `create_*` tool. On every create
+the `password` is optional (the schema never lists it as required): an auth
+document may have no password when an external auth method owns the credential,
+as over gRPC and the Lua API.
 
 Alongside field values, the CRUD tools accept a few **reserved top-level
 arguments** (excluded from the document's field data, like `id` and

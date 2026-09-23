@@ -11,8 +11,8 @@ use crate::{
     db::{AccessResult, DbConnection, LocaleContext, query},
     hooks::{AccessCheckInput, HookContext, HookEvent},
     service::{
-        ServiceContext, helpers::enforce_access_constraints, hooks::WriteHooks,
-        write::owned_file_keys,
+        DeleteEvent, ServiceContext, helpers::enforce_access_constraints, hooks::WriteHooks,
+        read_delete_event, write::owned_file_keys,
     },
 };
 
@@ -78,25 +78,20 @@ pub(crate) struct DeleteResult {
     /// Empty for a collection without uploads and for a soft delete, which
     /// keeps every file so an undelete finds them.
     pub upload_keys: Vec<String>,
-    /// The document's `_status` before deletion (draft collections only), used
-    /// to gate a hard-delete event by the status view it was last in. `None`
-    /// for status-less collections and soft-deletes (gated by `trash`).
-    pub pre_status: Option<String>,
+    /// The delete's live event — the view the removed row was last in and its
+    /// gating snapshot (see [`DeleteEvent`]). `None` when the delete publishes
+    /// no event.
+    pub event: Option<DeleteEvent>,
 }
 
-/// Load the document's fields once (before deletion removes the row) and build
-/// the delete-hook `data`. Returns `(hook_data, pre_status)`:
+/// Build the delete-hook `data`: the document's full fields (when a delete
+/// hook will run) plus `id`, and `soft_delete` for a soft delete; otherwise
+/// just `{ id }` (+ `soft_delete`).
 ///
-/// - `hook_data` — the `data` passed to `before_delete` / `after_delete`: the
-///   document's full fields (when a delete hook will run) plus `id`, and
-///   `soft_delete` for a soft delete; otherwise just `{ id }` (+ `soft_delete`).
-/// - `pre_status` — the document's `_status` before deletion, for the mutation
-///   event's view gate (draft collections only; `None` otherwise).
-///
-/// The document is loaded only when a delete hook or a status axis needs it, so
-/// a plain delete on a status-less, hook-less collection does no extra query.
-/// Upload cleanup does not read the row here — its keys come from
-/// [`document_file_keys`], which covers the snapshots too.
+/// The document is loaded only when a delete hook runs, so a plain delete on a
+/// hook-less collection does no extra query here. Upload cleanup does not read
+/// the row here — its keys come from [`document_file_keys`], which covers the
+/// snapshots too.
 fn prepare_delete_hook_data(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
@@ -104,10 +99,8 @@ fn prepare_delete_hook_data(
     conn: &dyn DbConnection,
     id: &str,
     locale_config: Option<&LocaleConfig>,
-) -> Result<(DocumentFields, Option<String>)> {
-    let wants_hook_data = write_hooks.runs_delete_hooks(&def.hooks);
-
-    let doc_fields = if wants_hook_data || def.has_drafts() {
+) -> Result<DocumentFields> {
+    let mut hook_data = if write_hooks.runs_delete_hooks(&def.hooks) {
         let lc = locale_config.cloned().unwrap_or_default();
         let locale_ctx = LocaleContext::default_for(&lc);
 
@@ -115,28 +108,79 @@ fn prepare_delete_hook_data(
         // transient failure here must not silently degrade delete hooks to
         // `{ id }` only (losing upload-cleanup fields) and look like "not
         // found". `?` on the query; `Option` still means genuinely absent.
-        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())?.map(|d| d.fields)
-    } else {
-        None
-    };
-
-    // Capture `_status` before `doc_fields` is consumed into `hook_data`.
-    let pre_status = doc_fields
-        .as_ref()
-        .and_then(|f| f.get_str("_status").map(str::to_string));
-
-    let mut hook_data = if wants_hook_data {
-        doc_fields.unwrap_or_default()
+        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())?
+            .map(|d| d.fields)
+            .unwrap_or_default()
     } else {
         DocumentFields::new()
     };
+
     hook_data.insert("id".to_string(), Value::String(id.to_string()));
 
     if def.soft_delete {
         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
     }
 
-    Ok((hook_data, pre_status))
+    Ok(hook_data)
+}
+
+/// The delete's live event, read on the delete's own connection (inside its
+/// transaction, after the before-hooks and the hard delete's ref-count row
+/// lock) so it is exactly the row the delete acts on. `None` when the delete
+/// publishes no event — nothing is read then.
+fn read_event(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<DeleteEvent>> {
+    if !ctx.publishes_events() {
+        return Ok(None);
+    }
+
+    read_delete_event(conn, ctx.collection_def()?, id, locale_ctx)
+}
+
+/// Remove the row — trash it (soft delete) or purge it (hard delete) — and
+/// return the delete's live event: a hard-deleted row as read just before it
+/// went, a trashed row as it now sits in the trash.
+fn execute_delete(
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    id: &str,
+    locale_cfg: &LocaleConfig,
+) -> Result<Option<DeleteEvent>> {
+    let def = ctx.collection_def()?;
+    let locale_ctx = LocaleContext::default_for(locale_cfg);
+
+    if !def.soft_delete {
+        let removed = read_event(ctx, conn, id, locale_ctx.as_ref())?;
+
+        if !purge_document(conn, def, id, locale_cfg)? {
+            return Err(ServiceError::NotFound(format!(
+                "Document '{id}' not found in '{}'",
+                ctx.slug
+            )));
+        }
+
+        return Ok(removed);
+    }
+
+    if !query::soft_delete(conn, ctx.slug, id)? {
+        return Err(ServiceError::NotFound(format!(
+            "Document '{id}' not found in '{}' (or already deleted)",
+            ctx.slug
+        )));
+    }
+
+    // A soft-deleted row keeps its FTS entry so the trash view stays
+    // searchable (the normal view is filtered by `_deleted_at` before the FTS
+    // membership clause), and its queued image conversions: a restore brings
+    // the upload back, and nothing re-queues them. A conversion that runs
+    // while the row is trashed writes its URL onto the trashed row and
+    // publishes nothing (the report reads live rows only); only a hard
+    // delete cancels them.
+    read_event(ctx, conn, id, locale_ctx.as_ref())
 }
 
 /// Delete a document on an existing connection/transaction.
@@ -193,8 +237,7 @@ pub(crate) fn delete_document_in_conn(
     // delete-hook context, and build the hook `data`. For a hard delete the row
     // is gone afterwards, so this snapshot is `after_delete`'s only view of
     // what was removed.
-    let (hook_data, pre_status) =
-        prepare_delete_hook_data(ctx, write_hooks, def, conn, id, locale_config)?;
+    let hook_data = prepare_delete_hook_data(ctx, write_hooks, def, conn, id, locale_config)?;
 
     // Ref count protection (hard delete only).
     if !def.soft_delete {
@@ -233,30 +276,7 @@ pub(crate) fn delete_document_in_conn(
         owned_file_keys(conn, def, id, purge_locale.as_ref())?
     };
 
-    // Execute delete
-    if def.soft_delete {
-        let deleted = query::soft_delete(conn, ctx.slug, id)?;
-
-        if !deleted {
-            return Err(ServiceError::NotFound(format!(
-                "Document '{id}' not found in '{}' (or already deleted)",
-                ctx.slug
-            )));
-        }
-
-        // A soft-deleted row keeps its FTS entry so the trash view stays
-        // searchable (the normal view is filtered by `_deleted_at` before the FTS
-        // membership clause), and its queued image conversions: a restore brings
-        // the upload back, and nothing re-queues them. A conversion that runs
-        // while the row is trashed writes its URL onto the trashed row and
-        // publishes nothing (the report reads live rows only); only a hard
-        // delete cancels them.
-    } else if !purge_document(conn, def, id, &locale_cfg)? {
-        return Err(ServiceError::NotFound(format!(
-            "Document '{id}' not found in '{}'",
-            ctx.slug
-        )));
-    }
+    let event = execute_delete(ctx, conn, id, &locale_cfg)?;
 
     // After-delete hooks
     let after_ctx = HookContext::builder(ctx.slug, "delete")
@@ -277,13 +297,17 @@ pub(crate) fn delete_document_in_conn(
     Ok(DeleteResult {
         context: after_result.context,
         upload_keys,
-        pre_status,
+        event,
     })
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
 
     use rusqlite::Connection;
     use serde_json::json;
@@ -292,17 +316,20 @@ mod tests {
         config::CrapConfig,
         core::{
             CollectionDefinition, FieldDefinition, FieldType, Hooks, JobStatus, Registry,
-            SharedInvalidationTransport, ValidationError,
+            SharedEventTransport, SharedInvalidationTransport, ValidationError,
             collection::Auth,
-            event::InProcessInvalidationBus,
+            event::{EventOperation, InProcessEventBus, InProcessInvalidationBus},
             upload::{
                 CollectionUpload, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
                 queue_image_conversion,
             },
         },
-        db::{DbConnection, migrate, pool},
+        db::{DbConnection, Filter, FilterClause, FilterOp, migrate, pool},
         hooks::ValidationCtx,
-        service::{FieldReadStrip, ServiceContext, hooks::WriteHooks},
+        service::{
+            DeleteManyOptions, EventQueue, FieldReadStrip, ServiceContext, delete_document,
+            delete_many, hooks::WriteHooks,
+        },
     };
 
     use super::*;
@@ -404,7 +431,7 @@ mod tests {
 
         // Invalidation is published by the wrapper (conn mode → delete_document_conn),
         // post-commit, not inside delete_document_in_conn.
-        let _ = crate::service::delete_document(&ctx, "u1", None, None).expect("delete");
+        let _ = delete_document(&ctx, "u1", None, None).expect("delete");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
@@ -440,7 +467,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = crate::service::delete_document(&ctx, "u1", None, None).expect("soft delete");
+        let _ = delete_document(&ctx, "u1", None, None).expect("soft delete");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
@@ -662,5 +689,194 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pending, 1, "a trashed upload keeps its queued conversion");
+    }
+
+    /// A `posts` table holding `p1` (owned by `u1`) and `p2` (owned by `u2`);
+    /// soft-deleting when `soft_delete`.
+    fn owned_posts(soft_delete: bool) -> (Connection, CollectionDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                owner TEXT,
+                _ref_count INTEGER DEFAULT 0,
+                _deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, owner) VALUES ('p1', 'u1'), ('p2', 'u2');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.soft_delete = soft_delete;
+        def.fields = vec![FieldDefinition::builder("owner", FieldType::Text).build()];
+
+        (conn, def)
+    }
+
+    fn owner_is(owner: &str) -> [FilterClause; 1] {
+        [FilterClause::Single(Filter {
+            field: "owner".to_string(),
+            op: FilterOp::Equals(owner.to_string()),
+        })]
+    }
+
+    /// A conn-mode context that publishes its events into `queue`.
+    fn publishing_ctx<'a>(
+        conn: &'a Connection,
+        def: &'a CollectionDefinition,
+        hooks: &'a AllowAllWriteHooks,
+        queue: &EventQueue,
+    ) -> ServiceContext<'a> {
+        let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
+
+        ServiceContext::collection("posts", def)
+            .conn(conn)
+            .write_hooks(hooks)
+            .override_access(true)
+            .event_transport(Some(transport))
+            .event_queue(queue.clone())
+            .build()
+    }
+
+    /// Regression: a delete event carried no document, so a subscriber with a
+    /// row-constrained view never learned that a row it could see was deleted.
+    /// A hard delete now carries the row as read just before it was removed.
+    #[test]
+    fn hard_delete_event_carries_the_removed_row() {
+        let (conn, def) = owned_posts(false);
+        let hooks = AllowAllWriteHooks;
+        let queue: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let ctx = publishing_ctx(&conn, &def, &hooks, &queue);
+
+        delete_document(&ctx, "p1", None, None).expect("delete");
+
+        let queued = queue.borrow();
+        let event = queued.first().expect("delete event queued");
+        let gate = event.gate.as_ref().expect("the removed row rides along");
+
+        assert_eq!(event.operation, EventOperation::Delete);
+        assert!(event.data.is_empty(), "a delete delivers no document");
+        assert!(!event.view.trashed);
+        assert!(gate.matches(&owner_is("u1"), &def.fields));
+        assert!(!gate.matches(&owner_is("u2"), &def.fields));
+    }
+
+    /// A soft delete carries the row as it now sits in the trash — the view the
+    /// event is gated by — so a trash-view constraint is judged like SQL's.
+    #[test]
+    fn soft_delete_event_carries_the_trashed_row() {
+        let (conn, def) = owned_posts(true);
+        let hooks = AllowAllWriteHooks;
+        let queue: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let ctx = publishing_ctx(&conn, &def, &hooks, &queue);
+
+        delete_document(&ctx, "p1", None, None).expect("soft delete");
+
+        let queued = queue.borrow();
+        let event = queued.first().expect("delete event queued");
+        let gate = event.gate.as_ref().expect("the trashed row rides along");
+        let trashed = [FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        })];
+
+        assert!(event.view.trashed);
+        assert!(gate.matches(&owner_is("u1"), &def.fields));
+        assert!(gate.matches(&trashed, &def.fields));
+    }
+
+    /// A delete that publishes no event reads nothing for it.
+    #[test]
+    fn delete_without_events_reads_no_event_row() {
+        let (conn, def) = owned_posts(false);
+        let hooks = AllowAllWriteHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .override_access(true)
+            .build();
+
+        let result = delete_document_in_conn(&ctx, "p1", None).expect("delete");
+
+        assert!(result.event.is_none());
+    }
+
+    /// Regression: a hard delete of a trashed row — a forced delete, or a
+    /// purge of the trash — runs on the collection's hard-delete variant,
+    /// which reads no trash column, so its event was gated by the row's status
+    /// view: a subscriber without trash access learned of a document it could
+    /// no longer see. It is gated by the trash, the view the row was last in,
+    /// and carries the trash timestamp for a trash-view constraint.
+    #[test]
+    fn a_hard_delete_of_a_trashed_row_is_gated_by_the_trash() {
+        let (conn, soft) = owned_posts(true);
+        query::soft_delete(&conn, "posts", "p1").unwrap();
+
+        let mut hard = soft.clone();
+        hard.make_hard_delete();
+
+        let hooks = AllowAllWriteHooks;
+        let queue: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let ctx = publishing_ctx(&conn, &hard, &hooks, &queue);
+
+        delete_document(&ctx, "p1", None, None).expect("delete the trashed row");
+        delete_document(&ctx, "p2", None, None).expect("delete the live row");
+
+        let queued = queue.borrow();
+        let trashed = [FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        })];
+
+        let purged = queued.first().expect("the trashed row's event");
+        let gate = purged.gate.as_ref().expect("the removed row rides along");
+        assert!(purged.view.trashed, "a trashed row is gated by the trash");
+        assert!(gate.matches(&trashed, &hard.fields));
+        assert!(gate.matches(&owner_is("u1"), &hard.fields));
+
+        let live = queued.get(1).expect("the live row's event");
+        assert!(!live.view.trashed, "a live row keeps its status view");
+    }
+
+    /// Every document a bulk delete removes carries its own row.
+    #[test]
+    fn bulk_delete_events_carry_each_removed_row() {
+        let (conn, def) = owned_posts(false);
+        let hooks = AllowAllWriteHooks;
+        let queue: EventQueue = Rc::new(RefCell::new(Vec::new()));
+        let ctx = publishing_ctx(&conn, &def, &hooks, &queue);
+        let both = [FilterClause::Single(Filter {
+            field: "owner".to_string(),
+            op: FilterOp::In(vec!["u1".to_string(), "u2".to_string()]),
+        })];
+
+        delete_many(
+            &ctx,
+            &both,
+            &LocaleConfig::default(),
+            &DeleteManyOptions::default(),
+        )
+        .expect("bulk delete");
+
+        let queued = queue.borrow();
+        assert_eq!(queued.len(), 2);
+
+        for event in queued.iter() {
+            let owner = if event.document_id == "p1" {
+                "u1"
+            } else {
+                "u2"
+            };
+            let gate = event.gate.as_ref().expect("each removed row rides along");
+
+            assert!(
+                gate.matches(&owner_is(owner), &def.fields),
+                "{}",
+                event.document_id
+            );
+        }
     }
 }

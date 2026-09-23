@@ -281,6 +281,12 @@ pub trait DbConnection {
     /// `SQLite`: `"json_each(source) AS alias"`
     fn json_each_source(&self, source: &str, alias: &str) -> String;
 
+    /// The part of the text `expr` after the first `separator` — the whole
+    /// text when it holds none. `separator` is a literal the caller controls.
+    ///
+    /// `SQLite`: `substr` + `instr` · Postgres: `substr` + `strpos`
+    fn text_after(&self, expr: &str, separator: &str) -> String;
+
     // ── Conflict handling ────────────────────────────────────────────
 
     /// Build a complete INSERT-or-skip SQL statement.
@@ -472,6 +478,9 @@ macro_rules! impl_db_connection_delegate {
             }
             fn json_each_source(&self, source: &str, alias: &str) -> String {
                 self.inner.json_each_source(source, alias)
+            }
+            fn text_after(&self, expr: &str, separator: &str) -> String {
+                self.inner.text_after(expr, separator)
             }
             fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
                 self.inner.build_insert_ignore(table, columns, values)

@@ -322,6 +322,18 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R24 (2026-09-23)**
+  - *Postgres (live):* the example project syncs, seeds and serves on PG16 —
+    login, every collection list/edit, globals, dashboard, custom pages,
+    sort/search/trash/filter; CLI status/user list/jobs list/export/bench.
+  - *Live events:* no subscriber-facing encoder can emit the gate snapshot or
+    unstripped data; per-subscriber strip order; commit-gated publishing on
+    every delete path; toast coalescing escapes text.
+  - *List view:* cells escape every field kind; column prefs keyed per user;
+    trash/restore buttons gated by `perms`; pagination bounds.
+  - *Typegen:* golden diffs are real in all six outputs; `_status`/`_deleted_at`
+    emitted exactly with drafts/soft delete; array row ids only where relational.
+
 - **R23 (2026-09-23)**
   - *Jobs catalogue/health:* gRPC/MCP/CLI/Lua list through one
     `service::jobs` chokepoint; access fails closed and hides denied jobs;
@@ -1233,6 +1245,89 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-23 (34) — **CONVERGENCE ROUND 24** (budget lifted: a live Postgres 16
+  container for the harness and an example-project boot; 2 Opus lenses — admin
+  list view + i18n, generated types vs real reads/writes — 11 Opus fix batches,
+  4 Opus post-fix reviews). **~45 confirmed — 3 HIGH (1 security), ~15 MED,
+  ~25 LOW — NOT quiet; no new class.**
+  - **Running the real thing found what reading didn't.** The Postgres harness
+    flaked on every fresh database (CI's case, ~2 runs in 3): a test created a
+    system table outside the schema-sync advisory lock and raced another test's
+    sync (`pg_type_typname_nsp_index`); production was safe. Booting the
+    example on Postgres showed its seed broken twice — HTML written into a
+    `format = "json"` rich text field (refused since R23) and polymorphic
+    references in a pre-alpha.10 shape — because NOTHING ran the example's
+    migrations. Guard: `tests/example_project.rs` (sync + seed on SQLite,
+    SMTP overridden). The first smoke `serve` also inherited real
+    `CRAP_SMTP_*` credentials from the operator's shell (15 rejected attempts,
+    none delivered) — process lesson recorded.
+  - **P1 — has-many element semantics were missing everywhere.** Scalar
+    has-many columns were filtered as whole JSON text (`tags = "a"` never
+    matched `["a"]`); the admin merged AND rows on one field into IN. Now
+    element-wise on SQLite, Postgres and the in-memory evaluator (one rule for
+    scalar lists, has-many relationships and references inside rows; negative
+    operators = no element), AND means AND, sort on a list field rejected.
+    User decision (no PG16 `IS JSON`): a STORAGE INVARIANT — the schema sync
+    rewrites any non-array has-many value once (gated by a per-table
+    fingerprint; unconvertible values fail the boot naming the row), and a
+    stored single value in a column is one element (comma lists only where
+    rows really stored them). Found on the way: has-many references inside
+    rows were stored as comma text and read back as an empty selection
+    (re-save erased them).
+  - **F (SECURITY, HIGH) — live events leaked past row constraints.** The
+    subscriber gate judged constraints on the event payload, which is empty in
+    Metadata mode and for every delete: has-many `not_in` / `not_equals` and
+    `not_exists` constraints matched empty data. User decision: events carry
+    an opaque access-check snapshot of the stored row (no getter, redacted
+    Debug, destructured away by every client encoder — compile-forced guard),
+    deletes read the row before removal; Full-mode data is now stripped per
+    subscriber from the stored row (it was stripped by the WRITER's access);
+    trash purges publish their events and clear the cache; the in-memory
+    evaluator judges `id`/timestamps (`constraint_row`, one chokepoint); a
+    trashed row's hard delete is gated by the trash view. Redis carries full
+    rows → `rediss://` TLS enabled (user decision), with one process-wide
+    rustls provider installed at `open_client` (both ring and aws-lc-rs are in
+    the tree, so `builder()` would panic).
+  - **D1 — generated types described neither the write nor the read shape.**
+    One write shape and one read shape in the typegen IR: TS `…Data` ids-only
+    references, required single relationships required, upload-derived keys
+    gone, `password?` on auth input, Join not writable, hidden fields gone from
+    read types, `collection` tag declared, Lua `crap.input.*` /
+    `crap.read_hook.*`, Go system names pre-seeded; goldens now cover every
+    field kind (incl. `typegen proto`).
+  - **List view / i18n:** operator labels resolved to the alphabetically-first
+    locale (now the viewer's UI locale, one task-local re-entered on blocking
+    threads); `_status` in an OR was lifted to a global AND; hidden/unreadable
+    fields offered for sort → whole-collection 403; search dropped trash and
+    filters; untranslated password-policy key; user-settings keys collided with
+    collection slugs (namespaced, then the `collections` slug itself — review
+    catch). Guard: `tests/admin_translation_keys.rs` (template/Rust keys, en/de
+    parity).
+  - **Also:** CLI config validation via one `load_config` + explicit
+    `--skip-config-validation` on recovery commands (R23 follow-up); D4 — the
+    shared guard scanner blanked every `not(...)`-gated item (122 files of
+    `not(tarpaulin_include)` code were invisible to every guard); `crap-cms
+    trash restore` bypassed the service; undelete of a live document ran
+    `before_change`; the retention purge is batched and fails per row.
+    Post-fix reviews: 4, each finding real issues next to the fixes (1 HIGH
+    among them — the event gate), none a regression of a fix's own intent.
+    Gates (2026-09-23): clippy clean in both forms; unit + integration ~8,236
+    green over 110 binaries; e2e 325 green over 80 binaries (per binary); Postgres
+    harness 22/22 on a fresh PG16; all five `gen-*` checks, `cargo fmt`,
+    `crap-cms fmt --check`, `biome ci` and mdbook clean.
+    Follow-up (user report — editor warnings in the new Lua golden): a real
+    LuaLS `--check` found 93 problems in the generated types. Digit-leading
+    slugs/field names (`2fa`), Lua keywords and LuaLS scope words (`private`)
+    were emitted raw; accessor stubs on `crap.collections.<slug>` triggered
+    `inject-field` for EVERY collection; an inline `fun(...)` return list in
+    `types/crap.lua` swallowed its table's next member. One Lua naming
+    chokepoint (`idents::lua_index` / `lua_field_key`), class-name collision
+    check, factories on the class-bound local. Guards: a hermetic LuaLS-grammar
+    test and `lua_types_pass_a_luals_check` (runs real LuaLS when found —
+    `CRAP_LUALS`, PATH or Mason). The whole example project now checks clean,
+    which exposed an example bug: the `reading_time` hook read its own empty
+    field as HTML (always "1 min read"; raised on the JSON `content`).
+    Streak: 0 quiet rounds.
 - 2026-09-23 (33) — **CONVERGENCE ROUND 23** (budget lifted mid-round:
   5 lenses — newest code (jobs catalogue parity, custom-route CSRF, example
   job-manager plugin) and the validate dry-run on Sonnet, the CLI surface on

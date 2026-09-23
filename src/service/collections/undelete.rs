@@ -5,7 +5,7 @@ use crate::{
     db::{AccessResult, LocaleContext, query},
     hooks::AccessCheckInput,
     service::{
-        ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
+        Gated, ServiceContext, ServiceError, StateChange, helpers, invalidate_user_streams_if_auth,
         run_after_change_hooks, run_pool_write, run_state_before_change,
     },
 };
@@ -46,8 +46,10 @@ fn gate_undelete(ctx: &ServiceContext, id: &str) -> Result<()> {
 
 /// The trashed document as it stands going in: the data `before_change` sees.
 ///
-/// Read with `include_deleted`, since the row is in the trash — and under the
-/// default locale context, because a localized collection's per-locale columns
+/// A live row is refused here, before any hook runs: an undelete of it would
+/// only fail once `before_change` had already acted on it. Read with
+/// `include_deleted`, since the row is in the trash — and under the default
+/// locale context, because a localized collection's per-locale columns
 /// (`title__en`) only resolve with one.
 fn trashed_document(
     ctx: &ServiceContext,
@@ -56,16 +58,25 @@ fn trashed_document(
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let def = ctx.collection_def()?;
+    let not_trashed = || ServiceError::NotFound("Document not found or not deleted".into());
+
+    let trashed = query::stored_deleted_at(conn.as_ref(), ctx.slug, id)?
+        .is_some_and(|deleted_at| !deleted_at.is_null());
+
+    if !trashed {
+        return Err(not_trashed());
+    }
 
     query::find_by_id_raw(conn.as_ref(), ctx.slug, def, id, locale_ctx, true)?
-        .ok_or_else(|| ServiceError::NotFound("Document not found or not deleted".into()))
+        .ok_or_else(not_trashed)
 }
 
 /// Core undelete logic on an existing connection: gates, `before_change`,
-/// restore the row, `after_change`.
+/// restore the row, `after_change`. Returns the stored row the undelete event
+/// is built from alongside the document.
 ///
 /// Does NOT manage transactions — caller must open/commit.
-fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Gated<Document>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -99,9 +110,13 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
         conn,
     )?;
 
+    // The row as stored, before anything is shaped or stripped for the writer:
+    // the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     helpers::strip_reported(ctx, write_hooks, &mut doc, locale_ctx.as_ref())?;
 
-    Ok(doc)
+    Ok((doc, row))
 }
 
 /// Undelete a soft-deleted document.
@@ -124,25 +139,27 @@ pub fn undelete_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
 /// Pool-based undelete: own transaction with event publishing after commit.
 fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    run_pool_write(
+    let (doc, _) = run_pool_write(
         ctx,
         None,
         |inner| undelete_document_in_conn(inner, id),
-        |ctx, doc| {
-            ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, &doc.fields);
+        |ctx, (doc, row)| {
+            ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, row.clone());
             // Restoring an auth document changes that user's effective access.
             invalidate_user_streams_if_auth(ctx, &doc.id);
         },
-    )
+    )?;
+
+    Ok(doc)
 }
 
 /// Conn-based undelete: uses existing connection (Lua CRUD path).
 fn undelete_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let doc = undelete_document_in_conn(ctx, id)?;
+    let (doc, row) = undelete_document_in_conn(ctx, id)?;
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, &doc.fields);
+    ctx.publish_mutation_event(EventOperation::Undelete, &doc.id, row);
     invalidate_user_streams_if_auth(ctx, &doc.id);
 
     Ok(doc)
@@ -355,7 +372,7 @@ mod tests {
             .write_hooks(&hooks)
             .build();
 
-        let doc = undelete_document_in_conn(&ctx, &id).unwrap();
+        let (doc, _) = undelete_document_in_conn(&ctx, &id).unwrap();
 
         let items = doc.fields.get("items").and_then(Value::as_array);
         assert_eq!(
@@ -384,6 +401,31 @@ mod tests {
 
         assert_eq!(hooks.before.borrow().join(","), "undelete");
         assert_eq!(hooks.after.borrow().join(","), "undelete");
+    }
+
+    /// Regression: undelete read its target with the trash included but never
+    /// checked the row was trashed, so undeleting a live document ran
+    /// `before_change` — and its side effects — before failing.
+    #[test]
+    fn undeleting_a_live_document_runs_no_hook() {
+        let (_tmp, db_pool, def, id) = trashed_document_with_array_row();
+        let conn = db_pool.get().unwrap();
+        query::restore(&conn, "articles", &id).unwrap();
+
+        let hooks = RecordingWriteHooks::new(false);
+        let ctx = ServiceContext::collection("articles", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .build();
+
+        assert!(matches!(
+            undelete_document_in_conn(&ctx, &id),
+            Err(ServiceError::NotFound(_))
+        ));
+        assert!(
+            hooks.before.borrow().is_empty(),
+            "before_change must not run for a live document"
+        );
     }
 
     /// A `before_change` hook that errors aborts the undelete: the row stays

@@ -27,21 +27,13 @@ impl Labels {
     }
 }
 
-/// Resolve a localized label down to a `&str`, falling back to `fallback`
-/// when the label is missing or resolves empty. `locale` selects between
-/// default-resolution (`None`) and locale-aware resolution (`Some((locale,
-/// default_locale))`). Shared by `CollectionDefinition` /
-/// `GlobalDefinition` `display_name*` / `singular_name*` methods.
-pub(crate) fn resolve_label<'a>(
-    label: Option<&'a LocalizedString>,
-    fallback: &'a str,
-    locale: Option<(&str, &str)>,
-) -> &'a str {
+/// Resolve a localized label down to a `&str` for the active label locale
+/// (see [`LocalizedString::resolve_current`]), falling back to `fallback` when
+/// the label is missing or resolves empty. Shared by `CollectionDefinition` /
+/// `GlobalDefinition` `display_name` / `singular_name`.
+pub(crate) fn resolve_label<'a>(label: Option<&'a LocalizedString>, fallback: &'a str) -> &'a str {
     label
-        .map(|ls| match locale {
-            Some((l, d)) => ls.resolve(l, d),
-            None => ls.resolve_default(),
-        })
+        .map(LocalizedString::resolve_current)
         .filter(|s| !s.is_empty())
         .unwrap_or(fallback)
 }
@@ -51,6 +43,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::core::with_label_locale;
 
     fn localized(pairs: &[(&str, &str)]) -> LocalizedString {
         let mut map = HashMap::new();
@@ -63,51 +56,36 @@ mod tests {
 
     #[test]
     fn falls_back_when_label_is_none() {
-        assert_eq!(resolve_label(None, "posts", None), "posts");
-        assert_eq!(resolve_label(None, "posts", Some(("de", "en"))), "posts");
+        assert_eq!(resolve_label(None, "posts"), "posts");
     }
 
     #[test]
     fn falls_back_when_label_resolves_empty() {
-        // Empty Localized map → both resolution paths yield ""
         let ls = LocalizedString::Localized(HashMap::new());
-        assert_eq!(resolve_label(Some(&ls), "fallback", None), "fallback");
-        assert_eq!(
-            resolve_label(Some(&ls), "fallback", Some(("de", "en"))),
-            "fallback"
-        );
+        assert_eq!(resolve_label(Some(&ls), "fallback"), "fallback");
     }
 
     #[test]
-    fn resolves_via_default_when_locale_is_none() {
+    fn plain_label_is_used_as_is() {
         let ls = LocalizedString::Plain("Plain".into());
-        assert_eq!(resolve_label(Some(&ls), "fallback", None), "Plain");
-
-        // Localized + None → resolve_default picks alphabetically-first key
-        let ls = localized(&[("de", "Titel"), ("en", "Title")]);
-        assert_eq!(resolve_label(Some(&ls), "fallback", None), "Titel");
+        assert_eq!(resolve_label(Some(&ls), "fallback"), "Plain");
     }
 
-    #[test]
-    fn resolves_via_locale_when_provided() {
-        let ls = localized(&[("de", "Titel"), ("en", "Title")]);
-        assert_eq!(
-            resolve_label(Some(&ls), "fallback", Some(("en", "de"))),
-            "Title"
-        );
-        // Locale missing → falls back to default_locale value
-        assert_eq!(
-            resolve_label(Some(&ls), "fallback", Some(("fr", "en"))),
-            "Title"
-        );
-    }
+    /// Regression: a localized collection label resolved to the
+    /// alphabetically-first key for every viewer. It follows the active label
+    /// locale.
+    #[tokio::test]
+    async fn localized_label_follows_the_label_locale() {
+        let ls = localized(&[("de", "Beiträge"), ("en", "Posts")]);
 
-    #[test]
-    fn plain_label_ignores_locale_args() {
-        let ls = LocalizedString::Plain("Always".into());
-        assert_eq!(
-            resolve_label(Some(&ls), "fallback", Some(("xx", "yy"))),
-            "Always"
-        );
+        let en = with_label_locale("en".to_string(), async {
+            resolve_label(Some(&ls), "fallback").to_string()
+        });
+        assert_eq!(en.await, "Posts");
+
+        let de = with_label_locale("de".to_string(), async {
+            resolve_label(Some(&ls), "fallback").to_string()
+        });
+        assert_eq!(de.await, "Beiträge");
     }
 }

@@ -18,11 +18,14 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     core::upload::delete_storage_keys,
-    db::{BoxedConnection, query::jobs as job_query},
+    db::{DbConnection, query::jobs as job_query},
     service::AppInfra,
 };
 
-use super::runner::{check_cron_schedules, claim_retention_purge_tick, purge_soft_deleted};
+use super::runner::{
+    PurgeBatch, RetentionPurge, check_cron_schedules, claim_retention_purge_tick,
+    purge_soft_deleted,
+};
 
 /// The purge runs every this many cron ticks.
 const PURGE_EVERY_TICKS: u64 = 10;
@@ -126,53 +129,114 @@ pub(super) fn cron_tick(t: &CronTickInput) {
 ///
 /// In multi-node deployments the purge is gated by an atomic
 /// `_crap_cron_fired` claim -- only one node runs it per purge window. The
-/// claim and the purges it stands for are ONE transaction: a claim recorded
-/// before the purge ran would, on a crash in between, skip that window's
-/// purge entirely — no node re-claims a window already marked fired. Either
-/// the window is claimed with its purge durable, or neither happened and the
-/// next window (this node's or a peer's) runs it.
+/// claim commits in ONE transaction with the job-row purge and the first
+/// batch of the soft-delete purge: a claim recorded before any purge ran
+/// would, on a crash in between, skip that window's purge entirely — no node
+/// re-claims a window already marked fired. Either the window is claimed with
+/// its first batch durable, or neither happened and the next window (this
+/// node's or a peer's) runs it.
 ///
-/// Upload files are deleted only AFTER that transaction commits: a rollback
-/// leaves orphaned files (safe), never DB rows pointing at deleted files.
+/// The soft-delete purge then continues in bounded batches, each its own
+/// IMMEDIATE transaction, until every expired candidate has been examined —
+/// so neither the write lock nor the purged rows held in memory grow with the
+/// size of the expired trash. A batch that fails rolls back alone: the
+/// batches before it stay committed, and what it would have purged is still
+/// expired for the next window. A batch that failed on one document is re-run
+/// without it (see [`RetentionPurge`]).
+///
+/// Each batch's upload files are deleted only AFTER it commits: a rollback
+/// leaves orphaned files (safe), never DB rows pointing at deleted files. Its
+/// purged documents' delete events are published after it too, as every
+/// write's are — a rolled-back batch announces nothing.
 #[cfg(not(tarpaulin_include))]
 fn run_periodic_purges(t: &CronTickInput) {
-    let mut conn = match t.infra.pool.write() {
-        Ok(conn) => conn,
-        Err(e) => {
-            warn!("Retention purge skipped: no write connection: {e}");
+    let mut run = RetentionPurge::new(t.infra.event_transport.is_some());
+    let mut claimed = false;
 
+    loop {
+        let batch = match purge_batch(t, &mut run, claimed) {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                debug!("Retention purge already claimed by another instance this window");
+
+                return;
+            }
+            Err(e) => {
+                if run.retry_after_failure() {
+                    warn!(
+                        "Retention purge batch rolled back; re-running it without the \
+                         failed document: {e:#}"
+                    );
+
+                    continue;
+                }
+
+                warn!("Retention purge error (batch rolled back; the next window retries): {e:#}");
+
+                return;
+            }
+        };
+
+        finish_batch(t, batch);
+        claimed = true;
+
+        if run.is_done() {
             return;
         }
-    };
-
-    let keys_to_clean = match claim_and_purge(&mut conn, t) {
-        Ok(Some(keys)) => keys,
-        Ok(None) => {
-            debug!("Retention purge already claimed by another instance this window");
-
-            return;
-        }
-        Err(e) => {
-            warn!("Retention purge error (rolled back, window unclaimed): {e:#}");
-
-            return;
-        }
-    };
-
-    delete_storage_keys(&*t.infra.storage, &keys_to_clean);
+    }
 }
 
-/// Claim this purge window and run both purges inside the claim's IMMEDIATE
-/// transaction. `Ok(None)` = another instance holds the window. Returns the
-/// upload field-maps whose files the caller deletes once this has committed.
+/// Delete a committed batch's upload files and publish its delete events.
+#[cfg(not(tarpaulin_include))]
+fn finish_batch(t: &CronTickInput, batch: PurgeBatch) {
+    delete_storage_keys(&*t.infra.storage, &batch.files);
+
+    batch.events.settle(&t.infra);
+}
+
+/// Run one batch of the soft-delete purge in its own IMMEDIATE transaction —
+/// the first (`claimed` unset) after claiming the purge window and purging
+/// old job runs in that same transaction. `Ok(None)` = another instance holds
+/// the window. Returns the committed batch, whose files the caller deletes and
+/// whose delete events it publishes.
 ///
 /// `transaction_immediate()`: the claim runs a SELECT and an INSERT/UPDATE on
 /// `_crap_cron_fired`, and the soft-delete purge's per-doc locked ref-count
 /// check + delete relies on the same write lock — a deferred transaction
 /// would hit `SQLITE_BUSY_SNAPSHOT` when a concurrent writer commits between
-/// the read and the write.
+/// the read and the write. The write connection is taken per batch, so other
+/// writers get it between batches.
 #[cfg(not(tarpaulin_include))]
-fn claim_and_purge(conn: &mut BoxedConnection, t: &CronTickInput) -> Result<Option<Vec<String>>> {
+fn purge_batch(
+    t: &CronTickInput,
+    run: &mut RetentionPurge,
+    claimed: bool,
+) -> Result<Option<PurgeBatch>> {
+    let mut conn = t.infra.pool.write().context("acquire a write connection")?;
+
+    let tx = conn
+        .transaction_immediate()
+        .context("open the retention-purge transaction")?;
+
+    if !claimed && !claim_window(&tx, t)? {
+        return Ok(None);
+    }
+
+    let batch = purge_soft_deleted(&tx, &t.infra.registry, &t.infra.locale_config, run)?;
+
+    tx.commit().context("commit the retention purge")?;
+
+    if batch.purged > 0 {
+        info!("Purged {} expired soft-deleted doc(s)", batch.purged);
+    }
+
+    Ok(Some(batch))
+}
+
+/// Claim this purge window and, behind the same single-winner claim, purge
+/// old job runs. `false` = another instance holds the window.
+#[cfg(not(tarpaulin_include))]
+fn claim_window(tx: &dyn DbConnection, t: &CronTickInput) -> Result<bool> {
     // The purge fires every tenth cron tick, so the dedup window must cover
     // that span -- otherwise two nodes drifting by ~1 cron tick would each
     // claim a fresh window and run the purge twice.
@@ -181,34 +245,19 @@ fn claim_and_purge(conn: &mut BoxedConnection, t: &CronTickInput) -> Result<Opti
         .cron_interval_secs
         .saturating_mul(i64::try_from(PURGE_EVERY_TICKS).unwrap_or(i64::MAX));
 
-    let tx = conn
-        .transaction_immediate()
-        .context("open the retention-purge transaction")?;
-
-    if !claim_retention_purge_tick(&tx, Utc::now(), window_secs)? {
-        return Ok(None);
+    if !claim_retention_purge_tick(tx, Utc::now(), window_secs)? {
+        return Ok(false);
     }
 
-    // Job-row retention: gated behind the same single-winner claim as the
-    // soft-delete purge, so only one node does the work per window.
     if let Some(secs) = t.purge.auto_purge_secs {
-        let purged = job_query::purge_old_jobs(&tx, secs).context("purge old job runs")?;
+        let purged = job_query::purge_old_jobs(tx, secs).context("purge old job runs")?;
 
         if purged > 0 {
             info!("Auto-purged {} old job run(s)", purged);
         }
     }
 
-    let (purged, files) = purge_soft_deleted(&tx, &t.infra.registry, &t.infra.locale_config)
-        .context("purge expired soft-deleted documents")?;
-
-    tx.commit().context("commit the retention purge")?;
-
-    if purged > 0 {
-        info!("Purged {purged} expired soft-deleted doc(s)");
-    }
-
-    Ok(Some(files))
+    Ok(true)
 }
 
 #[cfg(test)]

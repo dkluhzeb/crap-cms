@@ -3,7 +3,6 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
-use tokio::task;
 
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ use crate::{
         AdminState,
         handlers::shared::{finish_version_restore, get_user_doc, paths, redirect_response},
     },
-    core::{CollectionDefinition, Document, auth::AuthUser},
+    core::{CollectionDefinition, Document, auth::AuthUser, spawn_blocking_in_label_locale},
     service::{AppInfra, ServiceContext, ServiceError, restore_collection_version},
 };
 
@@ -70,7 +69,8 @@ pub async fn restore_version(
         version_id,
     };
 
-    let result = task::spawn_blocking(move || restore_collection_version_blocking(&input)).await;
+    let result =
+        spawn_blocking_in_label_locale(move || restore_collection_version_blocking(&input)).await;
 
     finish_version_restore(&state, result, &redirect, "version")
 }

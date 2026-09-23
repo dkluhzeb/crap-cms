@@ -140,16 +140,18 @@ impl CollectionDefinition {
         super::CollectionDefinitionBuilder::new(slug)
     }
 
-    /// Get the display label (plural form, falls back to slug). Uses default resolution.
+    /// Get the display label (plural form, falls back to slug), resolved for the
+    /// active label locale.
     #[must_use]
     pub fn display_name(&self) -> &str {
-        resolve_label(self.labels.plural.as_ref(), &self.slug, None)
+        resolve_label(self.labels.plural.as_ref(), &self.slug)
     }
 
-    /// Get the singular label (falls back to slug). Uses default resolution.
+    /// Get the singular label (falls back to slug), resolved for the active
+    /// label locale.
     #[must_use]
     pub fn singular_name(&self) -> &str {
-        resolve_label(self.labels.singular.as_ref(), &self.slug, None)
+        resolve_label(self.labels.singular.as_ref(), &self.slug)
     }
 
     /// Get the field name to use as item title in admin lists.

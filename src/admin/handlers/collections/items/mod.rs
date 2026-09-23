@@ -10,5 +10,7 @@ pub mod empty_trash;
 pub mod evaluate_conditions;
 /// Handler for listing collection items.
 pub mod list;
+mod list_fetch;
+mod list_inputs;
 /// Validation-only endpoints for collection items.
 pub mod validate;

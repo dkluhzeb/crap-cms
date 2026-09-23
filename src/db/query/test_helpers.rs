@@ -195,8 +195,16 @@ impl DbConnection for CountingConn<'_> {
         self.inner.json_extract_expr(column, field)
     }
 
+    fn json_number_cast(&self, expr: &str) -> String {
+        self.inner.json_number_cast(expr)
+    }
+
     fn json_each_source(&self, source: &str, alias: &str) -> String {
         self.inner.json_each_source(source, alias)
+    }
+
+    fn text_after(&self, expr: &str, separator: &str) -> String {
+        self.inner.text_after(expr, separator)
     }
 
     fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {

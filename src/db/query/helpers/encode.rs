@@ -3,31 +3,54 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{Value, from_str};
 
 use crate::{
     core::{FieldDefinition, FieldType, is_empty_object, json_truthy},
     db::{
         DbValue,
         query::helpers::{
-            coerce_date_value_json, coerce_has_many_scalar, coerce_json_value,
-            parse_has_many_scalar,
+            ListPlace, coerce_date_value_json, coerce_has_many_scalar, coerce_json_value,
+            is_polymorphic, parse_has_many_scalar, reference_list,
         },
     },
 };
 
 /// The column value a write stores for `field` — the one encoding every write
 /// path uses (create, update, version restore). A scalar has-many list becomes
-/// its JSON text, a timezone date is normalized with its zone (`tz`), and any
-/// other value is coerced by the field's type. An empty has-many list spelled
-/// as an empty object (a Lua table with no entries) stores as an empty list.
+/// its JSON text, a has-many reference inside a row the JSON text of its id
+/// list, a timezone date is normalized with its zone (`tz`), and any other
+/// value is coerced by the field's type. An empty has-many list spelled as an
+/// empty object (a Lua table with no entries) stores as an empty list.
+///
+/// This is the encoding of a document's own column; an array row's column is
+/// encoded by [`row_column_value`].
 pub(crate) fn column_value(field: &FieldDefinition, value: &Value, tz: Option<&str>) -> DbValue {
+    encode(field, value, tz, ListPlace::Column)
+}
+
+/// [`column_value`] for a column of an array row, where a has-many list's text
+/// that isn't a JSON array reads as comma-separated values (see [`ListPlace`]).
+pub(crate) fn row_column_value(
+    field: &FieldDefinition,
+    value: &Value,
+    tz: Option<&str>,
+) -> DbValue {
+    encode(field, value, tz, ListPlace::Row)
+}
+
+/// The column value a write stores for `field` at `place`.
+fn encode(field: &FieldDefinition, value: &Value, tz: Option<&str>, place: ListPlace) -> DbValue {
     if field.is_list() && is_empty_object(value) {
-        return column_value(field, &Value::Array(Vec::new()), tz);
+        return encode(field, &Value::Array(Vec::new()), tz, place);
     }
 
     if field.is_has_many_scalar() {
-        return coerce_has_many_scalar(&field.field_type, value);
+        return coerce_has_many_scalar(&field.field_type, value, place);
+    }
+
+    if field.is_has_many_reference() {
+        return reference_column_value(field, value);
     }
 
     if field.has_tz_companion() {
@@ -35,6 +58,14 @@ pub(crate) fn column_value(field: &FieldDefinition, value: &Value, tz: Option<&s
     }
 
     coerce_json_value(&field.field_type, value)
+}
+
+/// The JSON text of a has-many reference's id list, or NULL for a null value.
+fn reference_column_value(field: &FieldDefinition, value: &Value) -> DbValue {
+    match reference_list(value, is_polymorphic(field)) {
+        Value::Null => DbValue::Null,
+        list => DbValue::Text(list.to_string()),
+    }
 }
 
 /// The column value of a companion column — a timezone date's `_tz` zone or a
@@ -82,18 +113,32 @@ fn parses_json_text(field: &FieldDefinition) -> bool {
 
 /// A stored column's JSON value as reads return it — the one decoding of a
 /// field's column, wherever the column lives (a table, a group's prefixed
-/// column, an array row) and whatever holds it (a row, a snapshot): a checkbox
+/// column, an array row — see [`decode_row_value`]) and whatever holds it (a
+/// row, a snapshot): a checkbox
 /// as `true`/`false` (an unset one as `false`), a scalar has-many list parsed
 /// and typed from its JSON text, any other JSON text parsed — a text that isn't
 /// JSON is kept as it is — and anything else as the column holds it. Decoding
-/// a decoded value changes nothing.
+/// a decoded value changes nothing. This is the decoding of a document's own
+/// column.
 pub(crate) fn decode_value(field: &FieldDefinition, value: &Value) -> Value {
+    decode(field, value, ListPlace::Column)
+}
+
+/// [`decode_value`] for a value inside an array or blocks row, where a has-many
+/// list's text that isn't a JSON array reads as comma-separated values (see
+/// [`ListPlace`]).
+pub(crate) fn decode_row_value(field: &FieldDefinition, value: &Value) -> Value {
+    decode(field, value, ListPlace::Row)
+}
+
+/// A stored value of `field` at `place` as reads return it.
+fn decode(field: &FieldDefinition, value: &Value, place: ListPlace) -> Value {
     if field.field_type == FieldType::Checkbox {
         return Value::Bool(json_truthy(value));
     }
 
     if field.is_has_many_scalar() {
-        return parse_has_many_scalar(&field.field_type, value);
+        return parse_has_many_scalar(&field.field_type, value, place);
     }
 
     if parses_json_text(field) {
@@ -110,7 +155,7 @@ fn parse_json_text(value: &Value) -> Value {
         return value.clone();
     };
 
-    serde_json::from_str(text).unwrap_or_else(|_| value.clone())
+    from_str(text).unwrap_or_else(|_| value.clone())
 }
 
 /// The value a write of `value` stores, as a read returns it: encoded to its
@@ -124,8 +169,9 @@ pub(crate) fn stored_value(field: &FieldDefinition, value: &Value, tz: Option<&s
 /// whoever wrote it. A checkbox is `true`/`false`, a blank value null, a JSON
 /// value (a JSON field, JSON-format rich text) the value its text spells, and a
 /// number, date, text, email or scalar has-many list is what its column would
-/// hold. An empty has-many list spelled as an empty object is an empty list.
-/// Any other value — HTML rich text, a reference — stays as sent, and so does a
+/// hold — a has-many reference its id list. An empty has-many list spelled as
+/// an empty object is an empty list. Any other value — HTML rich text, a
+/// single reference — stays as sent, and so does a
 /// value that doesn't encode (a number field holding text), which is kept
 /// rather than dropped.
 pub(crate) fn nested_value(field: &FieldDefinition, value: &Value, tz: Option<&str>) -> Value {
@@ -149,7 +195,8 @@ pub(crate) fn nested_value(field: &FieldDefinition, value: &Value, tz: Option<&s
         return value.clone();
     }
 
-    let stored = stored_value(field, value, tz);
+    let place = ListPlace::Row;
+    let stored = decode(field, &encode(field, value, tz, place).to_json(), place);
 
     if stored.is_null() {
         value.clone()
@@ -159,9 +206,11 @@ pub(crate) fn nested_value(field: &FieldDefinition, value: &Value, tz: Option<&s
 }
 
 /// Whether a value of `field` inside a JSON-stored row takes the form its column
-/// would hold: a number, date, text, email or scalar has-many list.
+/// would hold: a number, date, text, email, scalar has-many list or has-many
+/// reference's id list.
 fn nests_typed(field: &FieldDefinition) -> bool {
     field.is_has_many_scalar()
+        || field.is_has_many_reference()
         || matches!(
             field.field_type,
             FieldType::Number
@@ -335,6 +384,46 @@ mod tests {
             json!("not json")
         );
         assert_eq!(nested_value(&json_field, &json!(""), None), Value::Null);
+    }
+
+    /// Regression: a has-many reference inside a row stored whatever spelling
+    /// its write carried — the admin form's comma list `"a,b"` among them — so
+    /// its column held no list a filter could expand. It stores the id list.
+    #[test]
+    fn a_has_many_reference_in_a_row_stores_its_id_list() {
+        let refs = FieldDefinition::builder("tags", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", true))
+            .build();
+
+        assert_eq!(
+            row_column_value(&refs, &json!("a,b"), None),
+            DbValue::Text(r#"["a","b"]"#.into())
+        );
+        assert_eq!(nested_value(&refs, &json!("a"), None), json!(["a"]));
+        assert_eq!(row_column_value(&refs, &Value::Null, None), DbValue::Null);
+    }
+
+    /// A scalar has-many list's text that isn't a JSON array is one value in a
+    /// document's column and a comma list inside a row — an array row's column
+    /// or a row's JSON — where earlier admin forms stored lists that way.
+    #[test]
+    fn a_scalar_list_text_reads_by_where_it_is_stored() {
+        let list = FieldDefinition::builder("tags", FieldType::Text)
+            .has_many(true)
+            .build();
+        let text = json!("Hello, world");
+
+        assert_eq!(
+            column_value(&list, &text, None),
+            DbValue::Text(r#"["Hello, world"]"#.into())
+        );
+        assert_eq!(decode_value(&list, &text), json!(["Hello, world"]));
+        assert_eq!(
+            row_column_value(&list, &text, None),
+            DbValue::Text(r#"["Hello","world"]"#.into())
+        );
+        assert_eq!(decode_row_value(&list, &text), json!(["Hello", "world"]));
+        assert_eq!(nested_value(&list, &text, None), json!(["Hello", "world"]));
     }
 
     /// An empty has-many list spelled as an empty object — the only shape a Lua

@@ -260,6 +260,18 @@ mod tests {
         assert!(!json.contains("hunter2"));
     }
 
+    /// A TLS URL is masked exactly like a plain one.
+    #[test]
+    fn masks_password_in_a_tls_url() {
+        let url = RedisUrl::from("rediss://crap:hunter2@redis.internal:6380/0");
+
+        assert_eq!(url.as_str(), "rediss://crap:hunter2@redis.internal:6380/0");
+        assert_eq!(url.masked(), "rediss://crap:***@redis.internal:6380/0");
+        assert!(!format!("{url:?}").contains("hunter2"));
+        assert!(!format!("{url}").contains("hunter2"));
+        assert!(!serde_json::to_string(&url).unwrap().contains("hunter2"));
+    }
+
     #[test]
     fn urls_without_credentials_pass_through() {
         for plain in ["redis://127.0.0.1:6379", "rediss://host:6380/2", ""] {

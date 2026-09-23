@@ -43,7 +43,7 @@ node slugs. Invalid slugs are rejected at load time.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `use_as_title` | string | `nil` | Field name to display as the row label in admin lists |
-| `default_sort` | string | `nil` | Default sort field. Prefix with `-` for descending (e.g., `"-created_at"`) |
+| `default_sort` | string | `nil` | Default sort field. Prefix with `-` for descending (e.g., `"-created_at"`). Must name a sortable column of the collection and not a `hidden` field — checked at startup. For a viewer who may not read the field, the list falls back to the built-in order. |
 | `hidden` | boolean | `false` | Hide this collection from the admin sidebar |
 | `list_searchable_fields` | string[] | `{}` | Fields to search when using the admin list search bar |
 | `list_columns` | string[] | `{}` | Default columns shown in the admin list view, in order. Entries are field names or the meta columns `created_at` / `updated_at` / `_status`. Empty = built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides it. |

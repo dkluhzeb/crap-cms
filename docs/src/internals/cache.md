@@ -60,7 +60,7 @@ Redis credentials and TLS are encoded directly into the connection URL — there
 - **Plain TCP, no auth**: `redis://host:6379`
 - **Plain TCP, password**: `redis://:mypassword@host:6379` (note the leading colon for password-only)
 - **ACL user (Redis 6+)**: `redis://acl_user:acl_pass@host:6379`
-- **TLS**: `rediss://user:pass@host:6380` (double `s` — `rediss`, not `redis`)
+- **TLS**: `rediss://user:pass@host:6380` (double `s` — `rediss`, not `redis`). The server certificate is verified against the operating system's trust store; the `#insecure` fragment is not supported and fails the connection.
 - **Specific DB**: append `/<db_number>`, e.g. `redis://host:6379/1`
 
 The same URL is reused by the rate-limit and live-update Redis backends unless they override it.

@@ -178,7 +178,7 @@ fn field_schema(field: &FieldDefinition, relational: bool) -> Value {
         .admin
         .description
         .as_ref()
-        .map(LocalizedString::resolve_default));
+        .map(LocalizedString::resolve_current));
 
     let mut schema = match field.field_type {
         FieldType::Text if field.has_many => {
@@ -440,6 +440,25 @@ fn data_spread_schema(fields: &[FieldDefinition], wire: &OpWire) -> Value {
     schema
 }
 
+/// How a create describes an auth collection's top-level `password`.
+const CREATE_PASSWORD_DESCRIPTION: &str =
+    "Optional; validated against the password policy when set";
+
+/// Add an auth collection's top-level `password` property — never a required
+/// one: an auth document may have no password (an external auth method owns
+/// the credential), which the service create chokepoint accepts, and an
+/// update leaves the stored one alone without it.
+fn add_password_prop(schema: &mut Value, description: &str) {
+    let Some(props) = get_props(schema) else {
+        return;
+    };
+
+    props.insert(
+        "password".to_string(),
+        json!({ "type": "string", "description": description }),
+    );
+}
+
 /// Per-item schema for `create_many` — field data plus, for auth collections,
 /// an OPTIONAL `password` (validated against the password policy by the service
 /// create chokepoint when supplied). Unlike single `create`, items carry no
@@ -449,16 +468,8 @@ fn data_spread_schema(fields: &[FieldDefinition], wire: &OpWire) -> Value {
 fn create_many_item_schema(def: &CollectionDefinition) -> Value {
     let mut schema = fields_to_object_schema(&def.fields, true);
 
-    if def.is_auth_collection()
-        && let Some(props) = get_props(&mut schema)
-    {
-        props.insert(
-            "password".to_string(),
-            json!({
-                "type": "string",
-                "description": "Optional; validated against the password policy when set"
-            }),
-        );
+    if def.is_auth_collection() {
+        add_password_prop(&mut schema, CREATE_PASSWORD_DESCRIPTION);
     }
 
     schema
@@ -483,13 +494,10 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
         CrudOp::Create => {
             let mut schema = data_spread_schema(&def.fields, wire);
 
-            // Auth collections take a required top-level `password` (hashed by
+            // Auth collections take an optional top-level `password` (hashed by
             // the service create chokepoint, never stored as field data).
             if def.is_auth_collection() {
-                if let Some(props) = get_props(&mut schema) {
-                    props.insert("password".to_string(), json!({ "type": "string" }));
-                }
-                push_required(&mut schema, "password");
+                add_password_prop(&mut schema, CREATE_PASSWORD_DESCRIPTION);
             }
 
             schema
@@ -497,16 +505,8 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
         CrudOp::Update => {
             let mut schema = data_spread_schema(&def.fields, wire);
 
-            if def.is_auth_collection()
-                && let Some(props) = get_props(&mut schema)
-            {
-                props.insert(
-                    "password".to_string(),
-                    json!({
-                        "type": "string",
-                        "description": "Leave empty to keep current password"
-                    }),
-                );
+            if def.is_auth_collection() {
+                add_password_prop(&mut schema, "Leave empty to keep current password");
             }
 
             // Partial update: field-level `required` constraints don't apply at
@@ -1232,10 +1232,12 @@ mod tests {
 
     // ── auth collection schema ─────────────────────────────────────────────
 
+    /// Regression: the create schema required `password` on an auth
+    /// collection, although the service accepts a create without one (an
+    /// external auth method may own the credential) — a client following the
+    /// schema could not create such a user.
     #[test]
-    fn auth_collection_create_adds_password_field() {
-        // Use a required field so the "required" array is already present in the schema,
-        // allowing the auth code path to push "password" into it.
+    fn auth_collection_create_adds_optional_password_field() {
         let mut def = CollectionDefinition::new("users");
         def.fields = vec![required_text("email"), text_field("name")];
         def.auth = Some(Auth {
@@ -1244,9 +1246,10 @@ mod tests {
         });
         let s = collection_input_schema(&def, CrudOp::Create);
         assert!(s["properties"]["password"].is_object());
-        // password is appended to the existing required array
+
         let req = s["required"].as_array().unwrap();
-        assert!(req.contains(&Value::String("password".to_string())));
+        assert!(req.contains(&Value::String("email".to_string())));
+        assert!(!req.contains(&Value::String("password".to_string())));
     }
 
     /// Regression (cross-surface harmonization): `create_many` now accepts a
@@ -1392,23 +1395,6 @@ mod tests {
         for op in CrudOp::ALL {
             let _ = op.wire();
         }
-    }
-
-    #[test]
-    fn auth_collection_password_required_even_without_other_required_fields() {
-        let mut def = CollectionDefinition::new("users");
-        def.auth = Some(Auth::new(true));
-        // Only optional fields — no required fields
-        def.fields = vec![FieldDefinition::builder("bio", FieldType::Text).build()];
-
-        let schema = collection_input_schema(&def, CrudOp::Create);
-        let required = schema["required"]
-            .as_array()
-            .expect("required array should exist");
-        assert!(
-            required.contains(&Value::String("password".to_string())),
-            "password should be in required even when no other fields are required"
-        );
     }
 
     /// A rich text field stored as a JSON document takes and returns the

@@ -18,7 +18,7 @@ use crate::{
         query::{helpers::utc_now, jobs as job_query},
     },
     scheduler::runner::failure::{record_job_failure, record_permanent_job_failure},
-    service::{AppInfra, ServiceContext, helpers::shape_reported},
+    service::{AppInfra, ServiceContext},
 };
 
 /// Borrowed inputs of an image-convert job run.
@@ -231,9 +231,10 @@ fn discard_orphaned_derivative(data: &ImageConvertJobData, storage: &SharedStora
 }
 
 /// Tell readers a finished conversion changed the document, as any write does:
-/// invalidate the populate cache and publish an update event carrying the
-/// document in the shape a read returns. A system write — no hooks, no version
-/// snapshot, and no strip: delivery strips per subscriber.
+/// invalidate the populate cache and publish an update event built from the
+/// stored row, which the publisher read-shapes like every write's. A system
+/// write — no hooks, no version snapshot, and no strip: delivery strips per
+/// subscriber.
 ///
 /// The read excludes trashed rows, so a conversion finishing on a trashed
 /// upload publishes nothing; its URL is on the row for when it is restored.
@@ -269,12 +270,13 @@ fn report_conversion(infra: &AppInfra, data: &ImageConvertJobData) {
         .ok()
         .flatten();
 
-    let Some(mut doc) = doc else {
+    let Some(doc) = doc else {
         return;
     };
 
-    shape_reported(&ctx, &mut doc);
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    // The row as stored: the event read-shapes it and each subscriber's
+    // delivery strips it.
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, ctx.event_row(&doc));
 }
 
 #[cfg(all(test, feature = "sqlite"))]

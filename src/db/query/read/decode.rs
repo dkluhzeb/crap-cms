@@ -2,7 +2,7 @@
 //! columns to the values reads return.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     core::{
@@ -14,7 +14,9 @@ use crate::{
         document::row_to_document,
         query::{
             group_locale_fields,
-            helpers::{decode_value, decodes, prefixed_name, walk_leaf_fields},
+            helpers::{
+                ListPlace, decode_row_value, decode_value, decodes, prefixed_name, walk_leaf_fields,
+            },
         },
     },
 };
@@ -51,7 +53,8 @@ pub(crate) fn decode_row(
 fn decode_columns(fields: &[FieldDefinition], doc: &mut Document) {
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         if field.has_parent_column() {
-            decode_column(&mut doc.fields, &prefixed_name(prefix, &field.name), field);
+            let name = prefixed_name(prefix, &field.name);
+            decode_column(&mut doc.fields, &name, field, ListPlace::Column);
         }
 
         Ok(())
@@ -59,15 +62,24 @@ fn decode_columns(fields: &[FieldDefinition], doc: &mut Document) {
 }
 
 /// Decode the column `base` of `level` — and its per-locale columns
-/// (`{base}__{locale}`) — by `field`, when the field decodes at all.
-fn decode_column<R: JsonRoot>(level: &mut R, base: &str, field: &FieldDefinition) {
+/// (`{base}__{locale}`) — by `field`, when the field decodes at all. `place`
+/// says whether `level` is a document or a row inside one.
+fn decode_column<R: JsonRoot>(
+    level: &mut R,
+    base: &str,
+    field: &FieldDefinition,
+    place: ListPlace,
+) {
     if !decodes(field) {
         return;
     }
 
     for key in column_keys(&*level, base) {
         if let Some(value) = level.root_get(&key) {
-            let decoded = decode_value(field, value);
+            let decoded = match place {
+                ListPlace::Column => decode_value(field, value),
+                ListPlace::Row => decode_row_value(field, value),
+            };
             level.root_insert(key, decoded);
         }
     }
@@ -91,29 +103,37 @@ fn column_keys<R: JsonRoot>(level: &R, base: &str) -> Vec<String> {
 /// array row's columns and a blocks row's fields, so a snapshot written before
 /// a column's read form changed reads like the live row.
 pub(crate) fn decode_document_values(data: &mut DocumentFields, fields: &[FieldDefinition]) {
-    decode_level(data, fields, "");
+    decode_level(data, fields, "", ListPlace::Column);
 }
 
-/// Decode every field of `fields` found at `level` under `prefix`.
-fn decode_level<R: JsonRoot>(level: &mut R, fields: &[FieldDefinition], prefix: &str) {
+/// Decode every field of `fields` found at `level` under `prefix`; `place` says
+/// whether `level` is the document or a row inside it.
+fn decode_level<R: JsonRoot>(
+    level: &mut R,
+    fields: &[FieldDefinition],
+    prefix: &str,
+    place: ListPlace,
+) {
     for field in fields {
         let name = prefixed_name(prefix, &field.name);
 
         match field_children(field) {
             FieldChildren::Leaf => {
                 if field.has_parent_column() {
-                    decode_column(level, &name, field);
+                    decode_column(level, &name, field, place);
                 }
             }
-            FieldChildren::Group(sub) => decode_group(level, &name, sub),
-            FieldChildren::Wrapper(sub) => decode_level(level, sub, prefix),
+            FieldChildren::Group(sub) => decode_group(level, &name, sub, place),
+            FieldChildren::Wrapper(sub) => decode_level(level, sub, prefix, place),
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    decode_level(level, &tab.fields, prefix);
+                    decode_level(level, &tab.fields, prefix, place);
                 }
             }
             FieldChildren::Array(sub) => {
-                decode_rows(level, &name, |row| decode_level(row, sub, ""));
+                decode_rows(level, &name, |row| {
+                    decode_level(row, sub, "", ListPlace::Row);
+                });
             }
             FieldChildren::Blocks(defs) => {
                 decode_rows(level, &name, |row| decode_block_row(row, defs));
@@ -124,12 +144,12 @@ fn decode_level<R: JsonRoot>(level: &mut R, fields: &[FieldDefinition], prefix: 
 
 /// A group's leaves sit in a nested object (as snapshots keep them) or flat
 /// under `group__leaf` (as a row reads them); both forms are decoded.
-fn decode_group<R: JsonRoot>(level: &mut R, name: &str, sub: &[FieldDefinition]) {
+fn decode_group<R: JsonRoot>(level: &mut R, name: &str, sub: &[FieldDefinition], place: ListPlace) {
     if let Some(Value::Object(nested)) = level.root_get_mut(name) {
-        decode_level(nested, sub, "");
+        decode_level(nested, sub, "", place);
     }
 
-    decode_level(level, sub, &format!("{name}__"));
+    decode_level(level, sub, &format!("{name}__"), place);
 }
 
 /// Apply `decode_row` to every object row of the list stored under `name`,
@@ -137,7 +157,7 @@ fn decode_group<R: JsonRoot>(level: &mut R, name: &str, sub: &[FieldDefinition])
 fn decode_rows<R: JsonRoot>(
     level: &mut R,
     name: &str,
-    mut decode_row: impl FnMut(&mut serde_json::Map<String, Value>),
+    mut decode_row: impl FnMut(&mut Map<String, Value>),
 ) {
     for key in column_keys(&*level, name) {
         if let Some(Value::Array(rows)) = level.root_get_mut(&key) {
@@ -150,7 +170,7 @@ fn decode_rows<R: JsonRoot>(
 
 /// Decode a blocks row against its block's fields — or, when the row names
 /// no known block, against every block's fields.
-fn decode_block_row(row: &mut serde_json::Map<String, Value>, defs: &[BlockDefinition]) {
+fn decode_block_row(row: &mut Map<String, Value>, defs: &[BlockDefinition]) {
     let block_type = row
         .get(BLOCK_TYPE_KEY)
         .and_then(Value::as_str)
@@ -160,10 +180,10 @@ fn decode_block_row(row: &mut serde_json::Map<String, Value>, defs: &[BlockDefin
         .and_then(|ty| defs.iter().find(|def| def.block_type == ty));
 
     match matched {
-        Some(def) => decode_level(row, &def.fields, ""),
+        Some(def) => decode_level(row, &def.fields, "", ListPlace::Row),
         None => {
             for def in defs {
-                decode_level(row, &def.fields, "");
+                decode_level(row, &def.fields, "", ListPlace::Row);
             }
         }
     }
@@ -321,5 +341,47 @@ mod tests {
         let once = data.clone();
         decode_document_values(&mut data, &fields);
         assert_eq!(data, once, "decoding a decoded snapshot changes nothing");
+    }
+    /// A snapshot kept from before a field switched to `has_many` reads its
+    /// text as a write at the same place stores it: a document column's
+    /// `"Hello, world"` is one value, the comma list an earlier admin form
+    /// stored in an array row or a block its values.
+    #[test]
+    fn a_snapshot_reads_list_text_by_where_it_was_stored() {
+        let tags = || {
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build()
+        };
+        let fields = vec![
+            tags(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![tags()])
+                .build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![tags()])
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new("quote", vec![tags()])])
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!("Hello, world"));
+        data.insert("seo".to_string(), json!({ "tags": "Hello, world" }));
+        data.insert("items".to_string(), json!([{ "tags": "a, b" }]));
+        data.insert(
+            "content".to_string(),
+            json!([{ "_block_type": "quote", "tags": "a,b" }]),
+        );
+
+        decode_document_values(&mut data, &fields);
+
+        assert_eq!(data.get("tags"), Some(&json!(["Hello, world"])));
+        assert_eq!(data.get("seo"), Some(&json!({ "tags": ["Hello, world"] })));
+        assert_eq!(data.get("items"), Some(&json!([{ "tags": ["a", "b"] }])));
+        assert_eq!(
+            data.get("content"),
+            Some(&json!([{ "_block_type": "quote", "tags": ["a", "b"] }]))
+        );
     }
 }

@@ -4,9 +4,12 @@ use axum::{
     http::{HeaderMap, Uri},
     response::Response,
 };
-use serde_json::{Value, from_str, json};
-use tracing::warn;
+use serde_json::{Value, json};
 
+use super::{
+    list_fetch::{FetchedList, fetch_list_items},
+    list_inputs::{ListInputs, ListRequest, parse_list_inputs},
+};
 use crate::{
     admin::{
         AdminState,
@@ -16,103 +19,43 @@ use crate::{
         },
         handlers::{
             collections::shared::{
-                build_column_options, build_filter_fields, build_filter_pills, compute_cells,
-                resolve_columns, thumbnail_url,
+                FilterPillInputs, ListFieldAccess, active_filter_count, build_column_options,
+                build_filter_fields, build_filter_pills, compute_cells, resolve_columns,
+                thumbnail_url, title_label,
             },
             shared::{
-                HxNav, ListUrlContext, PageRequest, PaginationParams, bad_request,
-                editor_locale_ctx, extract_editor_locale, extract_status_filter,
-                extract_where_params, parse_where_params, paths, render_page, require_collection,
-                service_error_to_admin_response, task_join_error_response, validate_sort,
+                HxNav, ListUrlContext, PageRequest, PaginationParams, extract_where_params, paths,
+                render_page, require_collection,
             },
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document},
-    db::query::{self, FilterClause, FindQuery, LocaleContext},
-    service::{
-        PaginatedResult, ServiceError,
-        op::{self, CoreError, Find, FindArgs, Principal, TargetRef},
-        user_settings::get_user_settings,
-    },
+    db::query,
 };
 
-/// Fetch documents via the shared service layer read lifecycle.
-///
-/// `is_trash` is a presentation flag from the request — the service layer
-/// injects `_deleted_at EXISTS` and flips `include_deleted` itself. The admin
-/// list view shows drafts alongside published rows for users who can view them
-/// (edit-level access); a read-only viewer sees published only (see
-/// `fetch_list_documents`).
-/// Arguments for [`fetch_list_documents`]. All fields are required; constructed
-/// at the single call site in [`list_items`] — plain struct literal per
-/// CLAUDE.md's "single call site" exception to the builder rule.
-struct FetchListArgs<'a> {
-    state: &'a AdminState,
-    slug: &'a str,
-    find_query: &'a FindQuery,
-    locale_ctx: Option<&'a LocaleContext>,
-    auth_user: &'a Option<Extension<AuthUser>>,
-    cursor_enabled: bool,
-    is_trash: bool,
-    status_filter: Option<Vec<String>>,
-}
-
-fn fetch_list_documents(
-    args: FetchListArgs<'_>,
-) -> Result<PaginatedResult<Document>, ServiceError> {
-    let ui_locale = args
-        .auth_user
-        .as_ref()
-        .map(|Extension(au)| au.ui_locale.clone());
-    let user_doc = args
-        .auth_user
-        .as_ref()
-        .map(|Extension(au)| au.user_doc.clone());
-
-    // Request drafts unconditionally — the service read path returns the union
-    // of the views the caller may see and downgrades (never rejects): an editor
-    // gets published + drafts, a read-only admin gets published only. Draft
-    // *visibility* is the service's job; `CollectionPermissions` survives only
-    // as a UI hint (show/hide the Drafts tab), not a request gate.
-    let op_args = FindArgs::builder(args.find_query.clone())
-        .hydrate(false)
-        .locale_ctx(args.locale_ctx.cloned())
-        .cursor_enabled(args.cursor_enabled)
-        .trash(args.is_trash)
-        .include_drafts(true)
-        .status_filter(args.status_filter)
-        .build();
-
-    op::run::<Find>(
-        &args.state.infra,
-        Principal::Resolved {
-            user: user_doc,
-            ui_locale,
-        },
-        &TargetRef::collection(args.slug),
-        op_args,
-    )
-    .map_err(CoreError::into_service_error)
-}
-
-/// Compute title column sort URL and sort direction indicators.
+/// Compute title column sort URL and sort direction indicators. No sort link
+/// when the collection has no title field or the viewer is not offered it.
 fn compute_title_sort(
     def: &CollectionDefinition,
     url_ctx: &ListUrlContext,
+    access: &ListFieldAccess,
 ) -> (Option<String>, bool, bool) {
-    let title_field = match def.title_field() {
-        Some(tf) => tf.to_string(),
-        None => return (None, false, false),
+    let Some(title_field) = def.title_field() else {
+        return (None, false, false);
     };
+
+    if title_label(def, access).is_none() {
+        return (None, false, false);
+    }
 
     let sort_field_name = url_ctx.sort.map(|s| s.strip_prefix('-').unwrap_or(s));
     let sort_desc = url_ctx.sort.is_some_and(|s| s.starts_with('-'));
-    let is_sorted = sort_field_name == Some(title_field.as_str());
+    let is_sorted = sort_field_name == Some(title_field);
 
     let next = if is_sorted && !sort_desc {
         format!("-{title_field}")
     } else {
-        title_field.clone()
+        title_field.to_string()
     };
 
     (
@@ -122,38 +65,27 @@ fn compute_title_sort(
     )
 }
 
-/// Pagination context for the list view.
-struct ListPagination {
-    result: query::PaginationResult,
-    prev_url: String,
-    next_url: String,
-}
-
-/// Build prev/next URLs from the `PaginationResult` for cursor or page mode.
+/// Build the pagination context (prev/next URLs) for cursor or page mode.
 fn build_list_pagination(
     pr: &query::PaginationResult,
     pagination: &query::FindPagination,
     cursor_enabled: bool,
     url_ctx: &ListUrlContext,
-) -> ListPagination {
+) -> PaginationContext {
     let (prev_url, next_url) = if cursor_enabled {
-        let prev = if pr.has_prev_page {
-            pr.start_cursor
-                .as_deref()
-                .map(|sc| url_ctx.cursor_url("before_cursor", sc))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let prev = pr
+            .start_cursor
+            .as_deref()
+            .filter(|_| pr.has_prev_page)
+            .map(|sc| url_ctx.cursor_url("before_cursor", sc))
+            .unwrap_or_default();
 
-        let next = if pr.has_next_page {
-            pr.end_cursor
-                .as_deref()
-                .map(|ec| url_ctx.cursor_url("after_cursor", ec))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let next = pr
+            .end_cursor
+            .as_deref()
+            .filter(|_| pr.has_next_page)
+            .map(|ec| url_ctx.cursor_url("after_cursor", ec))
+            .unwrap_or_default();
 
         (prev, next)
     } else {
@@ -163,369 +95,32 @@ fn build_list_pagination(
         )
     };
 
-    ListPagination {
-        result: pr.clone(),
-        prev_url,
-        next_url,
-    }
+    PaginationContext::from_result(pr, prev_url, next_url)
 }
 
-/// Build the `FindQuery` from pagination, user filters, sort, and search params.
-///
-/// Produces a *user* query — system filters (`_deleted_at`, `_status`) are
-/// injected by `service::find_documents` based on the typed flags. The trash
-/// default sort (`-_deleted_at`) is set by the caller as a presentation choice.
-fn build_find_query(
-    pagination: &query::FindPagination,
-    url_filters: &[FilterClause],
-    order_by: Option<String>,
-    search: Option<&str>,
-) -> FindQuery {
-    let offset = (!pagination.has_cursor()).then_some(pagination.offset);
+/// The `where[…]` params of the view, prefixed with the trash flag in the
+/// trash view — the view state every list link carries.
+fn view_params(inputs: &ListInputs) -> String {
+    let where_params = extract_where_params(&inputs.raw_query);
 
-    FindQuery::builder()
-        .filters(url_filters.to_vec())
-        .order_by(order_by)
-        .limit(Some(pagination.limit))
-        .offset(offset)
-        .after_cursor(pagination.after_cursor.clone())
-        .before_cursor(pagination.before_cursor.clone())
-        .search(search.map(str::to_string))
-        .build()
-}
-
-/// Load the user's saved column preferences for a collection.
-fn load_user_columns(
-    state: &AdminState,
-    auth_user: Option<&Extension<AuthUser>>,
-    slug: &str,
-) -> Option<Vec<String>> {
-    let Extension(au) = auth_user?;
-    let conn = state.infra.pool.get().ok()?;
-    let settings_json = get_user_settings(&conn, &au.claims.sub).ok()??;
-    let settings: Value = from_str(&settings_json).ok()?;
-    let cols = settings.get(slug)?.get("columns")?.as_array()?;
-
-    Some(
-        cols.iter()
-            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-            .collect(),
-    )
-}
-
-/// Validated + normalized inputs derived from the request URL/headers,
-/// produced by [`parse_list_inputs`]. All downstream phases (fetch +
-/// view-model build + page-context build) take this as a single
-/// reference — keeps the handler a thin orchestrator.
-struct ListInputs {
-    is_trash: bool,
-    cursor_enabled: bool,
-    search: Option<String>,
-    pagination: query::FindPagination,
-    sort: Option<String>,
-    url_filters: Vec<FilterClause>,
-    status_filter: Option<Vec<String>>,
-    find_query: FindQuery,
-    editor_locale: Option<String>,
-    locale_ctx: Option<LocaleContext>,
-    raw_query: String,
-}
-
-/// Parse the query string + headers + pagination params into a typed
-/// [`ListInputs`] bundle. Returns a response (not an error) for the
-/// invalid-pagination case so the handler can short-circuit cleanly.
-fn parse_list_inputs(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    params: PaginationParams,
-    uri: &Uri,
-    headers: &HeaderMap,
-) -> Result<ListInputs, Box<Response>> {
-    let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
-    let raw_query = uri.query().unwrap_or("").to_string();
-    let cursor_enabled = state.config.pagination.is_cursor();
-    let search = params.search.filter(|s| !s.trim().is_empty());
-
-    let pg_ctx = query::PaginationCtx::from_config(&state.config.pagination);
-    let pagination = pg_ctx
-        .validate(
-            params.per_page,
-            params.page,
-            params.after_cursor.as_deref(),
-            params.before_cursor.as_deref(),
-        )
-        .inspect_err(|e| warn!("Invalid pagination params: {}", e))
-        .map_err(|_| Box::new(bad_request(state, "Invalid pagination parameters")))?;
-
-    // Present-but-invalid URL params hard-error with 400 (parity with the
-    // MCP/gRPC surfaces) instead of silently rendering wrong/unfiltered or
-    // default-sorted results.
-    let sort = match params.sort.as_deref() {
-        None => None,
-        Some(s) => Some(validate_sort(s, def).ok_or_else(|| {
-            Box::new(bad_request(
-                state,
-                &format!("Unknown or unsortable sort field '{s}'"),
-            ))
-        })?),
-    };
-
-    let url_filters =
-        parse_where_params(&raw_query, def).map_err(|e| Box::new(bad_request(state, &e)))?;
-
-    // The filter UI exposes `_status` for collections with drafts (see
-    // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`,
-    // including OR-bucket forms) is handled here as a typed param rather
-    // than a generic where clause, because system columns (`_*`) are
-    // off-limits to user filters at the service layer
-    // (`validate_user_filters`). See `extract_status_filter` for the
-    // parsing rule. Multiple values widen to `_status IN (...)` at
-    // injection time.
-    let status_filter = match extract_status_filter(&raw_query) {
-        None => None,
-        Some(values) => {
-            if !def.has_drafts() {
-                return Err(Box::new(bad_request(
-                    state,
-                    "Status filter is not available on this collection (drafts are disabled)",
-                )));
-            }
-
-            if let Some(bad) = values.iter().find(|s| *s != "draft" && *s != "published") {
-                return Err(Box::new(bad_request(
-                    state,
-                    &format!("Unknown status filter value '{bad}' (valid: draft, published)"),
-                )));
-            }
-
-            Some(values)
-        }
-    };
-
-    // Trash view: an explicit user sort wins; with none, the shared `Find`
-    // body applies the newest-deleted-first trash default. Hard-coding the
-    // default here used to discard the user's column sort entirely.
-    let order_by = if is_trash {
-        sort.clone()
-    } else {
-        sort.clone().or_else(|| def.admin.default_sort.clone())
-    };
-
-    let find_query = build_find_query(&pagination, &url_filters, order_by, search.as_deref());
-
-    let editor_locale = extract_editor_locale(headers, &state.config.locale);
-    let locale_ctx = editor_locale_ctx(&state.config.locale, editor_locale.as_deref());
-
-    Ok(ListInputs {
-        is_trash,
-        cursor_enabled,
-        search,
-        pagination,
-        sort,
-        url_filters,
-        status_filter,
-        find_query,
-        editor_locale,
-        locale_ctx,
-        raw_query,
-    })
-}
-
-/// Run the `find_documents` read pipeline on the blocking pool and map
-/// the service error / join error to an admin-rendered response.
-async fn fetch_list_items(
-    state: AdminState,
-    slug: String,
-    inputs: &ListInputs,
-    auth_user: Option<Extension<AuthUser>>,
-) -> Result<PaginatedResult<Document>, Response> {
-    let state_for_blocking = state.clone();
-    let find_query = inputs.find_query.clone();
-    let locale_ctx = inputs.locale_ctx.clone();
-    let status_filter = inputs.status_filter.clone();
-    let cursor_enabled = inputs.cursor_enabled;
-    let is_trash = inputs.is_trash;
-
-    let read_result = tokio::task::spawn_blocking(move || {
-        fetch_list_documents(FetchListArgs {
-            state: &state_for_blocking,
-            slug: &slug,
-            find_query: &find_query,
-            locale_ctx: locale_ctx.as_ref(),
-            auth_user: &auth_user,
-            cursor_enabled,
-            is_trash,
-            status_filter,
-        })
-    })
-    .await;
-
-    match read_result {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => {
-            let denied_msg = if is_trash {
-                "You don't have permission to view the trash"
-            } else {
-                "You don't have permission to view this collection"
-            };
-            Err(service_error_to_admin_response(&state, e, denied_msg))
-        }
-        Err(e) => Err(task_join_error_response(&state, &e)),
-    }
-}
-
-/// Inputs to [`build_list_page`]. All fields required; constructed at the
-/// single call site in [`list_items`] — plain struct literal per CLAUDE.md.
-struct BuildListPageInput<'a> {
-    state: &'a AdminState,
-    slug: &'a str,
-    def: &'a CollectionDefinition,
-    inputs: ListInputs,
-    fetched: PaginatedResult<Document>,
-    claims: Option<&'a Claims>,
-    auth_user: Option<&'a Extension<AuthUser>>,
-}
-
-/// Assemble the typed `CollectionItemsListPage` view-model from the
-/// parsed inputs and the fetched documents. Encapsulates all the
-/// table/column/filter/title-sort plumbing that previously sat inline
-/// in the handler.
-fn build_list_page(args: BuildListPageInput<'_>) -> CollectionItemsListPage {
-    let BuildListPageInput {
-        state,
-        slug,
-        def,
-        inputs,
-        fetched,
-        claims,
-        auth_user,
-    } = args;
-    let documents = fetched.docs;
-    let pagination_result = fetched.pagination;
-    let user_columns = load_user_columns(state, auth_user, slug);
-
-    let base_url = paths::collection(slug);
-    let mut where_params = extract_where_params(&inputs.raw_query);
-
-    if inputs.is_trash {
-        if where_params.is_empty() {
-            where_params = "trash=1".to_string();
-        } else {
-            where_params = format!("trash=1&{where_params}");
-        }
+    if !inputs.is_trash {
+        return where_params;
     }
 
-    let url_ctx = ListUrlContext {
-        base_url: &base_url,
-        search: inputs.search.as_deref(),
-        sort: inputs.sort.as_deref(),
-        where_params: &where_params,
-    };
-
-    let table_columns = resolve_columns(def, user_columns.as_deref(), &url_ctx);
-    let column_keys: Vec<String> = table_columns
-        .iter()
-        .filter_map(|c| c["key"].as_str().map(std::string::ToString::to_string))
-        .collect();
-    let column_options = build_column_options(def, &column_keys);
-    let filter_fields = build_filter_fields(def);
-    let filter_pills = build_filter_pills(&inputs.url_filters, def, &inputs.raw_query);
-
-    let (title_sort_url, title_sorted_asc, title_sorted_desc) = compute_title_sort(def, &url_ctx);
-
-    let items: Vec<_> = documents
-        .iter()
-        .map(|doc| build_item_row(doc, &table_columns, def))
-        .collect();
-
-    let lp = build_list_pagination(
-        &pagination_result,
-        &inputs.pagination,
-        inputs.cursor_enabled,
-        &url_ctx,
-    );
-
-    let base = BasePageContext::for_handler(
-        state,
-        claims,
-        auth_user,
-        PageMeta::new(PageType::CollectionItems, def.display_name()),
-    )
-    .with_editor_locale(inputs.editor_locale.as_deref(), state);
-
-    let active_filter_count = filter_pills.len();
-    let perms = CollectionPermissions::for_user(state, def, auth_user);
-
-    CollectionItemsListPage {
-        base,
-        collection: CollectionContext::from_def(def),
-        perms,
-        docs: items,
-        pagination: PaginationContext::from_result(&lp.result, lp.prev_url, lp.next_url),
-        has_drafts: def.has_drafts(),
-        has_soft_delete: def.soft_delete,
-        is_trash: inputs.is_trash,
-        search: inputs.search,
-        sort: inputs.sort,
-        table_columns,
-        column_options,
-        filter_fields,
-        active_filters: filter_pills,
-        active_filter_count,
-        title_sort_url,
-        title_sorted_asc,
-        title_sorted_desc,
+    if where_params.is_empty() {
+        return "trash=1".to_string();
     }
+
+    format!("trash=1&{where_params}")
 }
 
-/// GET /admin/collections/{slug} — list items in a collection.
-///
-/// Thin orchestrator: resolve the collection definition, parse query
-/// inputs, fetch documents, build the typed view-model, render.
-pub async fn list_items(
-    State(state): State<AdminState>,
-    Path(slug): Path<String>,
-    Query(params): Query<PaginationParams>,
-    uri: Uri,
-    headers: HeaderMap,
-    claims: Option<Extension<Claims>>,
-    auth_user: Option<Extension<AuthUser>>,
-) -> Response {
-    let hx = HxNav::from_headers(&headers);
-    let def = match require_collection(&state, &slug) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let inputs = match parse_list_inputs(&state, &def, params, &uri, &headers) {
-        Ok(i) => i,
-        Err(resp) => return *resp,
-    };
-
-    let fetched =
-        match fetch_list_items(state.clone(), slug.clone(), &inputs, auth_user.clone()).await {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
-
-    let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let ctx = build_list_page(BuildListPageInput {
-        state: &state,
-        slug: &slug,
-        def: &def,
-        inputs,
-        fetched,
-        claims: claims_ref,
-        auth_user: auth_user.as_ref(),
-    });
-
-    render_page(
-        &state,
-        PageRequest::new(hx, auth_user.as_ref()),
-        "collections/items",
-        &ctx,
-    )
-    .await
+/// The search form's hidden inputs as `{name, value}` objects.
+fn search_params(url_ctx: &ListUrlContext) -> Vec<Value> {
+    url_ctx
+        .search_form_params()
+        .into_iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect()
 }
 
 /// Build a single item row for the collection list table.
@@ -565,14 +160,216 @@ fn build_item_row(doc: &Document, table_columns: &[Value], def: &CollectionDefin
     item
 }
 
+/// The table-related parts of the list page.
+struct ListTable {
+    table_columns: Vec<Value>,
+    column_options: Vec<Value>,
+    filter_fields: Vec<Value>,
+    active_filters: Vec<Value>,
+    active_filter_count: usize,
+    title_label: Option<String>,
+}
+
+/// Build the columns (the viewer's saved `user_columns` choice, when any),
+/// column picker, filter fields, and filter pills.
+fn build_list_table(
+    args: &BuildListPageInput<'_>,
+    url_ctx: &ListUrlContext,
+    access: &ListFieldAccess,
+    user_columns: Option<&[String]>,
+) -> ListTable {
+    let BuildListPageInput {
+        state,
+        def,
+        inputs,
+        auth_user,
+        ..
+    } = *args;
+
+    let table_columns = resolve_columns(def, user_columns, url_ctx, access);
+    let column_keys: Vec<String> = table_columns
+        .iter()
+        .filter_map(|c| c["key"].as_str().map(str::to_string))
+        .collect();
+
+    let active_filters = build_filter_pills(&FilterPillInputs {
+        parsed: &inputs.url_filters,
+        def,
+        raw_query: &inputs.raw_query,
+        base_url: url_ctx.base_url,
+        status_filter: inputs.status_filter.as_ref(),
+        translations: &state.translations,
+        locale: ui_locale(state, auth_user),
+    });
+
+    ListTable {
+        column_options: build_column_options(def, &column_keys, access),
+        filter_fields: build_filter_fields(def, access),
+        active_filter_count: active_filter_count(&active_filters, &inputs.url_filters),
+        active_filters,
+        title_label: title_label(def, access),
+        table_columns,
+    }
+}
+
+/// The viewer's UI locale (the configured default without a viewer).
+fn ui_locale<'a>(state: &'a AdminState, auth_user: Option<&'a Extension<AuthUser>>) -> &'a str {
+    auth_user.map_or(&state.config.locale.default_locale, |Extension(au)| {
+        &au.ui_locale
+    })
+}
+
+/// Inputs to [`build_list_page`]. All fields required; constructed at the
+/// single call site in [`list_items`] — plain struct literal per CLAUDE.md.
+struct BuildListPageInput<'a> {
+    state: &'a AdminState,
+    def: &'a CollectionDefinition,
+    inputs: &'a ListInputs,
+    claims: Option<&'a Claims>,
+    auth_user: Option<&'a Extension<AuthUser>>,
+}
+
+/// Assemble the typed `CollectionItemsListPage` view-model from the
+/// parsed inputs and the fetched documents.
+fn build_list_page(args: &BuildListPageInput<'_>, fetched: FetchedList) -> CollectionItemsListPage {
+    let BuildListPageInput {
+        state,
+        def,
+        inputs,
+        claims,
+        auth_user,
+    } = *args;
+
+    let base_url = paths::collection(&def.slug);
+    let where_params = view_params(inputs);
+    let url_ctx = ListUrlContext {
+        base_url: &base_url,
+        search: inputs.search.as_deref(),
+        sort: inputs.sort.as_deref(),
+        per_page: inputs.per_page,
+        where_params: &where_params,
+    };
+
+    let access = ListFieldAccess::new(fetched.unreadable);
+    let table = build_list_table(args, &url_ctx, &access, fetched.user_columns.as_deref());
+    let (title_sort_url, title_sorted_asc, title_sorted_desc) =
+        compute_title_sort(def, &url_ctx, &access);
+
+    let docs = fetched
+        .result
+        .docs
+        .iter()
+        .map(|doc| build_item_row(doc, &table.table_columns, def))
+        .collect();
+
+    let pagination = build_list_pagination(
+        &fetched.result.pagination,
+        &inputs.pagination,
+        inputs.cursor_enabled,
+        &url_ctx,
+    );
+
+    let base = BasePageContext::for_handler(
+        state,
+        claims,
+        auth_user,
+        PageMeta::new(PageType::CollectionItems, def.display_name()),
+    )
+    .with_editor_locale(inputs.editor_locale.as_deref(), state);
+
+    CollectionItemsListPage {
+        base,
+        collection: CollectionContext::from_def(def),
+        perms: CollectionPermissions::for_user(state, def, auth_user),
+        docs,
+        pagination,
+        has_drafts: def.has_drafts(),
+        has_soft_delete: def.soft_delete,
+        is_trash: inputs.is_trash,
+        search: inputs.search.clone(),
+        sort: inputs.sort.clone(),
+        search_params: search_params(&url_ctx),
+        clear_search_url: url_ctx.clear_search_url(),
+        is_filtered: inputs.is_filtered(),
+        trash_total: fetched.trash_total,
+        table_columns: table.table_columns,
+        column_options: table.column_options,
+        filter_fields: table.filter_fields,
+        active_filters: table.active_filters,
+        active_filter_count: table.active_filter_count,
+        title_label: table.title_label,
+        title_sort_url,
+        title_sorted_asc,
+        title_sorted_desc,
+    }
+}
+
+/// GET /admin/collections/{slug} — list items in a collection.
+///
+/// Thin orchestrator: resolve the collection definition, parse query
+/// inputs, fetch documents, build the typed view-model, render.
+pub async fn list_items(
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Query(params): Query<PaginationParams>,
+    uri: Uri,
+    headers: HeaderMap,
+    claims: Option<Extension<Claims>>,
+    auth_user: Option<Extension<AuthUser>>,
+) -> Response {
+    let hx = HxNav::from_headers(&headers);
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
+    };
+
+    let req = ListRequest {
+        params,
+        uri: &uri,
+        headers: &headers,
+        ui_locale: ui_locale(&state, auth_user.as_ref()),
+    };
+
+    let inputs = match parse_list_inputs(&state, &def, req) {
+        Ok(i) => i,
+        Err(resp) => return *resp,
+    };
+
+    let fetched = match fetch_list_items(&state, def.clone(), &inputs, auth_user.clone()).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+
+    let ctx = build_list_page(
+        &BuildListPageInput {
+            state: &state,
+            def: &def,
+            inputs: &inputs,
+            claims: claims.as_ref().map(|Extension(c)| c),
+            auth_user: auth_user.as_ref(),
+        },
+        fetched,
+    );
+
+    render_page(
+        &state,
+        PageRequest::new(hx, auth_user.as_ref()),
+        "collections/items",
+        &ctx,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::admin::handlers::query::url::ListUrlContext;
+    use std::collections::HashSet;
 
     use super::*;
+    use crate::core::{FieldDefinition, FieldType};
 
     fn titled_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
         def.admin.use_as_title = Some("title".to_string());
         def
     }
@@ -582,27 +379,33 @@ mod tests {
             base_url: "/admin/collections/posts",
             search: None,
             sort,
+            per_page: None,
             where_params: "",
         }
     }
 
+    fn open() -> ListFieldAccess {
+        ListFieldAccess::default()
+    }
+
     #[test]
     fn no_title_field_yields_no_sort() {
-        let (url, asc, desc) = compute_title_sort(&CollectionDefinition::new("posts"), &ctx(None));
+        let (url, asc, desc) =
+            compute_title_sort(&CollectionDefinition::new("posts"), &ctx(None), &open());
         assert!(url.is_none());
         assert!(!asc && !desc);
     }
 
     #[test]
     fn unsorted_offers_ascending_toggle() {
-        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(None));
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(None), &open());
         assert!(url.is_some());
         assert!(!asc && !desc); // not currently sorted by title
     }
 
     #[test]
     fn ascending_active_next_toggles_to_descending() {
-        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("title")));
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("title")), &open());
         assert!(asc && !desc);
         // next link flips to descending.
         assert!(url.unwrap().contains("sort=-title"));
@@ -610,8 +413,17 @@ mod tests {
 
     #[test]
     fn descending_active_next_toggles_back_to_ascending() {
-        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("-title")));
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("-title")), &open());
         assert!(desc && !asc);
         assert!(url.unwrap().contains("sort=title"));
+    }
+
+    /// A title field the viewer may not read gets no sort link — clicking it
+    /// would be refused.
+    #[test]
+    fn an_unreadable_title_field_is_not_sortable() {
+        let denied = ListFieldAccess::new(HashSet::from(["title".to_string()]));
+        let (url, _, _) = compute_title_sort(&titled_def(), &ctx(None), &denied);
+        assert!(url.is_none());
     }
 }

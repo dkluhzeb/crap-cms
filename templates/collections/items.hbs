@@ -13,13 +13,13 @@
           {{#if has_soft_delete}}
             {{#if is_trash}}
               {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="back_to_list" icon="arrow_back"}}
-              {{#if docs}}
+              {{#if trash_total}}
                 {{#if perms.delete}}
                   <button
                     type="button"
                     class="button button--danger"
                     data-empty-trash-slug="{{ collection.slug }}"
-                    data-empty-trash-count="{{ pagination.total_docs }}"
+                    data-empty-trash-count="{{ trash_total }}"
                   >
                     <span class="material-symbols-outlined">delete_forever</span>
                     {{t "empty_trash"}}
@@ -85,8 +85,8 @@
             {{#if search}}
               <a
                 class="search-bar__clear"
-                href="/admin/collections/{{ collection.slug }}"
-                hx-get="/admin/collections/{{ collection.slug }}"
+                href="{{ clear_search_url }}"
+                hx-get="{{ clear_search_url }}"
                 hx-target="#main"
                 hx-swap="innerHTML show:window:top"
                 hx-push-url="true"
@@ -101,13 +101,13 @@
               </a>
             {{/if}}
           </div>
-          {{#if sort}}
+          {{#each search_params}}
             <input
               type="hidden"
-              name="sort"
-              value="{{ sort }}"
+              name="{{ this.name }}"
+              value="{{ this.value }}"
             />
-          {{/if}}
+          {{/each}}
         </form>
         <div class="list-toolbar__actions">
           <button

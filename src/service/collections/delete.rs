@@ -44,14 +44,12 @@ fn delete_document_pool(
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<ReqContext> {
-    let def = ctx.collection_def()?;
-
     let result = run_pool_write(
         ctx,
         None,
         |inner| delete_document_in_conn(inner, id, locale_config),
         |ctx, result| {
-            ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+            ctx.publish_delete_event(id, result.event.clone());
             // Deleting an auth document revokes that user — tear down their live streams
             // post-commit. This applies to BOTH hard and soft delete: the per-request
             // evaluator resolves users via `find_by_id`, which excludes soft-deleted
@@ -102,12 +100,11 @@ fn delete_document_conn(
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<ReqContext> {
-    let def = ctx.collection_def()?;
     let result = delete_document_in_conn(ctx, id, locale_config)?;
 
     ctx.clear_cache();
 
-    ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+    ctx.publish_delete_event(id, result.event);
     // Deleting an auth document revokes that user — tear down their live streams
     // (conn mode fires immediate). Applies to both hard and soft delete: a
     // soft-deleted user is rejected by the evaluator's `find_by_id` on new

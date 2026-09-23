@@ -8,7 +8,7 @@ use axum::{
     Extension,
     response::{IntoResponse, Response},
 };
-use tokio::task;
+use tokio::task::JoinError;
 use tracing::error;
 
 use crate::{
@@ -23,7 +23,8 @@ use crate::{
         },
     },
     core::{
-        AuthUser, CollectionDefinition, Document, ReqContext, SharedStorage, upload::UploadedFile,
+        AuthUser, CollectionDefinition, Document, ReqContext, SharedStorage,
+        spawn_blocking_in_label_locale, upload::UploadedFile,
     },
     db::{BoxedConnection, LocaleContext},
     service::{
@@ -294,7 +295,7 @@ async fn spawn_update(
     def: &CollectionDefinition,
     auth_user: Option<&Extension<AuthUser>>,
     input: UpdateInput,
-) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
+) -> Result<Result<service::WriteResult, ServiceError>, JoinError> {
     let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
     // The unpublish branch reads the row via `find_by_id_raw`, which needs
     // a `LocaleContext` to emit `title__en`/`title__de` for localized
@@ -312,7 +313,7 @@ async fn spawn_update(
         input,
     };
 
-    task::spawn_blocking(move || update_document_blocking(args)).await
+    spawn_blocking_in_label_locale(move || update_document_blocking(args)).await
 }
 
 /// Process a form update for a collection item (called from `update_action.rs`).
@@ -344,7 +345,9 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
         Err(msg) => return toast_only_error(&msg),
     };
 
-    // Field and collection write access are checked inside the service write.
+    // Field and collection write access, and the password policy, are checked
+    // inside the service write — a violation comes back as a `password` field
+    // error the form re-render shows in the viewer's locale.
     let password = form.take_password(&def);
 
     // Likewise kept: an error re-render that drops the lock box would post no
@@ -359,13 +362,6 @@ pub(in crate::admin::handlers::collections) async fn do_update(req: UpdateReques
         Some(should_lock) => LockUpdate::Set(should_lock),
         None => LockUpdate::Skip,
     };
-
-    if let Some(ref pw) = password
-        && !pw.is_empty()
-        && let Err(e) = state.config.auth.password_policy.validate(pw)
-    {
-        return toast_only_error(&e.to_string()).into_response();
-    }
 
     let form_for_error = form.clone();
 

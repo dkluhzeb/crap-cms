@@ -2,10 +2,19 @@
 //!
 //! Used where row-level access constraints must be enforced without a DB query:
 //! - **Event streams** (SSE, gRPC `Subscribe`) — gate each event by the
-//!   subscriber's read constraints.
+//!   subscriber's read constraints, judged against the stored row the event
+//!   carries for that purpose (`EventGateSnapshot`).
 //! - **Relationship/join population** — gate each embedded target row by the
 //!   target collection's view constraints, matched against the raw cached
 //!   document (see `populate::helpers::target_row_visible`).
+//! - **Draft reads** — gate a draft version snapshot, which bypasses the SQL
+//!   `WHERE`, by the view's row constraint (see `db::ops::find_by_id_full`).
+//!
+//! A caller holding a [`Document`](crate::core::Document) judges it through
+//! [`matches_document`] (or snapshots it with [`constraint_row`]), never by
+//! passing `doc.fields` alone: a document keeps `id` and the timestamps outside
+//! its field map, and a constraint naming them (`{ id = user.id }`) must see
+//! the row's columns as SQL sees them.
 //!
 //! It evaluates the same `FilterClause` types that `Find` compiles to SQL WHERE
 //! clauses, and is **exact** for the shapes access rules should use — equality
@@ -18,21 +27,49 @@
 //! for realistic data (only `SQLite`'s exotic mixed-type affinity edges, which
 //! aren't a sensible access constraint, are left unreplicated). Keep access
 //! rules to equality/membership/presence on your own fields (the documented
-//! guidance) and the two paths agree. There is intentionally no
-//! operator-rejection here: enforcement is by convention + documentation, not by
-//! narrowing what a Lua hook may return.
+//! guidance) and the two paths agree. A scalar has-many list is matched element
+//! by element with the SQL builder's list reading (see `super::elements`), and
+//! a path into array or blocks rows asks for some row that satisfies it, as the
+//! SQL subquery does (see `rows`).
+//!
+//! A field the data holds as `null` is a NULL column. A top-level field the
+//! data does not carry at all is **unknown** — a partial or empty document
+//! says nothing about it — so no operator matches it, negative ones included
+//! (fail-closed). Inside a row's JSON a
+//! missing key stays NULL, as SQL's `json_extract` reads it.
+//!
+//! There is intentionally no operator-rejection here: enforcement is by
+//! convention + documentation, not by narrowing what a Lua hook may return.
 
-use std::{cmp::Ordering, collections::HashMap};
+mod document;
+mod like;
+mod lists;
+mod presence;
+mod rows;
+mod schema;
 
-use regex::{Regex, escape};
+use std::cmp::Ordering;
+
 use serde_json::Value;
 
+pub use self::document::{constraint_row, matches_document};
+
+use self::{
+    like::matches_like,
+    lists::{list_elements, matches_list, reference_ids},
+    presence::{lookup, matches_null},
+    rows::matches_row_path,
+    schema::{Leaf, Schema},
+};
 use crate::{
     core::{
         DocumentFields, FieldDefinition, FieldType, canonical_operand, checkbox_value,
-        flatten_group_fields, parse_bool, parse_number, prefixed_name, walk_leaf_fields,
+        flatten_group_fields, parse_bool, parse_number,
     },
-    db::{Filter, FilterClause, FilterOp, query::helpers::normalize_date_value},
+    db::{
+        Filter, FilterClause, FilterOp,
+        query::helpers::{ListPlace, normalize_date_value},
+    },
 };
 
 /// Evaluate filter clauses against in-memory document data, coercing comparisons
@@ -45,7 +82,10 @@ use crate::{
 /// compare (`"1" != "true"`) and fails OPEN versus SQL on Checkbox/Number.
 ///
 /// Returns `true` if all clauses match (AND semantics, same as SQL WHERE).
-/// Returns `false` (fail-closed) if a referenced field is missing/null.
+/// A field the data holds as `null` reads as a SQL NULL: only `not_exists`
+/// matches it. A top-level field the data does not carry at all cannot be
+/// judged, so no operator matches it — not even a negative one (fail-closed):
+/// a partial or empty payload never satisfies a constraint on a field it lacks.
 /// Returns `true` for empty constraints (no filters = no restrictions).
 #[must_use]
 pub fn matches_constraints_typed(
@@ -57,15 +97,24 @@ pub fn matches_constraints_typed(
         return true;
     }
 
-    let types = field_type_map(fields);
-
     // Constraints name a group's sub-field by its flat path (`seo__owner`),
     // while documents carry the group nested.
     let flat = flatten_group_fields(data, fields);
 
+    matches_flat(&flat, constraints, fields)
+}
+
+/// Evaluate `constraints` (AND) against data whose groups are already flat.
+fn matches_flat(
+    flat: &DocumentFields,
+    constraints: &[FilterClause],
+    fields: &[FieldDefinition],
+) -> bool {
+    let schema = Schema::new(fields);
+
     constraints
         .iter()
-        .all(|clause| matches_clause(&flat, clause, &types))
+        .all(|clause| matches_clause(flat, clause, &schema))
 }
 
 /// `matches_constraints_typed` with no field-type information — a blind string
@@ -76,57 +125,79 @@ pub(crate) fn matches_constraints(data: &DocumentFields, constraints: &[FilterCl
     matches_constraints_typed(data, constraints, &[])
 }
 
-/// Build a flat-field-name → type map (`meta__color` → …) for the field tree.
-fn field_type_map(fields: &[FieldDefinition]) -> HashMap<String, FieldType> {
-    let mut types = HashMap::new();
-    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
-        types.insert(prefixed_name(prefix, &field.name), field.field_type.clone());
-        Ok(())
-    });
-    types
-}
-
 /// Evaluate one [`FilterClause`] tree node against document data, recursing
 /// through `And`/`Or`. An empty `And` matches (`all` over none is `true`); an
 /// empty `Or` does not (`any` over none is `false`) — the same identities the
 /// SQL builder renders as `1=1` / `1=0`.
-fn matches_clause(
-    data: &DocumentFields,
-    clause: &FilterClause,
-    types: &HashMap<String, FieldType>,
-) -> bool {
+fn matches_clause(data: &DocumentFields, clause: &FilterClause, schema: &Schema<'_>) -> bool {
     match clause {
-        FilterClause::Single(filter) => matches_filter(data, filter, types),
-        FilterClause::And(subs) => subs.iter().all(|c| matches_clause(data, c, types)),
-        FilterClause::Or(subs) => subs.iter().any(|c| matches_clause(data, c, types)),
+        FilterClause::Single(filter) => matches_filter(data, filter, schema),
+        FilterClause::And(subs) => subs.iter().all(|c| matches_clause(data, c, schema)),
+        FilterClause::Or(subs) => subs.iter().any(|c| matches_clause(data, c, schema)),
     }
 }
 
 /// Evaluate a single filter against document data.
-fn matches_filter(
-    data: &DocumentFields,
-    filter: &Filter,
-    types: &HashMap<String, FieldType>,
-) -> bool {
-    // A JSON `null` is treated identically to an absent field: SQL three-valued
-    // logic excludes NULL rows from every comparison except `IS NULL`, so a
-    // present-but-null field must NOT satisfy `Equals`/`NotEquals`/`In`/`NotIn`/
-    // `Exists` (and must satisfy `NotExists`). Without this, `value_to_string`
-    // would coerce `null` to `""` and `NotEquals`/`NotIn` would match (fail-open)
-    // while SQL excludes the row — a leak on the populate/event/snapshot paths.
-    let value = match data.get(&filter.field) {
-        Some(v) if !v.is_null() => v,
-        _ => return matches_missing_field(&filter.op),
+fn matches_filter(data: &DocumentFields, filter: &Filter, schema: &Schema<'_>) -> bool {
+    if let Some(matched) = matches_row_path(data, filter, schema.fields) {
+        return matched;
+    }
+
+    let leaf = schema.types.get(&filter.field);
+
+    // A path the payload does not carry cannot be judged: no operator — not
+    // even a negative one — matches it (fail-closed).
+    let root = match leaf {
+        Some(Leaf::References { root, .. }) => root.as_str(),
+        _ => filter.field.as_str(),
+    };
+    let Some(value) = lookup(data, root) else {
+        return false;
     };
 
-    let ft = types.get(&filter.field);
+    matches_leaf(value, &filter.op, leaf)
+}
+
+/// Evaluate an operator against the value a document carries for a leaf —
+/// a list element by element, a single value as SQL compares its column.
+fn matches_leaf(value: &Value, op: &FilterOp, leaf: Option<&Leaf>) -> bool {
+    let field_type = match leaf {
+        Some(Leaf::List(field_type)) => {
+            let elements = list_elements(Some(value), field_type, ListPlace::Column);
+
+            return matches_list(&elements, op, Some(field_type));
+        }
+        Some(Leaf::References { polymorphic, .. }) => {
+            let ids = reference_ids(Some(value), *polymorphic);
+
+            return matches_list(&ids, op, Some(&FieldType::Text));
+        }
+        Some(Leaf::Value(field_type)) => Some(field_type),
+        None => None,
+    };
+
+    // A present JSON `null` is a NULL column: SQL three-valued logic excludes
+    // NULL rows from every comparison except `IS NULL`, so it must NOT satisfy
+    // `Equals`/`NotEquals`/`In`/`NotIn`/`Exists` (and must satisfy `NotExists`).
+    // Without this, `value_to_string` would coerce `null` to `""` and
+    // `NotEquals`/`NotIn` would match (fail-open) while SQL excludes the row — a
+    // leak on the populate/event/snapshot paths.
+    if value.is_null() {
+        return matches_null(op);
+    }
+
+    matches_value(value, op, field_type)
+}
+
+/// Evaluate an operator against one present, non-null value.
+fn matches_value(value: &Value, op: &FilterOp, ft: Option<&FieldType>) -> bool {
     let value_str = value_to_string(value);
     // Operands in the form the field's values are stored in, as SQL binds them:
     // otherwise an email typed with capitals fails `equals` and passes
     // `not_equals` here while SQL decides the reverse.
     let operand = |raw: &str| canonical_operand(ft, raw).into_owned();
 
-    match &filter.op {
+    match op {
         // Equality/membership are coerced by field type so Checkbox/Number agree
         // with SQL's `coerce_filter_value` instead of a blind string compare.
         FilterOp::Equals(expected) => typed_eq(value, &operand(expected), ft),
@@ -147,8 +218,8 @@ fn matches_filter(
         FilterOp::LessThanOrEqual(expected) => {
             order_is(value, &operand(expected), Ordering::Less, true)
         }
-        FilterOp::Exists => true,     // field exists (checked above)
-        FilterOp::NotExists => false, // field exists but op says it shouldn't
+        FilterOp::Exists => true, // the value is present (checked by the caller)
+        FilterOp::NotExists => false, // present, but the op says it shouldn't be
     }
 }
 
@@ -201,13 +272,6 @@ fn num_repr(v: &Value) -> Option<f64> {
     }
 }
 
-/// Handle filters when the field is missing from data.
-/// Fail-closed: missing field means the filter doesn't match,
-/// except for `NotExists` which expects the field to be absent.
-fn matches_missing_field(op: &FilterOp) -> bool {
-    matches!(op, FilterOp::NotExists)
-}
-
 /// Convert a JSON value to its string representation for comparison.
 fn value_to_string(v: &Value) -> String {
     match v {
@@ -246,42 +310,6 @@ fn compare_typed(value: &Value, expected: &str) -> Option<Ordering> {
     }
 }
 
-/// SQL `LIKE` matching: `%` matches any run of characters, `_` one character,
-/// and `\` escapes the next one. Agrees with the SQL backends so the in-memory
-/// and SQL paths decide alike:
-/// - literal characters are regex-escaped, so a `.`/`(`/`[` matches itself (an
-///   over-match here would fail open);
-/// - `%` spans line breaks, as in SQL;
-/// - ASCII case is folded on both sides: `SQLite` `LIKE` is ASCII-case-insensitive
-///   and Postgres uses `ILIKE`; ASCII-only folding tracks `SQLite` and stays at
-///   most stricter than `ILIKE` for non-ASCII (fail-closed);
-/// - a pattern ending in a lone `\` matches nothing (the SQL path rejects it).
-fn matches_like(value: &str, pattern: &str) -> bool {
-    let Some(body) = like_to_regex(&pattern.to_ascii_lowercase()) else {
-        return false;
-    };
-
-    Regex::new(&format!("(?s)^{body}$")).is_ok_and(|re| re.is_match(&value.to_ascii_lowercase()))
-}
-
-/// Translate a `LIKE` pattern to a regex body, or `None` when it ends in a
-/// lone escape character.
-fn like_to_regex(pattern: &str) -> Option<String> {
-    let mut body = String::with_capacity(pattern.len() * 2);
-    let mut chars = pattern.chars();
-
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => body.push_str(&escape(&chars.next()?.to_string())),
-            '%' => body.push_str(".*"),
-            '_' => body.push('.'),
-            other => body.push_str(&escape(&other.to_string())),
-        }
-    }
-
-    Some(body)
-}
-
 #[cfg(test)]
 mod tests {
     use std::slice::from_ref;
@@ -295,36 +323,6 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
-    }
-
-    /// `Like` must treat regex metacharacters in the pattern as literals (SQL
-    /// semantics), not as regex — otherwise in-memory matching over-matches
-    /// relative to SQL, a fail-open on the access-gating path.
-    #[test]
-    fn matches_like_treats_metacharacters_literally() {
-        // `.` is a literal dot, not "any char": "a.c" matches, "axc" must not.
-        assert!(matches_like("a.c", "a.c"));
-        assert!(!matches_like("axc", "a.c"));
-
-        // SQL wildcards still work: `%` = any run, `_` = any single char.
-        assert!(matches_like("axc", "a%c"));
-        assert!(matches_like("axc", "a_c"));
-
-        // Regex group/alternation metachars are literal too.
-        assert!(matches_like("a(b)c", "a(b)c"));
-        assert!(!matches_like("ab", "a|b"));
-    }
-
-    /// `Like` is ASCII-case-insensitive on both sides, matching `SQLite` `LIKE` /
-    /// Postgres `ILIKE`, so the in-memory and SQL paths agree.
-    #[test]
-    fn matches_like_is_ascii_case_insensitive() {
-        assert!(matches_like("Hello", "hello"));
-        assert!(matches_like("hello", "HELLO"));
-        assert!(matches_like("ALICE@X.COM", "alice@%"));
-        assert!(matches_like("Bob", "b_b"));
-        // Non-letters and structure still matter.
-        assert!(!matches_like("hellp", "hello"));
     }
 
     fn eq(field: &str, value: &str) -> FilterClause {
@@ -489,52 +487,6 @@ mod tests {
         assert!(!matches_constraints(&d, &[neq("status", "published")]));
     }
 
-    // ── Missing field (fail-closed) ─────────────────────────────────
-
-    #[test]
-    fn missing_field_fails_closed() {
-        let d = data(&[("title", json!("hello"))]);
-        assert!(!matches_constraints(&d, &[eq("owner", "user1")]));
-    }
-
-    #[test]
-    fn missing_field_not_exists_matches() {
-        let d = data(&[("title", json!("hello"))]);
-        assert!(matches_constraints(
-            &d,
-            &[FilterClause::Single(Filter {
-                field: "deleted".to_string(),
-                op: FilterOp::NotExists,
-            })]
-        ));
-    }
-
-    // ── Exists / NotExists ──────────────────────────────────────────
-
-    #[test]
-    fn exists_with_field_present() {
-        let d = data(&[("email", json!("a@b.com"))]);
-        assert!(matches_constraints(
-            &d,
-            &[FilterClause::Single(Filter {
-                field: "email".to_string(),
-                op: FilterOp::Exists,
-            })]
-        ));
-    }
-
-    #[test]
-    fn exists_with_field_absent() {
-        let d = data(&[("name", json!("test"))]);
-        assert!(!matches_constraints(
-            &d,
-            &[FilterClause::Single(Filter {
-                field: "email".to_string(),
-                op: FilterOp::Exists,
-            })]
-        ));
-    }
-
     // ── Contains ────────────────────────────────────────────────────
 
     /// `contains` folds ASCII case like SQL `LIKE` / `ILIKE`, so the in-memory
@@ -549,22 +501,6 @@ mod tests {
                 op: FilterOp::Contains("WORLD".to_string()),
             })]
         ));
-    }
-
-    /// `%` matches across line breaks, as it does in SQL.
-    #[test]
-    fn matches_like_spans_newlines() {
-        assert!(matches_like("line one\nline two", "line%two"));
-    }
-
-    /// A backslash escapes `%` and `_` in a `like` pattern, as `ESCAPE '\\'`
-    /// does in SQL.
-    #[test]
-    fn matches_like_honors_backslash_escapes() {
-        assert!(matches_like("100%", "100\\%"));
-        assert!(!matches_like("1000", "100\\%"));
-        assert!(matches_like("a_b", "a\\_b"));
-        assert!(!matches_like("axb", "a\\_b"));
     }
 
     #[test]
@@ -808,67 +744,6 @@ mod tests {
         // c matches but neither d nor e does → the AND arm fails, no match.
         let miss = data(&[("c", json!("3")), ("e", json!("nope"))]);
         assert!(!matches_constraints(&miss, from_ref(&clause)));
-    }
-
-    // ── Null values (SQL three-valued logic) ───────────────────────
-
-    /// A JSON `null` is treated identically to an absent field, mirroring SQL:
-    /// every comparison against NULL yields NULL (not true), so the row is
-    /// excluded from `Equals`/`In` *and* from `NotEquals`/`NotIn`. The DB layer
-    /// maps a SQL NULL column to `Value::Null` (a present key with a null value),
-    /// so this must not coerce to `""` — doing so would make `NotEquals`/`NotIn`
-    /// match (fail-open) while SQL excludes the row.
-
-    #[test]
-    fn null_value_equals_does_not_match() {
-        // SQL: `field = ''` is NULL for a NULL column → row excluded.
-        let d = data(&[("field", Value::Null)]);
-        assert!(!matches_constraints(&d, &[eq("field", "")]));
-        assert!(!matches_constraints(&d, &[eq("field", "something")]));
-    }
-
-    /// Regression for the fail-open NULL leak: `NotEquals` against a NULL field
-    /// must NOT match, because SQL `field != 'x'` is NULL (excluded) when the
-    /// column is NULL. Previously `value_to_string(null) == ""` made `"" != "x"`
-    /// true, leaking the row on the in-memory (populate/event/snapshot) paths.
-    #[test]
-    fn null_value_not_equals_does_not_match() {
-        let d = data(&[("field", Value::Null)]);
-        assert!(!matches_constraints(&d, &[neq("field", "admin")]));
-    }
-
-    /// `In` / `NotIn` against a NULL field both exclude the row (SQL: `field IN
-    /// (...)` and `field NOT IN (...)` are NULL for a NULL column).
-    #[test]
-    fn null_value_membership_does_not_match() {
-        let d = data(&[("field", Value::Null)]);
-        let in_clause = FilterClause::Single(Filter {
-            field: "field".to_string(),
-            op: FilterOp::In(vec!["a".to_string(), "b".to_string()]),
-        });
-        let not_in_clause = FilterClause::Single(Filter {
-            field: "field".to_string(),
-            op: FilterOp::NotIn(vec!["a".to_string(), "b".to_string()]),
-        });
-        assert!(!matches_constraints(&d, from_ref(&in_clause)));
-        assert!(!matches_constraints(&d, from_ref(&not_in_clause)));
-    }
-
-    /// `Exists` is `IS NOT NULL` in SQL, so a NULL field does NOT exist;
-    /// `NotExists` (`IS NULL`) does match it.
-    #[test]
-    fn null_value_exists_semantics_match_sql() {
-        let d = data(&[("field", Value::Null)]);
-        let exists = FilterClause::Single(Filter {
-            field: "field".to_string(),
-            op: FilterOp::Exists,
-        });
-        let not_exists = FilterClause::Single(Filter {
-            field: "field".to_string(),
-            op: FilterOp::NotExists,
-        });
-        assert!(!matches_constraints(&d, from_ref(&exists)));
-        assert!(matches_constraints(&d, from_ref(&not_exists)));
     }
 
     // ── Field-type-aware equality (Checkbox / Number) ───────────────

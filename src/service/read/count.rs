@@ -33,10 +33,7 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let def = ctx.collection_def()?;
 
     reject_unreadable_query_fields(
-        hooks,
-        def,
-        ctx.slug,
-        ctx.user,
+        ctx,
         input.locale_ctx.map(LocaleContext::access_locale),
         &QueryFieldRefs {
             filters: input.filters,

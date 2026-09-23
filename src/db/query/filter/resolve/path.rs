@@ -3,13 +3,16 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, FieldType, find_field};
-use crate::db::query::helpers::join_table;
-use crate::db::query::{column_read_expr, is_valid_identifier};
+use crate::core::{
+    BLOCK_TYPE_KEY, FieldDefinition, FieldType, find_field, flatten_array_sub_fields,
+};
+use crate::db::query::filter::elements::ListLeaf;
+use crate::db::query::helpers::{join_table, qualified_ident};
+use crate::db::query::{column_read_expr, is_valid_identifier, qualified_column_read_expr};
 use crate::db::{DbConnection, LocaleContext};
 
 use super::blocks::walk_block_fields;
-use super::lookup::lookup_column_field_type;
+use super::lookup::lookup_column_field;
 use super::types::{ResolvedFilter, SubqueryCondition};
 
 /// Resolve a dot-notation filter field to its SQL representation.
@@ -20,7 +23,7 @@ use super::types::{ResolvedFilter, SubqueryCondition};
 /// based on the root field type:
 /// - **Array** → subquery with typed column on join table
 /// - **Blocks** → subquery with `json_extract` (and `json_each` for nesting)
-/// - **Relationship** (has-many) → subquery on `related_id`
+/// - **Relationship / Upload** (has-many) → subquery on the junction's `related_id`
 ///
 /// `locale_ctx` drives per-locale filtering on junction tables: when the
 /// target array/blocks/relationship field is `localized` and the query is
@@ -36,15 +39,7 @@ pub(in crate::db::query::filter) fn resolve_filter(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<ResolvedFilter> {
     if !field.contains('.') {
-        let field_type = lookup_column_field_type(field, fields);
-
-        // Localized columns resolve HERE, at the single point the parent-table
-        // comparand is built — the SELECT, the sort and the keyset take the
-        // same expression, so a filter matches the values the read returns.
-        return Ok(ResolvedFilter::Column {
-            expr: column_read_expr(field, fields, locale_ctx)?,
-            field_type,
-        });
+        return resolve_column(field, slug, fields, locale_ctx);
     }
 
     // Guarded by early return above: field.contains('.') is true here
@@ -81,13 +76,42 @@ pub(in crate::db::query::filter) fn resolve_filter(
     match field_def.field_type {
         FieldType::Array => resolve_array_filter(ctx),
         FieldType::Blocks => resolve_blocks_filter(ctx),
-        FieldType::Relationship => resolve_relationship_filter(ctx),
+        FieldType::Relationship | FieldType::Upload => resolve_relationship_filter(ctx),
         _ => bail!(
             "Field '{}' (type {:?}) does not support sub-field filtering",
             root,
             field_def.field_type
         ),
     }
+}
+
+/// Resolve a parent-table column filter.
+///
+/// Localized columns resolve HERE, at the single point the parent-table
+/// comparand is built — the SELECT, the sort and the keyset take the same
+/// expression, so a filter matches the values the read returns. A scalar
+/// has-many column is read qualified by its table: its filter expands the list
+/// in a subquery, whose own columns would otherwise shadow the bare name.
+fn resolve_column(
+    field: &str,
+    slug: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<ResolvedFilter> {
+    let leaf = lookup_column_field(field, fields);
+    let list = leaf.and_then(ListLeaf::of);
+
+    let expr = if list.is_some() {
+        qualified_column_read_expr(slug, field, fields, locale_ctx)?
+    } else {
+        column_read_expr(field, fields, locale_ctx)?
+    };
+
+    Ok(ResolvedFilter::Column {
+        expr,
+        field_type: leaf.map(|f| f.field_type.clone()),
+        list,
+    })
 }
 
 /// Resolved context for sub-field filter helpers. Built once in
@@ -120,22 +144,24 @@ fn resolve_array_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
         // Dotted path inside array — check if first segment is a Group sub-field.
         let first_seg = &ctx.rest[..dot];
         let remaining = &ctx.rest[dot + 1..];
-        let sub_def = ctx.field_def.fields.iter().find(|f| f.name == first_seg);
+        let sub_def = array_sub_field(ctx.field_def, first_seg);
         match sub_def.map(|f| &f.field_type) {
             Some(FieldType::Group) => {
                 // Group sub-fields in arrays are stored as JSON TEXT columns.
-                // Access nested values via json_extract.
-                let extract_expr = ctx.conn.json_extract_expr(first_seg, remaining);
-                let field_type = sub_def
-                    .and_then(|g| find_field(remaining, &g.fields))
-                    .map(|f| f.field_type.clone());
+                // Access nested values via json_extract, reading the column
+                // qualified by its join table: a has-many list inside the group
+                // is expanded in a subquery whose own columns would shadow it.
+                let column = qualified_ident(Some(ctx.join_table.as_str()), first_seg);
+                let extract_expr = ctx.conn.json_extract_expr(&column, remaining);
+                let leaf = sub_def.and_then(|g| find_field(remaining, &g.fields));
                 Ok(ResolvedFilter::Subquery {
                     join_table: ctx.join_table,
                     parent_table: ctx.slug.to_string(),
                     condition: SubqueryCondition::Json {
                         each_joins: vec![],
                         extract_expr,
-                        field_type,
+                        field_type: leaf.map(|f| f.field_type.clone()),
+                        list: leaf.and_then(ListLeaf::of),
                     },
                     locale_constraint: ctx.locale_constraint,
                 })
@@ -148,22 +174,26 @@ fn resolve_array_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
         }
     } else {
         // Simple sub-field — direct typed column on join table.
-        let field_type = ctx
-            .field_def
-            .fields
-            .iter()
-            .find(|f| f.name == ctx.rest)
-            .map(|f| f.field_type.clone());
+        let leaf = array_sub_field(ctx.field_def, ctx.rest);
         Ok(ResolvedFilter::Subquery {
             join_table: ctx.join_table,
             parent_table: ctx.slug.to_string(),
             condition: SubqueryCondition::Column {
                 col: ctx.rest.to_string(),
-                field_type,
+                field_type: leaf.map(|f| f.field_type.clone()),
+                list: leaf.and_then(ListLeaf::of),
             },
             locale_constraint: ctx.locale_constraint,
         })
     }
+}
+
+/// The sub-field `name` of an array's rows. Layout wrappers are transparent
+/// in a row, the way its join table's columns are.
+fn array_sub_field<'a>(array: &'a FieldDefinition, name: &str) -> Option<&'a FieldDefinition> {
+    flatten_array_sub_fields(&array.fields)
+        .into_iter()
+        .find(|f| f.name == name)
 }
 
 fn resolve_blocks_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
@@ -182,7 +212,7 @@ fn resolve_blocks_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
             bail!("Invalid segment '{}' in filter path '{}'", seg, ctx.field);
         }
     }
-    let (each_joins, extract_expr, field_type) = walk_block_fields(
+    let (each_joins, extract_expr, field_type, list) = walk_block_fields(
         ctx.conn,
         &rest_parts,
         &ctx.field_def.blocks,
@@ -196,6 +226,7 @@ fn resolve_blocks_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
             each_joins,
             extract_expr,
             field_type,
+            list,
         },
         locale_constraint: ctx.locale_constraint,
     })
@@ -227,10 +258,7 @@ fn resolve_relationship_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> 
     Ok(ResolvedFilter::Subquery {
         join_table: ctx.join_table,
         parent_table: ctx.slug.to_string(),
-        condition: SubqueryCondition::Column {
-            col: "related_id".to_string(),
-            field_type: Some(FieldType::Text),
-        },
+        condition: SubqueryCondition::RelatedId,
         locale_constraint: ctx.locale_constraint,
     })
 }
@@ -262,9 +290,14 @@ mod tests {
         let (_dir, conn) = test_conn();
         let resolved = resolve_filter(&conn, "status", "posts", &[], None).unwrap();
         match resolved {
-            ResolvedFilter::Column { expr, field_type } => {
+            ResolvedFilter::Column {
+                expr,
+                field_type,
+                list,
+            } => {
                 assert_eq!(expr, "\"status\"");
                 assert_eq!(field_type, None);
+                assert!(list.is_none());
             }
             other => panic!("Expected Column, got {other:?}"),
         }
@@ -314,9 +347,14 @@ mod tests {
                 assert_eq!(parent_table, "posts");
                 assert_eq!(locale_constraint, None);
                 match condition {
-                    SubqueryCondition::Column { col, field_type } => {
+                    SubqueryCondition::Column {
+                        col,
+                        field_type,
+                        list,
+                    } => {
                         assert_eq!(col, "name");
                         assert_eq!(field_type, Some(FieldType::Text));
+                        assert!(list.is_none());
                     }
                     other => panic!("Expected Column, got {other:?}"),
                 }
@@ -339,9 +377,13 @@ mod tests {
                     each_joins,
                     extract_expr,
                     field_type,
+                    ..
                 } => {
                     assert!(each_joins.is_empty());
-                    assert_eq!(extract_expr, "json_extract(address, '$.city')");
+                    assert_eq!(
+                        extract_expr,
+                        "json_extract(\"posts_items\".\"address\", '$.city')"
+                    );
                     assert_eq!(field_type, Some(FieldType::Text));
                 }
                 other => panic!("Expected Json, got {other:?}"),
@@ -381,6 +423,7 @@ mod tests {
                     each_joins,
                     extract_expr,
                     field_type,
+                    ..
                 } => {
                     assert!(each_joins.is_empty());
                     assert_eq!(extract_expr, "json_extract(data, '$.body')");
@@ -404,15 +447,128 @@ mod tests {
                 ..
             } => {
                 assert_eq!(join_table, "posts_tags");
-                match condition {
-                    SubqueryCondition::Column { col, field_type } => {
-                        assert_eq!(col, "related_id");
-                        assert_eq!(field_type, Some(FieldType::Text));
-                    }
-                    other => panic!("Expected Column, got {other:?}"),
-                }
+                assert!(matches!(condition, SubqueryCondition::RelatedId));
             }
             other => panic!("Expected Subquery, got {other:?}"),
+        }
+    }
+
+    /// Regression: a has-many upload keeps its ids in a junction table exactly
+    /// like a has-many relationship, and the query validation accepts
+    /// `gallery.id` — but the resolver only routed relationships, so the
+    /// filter failed with "does not support sub-field filtering".
+    #[test]
+    fn resolve_filter_has_many_upload() {
+        let (_dir, conn) = test_conn();
+        let fields = vec![
+            FieldDefinition::builder("gallery", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", true))
+                .build(),
+        ];
+
+        let resolved = resolve_filter(&conn, "gallery.id", "posts", &fields, None).unwrap();
+
+        match resolved {
+            ResolvedFilter::Subquery {
+                join_table,
+                condition,
+                ..
+            } => {
+                assert_eq!(join_table, "posts_gallery");
+                assert!(matches!(condition, SubqueryCondition::RelatedId));
+            }
+            other => panic!("Expected Subquery, got {other:?}"),
+        }
+    }
+
+    /// A scalar has-many column is a list: its filter quantifies over the
+    /// elements, reading the column qualified by its table so the element
+    /// expansion cannot shadow it.
+    #[test]
+    fn resolve_filter_scalar_has_many_column_is_a_qualified_list() {
+        let (_dir, conn) = test_conn();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build(),
+        ];
+
+        let resolved = resolve_filter(&conn, "tags", "posts", &fields, None).unwrap();
+
+        match resolved {
+            ResolvedFilter::Column {
+                expr,
+                field_type,
+                list,
+            } => {
+                assert_eq!(expr, "\"posts\".\"tags\"");
+                assert_eq!(field_type, Some(FieldType::Text));
+                assert_eq!(list, Some(ListLeaf::Scalar(FieldType::Text)));
+            }
+            other => panic!("Expected Column, got {other:?}"),
+        }
+    }
+
+    /// A scalar has-many sub-field of an array row is a list too.
+    #[test]
+    fn resolve_filter_scalar_has_many_array_sub_field_is_a_list() {
+        let (_dir, conn) = test_conn();
+        let tags = FieldDefinition::builder("tags", FieldType::Number)
+            .has_many(true)
+            .build();
+        let fields = vec![make_array_field("items", vec![tags])];
+
+        let resolved = resolve_filter(&conn, "items.tags", "posts", &fields, None).unwrap();
+
+        match resolved {
+            ResolvedFilter::Subquery {
+                condition: SubqueryCondition::Column { list, .. },
+                ..
+            } => assert_eq!(list, Some(ListLeaf::Scalar(FieldType::Number))),
+            other => panic!("Expected a Column subquery, got {other:?}"),
+        }
+    }
+
+    /// A has-many relationship sub-field of an array row stores its id list
+    /// in its column, which its filter reads as a list of ids.
+    #[test]
+    fn resolve_filter_has_many_reference_array_sub_field_is_a_list() {
+        let (_dir, conn) = test_conn();
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_has_many_field("related", "tags")],
+        )];
+
+        let resolved = resolve_filter(&conn, "items.related", "posts", &fields, None).unwrap();
+
+        match resolved {
+            ResolvedFilter::Subquery {
+                condition: SubqueryCondition::Column { list, .. },
+                ..
+            } => assert_eq!(list, Some(ListLeaf::References { polymorphic: false })),
+            other => panic!("Expected a Column subquery, got {other:?}"),
+        }
+    }
+
+    /// Regression: an array sub-field inside a layout row was looked up among
+    /// the array's direct sub-fields only, so its filter lost the field's type
+    /// — a number compared as text. Layout wrappers are transparent in a row.
+    #[test]
+    fn resolve_filter_array_sub_field_inside_a_row_keeps_its_type() {
+        let (_dir, conn) = test_conn();
+        let row = FieldDefinition::builder("layout", FieldType::Row)
+            .fields(vec![make_field("width", FieldType::Number, false)])
+            .build();
+        let fields = vec![make_array_field("items", vec![row])];
+
+        let resolved = resolve_filter(&conn, "items.width", "posts", &fields, None).unwrap();
+
+        match resolved {
+            ResolvedFilter::Subquery {
+                condition: SubqueryCondition::Column { field_type, .. },
+                ..
+            } => assert_eq!(field_type, Some(FieldType::Number)),
+            other => panic!("Expected a Column subquery, got {other:?}"),
         }
     }
 

@@ -5,11 +5,14 @@
 //! empty half (`"col/"` / `"/id"`), the back-reference reader silently accepted
 //! them — so a malformed ref could be dropped on one path and kept on another.
 
+/// What separates the collection from the id.
+pub(crate) const SEPARATOR: &str = "/";
+
 /// Parse `"collection/id"` into `(collection, id)`. Requires a `/` separator and
 /// a non-empty collection **and** id; returns `None` otherwise. Slicing is on a
 /// `char`-boundary split so multi-byte UTF-8 never panics.
 pub(crate) fn parse(s: &str) -> Option<(String, String)> {
-    let (collection, id) = s.split_once('/')?;
+    let (collection, id) = s.split_once(SEPARATOR)?;
 
     if collection.is_empty() || id.is_empty() {
         return None;
@@ -22,7 +25,7 @@ pub(crate) fn parse(s: &str) -> Option<(String, String)> {
 /// inverse of [`parse`], so the read and write grammar can't drift.
 #[must_use]
 pub(crate) fn format(collection: &str, id: &str) -> String {
-    format!("{collection}/{id}")
+    format!("{collection}{SEPARATOR}{id}")
 }
 
 #[cfg(test)]

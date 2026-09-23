@@ -6,5 +6,5 @@ mod password_policy;
 mod secret_file;
 
 pub use config::{AuthConfig, RateLimitBackend, SessionCookieSameSite};
-pub use password_policy::PasswordPolicy;
+pub use password_policy::{PasswordPolicy, PasswordViolation};
 pub(crate) use secret_file::write_new_owner_only;

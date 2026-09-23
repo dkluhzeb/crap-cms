@@ -73,10 +73,11 @@ impl GlobalDefinition {
         super::GlobalDefinitionBuilder::new(slug)
     }
 
-    /// Get the display label (singular form, falls back to slug). Uses default resolution.
+    /// Get the display label (singular form, falls back to slug), resolved for
+    /// the active label locale.
     #[must_use]
     pub fn display_name(&self) -> &str {
-        resolve_label(self.labels.singular.as_ref(), &self.slug, None)
+        resolve_label(self.labels.singular.as_ref(), &self.slug)
     }
 
     /// Check if this global has versioning enabled.

@@ -74,7 +74,7 @@ Without a shared cache, each server maintains its own in-memory populate cache. 
 ```toml
 [cache]
 backend = "redis"
-redis_url = "redis://redis.example.com:6379"
+redis_url = "redis://redis.example.com:6379"   # rediss:// for TLS
 prefix = "crap:"
 ```
 
@@ -129,7 +129,19 @@ transport = "redis"
 
 Both transports use the same Redis URL configured under `[cache] redis_url` (single source of truth — no separate `[live] redis_url` key). `transport = "redis"` requires `--features redis` at build time; if the feature is missing, startup aborts with an explicit error.
 
-Events are JSON-encoded and published to the `crap:events` / `crap:invalidations` channels — the defaults of `[live] channel_prefix`. **Two deployments sharing one Redis must set different prefixes**: pub/sub is not scoped by the selected database, so identical channel names cross-deliver events between them. A prefix that overlaps the cache or rate-limit namespace on the same Redis is refused at startup. A full-mode event whose payload exceeds 512 KiB is published as a metadata event instead. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can't keep up is force-dropped with `RecvError::Lagged`.
+Events are JSON-encoded and published to the `crap:events` / `crap:invalidations` channels — the defaults of `[live] channel_prefix`. **Two deployments sharing one Redis must set different prefixes**: pub/sub is not scoped by the selected database, so identical channel names cross-deliver events between them. A prefix that overlaps the cache or rate-limit namespace on the same Redis is refused at startup. A full-mode event whose document data exceeds 512 KiB is published as a metadata event instead. Each event also carries the stored row as a gating snapshot for row-constrained subscribers, bounded separately at 512 KiB: an event whose snapshot exceeds that is published without it and reaches only subscribers without a row constraint (a constrained subscriber cannot judge it and does not receive it). The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can't keep up is force-dropped with `RecvError::Lagged`.
+
+**The event channel carries full stored rows — Redis must be trusted infrastructure.** Every write publishes the stored row it concerns as the event's gating snapshot, in both `live_mode`s, and a `full`-mode event additionally carries the row as its `data`. Both include hidden fields and fields the subscriber may not read: access and hidden-field stripping happen on the receiving node, per subscriber, never before publishing (see [Frozen Contracts — Read-surface invariants](../internals/frozen-contracts.md#read-surface-invariants)). Anyone who can `SUBSCRIBE` to the event channel therefore sees every stored value of every written document. Run the Redis used for `[live] transport = "redis"` as private, access-controlled infrastructure: require authentication (a Redis ACL user limited to the deployment's channels and keys), encrypt the connection, keep it on a private network, and do not share the instance with untrusted tenants or applications.
+
+Use a `rediss://` URL (double `s`) to connect over TLS, with the ACL user's credentials in it:
+
+```toml
+[cache]
+backend = "redis"
+redis_url = "rediss://crap:secret@redis.internal:6380/0"
+```
+
+The server certificate is verified against the operating system's trust store (on Linux, `SSL_CERT_FILE` / `SSL_CERT_DIR` point it elsewhere), so a private CA must be installed there. Verification cannot be switched off: the `redis` crate's `#insecure` URL fragment is not supported, and a URL carrying it fails to connect. The same applies to `rate_limit_redis_url`. Any Redis traffic that crosses a network you do not fully control should use `rediss://` — the event channel above is the most sensitive, but cache entries and rate-limit keys travel the same connection.
 
 Each node numbers the events it publishes independently. An event's `publisher`
 identifies the node and `sequence` increases per publisher, so detect gaps on the

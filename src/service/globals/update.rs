@@ -9,7 +9,7 @@ use crate::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
     },
     service::{
-        AfterChangeInput, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
+        AfterChangeInput, Gated, ServiceContext, ServiceError, WriteHooks, WriteInput, WriteResult,
         admit_global_update_input, helpers as svc_helpers,
         persist::{DraftDocumentArgs, draft_document},
         run_after_change_hooks, run_pool_write,
@@ -88,22 +88,24 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
 }
 
 fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    run_pool_write(
+    let (result, _) = run_pool_write(
         ctx,
         None,
-        |inner| update_global_in_conn(inner, input),
-        |ctx, result| {
-            ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+        |inner| update_global_gated(inner, input),
+        |ctx, (result, row)| {
+            ctx.publish_mutation_event(EventOperation::Update, &result.0.id, row.clone());
         },
-    )
+    )?;
+
+    Ok(result)
 }
 
 fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let result = update_global_in_conn(ctx, input)?;
+    let (result, row) = update_global_gated(ctx, input)?;
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, row);
 
     Ok(result)
 }
@@ -114,10 +116,16 @@ fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 ///
 /// Returns service-layer errors (access denied, validation, hook errors) or
 /// a backend error if persistence fails.
-pub fn update_global_in_conn(
+pub fn update_global_in_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
+    update_global_gated(ctx, input).map(|(result, _)| result)
+}
+
+/// [`update_global_in_conn`], plus the stored row the update's live event is
+/// built from.
+fn update_global_gated(
     ctx: &ServiceContext,
     mut input: WriteInput<'_>,
-) -> Result<WriteResult> {
+) -> Result<Gated<WriteResult>> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
@@ -219,9 +227,13 @@ pub fn update_global_in_conn(
         conn,
     )?;
 
+    // The global as stored, before anything is shaped or stripped for the
+    // writer: the live event is built from it.
+    let row = ctx.event_row(&doc);
+
     svc_helpers::strip_reported(ctx, write_hooks, &mut doc, input.locale_ctx)?;
 
-    Ok((doc, after_ctx))
+    Ok(((doc, after_ctx), row))
 }
 
 /// Enforce the global-update access check. Globals don't support

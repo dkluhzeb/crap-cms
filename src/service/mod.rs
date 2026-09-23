@@ -30,6 +30,8 @@
 //! - `auth/`, `jobs/`, `upload/` -- domain-specific service helpers.
 //! - `hooks/` -- read/write `*Hooks` traits + Lua impls invoked from
 //!   the service layer.
+//! - `publish` -- mutation-event and user-invalidation publishing on
+//!   a `ServiceContext`, each event built from the row the write stored.
 //! - `email/`, `helpers/`, `user_settings/`, `document_info/` --
 //!   support submodules.
 //! - `error.rs` -- `ServiceError` enum + classification helpers
@@ -62,6 +64,7 @@ pub mod jobs;
 pub mod op;
 mod orchestrate;
 mod persist;
+mod publish;
 pub(crate) mod read;
 mod types;
 pub mod upload;
@@ -76,7 +79,7 @@ pub(crate) use access::{
 pub use app_infra::{AppInfra, AppInfraBuilder, StandaloneInfra};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
-pub(crate) use types::AfterChangeInput;
+pub(crate) use types::{AfterChangeInput, EventRow, Gated};
 pub use types::{
     CountDocumentsInput, DeferredEffect, DeferredQueue, EffectOutcome, EmailContext, EventQueue,
     FindByIdInput, FindDocumentsInput, GetGlobalInput, ListVersionsInput, OpDeadline,
@@ -111,21 +114,26 @@ pub(crate) use orchestrate::run_pool_write;
 pub(crate) use persist::persist_bulk_update;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
-    CollectionStats, collection_stats, count_documents, find_document_by_id, find_documents,
-    get_global_document, read_own_document, search_documents, validate_access_constraint_locales,
-    validate_access_constraints, validate_user_filters,
+    CollectionStats, QueryFieldRefs, collection_stats, count_documents, find_document_by_id,
+    find_documents, get_global_document, is_hidden_query_path, query_field_paths,
+    read_own_document, search_documents, unreadable_query_paths,
+    validate_access_constraint_locales, validate_access_constraints, validate_user_filters,
 };
 pub(crate) use versions::{find_stored_version, read_version_snapshot, unpublish_with_snapshot};
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
+#[cfg(test)]
+pub(crate) use write::update_document_in_conn;
 pub(crate) use write::{
-    PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
-    check_create_access, check_update_access, delete_document_in_conn, owned_file_keys,
-    purge_document, stored_fields_for_update_rules, update_document_in_conn,
-    update_many_single_in_conn, warn_orphaned_files,
+    DeleteEvent, PendingDraft, admit_create_input, admit_global_update_input, admit_update_input,
+    check_create_access, check_update_access, create_document_gated, delete_document_in_conn,
+    owned_file_keys, purge_document, read_delete_event, stored_fields_for_update_rules,
+    update_document_gated, update_many_single_in_conn, warn_orphaned_files,
 };
-pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
+pub use write::{
+    PurgeEvents, ValidateContext, create_document_in_conn, validate_document, validate_outcome,
+};
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {

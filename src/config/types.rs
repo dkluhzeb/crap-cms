@@ -23,7 +23,7 @@ use crate::config::{
     routes::RoutesConfig,
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
-use crate::core::{JwtSecret, NESTING_DEPTH, NestingDepth};
+use crate::core::{JwtSecret, NESTING_DEPTH, NestingDepth, set_default_label_locale};
 
 /// Enumerate a config struct's serde keys — implemented by
 /// `#[derive(ConfigKeys)]` (`crap-cms-macros`).
@@ -269,6 +269,11 @@ impl CrapConfig {
         // from the config rather than passed down. It is fixed for the process
         // lifetime — the first config to reach this point wins.
         depth.install(self.depth.max_nesting_depth);
+
+        // Operator-localized labels resolve against the default locale
+        // whenever no request UI locale is in scope (API, MCP, Lua schema
+        // reads), and as the fallback for a UI locale a label lacks.
+        set_default_label_locale(&self.locale.default_locale);
 
         Ok(())
     }
