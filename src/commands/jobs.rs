@@ -262,7 +262,7 @@ fn run_trigger(
         .get(&job_def.queue)
         .and_then(|q| q.retries);
 
-    let conn = pool.get().context("Failed to get DB connection")?;
+    let conn = pool.write().context("Failed to get a write connection")?;
     let job_run = query::jobs::insert_job(
         &conn,
         slug,
@@ -282,7 +282,7 @@ fn run_trigger(
 /// Cancel pending jobs, optionally filtered by slug.
 #[cfg(not(tarpaulin_include))]
 fn run_cancel(pool: &DbPool, slug: Option<String>, id: Option<String>) -> Result<()> {
-    let conn = pool.get().context("Failed to get DB connection")?;
+    let conn = pool.write().context("Failed to get a write connection")?;
 
     // A single run by id — the precise alternative to clearing a whole
     // slug, which would discard every other caller's pending work.
@@ -320,7 +320,7 @@ fn parse_purge_age(older_than: &str) -> Result<u64> {
 /// Purge old completed/failed job runs older than the specified duration.
 #[cfg(not(tarpaulin_include))]
 fn run_purge(pool: &DbPool, secs: u64) -> Result<()> {
-    let conn = pool.get().context("Failed to get DB connection")?;
+    let conn = pool.write().context("Failed to get a write connection")?;
     let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
 
     cli::success(&format!("Purged {deleted} old job run(s)"));

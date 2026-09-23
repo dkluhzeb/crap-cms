@@ -81,7 +81,7 @@ mod helpers;
 mod types;
 
 pub use cli::{Cli, Command};
-pub use helpers::{Project, cli_find, open_project};
+pub use helpers::{Project, cli_find, load_config, load_config_for_recovery, open_project};
 pub use resolve_config::resolve_config_dir;
 pub use types::{
     BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,

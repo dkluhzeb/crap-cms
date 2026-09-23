@@ -5198,10 +5198,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   The warning now fires for every empty auth collection. A user count or a
   migration status that can't be read is reported as its own warning
   instead of being taken as "no users" or "nothing pending".
-- **`jobs cancel` and `jobs purge` skipped config validation and the schema
-  sync** every other command runs when it opens a project, so on a fresh
-  project they failed on the missing jobs table and an invalid `crap.toml`
-  went unnoticed. `migrate` now validates the config before it runs, too.
+- **`jobs cancel` and `jobs purge` skipped the schema sync** every other
+  command runs when it opens a project, so on a fresh project they failed on
+  the missing jobs table.
 - **The "no blueprints yet" hint showed `crap-cms blueprint save <dir>
   <name>`**, a form the command doesn't accept, in two of its three places.
   All three now show `crap-cms blueprint save <name>`.
@@ -5217,6 +5216,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`--skip-config-validation` on the offline recovery commands** (`backup`,
+  `restore`, `db console`, and the `logs` tail). An upgrade can make an
+  existing `crap.toml` invalid, and every command refuses an invalid config —
+  including the ones needed to back up and inspect the database before fixing
+  it. With the flag, these commands print the validation error as a warning
+  and run on the config as loaded. Nothing else accepts it: a server, worker
+  or write command never runs on an invalid configuration. Every other
+  command now loads its config through one validated path.
 - **`crap.jobs.list()`** returns the defined jobs the caller may see, in slug order, with each job's queue, schedule, timeout, priority, retries, concurrency, `skip_if_running` and label. Lua could read job runs but had no way to enumerate the jobs that produce them, so anything building on the job system had to hardcode a list of slugs that drifted from the definitions. The job's `access` rule gates it: a job the caller may not read is absent, the same visibility rule `crap.jobs.list_runs` applies.
 - **`ListJobs` and the MCP `list_jobs` tool describe a job identically.** The gRPC response gained the job's default `priority`, and the MCP tool gained `retries`, `concurrency`, `skip_if_running` and `label`. Both now render one shared description, so the same job cannot describe itself differently depending on which surface is asked. `crap-cms jobs list` shows the resolved retry count as a new column.
 - **The version restore confirmation lists the version's files that storage no

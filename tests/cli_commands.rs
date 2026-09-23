@@ -23,6 +23,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
+use crap_cms::commands::db::{BackupOpts, RestoreOpts};
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::{CollectionDefinition, DocumentFields};
@@ -454,7 +455,10 @@ fn cmd_backup_and_restore_carry_the_generated_auth_secret() {
     let secret = std::fs::read_to_string(&secret_path).expect("config load generates the secret");
 
     let backup_output = tmp.path().join("backups");
-    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+    let opts = BackupOpts::builder()
+        .output(Some(backup_output.clone()))
+        .build();
+    commands::db::backup(&config_dir, opts).unwrap();
 
     let backup_dir = std::fs::read_dir(&backup_output)
         .unwrap()
@@ -483,7 +487,8 @@ fn cmd_backup_and_restore_carry_the_generated_auth_secret() {
     assert_eq!(manifest["includes_secret"], true);
 
     std::fs::write(&secret_path, "a-secret-generated-on-a-new-host").unwrap();
-    commands::db::restore(&config_dir, &backup_dir, false, true).unwrap();
+    let opts = RestoreOpts::builder().confirm(true).build();
+    commands::db::restore(&config_dir, &backup_dir, opts).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(&secret_path).unwrap(),
@@ -1044,7 +1049,10 @@ fn cmd_backup_creates_snapshot() {
     drop(pool);
 
     let backup_output = tmp.path().join("backups");
-    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+    let opts = BackupOpts::builder()
+        .output(Some(backup_output.clone()))
+        .build();
+    commands::db::backup(&config_dir, opts).unwrap();
 
     // The backup command creates a timestamped subdirectory
     assert!(

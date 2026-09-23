@@ -175,6 +175,12 @@ crap-cms backup --include-uploads      # → <config_dir>/backups/backup-<timest
   up with that service (S3 versioning/snapshot, or your custom backend's own
   tooling).
 
+**Already swapped the binary, and alpha.10 refuses your `crap.toml`?** Every
+command refuses an invalid config, `backup` included. Take the backup anyway
+with `crap-cms backup --include-uploads --skip-config-validation` — it prints
+the validation error as a warning and runs on the config as loaded — then fix
+the config. `restore`, `db console` and `logs` accept the same flag.
+
 The backup also carries `data/.jwt_secret` when one exists, so keep it as
 private as the secret (item 34). To go back on SQLite, run `crap-cms restore
 <backup-dir> --confirm` **with the alpha.9 binary** you are returning to (add

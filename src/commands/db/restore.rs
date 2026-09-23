@@ -17,11 +17,23 @@ use crate::{
             manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
             secret::{configured_secret_overrides, has_generated_secret, restore_secret},
         },
-        helpers,
+        helpers::{self, load_config_for_recovery},
     },
     config::{CrapConfig, UploadStorage},
+    core::Builder,
     db::{DbConnection, pool},
 };
+
+/// Options of the `restore` subcommand.
+#[derive(Builder, Clone, Copy)]
+pub struct RestoreOpts {
+    /// Also restore uploads from `uploads.tar.gz` if present.
+    pub include_uploads: bool,
+    /// The operator confirmed the destructive operation.
+    pub confirm: bool,
+    /// Run on a config that fails validation (recovery after an upgrade).
+    pub skip_config_validation: bool,
+}
 
 /// Handle the `restore` subcommand — replace database and optionally uploads from a backup.
 ///
@@ -30,12 +42,13 @@ use crate::{
 /// Returns an error if the backup directory is invalid, config loading
 /// fails, or any of the restore filesystem operations fails.
 #[cfg(not(tarpaulin_include))]
-pub fn restore(
-    config_dir: &Path,
-    backup_dir: &Path,
-    include_uploads: bool,
-    confirm: bool,
-) -> Result<()> {
+pub fn restore(config_dir: &Path, backup_dir: &Path, opts: RestoreOpts) -> Result<()> {
+    let RestoreOpts {
+        include_uploads,
+        confirm,
+        skip_config_validation,
+    } = opts;
+
     if !confirm {
         bail!(
             "Restore is destructive — it replaces the current database.\n\
@@ -49,7 +62,7 @@ pub fn restore(
     validate_backup_dir(&backup_dir)?;
     read_and_display_manifest(&backup_dir)?;
 
-    let (cfg, had_secret) = load_project(&config_dir)?;
+    let (cfg, had_secret) = load_project(&config_dir, skip_config_validation)?;
     let db_path = cfg.db_path(&config_dir);
 
     // Before anything is replaced, and for the whole command.
@@ -88,7 +101,7 @@ fn canonical(path: &Path) -> PathBuf {
 /// load: one the load generates holds nothing the backup's doesn't replace, so
 /// it isn't kept aside.
 #[cfg(not(tarpaulin_include))]
-fn load_project(config_dir: &Path) -> Result<(CrapConfig, bool)> {
+fn load_project(config_dir: &Path, skip_validation: bool) -> Result<(CrapConfig, bool)> {
     if !config_dir.join("crap.toml").is_file() {
         bail!(
             "{} is not a crap-cms project (no crap.toml)",
@@ -97,7 +110,7 @@ fn load_project(config_dir: &Path) -> Result<(CrapConfig, bool)> {
     }
 
     let had_secret = has_generated_secret(config_dir);
-    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
+    let cfg = load_config_for_recovery(config_dir, skip_validation)?;
 
     Ok((cfg, had_secret))
 }

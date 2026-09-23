@@ -729,10 +729,16 @@ crap-cms blueprint remove <NAME>
 #### `db console`
 
 ```bash
-crap-cms db console
+crap-cms db console [--skip-config-validation]
 ```
 
 Opens an interactive shell on the project database: `sqlite3 <path>` on SQLite, `psql <database.url>` on PostgreSQL. The client binary must be on `PATH`.
+
+| Flag | Description |
+|------|-------------|
+| `--skip-config-validation` | Run even if `crap.toml` fails validation (see below) |
+
+Every command refuses a `crap.toml` that fails validation. `--skip-config-validation` is the recovery escape hatch for when an upgrade made an existing config invalid: the command prints the validation error as a warning and runs on the config as loaded, so you can back up and inspect the database before fixing the config. Only `backup`, `restore`, `db console` and the `logs` tail accept it.
 
 #### `db cleanup`
 
@@ -880,13 +886,14 @@ crap-cms migrate fresh -y
 ### `backup` — Backup database
 
 ```bash
-crap-cms backup [-o <DIR>] [-i]
+crap-cms backup [-o <DIR>] [-i] [--skip-config-validation]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--output` | `-o` | Output directory (default: `<config>/backups/`) |
 | `--include-uploads` | `-i` | Also compress the uploads directory (the command fails if `tar` is missing or fails) |
+| `--skip-config-validation` | | Run even if `crap.toml` fails validation — back up before fixing a config an upgrade invalidated (see [`db console`](#db-console)) |
 
 ```bash
 crap-cms backup
@@ -900,13 +907,14 @@ When the auth secret is generated (`[auth] secret` is empty), the backup also co
 ### `restore` — Restore from backup
 
 ```bash
-crap-cms restore <BACKUP> [-i] [-y]
+crap-cms restore <BACKUP> [-i] [-y] [--skip-config-validation]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--include-uploads` | `-i` | Also restore uploads from `uploads.tar.gz` if present (skipped with a note when `[upload] storage` is not `local`, as with `backup`) |
 | `--confirm` | `-y` | Required — confirms the destructive operation |
+| `--skip-config-validation` | | Run even if `crap.toml` fails validation (see [`db console`](#db-console)) |
 
 Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files. Refuses while a `serve`, `work` or stdio `mcp` process or any other CLI command uses the project (they hold `data/crap.lock`), and keeps them from starting until the restore finishes. A backed-up auth secret is written back to `data/.jwt_secret`; a different secret already there is kept as `data/.jwt_secret.pre-restore-<timestamp>`, so repeated restores never overwrite an earlier one — unless the restore's own config load generated it, when it holds nothing worth keeping. When `crap.toml` sets `[auth] secret`, that secret takes precedence and the restore warns that the backup's secret isn't used.
 
@@ -1270,6 +1278,7 @@ View log output from file-based logging. Requires `[logging] file = true` in `cr
 |------|-------------|
 | `-f`, `--follow` | Follow log output in real time (like `tail -f`) |
 | `-n`, `--lines <N>` | Number of lines to show (default: 100) |
+| `--skip-config-validation` | Show the logs even if `crap.toml` fails validation (see [`db console`](#db-console)); not accepted by `clear`, which deletes files |
 
 **Subcommands:**
 
@@ -1277,7 +1286,7 @@ View log output from file-based logging. Requires `[logging] file = true` in `cr
 |------------|-------------|
 | `clear` | Remove old rotated log files, keeping only the current one |
 
-`-f` and `-n` shape the tail only — `logs -f clear` is refused rather than silently ignoring them.
+`-f`, `-n` and `--skip-config-validation` shape the tail only — `logs -f clear` is refused rather than silently ignoring them.
 
 ```bash
 crap-cms logs                # show last 100 lines

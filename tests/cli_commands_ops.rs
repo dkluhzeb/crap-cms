@@ -21,7 +21,8 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands::{
-    self, UserChangePasswordParams, UserLookup, user_change_password, user_lock, user_unlock,
+    self, UserChangePasswordParams, UserLookup, db::BackupOpts, user_change_password, user_lock,
+    user_unlock,
 };
 use std::sync::LazyLock;
 
@@ -1179,7 +1180,13 @@ fn cmd_backup_with_output_dir() {
     drop(pool);
 
     let backup_output = tmp.path().join("my-backups");
-    let result = commands::db::backup(&config_dir, Some(backup_output.clone()), false);
+    let result = commands::db::backup(
+        &config_dir,
+        BackupOpts::builder()
+            .output(Some(backup_output.clone()))
+            .include_uploads(false)
+            .build(),
+    );
     assert!(result.is_ok(), "backup should succeed: {:?}", result.err());
     assert!(backup_output.exists(), "backup directory should exist");
 

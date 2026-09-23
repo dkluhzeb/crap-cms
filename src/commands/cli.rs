@@ -159,6 +159,11 @@ pub enum Command {
         /// Also compress the uploads directory
         #[arg(short, long)]
         include_uploads: bool,
+
+        /// Run even if the config fails validation (recovery after an upgrade);
+        /// the validation error is printed as a warning
+        #[arg(long)]
+        skip_config_validation: bool,
     },
 
     /// Restore database (and optionally uploads) from a backup directory
@@ -173,6 +178,11 @@ pub enum Command {
         /// Confirm destructive operation (required)
         #[arg(short = 'y', long)]
         confirm: bool,
+
+        /// Run even if the config fails validation (recovery after an upgrade);
+        /// the validation error is printed as a warning
+        #[arg(long)]
+        skip_config_validation: bool,
     },
 
     /// Database tools
@@ -239,8 +249,9 @@ pub enum Command {
     Mcp,
 
     /// View and manage log files
-    // `--follow` and `--lines` shape the tail; a subcommand such as `clear`
-    // refuses them rather than silently ignoring them.
+    // `--follow`, `--lines` and `--skip-config-validation` belong to the tail;
+    // a subcommand such as `clear` refuses them rather than silently ignoring
+    // them (`clear` deletes files, so it never runs on an invalid config).
     #[command(args_conflicts_with_subcommands = true)]
     Logs {
         /// Follow log output in real time
@@ -250,6 +261,11 @@ pub enum Command {
         /// Number of lines to show (default: 100)
         #[arg(short = 'n', long, default_value = "100")]
         lines: usize,
+
+        /// Run even if the config fails validation (recovery after an upgrade);
+        /// the validation error is printed as a warning
+        #[arg(long)]
+        skip_config_validation: bool,
 
         #[command(subcommand)]
         action: Option<LogsAction>,
@@ -311,6 +327,9 @@ mod tests {
     fn logs_clear_refuses_the_tail_flags() {
         assert!(Cli::try_parse_from(["crap-cms", "logs", "-f", "clear"]).is_err());
         assert!(Cli::try_parse_from(["crap-cms", "logs", "-n", "5", "clear"]).is_err());
+        assert!(
+            Cli::try_parse_from(["crap-cms", "logs", "--skip-config-validation", "clear"]).is_err()
+        );
 
         assert!(Cli::try_parse_from(["crap-cms", "logs", "clear"]).is_ok());
         assert!(Cli::try_parse_from(["crap-cms", "logs", "-f", "-n", "5"]).is_ok());

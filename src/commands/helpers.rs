@@ -20,6 +20,7 @@ use tracing::{info, warn};
 #[cfg(unix)]
 use crate::config::JobsConfig;
 use crate::{
+    cli,
     config::{CrapConfig, LocaleConfig},
     core::{
         CollectionDefinition, Document, Registry, SharedEventTransport,
@@ -47,6 +48,50 @@ pub struct Project {
     pub lock: InstanceLock,
 }
 
+/// Load the project's config and put it into service — validated, with the
+/// process-wide limits it carries installed. The one way a CLI command reads
+/// its config: a command that skipped validation would run on a configuration
+/// the server refuses to start on.
+///
+/// # Errors
+///
+/// Returns an error if the config can't be loaded or fails validation.
+pub fn load_config(config_dir: &Path) -> Result<CrapConfig> {
+    load_config_for_recovery(config_dir, false)
+}
+
+/// [`load_config`] for the offline recovery commands (`db backup`,
+/// `db restore`, `db console`, `logs`), which accept `--skip-config-validation`.
+///
+/// An upgrade can make an existing config invalid; the operator must still be
+/// able to back up, inspect and restore the database before fixing it. With
+/// `skip_validation` the failure is reported as a warning and the command runs
+/// on the config as loaded. Nothing else accepts the flag, so a server, worker
+/// or write command never runs on an invalid configuration.
+///
+/// # Errors
+///
+/// Returns an error if the config can't be loaded, or fails validation while
+/// `skip_validation` is false.
+pub fn load_config_for_recovery(config_dir: &Path, skip_validation: bool) -> Result<CrapConfig> {
+    if !skip_validation {
+        let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
+        cfg.apply()?;
+
+        return Ok(cfg);
+    }
+
+    let cfg = CrapConfig::load_unvalidated(config_dir).context("Failed to load config")?;
+
+    if let Some(e) = cfg.validation_error() {
+        cli::warning(&format!(
+            "Config validation skipped (--skip-config-validation); the config is invalid: {e:#}"
+        ));
+    }
+
+    Ok(cfg)
+}
+
 /// Open the project for a CLI command that reads or writes data: load the
 /// config, take the instance lock shared, init Lua, create the pool, and sync
 /// the schema.
@@ -60,8 +105,7 @@ pub fn open_project(config_dir: &Path) -> Result<Project> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let config = CrapConfig::load(&config_dir).context("Failed to load config")?;
-    config.apply()?;
+    let config = load_config(&config_dir)?;
     if let Some(warning) = config.check_version() {
         warn!("{}", warning);
     }
@@ -103,11 +147,7 @@ pub fn cli_find(
 /// Load a config and put it into service, check version, and prune old log
 /// files. Shared by serve and work commands.
 pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
-    let cfg = CrapConfig::load(config_dir)?;
-
-    // Validation plus the process-wide limits the config carries, through the
-    // one chokepoint test configs go through too.
-    cfg.apply()?;
+    let cfg = load_config(config_dir)?;
 
     if let Some(warning) = cfg.check_version() {
         warn!("{}", warning);
@@ -470,6 +510,41 @@ mod tests {
     use crate::config::JOB_DRAIN_GRACE_SECS;
 
     use super::*;
+
+    /// A config that parses but fails validation: the two ports collide.
+    fn invalid_project() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 3000\ngrpc_port = 3000\n",
+        )
+        .unwrap();
+
+        tmp
+    }
+
+    /// Regression: `typegen`, `db backup`, `db restore`, `db console` and
+    /// `logs` loaded the config without validating it, so they ran on a
+    /// configuration the server refuses to start on.
+    #[test]
+    fn a_command_refuses_an_invalid_config() {
+        let tmp = invalid_project();
+
+        let err = load_config(tmp.path()).expect_err("an invalid config is refused");
+        assert!(format!("{err:#}").contains("must be different"), "{err:#}");
+
+        assert!(load_config_for_recovery(tmp.path(), false).is_err());
+    }
+
+    /// The recovery escape hatch is explicit: only the flag lets a command run
+    /// on an invalid config.
+    #[test]
+    fn a_recovery_command_runs_on_an_invalid_config_only_when_asked() {
+        let tmp = invalid_project();
+
+        let cfg = load_config_for_recovery(tmp.path(), true).expect("skipped validation");
+        assert_eq!(cfg.server.admin_port, cfg.server.grpc_port);
+    }
 
     /// The escalation to `SIGKILL` must never come before the longest job a
     /// process in this deployment is allowed to run.

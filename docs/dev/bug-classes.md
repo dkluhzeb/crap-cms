@@ -1285,7 +1285,7 @@ files changed since. Entries are dropped when the area is touched.
     rendered nowhere (now grouped in the sidebar); the `make node` scaffold
     shipped the documented stored-XSS pattern; `make hook -t field` could not
     produce its own "any field" form; the empty-auth-collection warning was
-    dead; `jobs cancel`/`purge` skipped config validation and schema sync; a
+    dead; `jobs cancel`/`purge` skipped the schema sync; a
     tutorial scenario (02) did not work as written.
   - **Post-fix review (2 Opus reviewers) found no regression from the fixes but
     surfaced two MEDs next to them**: an admin *draft* save under a non-default
@@ -1301,6 +1301,26 @@ files changed since. Entries are dropped when the area is touched.
     match became predicates) and the upgrade-guide parity gate (two new
     Breaking bullets needed guide items); plus one obsolete unit test that
     pinned the old last-wins `template_data` registration.
+    Correction recorded: the CLI lens (and the fix report after it) claimed
+    `typegen`, `db backup/restore/console` and `logs` ran on an unvalidated
+    config because they skipped `apply()`. False — `CrapConfig::load` itself
+    validates; `apply()` adds only the nesting-limit install. The real gap was
+    the reverse: an upgrade-invalidated config blocked `backup` too. Follow-up
+    (user decision): one validated load path for every command
+    (`commands::load_config`, pinned by `CONFIG_LOAD` in
+    `tests/chokepoint_copies.rs`) plus an explicit `--skip-config-validation`
+    on the offline recovery commands only, via `CrapConfig::load_unvalidated`.
+  - **D4 — the shared guard scanner was blind to `not(…)` gates.**
+    `tests/common/mod.rs` judged an item test-only by evaluating its `cfg` with
+    every non-`test` atom *on*, so `#[cfg(not(tarpaulin_include))]` — most CLI
+    entry points and `main.rs` — and `not(feature = "x")` items were blanked
+    as test code, hiding them from every guard built on `production_code`
+    (chokepoints, dispatch inventory, sink escaping, MCP scrubbing, wiring,
+    surface parity). Now satisfiability with `test` off (`can_hold`/`can_fail`
+    per sub-predicate), pinned by
+    `production_code_keeps_items_gated_on_a_negated_atom`. The first thing the
+    un-blinded scan caught: `jobs trigger` / `cancel` / `purge` wrote on a
+    READ-pool connection (now `pool.write()`).
     Gates (2026-09-23): clippy clean in both forms; unit + integration ~8,025
     green over 108 binaries; e2e 323 green (80 binaries, per binary); all five
     `gen-*` checks, `cargo fmt --check`, `crap-cms fmt --check`, `biome ci`

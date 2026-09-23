@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Error, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -163,6 +163,43 @@ impl CrapConfig {
     /// Returns an error if the file can't be read, TOML parsing fails, env
     /// substitution references an unset variable without a default, or validation fails.
     pub fn load(config_dir: &Path) -> Result<Self> {
+        Self::read(config_dir, true)
+    }
+
+    /// [`load`](Self::load) without validation — for the offline recovery
+    /// commands behind `--skip-config-validation` only, so an operator whose
+    /// config an upgrade made invalid can still back up, inspect and restore
+    /// the database. Everything else load does (parsing, env substitution,
+    /// queue defaults, secret resolution) still happens; the caller reports
+    /// [`validation_error`](Self::validation_error) itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file can't be read, TOML parsing fails, or env
+    /// substitution references an unset variable without a default.
+    pub fn load_unvalidated(config_dir: &Path) -> Result<Self> {
+        Self::read(config_dir, false)
+    }
+
+    /// What [`load`](Self::load) would refuse this config for, if anything.
+    #[must_use]
+    pub fn validation_error(&self) -> Option<Error> {
+        self.check_loaded().err()
+    }
+
+    /// The load-time validation: the locale block, then the whole config.
+    fn check_loaded(&self) -> Result<()> {
+        self.locale
+            .validate()
+            .context("Invalid locale configuration")?;
+
+        self.validate().context("Invalid configuration")
+    }
+
+    /// Read `crap.toml` (or the defaults), validating unless `validate` is
+    /// false. Validation runs before the secret is resolved, so an invalid
+    /// config never gets a generated secret written for it on a normal load.
+    fn read(config_dir: &Path, validate: bool) -> Result<Self> {
         let config_path = config_dir.join("crap.toml");
 
         if config_path.exists() {
@@ -183,12 +220,9 @@ impl CrapConfig {
             // set explicitly. See `JobsConfig::apply_queue_defaults`.
             config.jobs.apply_queue_defaults();
 
-            config
-                .locale
-                .validate()
-                .context("Invalid locale configuration")?;
-
-            config.validate().context("Invalid configuration")?;
+            if validate {
+                config.check_loaded()?;
+            }
 
             warn_on_loose_permissions(&config_path, &config);
 
@@ -530,6 +564,26 @@ dev_mode = false
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.database.path, "mydata/custom.db");
         assert!(!config.admin.dev_mode);
+    }
+
+    /// The recovery load keeps everything but the validation, and reports what
+    /// a normal load would refuse.
+    #[test]
+    fn load_unvalidated_reads_an_invalid_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 3000\ngrpc_port = 3000\n",
+        )
+        .unwrap();
+
+        assert!(CrapConfig::load(tmp.path()).is_err());
+
+        let config = CrapConfig::load_unvalidated(tmp.path()).unwrap();
+        assert_eq!(config.server.admin_port, 3000);
+
+        let err = config.validation_error().expect("the ports collide");
+        assert!(format!("{err:#}").contains("must be different"), "{err:#}");
     }
 
     #[test]

@@ -12,23 +12,40 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::{cli, commands::LogsAction, config::CrapConfig};
+use crate::{
+    cli,
+    commands::{LogsAction, load_config_for_recovery},
+    core::Builder,
+};
 
 /// File name prefix used by `tracing-appender` for rotated log files.
 const LOG_PREFIX: &str = "crap-cms.log";
+
+/// How the `logs` tail runs.
+#[derive(Builder, Clone, Copy)]
+pub struct TailOpts {
+    /// Follow log output in real time.
+    pub follow: bool,
+    /// Number of lines to show.
+    #[builder(default = 100)]
+    pub lines: usize,
+    /// Run on a config that fails validation (recovery after an upgrade).
+    pub skip_config_validation: bool,
+}
 
 /// Run the `logs` command.
 ///
 /// # Errors
 ///
 /// Returns an error if config loading or the log file operation fails.
-pub fn run(
-    config_dir: &Path,
-    action: Option<LogsAction>,
-    follow: bool,
-    lines: usize,
-) -> Result<()> {
-    let config = CrapConfig::load(config_dir)?;
+pub fn run(config_dir: &Path, action: Option<LogsAction>, tail_opts: TailOpts) -> Result<()> {
+    let TailOpts {
+        follow,
+        lines,
+        skip_config_validation,
+    } = tail_opts;
+
+    let config = load_config_for_recovery(config_dir, skip_config_validation)?;
     let log_dir = config.log_dir(config_dir);
 
     if !log_dir.exists() {

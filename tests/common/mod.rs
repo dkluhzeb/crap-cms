@@ -62,9 +62,11 @@ fn production(src: &str) -> String {
 }
 
 /// True when the `#[cfg(…)]` / `#![cfg(…)]` attribute opening `line` compiles
-/// only under `test`: the predicate is false with `test` off and every other
-/// atom on, so `all(test, …)` gates, while `not(test)`, `any(test, …)` and
-/// `all(any(test, feature = "x"), …)` are production code and are kept.
+/// only under `test`: no build with `test` off satisfies the predicate. So
+/// `all(test, …)` gates, while `not(test)`, `any(test, …)`,
+/// `all(any(test, feature = "x"), …)` and a negated other atom
+/// (`not(tarpaulin_include)`, `not(feature = "x")`) are production code and
+/// are kept.
 fn is_test_predicate(line: &str) -> bool {
     let Some(open) = line.find("cfg(") else {
         return false;
@@ -74,39 +76,65 @@ fn is_test_predicate(line: &str) -> bool {
     };
     let predicate = line[open + 4..open + close].trim();
 
-    !cfg_holds_without_test(predicate)
+    !outcomes_without_test(predicate).can_hold
 }
 
-/// Evaluate a `cfg` predicate with `test` false and every other atom true.
-fn cfg_holds_without_test(predicate: &str) -> bool {
+/// Which values a `cfg` predicate can take with `test` off and every other
+/// atom free to be on or off.
+#[derive(Clone, Copy)]
+struct Outcomes {
+    can_hold: bool,
+    can_fail: bool,
+}
+
+/// Evaluate a `cfg` predicate with `test` off and every other atom unknown.
+/// Atoms are treated as independent, so a contradiction such as
+/// `all(x, not(x))` reads as satisfiable — the safe side for a guard, which
+/// then scans the item rather than hiding it.
+fn outcomes_without_test(predicate: &str) -> Outcomes {
     let predicate = predicate.trim();
 
-    if let Some(inner) = predicate
-        .strip_prefix("all(")
-        .and_then(|p| p.strip_suffix(')'))
-    {
-        return split_cfg_args(inner)
-            .iter()
-            .all(|arg| cfg_holds_without_test(arg));
+    if let Some(inner) = combinator_args(predicate, "all(") {
+        let parts: Vec<Outcomes> = inner.iter().map(|a| outcomes_without_test(a)).collect();
+
+        return Outcomes {
+            can_hold: parts.iter().all(|o| o.can_hold),
+            can_fail: parts.iter().any(|o| o.can_fail),
+        };
     }
 
-    if let Some(inner) = predicate
-        .strip_prefix("any(")
-        .and_then(|p| p.strip_suffix(')'))
-    {
-        return split_cfg_args(inner)
-            .iter()
-            .any(|arg| cfg_holds_without_test(arg));
+    if let Some(inner) = combinator_args(predicate, "any(") {
+        let parts: Vec<Outcomes> = inner.iter().map(|a| outcomes_without_test(a)).collect();
+
+        return Outcomes {
+            can_hold: parts.iter().any(|o| o.can_hold),
+            can_fail: parts.iter().all(|o| o.can_fail),
+        };
     }
 
-    if let Some(inner) = predicate
-        .strip_prefix("not(")
-        .and_then(|p| p.strip_suffix(')'))
-    {
-        return !cfg_holds_without_test(inner);
+    if let Some(inner) = combinator_args(predicate, "not(") {
+        let inner = outcomes_without_test(inner.first().copied().unwrap_or_default());
+
+        return Outcomes {
+            can_hold: inner.can_fail,
+            can_fail: inner.can_hold,
+        };
     }
 
-    predicate != "test"
+    let is_test = predicate == "test";
+
+    Outcomes {
+        can_hold: !is_test,
+        can_fail: true,
+    }
+}
+
+/// The arguments of `predicate` when it is the combinator `name` (`"all("`).
+fn combinator_args<'a>(predicate: &'a str, name: &str) -> Option<Vec<&'a str>> {
+    predicate
+        .strip_prefix(name)
+        .and_then(|p| p.strip_suffix(')'))
+        .map(split_cfg_args)
 }
 
 /// Top-level comma-separated arguments of a `cfg` combinator.

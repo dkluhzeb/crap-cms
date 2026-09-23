@@ -17,11 +17,23 @@ use crate::{
             manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
             secret::backup_secret,
         },
-        helpers::hold_instance_lock,
+        helpers::{hold_instance_lock, load_config_for_recovery},
     },
     config::{CrapConfig, DatabaseBackend, UploadStorage},
+    core::Builder,
     db::{DbConnection, pool},
 };
+
+/// Options of the `backup` subcommand.
+#[derive(Builder)]
+pub struct BackupOpts {
+    /// Output directory (default: `<config_dir>/backups`).
+    pub output: Option<PathBuf>,
+    /// Also archive the uploads directory.
+    pub include_uploads: bool,
+    /// Run on a config that fails validation (recovery after an upgrade).
+    pub skip_config_validation: bool,
+}
 
 /// Handle the `backup` subcommand — create a timestamped database snapshot with optional uploads.
 ///
@@ -30,12 +42,18 @@ use crate::{
 /// Returns an error if config loading, pool creation, the DB backup
 /// operation, or upload archiving fails.
 #[cfg(not(tarpaulin_include))]
-pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool) -> Result<()> {
+pub fn backup(config_dir: &Path, opts: BackupOpts) -> Result<()> {
+    let BackupOpts {
+        output,
+        include_uploads,
+        skip_config_validation,
+    } = opts;
+
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = load_config_for_recovery(&config_dir, skip_config_validation)?;
     ensure_file_database(&cfg)?;
     let _instance_lock = hold_instance_lock(&config_dir)?;
     let db_path = cfg.db_path(&config_dir);

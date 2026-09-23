@@ -498,7 +498,12 @@ pub enum MigrateAction {
 #[derive(Subcommand)]
 pub enum DbAction {
     /// Open an interactive `SQLite` console
-    Console,
+    Console {
+        /// Run even if the config fails validation (recovery after an upgrade);
+        /// the validation error is printed as a warning
+        #[arg(long)]
+        skip_config_validation: bool,
+    },
     /// Detect and optionally remove leftovers not in Lua definitions
     Cleanup {
         /// Actually apply the cleanup (default: dry-run report only)

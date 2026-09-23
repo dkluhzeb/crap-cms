@@ -20,7 +20,12 @@ use tracing_subscriber::{
 
 use crap_cms::{
     cli::{self, crap_theme},
-    commands::{self, BlueprintAction, Cli, Command, DbAction, TemplatesAction, serve::ServeMode},
+    commands::{
+        self, BlueprintAction, Cli, Command, DbAction, TemplatesAction,
+        db::{BackupOpts, RestoreOpts},
+        logs::TailOpts,
+        serve::ServeMode,
+    },
     config::{CrapConfig, LogRotation},
     scaffold::SAVE_BLUEPRINT_HINT,
 };
@@ -401,18 +406,34 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
         Command::Backup {
             output,
             include_uploads,
+            skip_config_validation,
         } => with_config(config_flag, |c| {
-            commands::db::backup(c, output, include_uploads)
+            let opts = BackupOpts::builder()
+                .output(output)
+                .include_uploads(include_uploads)
+                .skip_config_validation(skip_config_validation)
+                .build();
+
+            commands::db::backup(c, opts)
         }),
         Command::Restore {
             backup,
             include_uploads,
             confirm,
+            skip_config_validation,
         } => with_config(config_flag, |c| {
-            commands::db::restore(c, &backup, include_uploads, confirm)
+            let opts = RestoreOpts::builder()
+                .include_uploads(include_uploads)
+                .confirm(confirm)
+                .skip_config_validation(skip_config_validation)
+                .build();
+
+            commands::db::restore(c, &backup, opts)
         }),
         Command::Db { action } => with_config(config_flag, |c| match action {
-            DbAction::Console => commands::db::console(c),
+            DbAction::Console {
+                skip_config_validation,
+            } => commands::db::console(c, skip_config_validation),
             DbAction::Cleanup {
                 confirm,
                 drop_tables,
@@ -441,9 +462,16 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
         Command::Logs {
             follow,
             lines,
+            skip_config_validation,
             action,
         } => with_config(config_flag, |c| {
-            commands::logs::run(c, action, follow, lines)
+            let tail = TailOpts::builder()
+                .follow(follow)
+                .lines(lines)
+                .skip_config_validation(skip_config_validation)
+                .build();
+
+            commands::logs::run(c, action, tail)
         }),
         Command::Bench { action } => with_config(config_flag, |c| commands::bench::run(c, action)),
         Command::Fmt {

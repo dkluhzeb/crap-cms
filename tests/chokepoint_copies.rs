@@ -270,6 +270,32 @@ const WRITE_ADMISSION: Chokepoint = Chokepoint {
     ],
 };
 
+/// `commands::load_config` / `load_config_for_recovery` own how a command
+/// reads its configuration: validated, with the process-wide limits installed.
+/// A command that loads it by hand runs on a configuration the server would
+/// refuse; skipping validation is an explicit operator flag on the recovery
+/// commands, never a property of a command.
+const CONFIG_LOAD: Chokepoint = Chokepoint {
+    name: "commands::{load_config, load_config_for_recovery}",
+    scan_root: "src",
+    home: Some("src/commands/helpers.rs"),
+    copy_pattern: r"\bCrapConfig::load(_unvalidated)?\(",
+    fix: "Load the config through `commands::load_config` (or \
+          `load_config_for_recovery` behind `--skip-config-validation` on an \
+          offline recovery command), so it is validated before the command runs.",
+    allowlist: &[
+        (
+            "src/main.rs",
+            "Reads `[logging]` to set up logging before dispatch, only for `serve` / \
+             `work`, which load and validate the config themselves right after",
+        ),
+        (
+            "src/commands/make/helpers.rs",
+            "Best-effort locale detection for scaffold defaults; never runs on the config",
+        ),
+    ],
+};
+
 /// Every chokepoint, for the allowlist-staleness companion test.
 const CHOKEPOINTS: &[&Chokepoint] = &[
     &LOCALE_CONTEXT,
@@ -281,6 +307,7 @@ const CHOKEPOINTS: &[&Chokepoint] = &[
     &SHAPE_READ_DOCUMENT,
     &UPLOAD_WRITE_LIFECYCLE,
     &WRITE_ADMISSION,
+    &CONFIG_LOAD,
 ];
 
 // ── the shared scan ──────────────────────────────────────────────────────────
@@ -507,6 +534,11 @@ fn the_validate_dry_run_runs_the_write_admission() {
              through the same step the write it previews runs"
         );
     }
+}
+
+#[test]
+fn commands_load_their_config_validated() {
+    CONFIG_LOAD.assert_no_copies();
 }
 
 #[test]
@@ -882,6 +914,32 @@ fn production_code_keeps_the_code_after_a_gated_helper() {
         kept.lines().count(),
         src.lines().count(),
         "line numbers must be preserved"
+    );
+}
+
+/// Regression: the gate evaluator assumed every non-`test` atom is on, so a
+/// negated atom — `#[cfg(not(tarpaulin_include))]`, which marks most CLI
+/// entry points and `main.rs`, or `not(feature = "x")` — read as test-only and
+/// its whole item was blanked. Every guard built on this scan was blind to
+/// those functions. An item is test-only exactly when no build with `test`
+/// off compiles it.
+#[test]
+fn production_code_keeps_items_gated_on_a_negated_atom() {
+    let src = "#[cfg(not(tarpaulin_include))]\nfn entry() {}\n\
+               #[cfg(not(feature = \"postgres\"))]\nfn sqlite_only() {}\n\
+               #[cfg(all(not(tarpaulin_include), feature = \"sqlite\"))]\nfn both() {}\n\
+               #[cfg(all(test, not(tarpaulin_include)))]\nfn gated_test() {}\n\
+               #[cfg(not(any(not(test), feature = \"x\")))]\nfn never_in_prod() {}\n";
+
+    let kept = production_code(src);
+
+    assert!(kept.contains("fn entry()"), "{kept}");
+    assert!(kept.contains("fn sqlite_only()"), "{kept}");
+    assert!(kept.contains("fn both()"), "{kept}");
+    assert!(!kept.contains("fn gated_test()"), "{kept}");
+    assert!(
+        !kept.contains("fn never_in_prod()"),
+        "not(any(not(test), …)) needs test on: {kept}"
     );
 }
 

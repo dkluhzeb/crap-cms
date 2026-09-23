@@ -7,11 +7,11 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow};
 
 use crate::{
-    cli, config, hooks,
+    cli, hooks,
     typegen::{self, Language},
 };
 
-use super::TypegenAction;
+use super::{TypegenAction, load_config};
 
 /// Dispatch a `typegen` invocation to the matching artifact handler.
 /// All three subcommands load the same `(CrapConfig, Registry)` pair
@@ -27,7 +27,7 @@ pub fn run(config_dir: &Path, action: TypegenAction) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = load_config(&config_dir)?;
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
 
     match action {

@@ -6,8 +6,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::{
     cli,
-    commands::helpers::hold_instance_lock,
-    config::{CrapConfig, DbUrl},
+    commands::helpers::{hold_instance_lock, load_config_for_recovery},
+    config::DbUrl,
     db::{DbConnection, pool},
 };
 
@@ -18,12 +18,12 @@ use crate::{
 /// Returns an error if config loading or pool creation fails, or the
 /// console subprocess exits with a non-zero status.
 #[cfg(not(tarpaulin_include))]
-pub fn console(config_dir: &Path) -> Result<()> {
+pub fn console(config_dir: &Path, skip_config_validation: bool) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = load_config_for_recovery(&config_dir, skip_config_validation)?;
     let _instance_lock = hold_instance_lock(&config_dir)?;
     let p = pool::create_pool(&config_dir, &cfg).context("Failed to create pool")?;
     let conn = p.get().context("Failed to get connection")?;

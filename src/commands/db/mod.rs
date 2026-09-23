@@ -9,8 +9,8 @@ mod migrate;
 mod restore;
 mod secret;
 
-pub use backup::backup;
+pub use backup::{BackupOpts, backup};
 pub use cleanup::cleanup;
 pub use console::console;
 pub use migrate::migrate;
-pub use restore::restore;
+pub use restore::{RestoreOpts, restore};

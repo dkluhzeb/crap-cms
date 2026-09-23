@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crap_cms::commands;
+use crap_cms::commands::db::{BackupOpts, RestoreOpts};
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
@@ -878,7 +879,14 @@ fn cmd_restore_requires_confirm() {
     let backup_dir = tmp.path().join("fake-backup");
     std::fs::create_dir_all(&backup_dir).unwrap();
 
-    let result = commands::db::restore(&config_dir, &backup_dir, false, false);
+    let result = commands::db::restore(
+        &config_dir,
+        &backup_dir,
+        RestoreOpts::builder()
+            .include_uploads(false)
+            .confirm(false)
+            .build(),
+    );
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("--confirm"));
 }
@@ -893,7 +901,14 @@ fn cmd_restore_validates_backup_dir() {
     let backup_dir = tmp.path().join("empty-backup");
     std::fs::create_dir_all(&backup_dir).unwrap();
 
-    let result = commands::db::restore(&config_dir, &backup_dir, false, true);
+    let result = commands::db::restore(
+        &config_dir,
+        &backup_dir,
+        RestoreOpts::builder()
+            .include_uploads(false)
+            .confirm(true)
+            .build(),
+    );
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("manifest.json"));
 }
@@ -917,7 +932,14 @@ fn cmd_restore_roundtrip() {
 
     // Backup
     let backup_output = tmp.path().join("backups");
-    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+    commands::db::backup(
+        &config_dir,
+        BackupOpts::builder()
+            .output(Some(backup_output.clone()))
+            .include_uploads(false)
+            .build(),
+    )
+    .unwrap();
 
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
@@ -933,7 +955,15 @@ fn cmd_restore_roundtrip() {
     assert!(!db_path.exists());
 
     // Restore
-    commands::db::restore(&config_dir, &backup_dir, false, true).unwrap();
+    commands::db::restore(
+        &config_dir,
+        &backup_dir,
+        RestoreOpts::builder()
+            .include_uploads(false)
+            .confirm(true)
+            .build(),
+    )
+    .unwrap();
 
     // Verify DB was restored
     assert!(db_path.exists(), "DB should be restored");

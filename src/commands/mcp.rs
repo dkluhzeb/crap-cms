@@ -10,8 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    commands::helpers::{create_live_transports, hold_instance_lock},
-    config::CrapConfig,
+    commands::helpers::{create_live_transports, hold_instance_lock, load_config},
     core::{
         cache::{periodic_clear_interval, spawn_periodic_clear},
         upload::create_storage_with_lease,
@@ -35,8 +34,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Use stderr for logging since stdout is the MCP transport
-    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
-    cfg.apply()?;
+    let cfg = load_config(&config_dir)?;
     let _instance_lock = hold_instance_lock(&config_dir)?;
 
     if let Some(warning) = cfg.check_version() {
