@@ -199,6 +199,10 @@ impl DbConnection for CountingConn<'_> {
         self.inner.json_number_cast(expr)
     }
 
+    fn json_checkbox_cast(&self, expr: &str) -> String {
+        self.inner.json_checkbox_cast(expr)
+    }
+
     fn json_each_source(&self, source: &str, alias: &str) -> String {
         self.inner.json_each_source(source, alias)
     }

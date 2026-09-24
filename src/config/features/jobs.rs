@@ -55,10 +55,12 @@ const DEFAULT_BULK_QUEUE_RETRIES: u32 = 0;
 /// the now-removed `[email] queue_timeout` field.
 pub(crate) const DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS: u64 = 30;
 
-/// Extra wall-clock the scheduler's outer timer allows a job that enforces its
-/// own cooperative deadline (`_system_bulk` aborts and rolls back at its
-/// `timeout`), covering the post-commit work — event publishing, upload-file
-/// deletion — that happens after the last in-batch deadline check.
+/// Extra wall-clock the scheduler's watchdog allows a job that enforces its
+/// own cooperative deadline (a Lua handler and `_system_bulk` stop and roll
+/// back at their `timeout`) before it reports the run as stuck, covering the
+/// rollback, the terminal status write and the post-commit work — event
+/// publishing, upload-file deletion — that happens after the last deadline
+/// check.
 ///
 /// Lives here rather than next to the scheduler because the drain deadline is
 /// derived from it and config must not depend on the scheduler.

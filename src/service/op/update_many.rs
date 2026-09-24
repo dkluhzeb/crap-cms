@@ -68,14 +68,14 @@ impl Operation for UpdateMany {
 
         let locale_ctx = write_locale_ctx(args.locale_ctx)?;
 
-        let opts = UpdateManyOptions {
-            locale_ctx: locale_ctx.as_ref(),
-            run_hooks: args.run_hooks,
-            draft: args.draft,
-            ui_locale: ctx.ui_locale.clone(),
-            max_documents: args.max_documents,
-            deadline: args.deadline,
-        };
+        let opts = UpdateManyOptions::builder()
+            .locale_ctx(locale_ctx.as_ref())
+            .run_hooks(args.run_hooks)
+            .draft(args.draft)
+            .ui_locale(ctx.ui_locale.clone())
+            .max_documents(args.max_documents)
+            .deadline(args.deadline)
+            .build();
 
         update_many(ctx, &filters, &args.data, locale_config, &opts)
     }

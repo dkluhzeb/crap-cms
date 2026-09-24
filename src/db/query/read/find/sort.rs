@@ -13,6 +13,7 @@ use anyhow::{Result, bail};
 
 use crate::core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children};
 use crate::db::query::cursor::SortDirection;
+use crate::db::query::filter::normalize_order_by;
 use crate::db::query::helpers::prefixed_name;
 use crate::db::query::{self, column_read_expr, resolve_sort as resolve_order};
 use crate::db::{FindQuery, LocaleContext};
@@ -32,7 +33,13 @@ pub(super) fn resolve_sort(
         bail!("Cannot use both after_cursor and before_cursor — they are mutually exclusive");
     }
 
-    let (sort_col, sort_dir) = resolve_order(query.order_by.as_deref(), def.timestamps);
+    // A group's value sorts by its dotted name too (`seo.title`), as filters
+    // name it.
+    let order_by = query
+        .order_by
+        .as_deref()
+        .map(|order| normalize_order_by(order, &def.fields));
+    let (sort_col, sort_dir) = resolve_order(order_by.as_deref(), def.timestamps);
 
     // `_rank` is virtual (relevance for the current search term) — validated
     // by `validate_query_fields` (requires `search`, forbids cursors) and
@@ -144,10 +151,12 @@ fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
 /// Check whether a sort column name corresponds to a real column on the
 /// collection table. `_status` exists only when the collection keeps drafts
 /// and `_deleted_at` only with soft delete, so ordering by either elsewhere
-/// is a validation error rather than a backend error.
+/// is a validation error rather than a backend error. `_ref_count` is a real
+/// column but no sort: it counts references from collections the reader may
+/// not see, so the query validator refuses it, and this answer must agree.
 pub(crate) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
     let system = match col {
-        "id" | "created_at" | "updated_at" | "_ref_count" => true,
+        "id" | "created_at" | "updated_at" => true,
         "_status" => def.has_drafts(),
         "_deleted_at" => def.soft_delete,
         _ => false,
@@ -164,9 +173,11 @@ mod tests {
     use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::column_read_expr;
+    use crate::db::query::cursor::{CursorData, CursorKey, build_cursors};
+    use crate::db::query::cursor_sort_locale;
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
-    use crate::db::{FindQuery, LocaleMode};
+    use crate::db::{DbConnection, FindQuery, LocaleMode};
 
     /// `_status` and `_deleted_at` are created only by drafts and soft delete;
     /// on a plain collection a sort by them used to reach the database.
@@ -175,12 +186,25 @@ mod tests {
         let mut def = CollectionDefinition::new("posts");
         assert!(!is_valid_sort_column("_status", &def));
         assert!(!is_valid_sort_column("_deleted_at", &def));
-        assert!(is_valid_sort_column("_ref_count", &def));
 
         def.versions = Some(crate::core::VersionsConfig::new(true, 0));
         def.soft_delete = true;
         assert!(is_valid_sort_column("_status", &def));
         assert!(is_valid_sort_column("_deleted_at", &def));
+    }
+
+    /// Regression: `_ref_count` was accepted here while the query validator
+    /// refused it, so `admin.default_sort = "_ref_count"` passed the startup
+    /// check and then failed every list load. It is no sort column: its value
+    /// counts references from collections the reader may not see.
+    #[test]
+    fn ref_count_is_not_a_sort_column() {
+        let mut def = CollectionDefinition::new("posts");
+        assert!(!is_valid_sort_column("_ref_count", &def));
+
+        def.versions = Some(crate::core::VersionsConfig::new(true, 0));
+        def.soft_delete = true;
+        assert!(!is_valid_sort_column("_ref_count", &def));
     }
 
     /// A scalar has-many column stores a JSON list; ordering by that text is
@@ -204,6 +228,39 @@ mod tests {
         assert!(!is_valid_sort_column("tags", &def));
         assert!(!is_valid_sort_column("meta__tags", &def));
         assert!(is_valid_sort_column("title", &def));
+    }
+
+    /// Regression: a sort by a group's value took only the flat `meta__title`,
+    /// though filters accept `meta.title` too. The dotted form resolves to the
+    /// same column, in either direction.
+    #[test]
+    fn a_dotted_group_sort_resolves_to_its_column() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let sort_of = |order: &str| {
+            let query = FindQuery {
+                order_by: Some(order.to_string()),
+                ..FindQuery::default()
+            };
+
+            resolve_sort(&def, &query).map(|(col, dir, _)| (col, dir))
+        };
+
+        assert_eq!(
+            sort_of("meta.title").unwrap(),
+            ("meta__title".to_string(), SortDirection::Asc)
+        );
+        assert_eq!(
+            sort_of("-meta.title").unwrap(),
+            ("meta__title".to_string(), SortDirection::Desc)
+        );
+        assert!(sort_of("meta.nope").is_err());
     }
 
     /// A sort on a localized column orders by the value the read returns —
@@ -246,6 +303,92 @@ mod tests {
             column_read_expr("title", &def.fields, Some(&ctx)).unwrap(),
             "COALESCE(\"title__de_DE\", \"title__en\")",
             "the sort key must be the shared read expression"
+        );
+    }
+
+    /// Regression: an all-locales read holds a localized sort column as its
+    /// `{ en, de }` map, and the cursor recorded that map's JSON text while
+    /// the SQL ordered by the default locale's column — the next page compared
+    /// the column against JSON and came back empty. The cursor records the
+    /// value the SQL orders by, for a top-level and a group column alike.
+    #[test]
+    fn an_all_locales_cursor_pages_by_the_value_sql_orders_by() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "ALTER TABLE posts ADD COLUMN title__en TEXT;
+             ALTER TABLE posts ADD COLUMN title__de TEXT;
+             ALTER TABLE posts ADD COLUMN seo__title__en TEXT;
+             ALTER TABLE posts ADD COLUMN seo__title__de TEXT;
+             INSERT INTO posts (id, title__en, title__de, seo__title__en, seo__title__de)
+                 VALUES ('a', 'Apple', 'Zapfen', 'Alpha', 'Zeta'),
+                        ('b', 'Banana', 'Yam', 'Beta', 'Ypsilon'),
+                        ('c', 'Cherry', 'Xylo', 'Gamma', 'Xi');",
+        )
+        .unwrap();
+
+        let localized_title = || {
+            FieldDefinition::builder("title", FieldType::Text)
+                .localized(true)
+                .build()
+        };
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            localized_title(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![localized_title()])
+                .build(),
+        ];
+        let ctx = LocaleContext {
+            mode: LocaleMode::All,
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        };
+
+        for order_by in ["title", "seo__title"] {
+            let sort_locale =
+                cursor_sort_locale(Some(order_by), def.timestamps, &def.fields, Some(&ctx));
+            assert_eq!(sort_locale, Some("en"), "{order_by}");
+
+            let first = FindQuery::builder()
+                .order_by(Some(order_by.to_string()))
+                .limit(Some(2))
+                .build();
+            let page1 = find(&conn, "posts", &def, &first, Some(&ctx)).unwrap();
+
+            let key = CursorKey::builder(order_by, SortDirection::Asc)
+                .sort_locale(sort_locale)
+                .build();
+            let (_, end) = build_cursors(&page1, &key);
+            let after = CursorData::decode(&end.unwrap()).unwrap();
+
+            let next = FindQuery::builder()
+                .order_by(Some(order_by.to_string()))
+                .limit(Some(2))
+                .after_cursor(Some(after))
+                .build();
+            let page2 = find(&conn, "posts", &def, &next, Some(&ctx)).unwrap();
+            let ids: Vec<&str> = page2.iter().map(|d| d.id.as_ref()).collect();
+
+            assert_eq!(ids, vec!["c"], "{order_by}");
+        }
+
+        // A single-locale read already holds the value itself; a column that
+        // isn't localized never names a locale.
+        let single = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            ..ctx.clone()
+        };
+        assert_eq!(
+            cursor_sort_locale(Some("title"), true, &def.fields, Some(&single)),
+            None
+        );
+        assert_eq!(
+            cursor_sort_locale(Some("id"), true, &def.fields, Some(&ctx)),
+            None
         );
     }
 

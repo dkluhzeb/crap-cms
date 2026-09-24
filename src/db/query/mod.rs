@@ -29,6 +29,7 @@ pub use columns::{
     get_column_names, get_expected_column_names, get_expected_global_column_names,
     get_expected_junction_columns, join_field_names, join_fields,
 };
+pub(crate) use cursor::cursor_sort_locale;
 pub use cursor::{SortDirection, SortValue};
 pub use find_pagination::{FindPagination, PaginationCtx, TRASH_DEFAULT_ORDER};
 pub use helpers::{apply_pagination_limits, clamp_depth, floor_optional_limit};

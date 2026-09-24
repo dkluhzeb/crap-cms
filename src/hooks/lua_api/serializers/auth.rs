@@ -47,6 +47,7 @@ fn method_to_lua(lua: &Lua, m: &AuthMethod) -> mlua::Result<Table> {
             mfa,
             mfa_when,
             mfa_deliver,
+            mfa_exempt_callbacks,
             verify_email,
             forgot_password,
         } => {
@@ -62,6 +63,9 @@ fn method_to_lua(lua: &Lua, m: &AuthMethod) -> mlua::Result<Table> {
             }
             if let Some(hook) = mfa_deliver {
                 t.set("mfa_deliver", hook.reference())?;
+            }
+            if !mfa_exempt_callbacks.is_empty() {
+                t.set("mfa_exempt_callbacks", mfa_exempt_callbacks.clone())?;
             }
             if *verify_email {
                 t.set("verify_email", true)?;
@@ -129,7 +133,7 @@ fn activation_to_lua(lua: &Lua, act: &Activation) -> mlua::Result<Table> {
 mod tests {
     use crate::core::{
         CollectionDefinition,
-        collection::{Activation, Auth, AuthMethod, SurfaceSet},
+        collection::{Activation, Auth, AuthMethod, MfaMode, SurfaceSet},
     };
     use crate::hooks::lua_api::serializers::collection::collection_config_to_lua;
     use mlua::{self, Value};
@@ -175,6 +179,27 @@ mod tests {
         assert_eq!(m1.get::<String>("name").unwrap(), "oauth");
         let act: mlua::Table = m1.get("activates_on").unwrap();
         assert_eq!(act.get::<String>("header").unwrap(), "x-oauth");
+    }
+
+    /// The MFA-exempt callbacks round-trip into the Lua config table.
+    #[test]
+    fn auth_emits_mfa_exempt_callbacks() {
+        let lua = mlua::Lua::new();
+        let mut def = CollectionDefinition::new("users");
+        def.auth = Some(Auth::enabled().map_password_login(|b| {
+            b.mfa(MfaMode::Totp)
+                .mfa_exempt_callbacks(vec!["okta".to_string()])
+        }));
+
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let auth_tbl: mlua::Table = tbl.get("auth").unwrap();
+        let methods: mlua::Table = auth_tbl.get("methods").unwrap();
+        let m1: mlua::Table = methods.get(1).unwrap();
+
+        assert_eq!(
+            m1.get::<Vec<String>>("mfa_exempt_callbacks").unwrap(),
+            vec!["okta".to_string()]
+        );
     }
 
     #[test]

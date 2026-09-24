@@ -172,6 +172,73 @@ pub fn find_document_by_id(
     Ok(Some(doc))
 }
 
+/// The document as the viewer's **draft view** reads it, in stored shape.
+///
+/// The same gate as [`find_document_by_id`] with `use_draft` — the published
+/// and draft views resolved for this viewer, the draft overlay applied only
+/// when the draft view is visible and the snapshot passes its row constraint,
+/// a trashed document excluded, `before_read` run — but without the
+/// post-processing: no upload `sizes` folding, field strips or `after_read`. A
+/// caller matching stored column values (the upload serve gate matching a
+/// requested file against the draft's url columns) needs the columns as
+/// stored, not as a hook may have rewritten them for display.
+///
+/// `None` when the viewer has no draft view, or the document doesn't exist
+/// for it. A viewer that may read the published row but not drafts gets
+/// `None` rather than the published row — the draft-access downgrade
+/// [`find_document_by_id`] applies silently is an answer of its own here. A
+/// draft whose snapshot fails the draft view's row constraint reads as the
+/// main row, exactly as the draft-view read does.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, hook errors) or a backend
+/// error if the SELECT or hydration fails.
+pub fn find_draft_view_stored(
+    ctx: &ServiceContext,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
+    let resolved = ctx.resolve_conn()?;
+    let conn = resolved.as_ref();
+    let hooks = ctx.read_hooks()?;
+    let def = ctx.collection_def()?;
+
+    let input = FindByIdInput::builder(id)
+        .locale_ctx(locale_ctx)
+        .use_draft(true)
+        .build();
+
+    let scope = resolve_live_by_id(hooks, ctx, def, &input)?;
+
+    if !scope.use_draft_overlay {
+        return Ok(None);
+    }
+
+    hooks.before_read(
+        &def.hooks,
+        ctx.slug,
+        "find_by_id",
+        locale_ctx.map(LocaleContext::access_locale),
+    )?;
+
+    let constraints = (!scope.constraints.is_empty()).then_some(scope.constraints);
+
+    let doc = ops::find_by_id_full(ops::FindByIdFullParams {
+        conn,
+        slug: ctx.slug,
+        def,
+        id,
+        locale_ctx,
+        constraints,
+        snapshot_constraints: scope.snapshot_constraints,
+        use_draft: true,
+        include_deleted: false,
+    })?;
+
+    Ok(doc)
+}
+
 /// Run the read pipeline on a document the caller already holds — `before_read`,
 /// upload sizes, field read strips, `after_read` — without the collection-level
 /// read gate. For a user's own document at login and on Me: a rule restricting
@@ -841,6 +908,46 @@ mod tests {
         assert!(
             live.is_none(),
             "a live draft read must not surface a trashed document's snapshot"
+        );
+    }
+
+    /// The stored draft view: a viewer with draft access reads the pending
+    /// draft's own columns; a viewer who may only read the published row gets
+    /// `None` — not the published row the silent downgrade would give it.
+    #[test]
+    fn draft_view_stored_answers_only_for_a_visible_draft_view() {
+        let (conn, mut def) = drafts_collection_with_rows();
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v1', 'pub1', 2, 'draft', 1, '{\"title\":\"Pending Edit\"}');",
+        )
+        .unwrap();
+
+        let editor = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&editor)
+            .build();
+
+        let draft = find_draft_view_stored(&ctx, "pub1", None)
+            .unwrap()
+            .expect("the editor's draft view");
+        assert_eq!(draft.fields.get_str("title"), Some("Pending Edit"));
+
+        def.access.read = Some(HookRef::new("read_fn"));
+        def.access.update = Some(HookRef::new("update_fn"));
+
+        let reader = OnlyReadFnAllowed;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&reader)
+            .build();
+
+        assert!(
+            find_draft_view_stored(&ctx, "pub1", None)
+                .unwrap()
+                .is_none(),
+            "a reader without draft access has no draft view"
         );
     }
 }

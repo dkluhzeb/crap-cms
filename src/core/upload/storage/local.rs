@@ -282,7 +282,7 @@ mod tests {
 
     // ── Path traversal rejection ──────────────────────────────────────────
     //
-    // Regression tests for audit finding H-2. The trait is the trust boundary:
+    // The trait is the trust boundary:
     // any caller (admin handlers, Lua hooks, future migrations) that hands the
     // backend an attacker-controlled key must not be able to escape `base_dir`.
 

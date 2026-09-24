@@ -68,6 +68,12 @@ When `queue = true`:
 3. The scheduler picks up pending jobs and processes them in the background
 4. Once complete, the document's URL column is updated with the new file path
 
+Until its job runs, a queued variant's URL column is empty, and a version
+snapshot taken with the file records it empty. Every write that makes a stored
+file live again queues the variants its columns lack: publishing a draft with
+a new file, and restoring a version — so a restored file gets its queued
+variants back even though the snapshot never saw them.
+
 This is useful for AVIF which is significantly slower to encode than WebP. The `queue` option is per-format — you can queue AVIF while keeping WebP synchronous. Give image work its own concurrency knob with `[jobs.queues.images]` in `crap.toml`.
 
 Use the [`images` CLI command](../cli/flags.md#images--manage-image-processing-queue) to inspect and manage the queue:

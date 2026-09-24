@@ -19,7 +19,10 @@ use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, L
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
-use crap_cms::db::{migrate, ops, pool, query};
+use crap_cms::db::{
+    migrate, ops, pool,
+    query::{self, TokenGrant},
+};
 use serde_json::{Value, json};
 
 fn make_posts_def() -> CollectionDefinition {
@@ -341,9 +344,16 @@ fn sync_creates_auth_columns() {
     let doc = query::create(&tx, "users", &def, &data, None).expect("Create");
     // These should not error — columns must exist
     query::update_password(&tx, "users", &doc.id, "password123").expect("update_password");
-    query::set_reset_token(&tx, "users", &doc.id, "token", 9999999).expect("set_reset_token");
-    query::set_verification_token(&tx, "users", &doc.id, "vtoken", 9999999999)
-        .expect("set_verification_token");
+    query::set_reset_token(
+        &tx,
+        &TokenGrant::builder("users", &doc.id, "token", 9999999).build(),
+    )
+    .expect("set_reset_token");
+    query::set_verification_token(
+        &tx,
+        &TokenGrant::builder("users", &doc.id, "vtoken", 9999999999).build(),
+    )
+    .expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 
@@ -457,8 +467,11 @@ fn alter_adds_auth_columns_on_upgrade() {
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "members", &def, &data, None).expect("Create");
     query::update_password(&tx, "members", &doc.id, "pass").expect("update_password");
-    query::set_verification_token(&tx, "members", &doc.id, "tok", 9999999999)
-        .expect("set_verification_token");
+    query::set_verification_token(
+        &tx,
+        &TokenGrant::builder("members", &doc.id, "tok", 9999999999).build(),
+    )
+    .expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 

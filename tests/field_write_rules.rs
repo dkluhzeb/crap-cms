@@ -13,7 +13,7 @@ use crap_cms::core::{Document, DocumentFields, HookRef, Registry};
 use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    OpDeadline, ServiceContext, UpdateManyOptions, WriteInput, update_document, update_many,
+    ServiceContext, UpdateManyOptions, WriteInput, update_document, update_many,
 };
 use serde_json::{Value, json};
 
@@ -195,14 +195,7 @@ fn a_bulk_update_cannot_pass_an_owner_rule_by_rewriting_owner() {
         &[],
         &fields(&[("owner", json!("user-b")), ("salary", json!(999))]),
         &LocaleConfig::default(),
-        &UpdateManyOptions {
-            locale_ctx: None,
-            run_hooks: true,
-            draft: false,
-            ui_locale: None,
-            max_documents: 0,
-            deadline: OpDeadline::none(),
-        },
+        &UpdateManyOptions::builder().run_hooks(true).build(),
     )
     .expect("bulk update");
 

@@ -16,8 +16,8 @@ use crap_cms::core::{DocumentFields, Registry, RequiredLocales};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    OpDeadline, ServiceContext, ServiceError, UpdateManyOptions, WriteInput,
-    restore_collection_version, update_document, update_global_document, update_many,
+    ServiceContext, ServiceError, UpdateManyOptions, WriteInput, restore_collection_version,
+    update_document, update_global_document, update_many,
 };
 use serde_json::{Value, json};
 
@@ -291,14 +291,10 @@ fn a_bulk_publish_is_gated_like_a_single_one() {
         &[],
         &fields(&[("title", json!("Hello v2"))]),
         &h.locale,
-        &UpdateManyOptions {
-            locale_ctx: Some(&en),
-            run_hooks: false,
-            draft: false,
-            ui_locale: None,
-            max_documents: 0,
-            deadline: OpDeadline::none(),
-        },
+        &UpdateManyOptions::builder()
+            .locale_ctx(Some(&en))
+            .run_hooks(false)
+            .build(),
     );
 
     assert_required_locale(result.map(|_| ()), "title", "de");

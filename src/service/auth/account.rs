@@ -266,6 +266,28 @@ pub fn set_password(ctx: &ServiceContext, id: &str, password: &str) -> Result<()
     Ok(())
 }
 
+/// Reset a user's TOTP enrollment as the operator (the CLI's
+/// `user reset-totp`): the secret, confirmation and replay guard are cleared
+/// and the next MFA challenge re-provisions from scratch.
+///
+/// Like every credential change it ends the user's sessions: the same
+/// statement bumps `_session_version` (see `query::reset_totp`), and the
+/// user's open live-update streams are torn down, exactly like
+/// [`set_password`] or [`lock_user`] — a session established with the old
+/// second factor must not outlive it.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
+pub fn reset_totp(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+
+    query::reset_totp(conn.as_ref(), ctx.slug, id)?;
+    ctx.publish_user_invalidation(id);
+
+    Ok(())
+}
+
 /// Check whether a user account is locked.
 ///
 /// # Errors
@@ -401,6 +423,45 @@ mod tests {
             .expect("recv timed out")
             .expect("expected invalidation signal");
         assert_eq!(received, "u1");
+    }
+
+    /// Regression: the CLI's `user reset-totp` wrote the reset raw, so every
+    /// session established with the old second factor — and its open live
+    /// streams — outlived the reset. The service op ends both.
+    #[tokio::test]
+    async fn reset_totp_ends_sessions_and_streams() {
+        let (conn, def, _) = setup();
+        conn.execute_batch(
+            "ALTER TABLE users ADD COLUMN _totp_secret TEXT;
+             ALTER TABLE users ADD COLUMN _totp_confirmed INTEGER DEFAULT 0;
+             ALTER TABLE users ADD COLUMN _totp_last_step INTEGER;
+             UPDATE users SET _totp_secret = 'sealed', _totp_confirmed = 1 WHERE id = 'u1';",
+        )
+        .unwrap();
+        let bus = Arc::new(InProcessInvalidationBus::new());
+        let transport: SharedInvalidationTransport = bus;
+        let mut rx = transport.subscribe();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .invalidation_transport(Some(transport))
+            .build();
+        let before = get_session_version(&ctx, "u1").unwrap();
+
+        reset_totp(&ctx, "u1").unwrap();
+
+        assert!(get_session_version(&ctx, "u1").unwrap() > before);
+        let received = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("expected invalidation signal");
+        assert_eq!(received, "u1");
+
+        let secret: Option<String> = conn
+            .query_row("SELECT _totp_secret FROM users WHERE id = 'u1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(secret.is_none(), "the enrollment is cleared");
     }
 
     #[test]

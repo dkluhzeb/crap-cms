@@ -12,7 +12,7 @@
 //! Surfaces keep what is theirs: multipart parsing, auth, CSRF, and response
 //! formatting.
 
-use anyhow::anyhow;
+use anyhow::{Context as _, Error, anyhow};
 
 use crate::{
     admin::{FormData, strip_locale_locked_form_fields},
@@ -20,13 +20,16 @@ use crate::{
         CollectionDefinition, Document, DocumentFields, FieldError, ReqContext, SharedStorage,
         ValidationError,
         upload::{
-            CleanupGuard, QueuedConversion, UploadedFile, inject_upload_metadata, process_upload,
+            CleanupGuard, CollectionUpload, InspectedUpload, QueuedConversion, UploadedFile,
+            inject_upload_metadata, inspect_upload, process_upload,
         },
     },
     db::LocaleContext,
     service::{
-        ServiceContext, UploadConversions, WriteInput, create_document, op::reject_all_locales,
-        orchestrate::CommitWatch, update_document,
+        RunnerWriteHooks, ServiceContext, UploadConversions, WriteHooks, WriteInput,
+        WriteInputBuilder, admit_create_input, admit_update_input, check_create_access,
+        check_update_access, create_document, op::reject_all_locales, orchestrate::CommitWatch,
+        update_document,
     },
 };
 
@@ -73,21 +76,6 @@ impl Drop for StoredFile {
     }
 }
 
-/// Where a file goes and how large it may be.
-struct FileStore<'a> {
-    storage: &'a SharedStorage,
-    max_file_size: u64,
-}
-
-impl<'a> FileStore<'a> {
-    fn new(storage: &'a SharedStorage, max_file_size: u64) -> Self {
-        Self {
-            storage,
-            max_file_size,
-        }
-    }
-}
-
 /// Drop every caller-supplied server-derived upload column before the real ones
 /// are injected, so a forged `url`/`*_url` (including a not-yet-processed
 /// queued-format size) can never survive even on this trusted, file-bearing
@@ -102,43 +90,150 @@ fn strip_derived_columns(form: &mut FormData, def: &CollectionDefinition) {
     }
 }
 
-/// Store the file and inject its server-derived metadata into `form`.
+/// The collection-level gate of the write a file is stored for — `update` of
+/// `id`, or `create` without one — judged by `write_hooks`.
+fn judge_write_access(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    id: Option<&str>,
+    probe: &WriteInput<'_>,
+) -> Result<()> {
+    let def = ctx.collection_def()?;
+    let locale = probe.locale_ctx.map(LocaleContext::access_locale);
+    let ui_locale = probe.ui_locale.as_deref();
+
+    match id {
+        Some(id) => check_update_access(ctx, write_hooks, def, id, &probe.data, locale, ui_locale),
+        None => check_create_access(ctx, write_hooks, def, &probe.data, locale, ui_locale),
+    }
+}
+
+/// [`judge_write_access`] in a transaction that is always rolled back, with the
+/// runner's write hooks bound to it — the pool-mode caller has no hooks yet.
+fn judge_in_rolled_back_tx(
+    ctx: &ServiceContext,
+    id: Option<&str>,
+    probe: &WriteInput<'_>,
+) -> Result<()> {
+    let pool = ctx.pool.context("pool required")?;
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn
+        .transaction()
+        .context("Start upload access pre-check transaction")?;
+
+    let mut write_hooks = RunnerWriteHooks::new(ctx.runner()?).with_conn(&tx);
+    if ctx.override_access {
+        write_hooks = write_hooks.with_override_access();
+    }
+
+    let verdict = judge_write_access(ctx, &write_hooks, id, probe);
+
+    // A pre-check writes nothing.
+    drop(tx);
+
+    verdict
+}
+
+/// Refuse a caller the collection's `create` / `update` rule denies BEFORE the
+/// file is stored.
+///
+/// Storing runs the whole image pipeline — decode, every resize, the
+/// synchronous format conversions — and writes the bytes. Judged only by the
+/// write afterwards, a caller with no write access at all could still make the
+/// server do every bit of that per request. The gate is the write's own
+/// chokepoint, on the request's fields admitted exactly as the write admits
+/// them, together with the file's own columns ([`probe_form`]) — so a rule
+/// reading `ctx.data.mime_type` judges the file it is about to let in. The
+/// write still runs its own gate on the final data.
+fn precheck_write_access(
+    ctx: &ServiceContext,
+    id: Option<&str>,
+    mut probe: WriteInput<'_>,
+) -> Result<()> {
+    let def = ctx.collection_def()?;
+
+    match id {
+        Some(id) => {
+            admit_update_input(ctx, def, id, &mut probe)?;
+        }
+        None => admit_create_input(def, &mut probe)?,
+    }
+
+    let Some(write_hooks) = ctx.write_hooks else {
+        return judge_in_rolled_back_tx(ctx, id, &probe);
+    };
+
+    judge_write_access(ctx, write_hooks, id, &probe)
+}
+
+/// The collection's upload config.
+fn upload_config(def: &CollectionDefinition) -> Result<&CollectionUpload> {
+    def.upload
+        .as_ref()
+        .ok_or_else(|| ServiceError::Internal(anyhow!("Upload config missing")))
+}
+
+/// A refused or unprocessable file as a `_file` validation error, so every
+/// surface can render it against the form's file input.
+fn file_error(e: &Error) -> ServiceError {
+    ServiceError::Validation(ValidationError::new(vec![FieldError::new(
+        "_file",
+        e.to_string(),
+    )]))
+}
+
+/// Validate `file` for the collection and derive the columns it will be stored
+/// with. Nothing is stored.
+///
+/// # Errors
+///
+/// A rejected file (type, size, unreadable image) is a `_file` validation
+/// error.
+fn inspect_file<'a>(
+    upload: &CollectionUpload,
+    file: &'a UploadedFile,
+    max_file_size: u64,
+) -> Result<InspectedUpload<'a>> {
+    inspect_upload(file, upload, max_file_size).map_err(|e| file_error(&e))
+}
+
+/// `form` as the write will receive it once `inspected` is stored — its
+/// derivable columns (`filename`, `mime_type`, `filesize`, and `width` /
+/// `height` for an image) injected exactly as the write injects them — for the
+/// access pre-check. The columns that only exist once the bytes are stored
+/// (`url` and every per-size column) are blank, as a file without them is.
+fn probe_form(
+    form: &FormData,
+    inspected: &InspectedUpload<'_>,
+    upload: &CollectionUpload,
+) -> FormData {
+    let mut probe = form.clone();
+    inspected.columns().inject(probe.raw_mut(), upload);
+
+    probe
+}
+
+/// Store the inspected file and inject its server-derived metadata into
+/// `form`.
 ///
 /// Returns the guard that removes the stored bytes unless the write commits,
 /// together with the conversions the file queued.
 ///
 /// # Errors
 ///
-/// A rejected file (type, size, unreadable image) is a `_file` validation
-/// error, so every surface can render it against the form's file input.
+/// A file that cannot be stored or decoded is a `_file` validation error.
 fn store_file(
     ctx: &ServiceContext,
-    store: &FileStore<'_>,
-    file: &UploadedFile,
+    storage: &SharedStorage,
+    inspected: InspectedUpload<'_>,
     form: &mut FormData,
 ) -> Result<(CleanupGuard, Vec<QueuedConversion>)> {
-    let def = ctx.collection_def()?;
+    let upload = upload_config(ctx.collection_def()?)?;
 
-    let upload_config = def
-        .upload
-        .clone()
-        .ok_or_else(|| ServiceError::Internal(anyhow!("Upload config missing")))?;
+    let (processed, guard) =
+        process_upload(inspected, upload, storage, ctx.slug).map_err(|e| file_error(&e))?;
 
-    let (processed, guard) = process_upload(
-        file,
-        &upload_config,
-        store.storage,
-        ctx.slug,
-        store.max_file_size,
-    )
-    .map_err(|e| {
-        ServiceError::Validation(ValidationError::new(vec![FieldError::new(
-            "_file",
-            e.to_string(),
-        )]))
-    })?;
-
-    inject_upload_metadata(form.raw_mut(), &processed, &upload_config);
+    inject_upload_metadata(form.raw_mut(), &processed, upload);
 
     Ok((guard, processed.queued_conversions))
 }
@@ -196,6 +291,49 @@ pub struct UpdateUploadInput<'a> {
     pub form_echoes_locked_fields: bool,
 }
 
+/// The builder of an upload write on `data`: the request's locale, draft
+/// flag and UI locale, with the server-derived upload columns trusted (they
+/// were injected from the inspected file, never taken from the caller).
+fn upload_write(
+    data: impl Into<DocumentFields>,
+    locale_ctx: Option<&LocaleContext>,
+    draft: bool,
+    ui_locale: Option<String>,
+) -> WriteInputBuilder<'_> {
+    WriteInput::builder(data)
+        .locale_ctx(locale_ctx)
+        .draft(draft)
+        .ui_locale(ui_locale)
+        .trusted_upload_metadata(true)
+}
+
+/// Inspect the create's file, pre-check the write's access on the columns it
+/// determines, then store it — the bytes never land for a write the
+/// collection's rule refuses.
+fn store_create_file(
+    ctx: &ServiceContext,
+    input: &mut CreateUploadInput<'_>,
+) -> Result<(StoredFile, UploadConversions)> {
+    let upload = upload_config(ctx.collection_def()?)?;
+    let inspected = inspect_file(upload, input.file, input.upload_max_file_size)?;
+
+    let probe = probe_form(&input.form, &inspected, upload);
+    let precheck = upload_write(
+        probe,
+        input.locale_ctx,
+        input.draft,
+        input.ui_locale.clone(),
+    );
+    precheck_write_access(ctx, None, precheck.build())?;
+
+    let (guard, queued) = store_file(ctx, input.storage, inspected, &mut input.form)?;
+
+    Ok((
+        StoredFile::new(guard),
+        UploadConversions::new(queued, input.image_max_attempts),
+    ))
+}
+
 /// Process a file and create an upload document.
 ///
 /// # Errors
@@ -207,38 +345,94 @@ pub fn create_upload(
     ctx: &ServiceContext,
     mut input: CreateUploadInput<'_>,
 ) -> Result<UploadCreateResult> {
-    let def = ctx.collection_def()?;
-
     // A file-bearing write reaches `create_document` without an operation, so
     // the rule every other write gets from the operation body is applied here.
     reject_all_locales(input.locale_ctx)?;
 
-    strip_derived_columns(&mut input.form, def);
+    strip_derived_columns(&mut input.form, ctx.collection_def()?);
 
-    let store = FileStore::new(input.storage, input.upload_max_file_size);
-    let (guard, conversions) = store_file(ctx, &store, input.file, &mut input.form)?;
-    let stored = StoredFile::new(guard);
+    let (stored, conversions) = store_create_file(ctx, &mut input)?;
 
-    let (doc, req_context) = create_document(
-        ctx,
-        WriteInput::builder(input.form)
-            .password(input.password.as_deref())
-            .locale_ctx(input.locale_ctx)
-            .draft(input.draft)
-            .ui_locale(input.ui_locale)
-            .trusted_upload_metadata(true)
-            .upload_conversions(Some(UploadConversions::new(
-                conversions,
-                input.image_max_attempts,
-            )))
-            .build(),
-    )?;
+    let write = upload_write(input.form, input.locale_ctx, input.draft, input.ui_locale)
+        .password(input.password.as_deref())
+        .upload_conversions(Some(conversions));
+    let (doc, req_context) = create_document(ctx, write.build())?;
 
     // The row is written; an error above dropped `stored` with no commit
     // on its watch and took the bytes with it.
     stored.keep();
 
     Ok(UploadCreateResult { doc, req_context })
+}
+
+/// The data an update writes from `form`: an HTML edit form's echoed shared
+/// fields dropped under a non-default locale (see
+/// [`UpdateUploadInput::form_echoes_locked_fields`]).
+fn update_data(
+    form: FormData,
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+    form_echoes_locked_fields: bool,
+) -> DocumentFields {
+    let data: DocumentFields = form.into();
+
+    if !form_echoes_locked_fields {
+        return data;
+    }
+
+    strip_locale_locked_form_fields(data, &def.fields, locale_ctx)
+}
+
+/// The access pre-check's input for an update storing `inspected`: the form
+/// with the file's own columns, admitted as [`update_data`] admits the write's.
+fn update_precheck<'a>(
+    input: &'a UpdateUploadInput<'_>,
+    def: &CollectionDefinition,
+    inspected: &InspectedUpload<'_>,
+    upload: &CollectionUpload,
+) -> WriteInput<'a> {
+    let probe = probe_form(&input.form, inspected, upload);
+    let probe = update_data(
+        probe,
+        def,
+        input.locale_ctx,
+        input.form_echoes_locked_fields,
+    );
+
+    upload_write(
+        probe,
+        input.locale_ctx,
+        input.draft,
+        input.ui_locale.clone(),
+    )
+    .build()
+}
+
+/// Inspect the update's replacement file (if it carries one), pre-check the
+/// write's access on the columns it determines, then store it — the bytes
+/// never land for a write the collection's rule refuses. `None` when the
+/// update carries no file.
+fn store_update_file(
+    ctx: &ServiceContext,
+    input: &mut UpdateUploadInput<'_>,
+) -> Result<Option<(StoredFile, UploadConversions)>> {
+    let Some(file) = input.file.take() else {
+        return Ok(None);
+    };
+
+    let def = ctx.collection_def()?;
+    let upload = upload_config(def)?;
+    let inspected = inspect_file(upload, &file, input.upload_max_file_size)?;
+
+    let precheck = update_precheck(input, def, &inspected, upload);
+    precheck_write_access(ctx, Some(input.id), precheck)?;
+
+    let (guard, queued) = store_file(ctx, input.storage, inspected, &mut input.form)?;
+
+    Ok(Some((
+        StoredFile::new(guard),
+        UploadConversions::new(queued, input.image_max_attempts),
+    )))
 }
 
 /// Process a file (optional) and update an upload document.
@@ -250,62 +444,27 @@ pub fn create_upload(
 /// `update_document` (access denied, validation, …).
 pub fn update_upload(
     ctx: &ServiceContext,
-    input: UpdateUploadInput<'_>,
+    mut input: UpdateUploadInput<'_>,
 ) -> Result<UploadUpdateResult> {
     let def = ctx.collection_def()?;
 
-    let UpdateUploadInput {
-        id,
-        storage,
-        file,
-        mut form,
-        locale_ctx,
-        password,
-        ui_locale,
-        draft,
-        upload_max_file_size,
-        image_max_attempts,
-        form_echoes_locked_fields,
-    } = input;
-
     // See `create_upload`: the same rejection, applied where the write is.
-    reject_all_locales(locale_ctx)?;
+    reject_all_locales(input.locale_ctx)?;
 
-    strip_derived_columns(&mut form, def);
+    strip_derived_columns(&mut input.form, def);
 
-    let store = FileStore::new(storage, upload_max_file_size);
+    let (stored, conversions) = store_update_file(ctx, &mut input)?.unzip();
 
-    let stored = match file.as_ref() {
-        Some(file) => Some(store_file(ctx, &store, file, &mut form)?),
-        None => None,
-    };
-
-    let (stored, conversions) = match stored {
-        Some((guard, queued)) => (
-            Some(StoredFile::new(guard)),
-            Some(UploadConversions::new(queued, image_max_attempts)),
-        ),
-        None => (None, None),
-    };
-
-    let mut data: DocumentFields = form.into();
-
-    if form_echoes_locked_fields {
-        data = strip_locale_locked_form_fields(data, &def.fields, locale_ctx);
-    }
-
-    let (doc, req_context) = update_document(
-        ctx,
-        id,
-        WriteInput::builder(data)
-            .password(password.as_deref())
-            .locale_ctx(locale_ctx)
-            .draft(draft)
-            .ui_locale(ui_locale)
-            .trusted_upload_metadata(true)
-            .upload_conversions(conversions)
-            .build(),
-    )?;
+    let data = update_data(
+        input.form,
+        def,
+        input.locale_ctx,
+        input.form_echoes_locked_fields,
+    );
+    let write = upload_write(data, input.locale_ctx, input.draft, input.ui_locale)
+        .password(input.password.as_deref())
+        .upload_conversions(conversions);
+    let (doc, req_context) = update_document(ctx, input.id, write.build())?;
 
     if let Some(stored) = stored {
         stored.keep();

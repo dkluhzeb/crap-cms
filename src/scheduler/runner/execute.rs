@@ -113,7 +113,7 @@ pub fn execute_job(p: ExecuteJobParams<'_>) -> Result<()> {
     // This avoids the `SQLITE_BUSY_SNAPSHOT` hazard that the previous
     // single-deferred-outer-tx model exposed for long-running handlers
     // that did read-then-write.
-    let result = hook_runner.run_job_handler(&job_def.handler, job_run, pool, lua_infra.cloned());
+    let result = hook_runner.run_job_handler(job_def, job_run, pool, lua_infra.cloned());
 
     match result {
         Ok(result_json) => {

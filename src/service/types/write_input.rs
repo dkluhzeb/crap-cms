@@ -93,6 +93,7 @@ pub struct WriteInputBuilder<'a> {
 }
 
 impl<'a> WriteInputBuilder<'a> {
+    #[must_use]
     pub fn new(data: DocumentFields) -> Self {
         Self {
             data,
@@ -105,24 +106,28 @@ impl<'a> WriteInputBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub fn password(mut self, password: Option<&'a str>) -> Self {
         self.password = password;
 
         self
     }
 
+    #[must_use]
     pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
         self.locale_ctx = locale_ctx;
 
         self
     }
 
+    #[must_use]
     pub fn draft(mut self, draft: bool) -> Self {
         self.draft = draft;
 
         self
     }
 
+    #[must_use]
     pub fn ui_locale(mut self, ui_locale: Option<String>) -> Self {
         self.ui_locale = ui_locale;
 
@@ -132,6 +137,7 @@ impl<'a> WriteInputBuilder<'a> {
     /// Mark this write as carrying trusted, server-computed upload metadata
     /// (the multipart upload handlers, after `inject_upload_metadata`). Leaves
     /// the derived upload columns untouched by the write-chokepoint strip.
+    #[must_use]
     pub fn trusted_upload_metadata(mut self, trusted: bool) -> Self {
         self.trusted_upload_metadata = trusted;
 
@@ -141,12 +147,14 @@ impl<'a> WriteInputBuilder<'a> {
     /// Carry the conversions the stored file queued into the write transaction.
     /// Setting it (even to an empty list) marks the write as one that stored a
     /// file, which cancels the conversions still queued for the previous one.
+    #[must_use]
     pub fn upload_conversions(mut self, conversions: Option<UploadConversions>) -> Self {
         self.upload_conversions = conversions;
 
         self
     }
 
+    #[must_use]
     pub fn build(self) -> WriteInput<'a> {
         WriteInput {
             data: self.data,

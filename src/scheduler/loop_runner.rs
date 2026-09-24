@@ -14,10 +14,11 @@ use std::{
     },
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use tokio::{
     select,
+    sync::Notify,
     task::spawn_blocking,
     time::{Duration, Interval, interval, timeout},
 };
@@ -25,31 +26,19 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
 use crate::{
-    config::{
-        DEFAULT_BULK_QUEUE_TIMEOUT_SECS, DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS,
-        DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig, SELF_LIMITING_JOB_GRACE_SECS,
-    },
-    core::{
-        JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
-        email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
-        job::{SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
-        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB},
-    },
-    db::{
-        BoxedConnection, DbPool,
-        query::jobs::{self as job_query, ClaimParams},
-    },
-    hooks::{HookRunner, LuaCrudInfra},
+    config::JobsConfig,
+    core::{Registry, SharedStorage},
+    db::DbPool,
+    hooks::LuaCrudInfra,
     service::AppInfra,
 };
 
 use super::{
     announce::{StartupAnnounce, announce_and_recover},
-    bulk::strip_finished_payload,
     cron_tick::{CronMode, CronTickInput, PurgeSchedule, cron_mode, cron_tick},
     heartbeat::{HeartbeatTickInput, heartbeat_tick, stale_threshold_secs},
-    runner::{ExecuteJobParams, execute_job},
-    types::{SchedulerParams, TickJobConfig},
+    poll::{PollGate, PollInput, spawn_poll},
+    types::{RunningJobs, SchedulerParams, TickJobConfig},
 };
 
 /// The poll, cron and heartbeat tickers of the loop, from their configured
@@ -80,18 +69,21 @@ fn announce_recover_and_ready(infra: &AppInfra, announce: &StartupAnnounce<'_>) 
 /// `job_tasks`, so the shutdown arm can wait for the work already in flight;
 /// without it a stop drops a running job mid-transaction (the row keeps a
 /// fresh heartbeat, a no-retry run goes terminally stale, and its post-commit
-/// effects never happen). The single-flight guards matter most for the poll:
-/// two overlapping polls each read the same stale `count_running` before
-/// either claim commits and each claim up to `available`, pushing running
-/// past the global `max_concurrent` cap.
+/// effects never happen). The single-flight guards matter most for the poll
+/// (see [`PollGate`]): two overlapping polls each read the same stale
+/// `count_running` before either claim commits and each claim up to
+/// `available`, pushing running past the global `max_concurrent` cap.
+/// `run_finished` is woken by every run that ends, so the freed slot is
+/// claimed again at once instead of at the next poll tick.
 struct LoopClocks {
     poll_ticker: Interval,
     cron_ticker: Interval,
     heartbeat_ticker: Interval,
-    running_jobs: Arc<Mutex<Vec<String>>>,
+    running_jobs: RunningJobs,
     job_tasks: TaskTracker,
     drain_deadline: Duration,
-    poll_in_flight: Arc<AtomicBool>,
+    poll_gate: Arc<PollGate>,
+    run_finished: Arc<Notify>,
     cron_in_flight: Arc<AtomicBool>,
     heartbeat_in_flight: Arc<AtomicBool>,
     last_cron_check: Arc<Mutex<DateTime<Utc>>>,
@@ -113,7 +105,8 @@ impl LoopClocks {
             running_jobs: Arc::new(Mutex::new(Vec::new())),
             job_tasks: TaskTracker::new(),
             drain_deadline: Duration::from_secs(config.drain_deadline_secs()),
-            poll_in_flight: Arc::new(AtomicBool::new(false)),
+            poll_gate: Arc::new(PollGate::new()),
+            run_finished: Arc::new(Notify::new()),
             cron_in_flight: Arc::new(AtomicBool::new(false)),
             heartbeat_in_flight: Arc::new(AtomicBool::new(false)),
             last_cron_check: Arc::new(Mutex::new(Utc::now())),
@@ -152,7 +145,7 @@ impl CronShared {
 fn heartbeat_input(
     pool: &DbPool,
     registry: &Arc<Registry>,
-    running_jobs: &Arc<Mutex<Vec<String>>>,
+    running_jobs: &RunningJobs,
     stale_threshold_secs: u64,
 ) -> HeartbeatTickInput {
     HeartbeatTickInput {
@@ -217,7 +210,8 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         running_jobs,
         job_tasks,
         drain_deadline,
-        poll_in_flight,
+        poll_gate,
+        run_finished,
         cron_in_flight,
         heartbeat_in_flight,
         last_cron_check,
@@ -230,6 +224,26 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         mode: cron_mode(run_cron),
     };
 
+    let poll_input = Arc::new(PollInput {
+        pool: pool.clone(),
+        hook_runner,
+        registry: Arc::clone(&registry),
+        max_concurrent: config.max_concurrent,
+        running_jobs: running_jobs.clone(),
+        email_provider,
+        run_finished: Arc::clone(&run_finished),
+        system: tick_job_config(&TickConfigSource {
+            infra: &infra,
+            priority_decay: config.priority_decay,
+            queue_concurrency: &queue_concurrency,
+            queue_timeouts: &queue_timeouts,
+            queues: queues.as_ref(),
+            storage: &storage,
+            lua_infra: &job_lua_infra,
+            job_tasks: &job_tasks,
+        }),
+    });
+
     loop {
         select! {
             () = shutdown.cancelled() => {
@@ -240,34 +254,11 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 break Ok(());
             }
             _ = poll_ticker.tick() => {
-                let pool = pool.clone();
-                let hook_runner = hook_runner.clone();
-                let registry = Arc::clone(&registry);
-                let running_jobs = running_jobs.clone();
-                let max_concurrent = config.max_concurrent;
-
-                let ep = email_provider.clone();
-                let sys = tick_job_config(&TickConfigSource {
-                    infra: &infra,
-                    priority_decay: config.priority_decay,
-                    queue_concurrency: &queue_concurrency,
-                    queue_timeouts: &queue_timeouts,
-                    queues: queues.as_ref(),
-                    storage: &storage,
-                    lua_infra: &job_lua_infra,
-                    job_tasks: &job_tasks,
-                });
-
-                // Tracked like the jobs it spawns: a poll caught mid-claim by
-                // the shutdown must finish handing its claimed runs to the
-                // tracker before the drain decides what to wait for.
-                spawn_tick(&job_tasks, &poll_in_flight, "poll", move || {
-                    if let Err(e) = poll_and_execute(
-                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, ep.as_ref(), &sys,
-                    ) {
-                        error!("Scheduler poll error: {}", e);
-                    }
-                });
+                spawn_poll(&job_tasks, &poll_gate, &poll_input);
+            }
+            // A run ended: its slot is free now, not at the next poll tick.
+            () = run_finished.notified() => {
+                spawn_poll(&job_tasks, &poll_gate, &poll_input);
             }
             _ = cron_ticker.tick() => {
                 let input = cron.input(&infra, &config);
@@ -283,11 +274,11 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
             }
             // Image conversion now runs through the unified job queue as
             // `_system_image_convert` system jobs — see
-            // `runner::execute_system_image_convert`. The poll_ticker arm
-            // above picks them up alongside email and Lua-handler jobs.
-            // No dedicated image ticker / single-flight gate needed; the
-            // job queue's `max_concurrent` + per-slug `job_concurrency`
-            // map handle worker throttling.
+            // `runner::execute_system_image_convert`. The poll arms above
+            // pick them up alongside email and Lua-handler jobs. No
+            // dedicated image ticker / single-flight gate needed; the job
+            // queue's `max_concurrent` + per-slug `job_concurrency` map
+            // handle worker throttling.
         }
     }
 }
@@ -320,10 +311,11 @@ where
     });
 }
 
-/// Event transport + populate cache for user job handlers' Lua CRUD calls,
-/// so job writes publish live-update events and invalidate the populate
-/// cache like every other surface. The event queue is injected per
-/// invocation by `run_job_handler` (which flushes it post-handler).
+/// Event transport, populate cache and email context for user job handlers'
+/// Lua CRUD calls, so job writes publish live-update events, invalidate the
+/// populate cache and issue account verifications like every other surface.
+/// The event queue is injected per invocation by `run_job_handler` (which
+/// flushes it post-handler).
 fn job_crud_infra(infra: &AppInfra) -> LuaCrudInfra {
     LuaCrudInfra::for_pool_crud(infra)
 }
@@ -393,8 +385,7 @@ struct TickConfigSource<'a> {
     job_tasks: &'a TaskTracker,
 }
 
-/// Snapshot the per-tick execution config (cheap clones) handed to the
-/// spawned poll task.
+/// Snapshot the execution config (cheap clones) every poll shares.
 fn tick_job_config(s: &TickConfigSource<'_>) -> TickJobConfig {
     TickJobConfig {
         app_infra: Arc::clone(s.infra),
@@ -413,12 +404,9 @@ fn tick_job_config(s: &TickConfigSource<'_>) -> TickJobConfig {
 /// The tracker is closed first so `wait()` can complete; the poll ticker is
 /// no longer running, so nothing new is claimed. `deadline` comes from the
 /// configured job timeouts — a run that outlives it has already blown past
-/// its own timeout, and the outer per-job timer will stamp it `failed`.
-async fn drain_job_tasks(
-    job_tasks: &TaskTracker,
-    running_jobs: &Arc<Mutex<Vec<String>>>,
-    deadline: Duration,
-) {
+/// its own timeout; it dies with the process, its row still `running`, and
+/// stale recovery reclaims it once its heartbeat has stopped.
+async fn drain_job_tasks(job_tasks: &TaskTracker, running_jobs: &RunningJobs, deadline: Duration) {
     job_tasks.close();
 
     if job_tasks.is_empty() {
@@ -427,7 +415,7 @@ async fn drain_job_tasks(
 
     let ids: Vec<String> = running_jobs
         .lock()
-        .map(|guard| guard.clone())
+        .map(|guard| guard.iter().map(|job| job.id.clone()).collect())
         .unwrap_or_default();
 
     info!(
@@ -455,311 +443,16 @@ async fn drain_job_tasks(
     info!("All in-flight scheduler tasks finished");
 }
 
-/// Poll for pending jobs and execute them.
-#[cfg(not(tarpaulin_include))]
-fn poll_and_execute(
-    pool: &DbPool,
-    hook_runner: &HookRunner,
-    registry: &Registry,
-    max_concurrent: usize,
-    running_jobs: &Arc<Mutex<Vec<String>>>,
-    email_provider: Option<&SharedEmailProvider>,
-    system: &TickJobConfig,
-) -> Result<()> {
-    // The write pool: `claim_pending_jobs` below opens an IMMEDIATE transaction
-    // on this connection, and a write transaction on a read connection starves
-    // concurrent readers.
-    let mut conn = pool.write().context("Failed to get DB connection")?;
-
-    let total_running = job_query::count_running(&conn, None)?;
-    // Saturate to max_concurrent so a runaway counter still gates new jobs
-    // (zero `available` = skip this tick rather than over-claiming).
-    let running_usize = usize::try_from(total_running).unwrap_or(max_concurrent);
-    if running_usize >= max_concurrent {
-        return Ok(());
-    }
-
-    let available = max_concurrent - running_usize;
-    let job_concurrency = read_job_concurrency(registry);
-
-    let claimed = claim_pending_jobs(
-        &mut conn,
-        &ClaimParams::all_queues(
-            available,
-            &job_concurrency,
-            &system.queue_concurrency,
-            system.priority_decay,
-        )
-        .with_queues(system.queues.as_deref()),
-    )?;
-    drop(conn);
-
-    for job_run in claimed {
-        let Some(job_def) = resolve_job_def(registry, &job_run, pool, &system.queue_timeouts)
-        else {
-            continue;
-        };
-
-        spawn_job_execution(&SpawnJobInput {
-            pool,
-            hook_runner,
-            running_jobs,
-            email_provider,
-            storage: &system.storage,
-            job_run: &job_run,
-            job_def: &job_def,
-            lua_infra: &system.lua_infra,
-            app_infra: &system.app_infra,
-            job_tasks: &system.job_tasks,
-        });
-    }
-
-    Ok(())
-}
-
-/// Read per-slug concurrency limits — sourced from
-/// `crap.jobs.define({ concurrency = N })` on each user-defined
-/// job. System jobs (`_system_image_convert`, `_system_email`) aren't
-/// in the registry; their aggregate throttling is handled by the
-/// per-queue cap mechanism (`[jobs.queues.images] concurrency = N`).
-#[cfg(not(tarpaulin_include))]
-fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
-    registry
-        .jobs
-        .iter()
-        .map(|(slug, def)| (slug.to_string(), def.concurrency))
-        .collect()
-}
-
-/// Claim pending jobs, using IMMEDIATE transaction for `SQLite`.
-#[cfg(not(tarpaulin_include))]
-fn claim_pending_jobs(conn: &mut BoxedConnection, params: &ClaimParams<'_>) -> Result<Vec<JobRun>> {
-    // One transaction path for BOTH backends: the
-    // `FOR UPDATE SKIP LOCKED` row locks (Postgres) and the IMMEDIATE
-    // write lock (SQLite) must be held across the whole select-count-claim
-    // sequence, or the per-slug/per-queue concurrency caps are only
-    // advisory across concurrent claimers. Postgres previously ran the
-    // claim on a bare autocommit connection, releasing each statement's
-    // locks immediately — so two nodes could each claim past a
-    // `concurrency = 1` cap in the same tick. `transaction_immediate` is
-    // plain BEGIN on Postgres (MVCC needs no IMMEDIATE) and IMMEDIATE on
-    // SQLite.
-    let tx = conn
-        .transaction_immediate()
-        .context("Failed to start claim transaction")?;
-    let result = job_query::claim_pending_jobs_with(&tx, params)?;
-    tx.commit().context("Failed to commit claim transaction")?;
-    Ok(result)
-}
-
-/// Resolve the job definition for a claimed job run.
-#[cfg(not(tarpaulin_include))]
-fn resolve_job_def(
-    registry: &Registry,
-    job_run: &JobRun,
-    pool: &DbPool,
-    queue_timeouts: &HashMap<String, u64>,
-) -> Option<Arc<JobDefinition>> {
-    if let Some(def) = registry.get_job(&job_run.slug) {
-        return Some(def.clone());
-    }
-
-    // `_system_email` and `_system_image_convert` are dispatched by
-    // `execute_job` directly (no Lua VM). Synthesize minimal
-    // `JobDefinition`s so the scheduler can flow them through the
-    // standard claim/execute path. Per-queue concurrency throttling
-    // is handled via `[jobs.queues.<queue>] concurrency = N`.
-    if job_run.slug == SYSTEM_EMAIL_JOB {
-        let timeout = queue_timeouts
-            .get(SYSTEM_EMAIL_QUEUE)
-            .copied()
-            .unwrap_or(DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS);
-        return Some(Arc::new(
-            JobDefinition::builder(SYSTEM_EMAIL_JOB, "_system")
-                .queue(SYSTEM_EMAIL_QUEUE)
-                .timeout(timeout)
-                .build(),
-        ));
-    }
-
-    if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
-        let timeout = queue_timeouts
-            .get(IMAGE_CONVERT_QUEUE)
-            .copied()
-            .unwrap_or(DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS);
-        return Some(Arc::new(
-            JobDefinition::builder(SYSTEM_IMAGE_CONVERT_JOB, "_system")
-                .queue(IMAGE_CONVERT_QUEUE)
-                .timeout(timeout)
-                .build(),
-        ));
-    }
-
-    if job_run.slug == SYSTEM_BULK_JOB {
-        let timeout = queue_timeouts
-            .get(SYSTEM_BULK_QUEUE)
-            .copied()
-            .unwrap_or(DEFAULT_BULK_QUEUE_TIMEOUT_SECS);
-        return Some(Arc::new(
-            JobDefinition::builder(SYSTEM_BULK_JOB, "_system")
-                .queue(SYSTEM_BULK_QUEUE)
-                .timeout(timeout)
-                .build(),
-        ));
-    }
-
-    warn!(
-        "Job definition '{}' not found, marking as failed",
-        job_run.slug
-    );
-
-    stamp_failed_run(pool, job_run, "job definition not found", false);
-
-    None
-}
-
-/// Move a claimed run out of `running` with a guarded `fail_job` (compare-
-/// and-set on running+attempt), on a write-pool connection like every other
-/// job-row write. A run left `running` would permanently consume a
-/// concurrency slot, so a failure to stamp it is logged loudly — the stale
-/// recovery reclaims it once its heartbeat expires.
-#[cfg(not(tarpaulin_include))]
-fn stamp_failed_run(pool: &DbPool, job_run: &JobRun, reason: &str, should_retry: bool) {
-    let conn = match pool.write() {
-        Ok(conn) => conn,
-        Err(e) => {
-            warn!(
-                "Failed to mark job {} as failed: no write connection: {e}",
-                job_run.id
-            );
-
-            return;
-        }
-    };
-
-    let _ = job_query::fail_job(&conn, &job_run.id, reason, should_retry, job_run.attempt)
-        .inspect_err(|e| warn!("Failed to mark job {} as failed: {e}", job_run.id));
-
-    // A bulk run failed here drops its request payload like every other
-    // terminal bulk run.
-    if job_run.slug == SYSTEM_BULK_JOB && !should_retry {
-        strip_finished_payload(&conn, job_run);
-    }
-}
-
-struct SpawnJobInput<'a> {
-    pool: &'a DbPool,
-    hook_runner: &'a HookRunner,
-    running_jobs: &'a Arc<Mutex<Vec<String>>>,
-    email_provider: Option<&'a SharedEmailProvider>,
-    storage: &'a SharedStorage,
-    job_run: &'a JobRun,
-    job_def: &'a JobDefinition,
-    lua_infra: &'a LuaCrudInfra,
-    app_infra: &'a Arc<AppInfra>,
-    job_tasks: &'a TaskTracker,
-}
-
-/// Spawn a tokio task to execute a job with timeout enforcement.
-#[cfg(not(tarpaulin_include))]
-fn spawn_job_execution(s: &SpawnJobInput<'_>) {
-    if let Ok(mut guard) = s.running_jobs.lock() {
-        guard.push(s.job_run.id.clone());
-    }
-
-    let pool = s.pool.clone();
-    let hook_runner = s.hook_runner.clone();
-    let running_jobs = s.running_jobs.clone();
-    // `_system_bulk` enforces its OWN cooperative deadline (it aborts and
-    // rolls back at `timeout`). Give the uncancellable outer timer extra
-    // grace so it can only ever fire for a genuinely stuck run — otherwise
-    // it could stamp `failed` while the batch is still doing post-commit
-    // work (event publishing, upload-file deletes) and then commits.
-    let timeout_secs = if s.job_def.slug.as_ref() == SYSTEM_BULK_JOB {
-        s.job_def
-            .timeout
-            .saturating_add(SELF_LIMITING_JOB_GRACE_SECS)
-    } else {
-        s.job_def.timeout
-    };
-    let should_retry = s.job_run.attempt < s.job_run.max_attempts;
-    let pool_for_failure = pool.clone();
-    let run_for_failure = s.job_run.clone();
-    let job_id = s.job_run.id.clone();
-    let id_log = s.job_run.id.clone();
-    let slug_log = s.job_run.slug.clone();
-    let ep = s.email_provider.cloned();
-    let storage = s.storage.clone();
-    let job_def = s.job_def.clone();
-    let job_run = s.job_run.clone();
-    let lua_infra = s.lua_infra.clone();
-    let app_infra = Arc::clone(s.app_infra);
-
-    // Tracked, not detached: a shutdown waits for this run rather than
-    // dropping it mid-transaction.
-    s.job_tasks.spawn(async move {
-        let timeout_dur = Duration::from_secs(timeout_secs);
-        let result = timeout(
-            timeout_dur,
-            tokio::task::spawn_blocking(move || {
-                execute_job(ExecuteJobParams {
-                    pool: &pool,
-                    hook_runner: &hook_runner,
-                    job_def: &job_def,
-                    job_run: &job_run,
-                    email_provider: ep.as_deref(),
-                    storage: &storage,
-                    lua_infra: Some(&lua_infra),
-                    app_infra: Some(&app_infra),
-                })
-            }),
-        )
-        .await;
-
-        if let Ok(mut guard) = running_jobs.lock() {
-            guard.retain(|id| id != &job_id);
-        }
-
-        // On any non-clean outcome, transition the row out of `running` via a
-        // guarded `fail_job` (compare-and-set on running+attempt). `execute_job`
-        // writes a terminal status itself on the normal success/handler-error
-        // paths and returns `Ok(())`; it returns `Err` ONLY from an early path
-        // that ran before writing a terminal status (missing provider, bad
-        // job data, a post-handler pool.get failure), and a panic leaves the
-        // row `running` too — without this, those jobs stick in `running`
-        // forever, permanently consuming a concurrency slot.
-        let fail_reason = match result {
-            Ok(Ok(Ok(()))) => None,
-            Ok(Ok(Err(e))) => {
-                error!("Job {} ({}) execution error: {}", id_log, slug_log, e);
-                Some(format!("execution error: {e}"))
-            }
-            Ok(Err(e)) => {
-                error!("Job {} ({}) panicked: {}", id_log, slug_log, e);
-                Some(format!("handler panicked: {e}"))
-            }
-            Err(_) => {
-                error!(
-                    "Job {} ({}) timed out after {}s",
-                    id_log, slug_log, timeout_secs
-                );
-                Some(format!("timeout after {timeout_secs}s"))
-            }
-        };
-
-        if let Some(reason) = fail_reason {
-            stamp_failed_run(&pool_for_failure, &run_for_failure, &reason, should_retry);
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, time::Instant};
+    use std::{future::pending, sync::mpsc, time::Instant};
 
     use tokio::time::sleep;
 
-    use crate::config::{JobsConfig, QueueConfig};
+    use crate::{
+        config::{JobsConfig, QueueConfig},
+        scheduler::types::RunningJob,
+    };
 
     use super::*;
 
@@ -825,7 +518,8 @@ mod tests {
             flag.store(true, Ordering::SeqCst);
         });
 
-        let running_jobs = Arc::new(Mutex::new(vec!["job-1".to_string()]));
+        let running_jobs: RunningJobs =
+            Arc::new(Mutex::new(vec![RunningJob::new("job-1".to_string(), 1)]));
 
         drain_job_tasks(&job_tasks, &running_jobs, Duration::from_secs(30)).await;
 
@@ -840,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn the_drain_gives_up_once_the_deadline_passes() {
         let job_tasks = TaskTracker::new();
-        job_tasks.spawn(std::future::pending::<()>());
+        job_tasks.spawn(pending::<()>());
 
         let running_jobs = Arc::new(Mutex::new(Vec::new()));
         let started = Instant::now();

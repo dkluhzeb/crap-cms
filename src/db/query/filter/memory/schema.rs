@@ -19,6 +19,17 @@ pub(super) enum Leaf {
     References { root: String, polymorphic: bool },
 }
 
+impl Leaf {
+    /// The type an operand is bound as: the value's, a list element's, or a
+    /// referenced id's (text).
+    pub(super) fn operand_type(&self) -> FieldType {
+        match self {
+            Self::Value(field_type) | Self::List(field_type) => field_type.clone(),
+            Self::References { .. } => FieldType::Text,
+        }
+    }
+}
+
 /// What the matcher knows of the constrained collection: its leaves by filter
 /// path, and its fields, whose array and blocks rows a path may descend into.
 pub(super) struct Schema<'a> {
@@ -36,8 +47,9 @@ impl<'a> Schema<'a> {
 }
 
 /// Build a filter-path → leaf map for the field tree: every leaf by its flat
-/// column name (`meta__color`), and every top-level has-many relationship or
-/// upload by the `rel.id` path the SQL filter accepts for it.
+/// column name (`meta__color`), and every has-many relationship or upload —
+/// top-level or inside groups — by the `rel.id` path the SQL filter accepts
+/// for it, keyed by its flat name (`seo__tags.id`).
 fn field_type_map(fields: &[FieldDefinition]) -> HashMap<String, Leaf> {
     // The system timestamps no field defines compare as SQL types them.
     let mut types: HashMap<String, Leaf> = typed_system_columns()
@@ -47,7 +59,7 @@ fn field_type_map(fields: &[FieldDefinition]) -> HashMap<String, Leaf> {
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         let name = prefixed_name(prefix, &field.name);
 
-        if field.is_has_many_reference() && prefix.is_empty() {
+        if field.is_has_many_reference() {
             let leaf = Leaf::References {
                 root: name.clone(),
                 polymorphic: is_polymorphic(field),

@@ -1,6 +1,6 @@
 //! Fixtures and helpers shared by the upload service tests.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 use anyhow::Result as AnyResult;
 use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
@@ -20,7 +20,7 @@ use crate::{
         },
     },
     db::{LocaleContext, query},
-    service::{AppInfra, OpDeadline, UpdateManyOptions, update_many},
+    service::{AppInfra, UpdateManyOptions, update_many},
 };
 
 pub(super) const MAX_FILE_SIZE: u64 = 1024 * 1024;
@@ -304,21 +304,14 @@ pub(super) fn bulk_publish(infra: &Arc<AppInfra>, def: &CollectionDefinition) {
         &[],
         &DocumentFields::new(),
         &LocaleConfig::default(),
-        &UpdateManyOptions {
-            locale_ctx: None,
-            run_hooks: false,
-            draft: false,
-            ui_locale: None,
-            max_documents: 0,
-            deadline: OpDeadline::none(),
-        },
+        &UpdateManyOptions::builder().run_hooks(false).build(),
     )
     .expect("bulk publish");
 }
 
 /// Whether any regular file lives under `dir`, at any depth.
-pub(super) fn has_file_under(dir: &std::path::Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+pub(super) fn has_file_under(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
         return false;
     };
 

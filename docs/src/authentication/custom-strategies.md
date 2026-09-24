@@ -164,15 +164,35 @@ Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually 
 - **Strategy returns are sanity-checked.** The evaluator refuses any
   returned document with an empty `id` (would silently break session-
   version lookups downstream) or one whose `id` names no stored,
-  non-trashed user of the collection, and re-runs `is_locked` / `verify_email`
-  against the returned doc (so a strategy can't authenticate a locked
-  or unverified user even if the strategy code overlooks the check).
-- **No session-version on strategy auth.** Bearer / cookie paths
-  reject a JWT whose `session_version` doesn't match the user's
+  non-trashed user of the collection, and checks the **stored** lock and
+  verification state (so a strategy can't authenticate a locked or
+  unverified user even if the strategy code overlooks the check). A
+  `_locked` / `_verified` field on the returned table may only
+  **restrict**: `_locked = true` refuses the user, `_verified = false`
+  refuses them where the collection requires verification, but
+  `_verified = true` never verifies an unverified account and an absent
+  `_locked` never unlocks a locked one. The per-request path, the login
+  path, and the [auth callbacks](#auth-callbacks-oauth2--oidc) all apply
+  these same rules.
+- **No session-version check on the request itself.** Bearer / cookie
+  paths reject a JWT whose `session_version` doesn't match the user's
   current version; strategies don't issue a JWT to the client (the
   Claims object is internal-only), so there's nothing to compare
-  against. Lock the user (`crap-cms user lock -e ...`) to revoke
-  strategy access — `is_locked` is the cross-method kill switch.
+  against — the strategy re-runs on every request. Lock the user
+  (`crap-cms user lock -e ...`) to revoke strategy access — `is_locked`
+  is the cross-method kill switch. The internal claims do carry the
+  user's **stored** session version, read when the user was admitted, so
+  a [queued bulk run](../grpc-api/rpcs.md#queued-mode-queue--true) a
+  strategy-authenticated caller starts is abandoned by a later
+  session-version bump (force-logout, password reset, unverify) exactly
+  like a token user's.
+- **A strategy credential is never exchanged for a token.** The claims
+  of a strategy-authenticated request are marked as strategy claims: the
+  token provider refuses to sign them, and the admin session-refresh
+  endpoint (`POST /admin/api/session-refresh`) extends only a session the
+  `crap_session` cookie established — a strategy-authenticated request
+  gets `401`. Revoking the strategy's credential therefore revokes the
+  access it granted; no long-lived session token outlives it.
 
 ## Auth Callbacks (OAuth2 / OIDC)
 
@@ -272,11 +292,22 @@ end
 > Only the browser case can use a cookie; the `verified_email` check above,
 > by contrast, is required regardless of flow.
 >
-> **Verification & lock still apply.** The callback enforces the same account
-> guards as password login: a locked account, or an unverified account in a
-> collection that requires email verification, is refused a session (the user
-> is redirected to login). Return a user your provider has actually
-> authenticated.
+> **Verification & lock still apply.** The callback admits the user exactly as
+> a custom strategy's user is admitted (see *Strategy returns are
+> sanity-checked* above): a trashed account, a locked account, or an
+> unverified account in a collection that requires email verification is
+> refused a session (the user is redirected to login). The returned table only
+> names the user by `id` — the `admin.access` gate and the session are built
+> from the user's **stored** document, never from the fields the hook returned.
+> Return a user your provider has actually authenticated.
+>
+> **MFA still applies.** On a collection with an `mfa` mode, the callback does
+> not mint the session itself: it redirects to the MFA step (`/admin/mfa`,
+> with a pending-MFA cookie), the user completes the collection's second factor
+> exactly as after a password login, and only then is the session issued. If
+> your identity provider already enforces 2FA, exempt the callback by name on
+> the `password_login` method — `mfa_exempt_callbacks = { "google" }` — see
+> [MFA → Auth callbacks](mfa.md#auth-callbacks-oauth--oidc).
 >
 > **Collection binding.** The callback binds the session to one auth collection,
 > and the hook-returned user must exist in it. The session can never bind to a
@@ -308,7 +339,7 @@ auth = {
 }
 ```
 
-When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns `mfa_required = true` plus an `mfa_challenge` token and the `VerifyMfa` RPC completes the login (see [gRPC Authentication](../grpc-api/authentication.md#email-mfa)).
+When enabled, after successful password/strategy authentication — or an [auth callback](#auth-callbacks-oauth2--oidc) the collection does not list in `mfa_exempt_callbacks` — a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use. On the admin UI the code is entered on the MFA page; over gRPC, `Login` returns `mfa_required = true` plus an `mfa_challenge` token and the `VerifyMfa` RPC completes the login (see [gRPC Authentication](../grpc-api/authentication.md#email-mfa)).
 
 **Throttling.** Code *guesses* are limited per user and per IP on both surfaces (the admin MFA page and gRPC `VerifyMfa`), independently of the login limiter — knowing the password does not reset the guess budget. Code *issuance* is throttled per user on both surfaces: `max_forgot_password_attempts` codes within `forgot_password_window_seconds`. Codes are single-use and expire with the challenge, so there is no earlier code to reuse — over budget, the admin login shows an error and gRPC `Login` returns `RESOURCE_EXHAUSTED` until the window passes.
 

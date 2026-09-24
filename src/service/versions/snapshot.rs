@@ -41,13 +41,12 @@ pub(crate) fn create_version_snapshot(
         query::set_document_status(conn, ctx.table, ctx.parent_id, status)?;
     }
 
-    // A format converted on the background queue is not part of this write, so
-    // the row — and therefore this snapshot — still carries the PREVIOUS file's
-    // derivative url in that column until the job runs and replaces it. Under
-    // reference-checked deletion those bytes stay alive for as long as this
-    // snapshot names them, and go when it is pruned. Recording the url that was
-    // true at snapshot time is what makes a restore of this version find a file
-    // it can serve, so the stale column is kept deliberately.
+    // A format converted on the background queue is not part of this write:
+    // the upload pipeline blanks its column, so the row — and therefore this
+    // snapshot — records it empty, and the job that later fills the row never
+    // revisits the snapshot. The snapshot is recorded as it was true at the
+    // time; a restore of it re-derives and re-queues whatever variant it left
+    // empty (`restored_file_conversions`).
     let mut snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc, ctx.locale_config)?;
 
     // The snapshot must record the status this version is stamped with, not

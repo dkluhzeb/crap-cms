@@ -17,7 +17,10 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
-use crap_cms::db::{DbValue, migrate, ops, pool, query};
+use crap_cms::db::{
+    DbValue, migrate, ops, pool,
+    query::{self, TokenGrant},
+};
 use serde_json::{Value, json};
 
 fn make_posts_def() -> CollectionDefinition {
@@ -520,10 +523,13 @@ fn set_and_find_reset_token() {
         .expect("User not found");
 
     let exp = chrono::Utc::now().timestamp() + 3600;
-    query::set_reset_token(&conn, "users", &user.id, "reset-token-abc", exp)
-        .expect("Set reset token failed");
+    query::set_reset_token(
+        &conn,
+        &TokenGrant::builder("users", &user.id, "reset-token-abc", exp).build(),
+    )
+    .expect("Set reset token failed");
 
-    let found = query::find_by_reset_token(&conn, "users", &def, "reset-token-abc")
+    let found = query::find_by_reset_token(&conn, &def, "reset-token-abc", None)
         .expect("Find by reset token failed");
     assert!(found.is_some());
     let (doc, token_exp) = found.unwrap();
@@ -536,7 +542,7 @@ fn find_reset_token_wrong_token() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
     let result =
-        query::find_by_reset_token(&conn, "users", &def, "wrong-token").expect("Query failed");
+        query::find_by_reset_token(&conn, &def, "wrong-token", None).expect("Query failed");
     assert!(result.is_none());
 }
 
@@ -550,12 +556,16 @@ fn clear_reset_token() {
         .expect("User not found");
 
     let exp = chrono::Utc::now().timestamp() + 3600;
-    query::set_reset_token(&conn, "users", &user.id, "token-to-clear", exp).expect("Set failed");
+    query::set_reset_token(
+        &conn,
+        &TokenGrant::builder("users", &user.id, "token-to-clear", exp).build(),
+    )
+    .expect("Set failed");
 
     query::clear_reset_token(&conn, "users", &user.id).expect("Clear failed");
 
     let found =
-        query::find_by_reset_token(&conn, "users", &def, "token-to-clear").expect("Query failed");
+        query::find_by_reset_token(&conn, &def, "token-to-clear", None).expect("Query failed");
     assert!(found.is_none());
 }
 
@@ -568,11 +578,14 @@ fn set_and_find_verification_token() {
         .expect("Query failed")
         .expect("User not found");
 
-    query::set_verification_token(&conn, "users", &user.id, "verify-abc", 9999999999)
-        .expect("Set verification token failed");
+    query::set_verification_token(
+        &conn,
+        &TokenGrant::builder("users", &user.id, "verify-abc", 9999999999).build(),
+    )
+    .expect("Set verification token failed");
 
     let found =
-        query::find_by_verification_token(&conn, "users", &def, "verify-abc").expect("Find failed");
+        query::find_by_verification_token(&conn, &def, "verify-abc", None).expect("Find failed");
     assert!(found.is_some());
     let (doc, exp) = found.unwrap();
     assert_eq!(doc.id, user.id);
@@ -583,8 +596,8 @@ fn set_and_find_verification_token() {
 fn find_verification_token_wrong() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result = query::find_by_verification_token(&conn, "users", &def, "wrong-verify")
-        .expect("Query failed");
+    let result =
+        query::find_by_verification_token(&conn, &def, "wrong-verify", None).expect("Query failed");
     assert!(result.is_none());
 }
 

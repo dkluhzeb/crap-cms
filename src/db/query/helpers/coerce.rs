@@ -1,7 +1,4 @@
-//! Form-string coercion to database values, with the NUL-byte guard on
-//! text-like input.
-
-use anyhow::{Result, anyhow};
+//! Form-string coercion to database values.
 
 use crate::{
     core::{FieldType, normalize_email, normalize_text, parse_number, parse_truthy},
@@ -10,34 +7,6 @@ use crate::{
         query::helpers::{normalize_date_value, normalize_date_with_timezone},
     },
 };
-
-/// Reject a text-like value if it contains a NUL byte.
-///
-/// Applies to `Text`, `Textarea`, and `Email` field types. Other types (numeric,
-/// date, etc.) are coerced independently and do not need this guard. The error
-/// message mirrors the email-header CRLF validator for consistency.
-pub(crate) fn validate_no_null_byte(
-    field_type: &FieldType,
-    field_name: &str,
-    value: &str,
-) -> Result<()> {
-    let applies = matches!(
-        field_type,
-        FieldType::Text | FieldType::Textarea | FieldType::Email
-    );
-
-    if !applies {
-        return Ok(());
-    }
-
-    if value.bytes().any(|b| b == 0) {
-        return Err(anyhow!(
-            "field '{field_name}' contains forbidden control characters"
-        ));
-    }
-
-    Ok(())
-}
 
 /// Coerce a form string value to the appropriate database type.
 pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
@@ -150,29 +119,6 @@ mod tests {
     #[test]
     fn coerce_value_date_empty_is_null() {
         assert_eq!(coerce_value(&FieldType::Date, ""), DbValue::Null);
-    }
-
-    #[test]
-    fn coerce_value_rejects_null_byte_in_text() {
-        // Applies to Text, Textarea, Email.
-        for ft in [FieldType::Text, FieldType::Textarea, FieldType::Email] {
-            let err = validate_no_null_byte(&ft, "mykey", "hello\0world").unwrap_err();
-            let msg = format!("{err}");
-            assert!(msg.contains("mykey"), "error should name the field: {msg}");
-            assert!(
-                msg.contains("forbidden control characters"),
-                "error wording: {msg}"
-            );
-        }
-
-        // Does not apply to Number/Date/Checkbox.
-        assert!(validate_no_null_byte(&FieldType::Number, "n", "1\x002").is_ok());
-        assert!(validate_no_null_byte(&FieldType::Date, "d", "2024-01-01").is_ok());
-
-        // Clean text passes.
-        assert!(validate_no_null_byte(&FieldType::Text, "t", "hello world").is_ok());
-        // Empty passes.
-        assert!(validate_no_null_byte(&FieldType::Text, "t", "").is_ok());
     }
 
     /// Email and text reach storage in one canonical form, whichever way the

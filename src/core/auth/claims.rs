@@ -24,6 +24,13 @@ pub enum TokenUse {
     /// A short-lived MFA-challenge token — accepted **only** by the MFA
     /// completion endpoint, never as a session.
     MfaPending,
+    /// The in-memory claims of a request a custom auth strategy
+    /// authenticated. The strategy's credential is the only proof the
+    /// request carries — no session was established — so these claims are
+    /// **never signed** (the token provider refuses them) and never
+    /// validate as a token. Handlers that mint a session from the
+    /// request's claims must refuse them.
+    Strategy,
 }
 
 /// JWT claims for auth tokens.
@@ -356,5 +363,18 @@ mod builder_tests {
         }"#;
         let claims: Claims = serde_json::from_str(json).unwrap();
         assert_eq!(claims.token_use, TokenUse::Session);
+    }
+
+    #[test]
+    fn token_use_strategy_is_distinct_from_session() {
+        let claims = ClaimsBuilder::new("u", "users")
+            .email("a@b.com")
+            .exp(9999999999)
+            .token_use(TokenUse::Strategy)
+            .build()
+            .unwrap();
+
+        assert_eq!(claims.token_use, TokenUse::Strategy);
+        assert_ne!(claims.token_use, TokenUse::Session);
     }
 }

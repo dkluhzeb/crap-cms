@@ -20,7 +20,7 @@
 - `/admin/reset-password`
 - `/admin/verify-email`
 - `/admin/mfa` (requires a pending MFA challenge cookie, not a session)
-- `/admin/auth/callback/{name}` and `/admin/auth/callback/{collection}/{name}` (OAuth/OIDC callbacks)
+- `/admin/auth/callback/{name}` and `/admin/auth/callback/{collection}/{name}` (OAuth/OIDC callbacks — on an MFA collection they hand off to `/admin/mfa` before any session is minted, unless the collection lists the callback in `mfa_exempt_callbacks`; see [MFA → Auth callbacks](mfa.md#auth-callbacks-oauth--oidc))
 - `/static/*`, `/health`, `/ready`
 
 **Request authentication:** every other `/admin/**` request runs the shared auth evaluator with the fixed precedence described in [Auth Methods](auth-methods.md#evaluation-order): session cookie → always-active strategies → header-activated strategies. A cookie that decodes but is invalid (expired, password changed, locked, user deleted) or that its collection no longer accepts is **cleared** and the browser is redirected to `/admin/login`; a cookie whose user lookup failed for a transient reason (database error) is kept and the request is denied, so a blip does not log everyone out. With no credential at all the request is redirected to login.
@@ -29,10 +29,10 @@
 
 Two bounds apply to an admin session:
 
-- **`token_expiry`** (default 2h) — the lifetime of the current cookie. Shortly before it elapses the admin UI's session dialog offers to stay signed in and calls `POST /admin/api/session-refresh`, which reissues the cookie for another `token_expiry` (sliding refresh). Refresh only succeeds for a still-valid session.
+- **`token_expiry`** (default 2h) — the lifetime of the current cookie. Shortly before it elapses the admin UI's session dialog offers to stay signed in and calls `POST /admin/api/session-refresh`, which reissues the cookie for another `token_expiry` (sliding refresh). Refresh only succeeds for a still-valid session **established by the session cookie**: a request authenticated by a bearer token or a [custom strategy](custom-strategies.md) has no cookie session to extend and is refused with `401` — a strategy credential is never exchanged for a session token.
 - **`[auth] session_absolute_max_age`** (default 30d, `0` to disable) — a hard ceiling measured from the original login (`auth_time` claim), regardless of how many refreshes happened. After it, refresh is refused and the user must log in again. Values above 30 days log a startup warning.
 
-Changing the password, locking the account, or un-verifying it bumps the user's `session_version`, which invalidates every existing cookie and token immediately.
+Changing the password, locking the account, un-verifying it, or resetting its TOTP enrollment (`crap-cms user reset-totp`) bumps the user's `session_version`, which invalidates every existing cookie and token immediately.
 
 ## Security
 
@@ -193,6 +193,8 @@ When email is configured (`[email]` section in `crap.toml`):
 4. Reset email is sent with a link to `/admin/reset-password?token=xxx`
 5. User clicks the link, enters a new password
 6. Server validates the token, updates the password, and redirects to login
+
+A reset link names an active account: once the user is moved to the trash, their outstanding reset and verification links stop working. Both links work on auth collections with localized fields.
 
 ### gRPC
 

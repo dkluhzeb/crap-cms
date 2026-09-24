@@ -11,9 +11,9 @@ use crap_cms::core::{DocumentFields, HookRef, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    FindByIdInput, ListVersionsInput, OpDeadline, RunnerReadHooks, ServiceContext,
-    UpdateManyOptions, WriteInput, find_document_by_id, list_versions, restore_collection_version,
-    unpublish_document, update_document, update_many,
+    FindByIdInput, ListVersionsInput, RunnerReadHooks, ServiceContext, UpdateManyOptions,
+    WriteInput, find_document_by_id, list_versions, restore_collection_version, unpublish_document,
+    update_document, update_many,
 };
 use serde_json::{Value, json};
 
@@ -346,14 +346,10 @@ fn restoring_a_bulk_update_version_keeps_every_locale() {
         &[],
         &fields(&[("title", "Hello v2")]),
         &h.locale,
-        &UpdateManyOptions {
-            locale_ctx: Some(&en),
-            run_hooks: false,
-            draft: false,
-            ui_locale: None,
-            max_documents: 0,
-            deadline: OpDeadline::none(),
-        },
+        &UpdateManyOptions::builder()
+            .locale_ctx(Some(&en))
+            .run_hooks(false)
+            .build(),
     )
     .expect("bulk update");
 

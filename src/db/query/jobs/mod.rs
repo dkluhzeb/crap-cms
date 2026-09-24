@@ -20,7 +20,7 @@ pub use lifecycle::{
     insert_job_with, mark_stale, set_job_data, update_heartbeat,
 };
 pub use query::{
-    count_failed_since, count_job_runs, count_job_runs_in, count_pending_older_than, count_running,
-    count_running_per_queue, count_running_per_slug, find_stale_jobs, get_job_run,
+    count_active, count_failed_since, count_job_runs, count_job_runs_in, count_pending_older_than,
+    count_running, count_running_per_queue, count_running_per_slug, find_stale_jobs, get_job_run,
     last_completed_run, list_job_runs, list_job_runs_in,
 };

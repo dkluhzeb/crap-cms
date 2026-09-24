@@ -56,9 +56,10 @@ impl Operation for Find {
         // Filter hygiene for wire-decoded queries, identical on every surface:
         // dotted group paths (`seo.title`) normalize to their column form
         // (`seo__title`), and user filters must not touch system columns.
-        // Previously gRPC/Lua did this in their codecs and MCP did neither —
-        // so the same `where` clause parsed on two surfaces and 400'd on the
-        // third.
+        // Previously gRPC/Lua did this in their codecs and MCP did neither — so
+        // the same `where` clause parsed on two surfaces and 400'd on the
+        // third. The sort is normalized by `find_documents` itself, which every
+        // list read passes.
         normalize_filter_fields(&mut fq.filters, &def.fields);
         validate_user_filters(&fq.filters).map_err(|e| ServiceError::HookError(e.to_string()))?;
 

@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields},
+    core::{Document, DocumentFields, reject_nul_characters},
     db::query,
     service::{PersistOptions, ServiceContext, versions},
 };
@@ -27,6 +27,10 @@ pub fn persist_create(
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
     let status = if opts.is_draft { "draft" } else { "published" };
+
+    // Final post-hook data: a NUL a before-change hook (or a write that skips
+    // validation) put anywhere in the document is refused here.
+    reject_nul_characters(data, &def.fields)?;
 
     // Lock referenced target rows before INSERT to prevent concurrent deletes
     // from creating dangling references (Postgres only; SQLite serializes via IMMEDIATE).

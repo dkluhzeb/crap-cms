@@ -126,8 +126,11 @@ pub fn record_totp_success(
 }
 
 /// Clear a user's TOTP enrollment entirely (secret, confirmed flag, replay
-/// guard) — the next MFA challenge re-provisions from scratch. Used by the
-/// `user reset-totp` CLI command.
+/// guard) — the next MFA challenge re-provisions from scratch — and bump
+/// `_session_version` in the SAME statement, so every session established
+/// with the old second factor ends atomically with the reset (like a
+/// password change). Callers go through `service::auth::reset_totp`, which
+/// also tears down the user's live streams.
 ///
 /// # Errors
 ///
@@ -138,7 +141,8 @@ pub fn reset_totp(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<
     conn.execute(
         &format!(
             "UPDATE \"{slug}\" SET _totp_secret = NULL, _totp_confirmed = 0, \
-             _totp_last_step = NULL WHERE id = {p1}"
+             _totp_last_step = NULL, \
+             _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {p1}"
         ),
         &[DbValue::Text(user_id.to_string())],
     )?;
@@ -161,7 +165,8 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 _totp_secret TEXT,
                 _totp_confirmed INTEGER DEFAULT 0,
-                _totp_last_step INTEGER
+                _totp_last_step INTEGER,
+                _session_version INTEGER DEFAULT 0
             )",
             &[],
         )
@@ -262,6 +267,23 @@ mod tests {
 
         // And a fresh guarded install works again.
         assert!(set_totp_secret(&conn, "users", "u1", "s2", None).unwrap());
+    }
+
+    /// Regression: a TOTP reset left every session established with the old
+    /// second factor alive. The same statement now bumps the session version.
+    #[test]
+    fn reset_ends_existing_sessions() {
+        let (_dir, conn) = setup();
+
+        reset_totp(&conn, "users", "u1").unwrap();
+
+        let version = conn
+            .query_one("SELECT _session_version FROM users WHERE id = 'u1'", &[])
+            .unwrap()
+            .expect("row")
+            .get_i64("_session_version")
+            .unwrap();
+        assert_eq!(version, 1);
     }
 
     #[test]

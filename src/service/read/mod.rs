@@ -16,8 +16,10 @@ mod validate_filters;
 
 pub use count::{CollectionStats, collection_stats, count_documents};
 pub use find::find_documents;
-pub use find_by_id::{find_document_by_id, read_own_document};
+pub use find_by_id::{find_document_by_id, find_draft_view_stored, read_own_document};
 pub use get_global::get_global_document;
+pub(crate) use populated_strip::join_child_readable;
+pub(crate) use query_access::reject_unreadable_filter_fields;
 pub use query_access::{
     QueryFieldRefs, is_hidden_query_path, query_field_paths, unreadable_query_paths,
 };

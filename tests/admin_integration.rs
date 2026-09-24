@@ -4,7 +4,7 @@
 //! then sends requests using `tower::ServiceExt::oneshot`.
 //!
 //! This file covers: health endpoints, static file serving.
-//! Auth tests → `admin_auth.rs`
+//! Auth tests → `admin_auth_{login,session,callback,verify_email,password}.rs`
 //! Collection tests → `admin_collections.rs`
 //! Global/upload/CSRF/CORS/access gate tests → `admin_globals.rs`
 

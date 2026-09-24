@@ -19,7 +19,9 @@ use std::{
 };
 
 use crate::core::lua_lease::LuaVmLease;
-use crate::hooks::lifecycle::types::{InstructionCounter, MaxInstructions};
+use crate::hooks::lifecycle::types::{
+    InstructionCounter, MaxInstructions, check_execution_deadline,
+};
 
 /// Builds a fresh, fully-initialized pool VM. The `usize` is the VM index
 /// (used only for the `vm-N` label). Boxed so the pool is decoupled from the
@@ -150,16 +152,19 @@ impl VmPool {
         }
     }
 
-    /// Arm the instruction hook and wrap the VM in a returning guard.
+    /// Arm the instruction budget (when one is configured) and wrap the VM in
+    /// a returning guard.
     ///
-    /// A VM whose budget hook cannot be installed is dropped rather than
-    /// leased: leasing it would hand out a VM with no ceiling on how long a
-    /// hook may run, which is the one thing the budget exists to prevent.
+    /// A VM whose hook cannot be installed is dropped rather than leased:
+    /// leasing it would hand out a VM with no ceiling on how long a hook may
+    /// run, which is the one thing the budget exists to prevent.
     fn check_out(&self, vm: Lua) -> Result<VmGuard<'_>> {
-        if let Err(e) = set_instruction_hook(&vm) {
+        if instruction_budget(&vm) > 0
+            && let Err(e) = set_vm_hook(&vm)
+        {
             self.release_slot();
 
-            return Err(anyhow!("failed to arm the Lua instruction limit: {e}"));
+            return Err(anyhow!("failed to arm the Lua VM hook: {e}"));
         }
 
         Ok(VmGuard {
@@ -235,8 +240,18 @@ pub(crate) fn reset_instruction_budget(vm: &Lua) {
     }
 }
 
-/// Set an instruction-counting hook on the VM if `MaxInstructions` is
-/// configured.
+/// The lease's instruction budget; `0` means none is configured.
+fn instruction_budget(vm: &Lua) -> u64 {
+    vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0)
+}
+
+/// Install the VM's global hook: the instruction budget (when
+/// `MaxInstructions` is configured) and the job deadline (when one is
+/// installed — see `ExecutionDeadline`).
+///
+/// Armed only when something needs it — at check-out when a budget is
+/// configured, and by [`DeadlineHookGuard`] for a job handler's lease — so a
+/// VM with neither pays no per-instruction hook overhead.
 ///
 /// The hook is the VM's **global** hook, not a per-thread one. A per-thread
 /// hook is looked up by thread on every trigger and uninstalls itself on a
@@ -248,30 +263,86 @@ pub(crate) fn reset_instruction_budget(vm: &Lua) {
 ///
 /// The install error is propagated: a swallowed one leaves the VM running
 /// without the ceiling, and nothing downstream would notice.
-fn set_instruction_hook(vm: &Lua) -> LuaResult<()> {
-    let max = vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0);
+fn set_vm_hook(vm: &Lua) -> LuaResult<()> {
+    let max = instruction_budget(vm);
+    let counter = Arc::new(AtomicU64::new(0));
 
-    if max == 0 {
-        return Ok(());
+    if max > 0 {
+        vm.set_app_data(InstructionCounter(counter.clone()));
     }
 
-    let counter = Arc::new(AtomicU64::new(0));
-    vm.set_app_data(InstructionCounter(counter.clone()));
-
     vm.set_global_hook(
-        HookTriggers::new().every_nth_instruction(10_000),
-        move |_lua, _debug| {
-            let count = counter.fetch_add(10_000, Ordering::Relaxed);
+        HookTriggers::new().every_nth_instruction(HOOK_EVERY_NTH_INSTRUCTION),
+        move |lua, _debug| {
+            check_execution_deadline(lua)?;
 
-            if count + 10_000 > max {
-                return Err(RuntimeError(
-                    "Lua execution exceeded instruction limit".into(),
-                ));
-            }
+            check_instruction_budget(&counter, max)?;
 
             Ok(VmState::Continue)
         },
     )
+}
+
+/// Keeps the VM hook armed for a job handler's deadline while held.
+///
+/// A job runs its handler under an `ExecutionDeadline`, and a CPU-bound
+/// handler that never reaches a database, HTTP or email call can only notice
+/// the deadline from the VM hook. A lease with an instruction budget already
+/// carries the hook (which checks the deadline too); on one without, this
+/// arms it — and disarms it again on drop, so the VM goes back to running
+/// hook-free.
+pub(crate) struct DeadlineHookGuard<'a> {
+    vm: &'a Lua,
+    /// Whether this guard installed the hook (and so removes it on drop).
+    armed_here: bool,
+}
+
+impl<'a> DeadlineHookGuard<'a> {
+    /// Arm the hook on `vm` unless its instruction budget already did.
+    ///
+    /// # Errors
+    ///
+    /// The hook install error — the handler must not run without a way to
+    /// stop at its deadline.
+    pub(crate) fn arm(vm: &'a Lua) -> LuaResult<Self> {
+        let armed_here = instruction_budget(vm) == 0;
+
+        if armed_here {
+            set_vm_hook(vm)?;
+        }
+
+        Ok(Self { vm, armed_here })
+    }
+}
+
+impl Drop for DeadlineHookGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed_here {
+            self.vm.remove_global_hook();
+        }
+    }
+}
+
+/// How many VM instructions pass between two hook invocations.
+const HOOK_EVERY_NTH_INSTRUCTION: u32 = 10_000;
+
+/// Charge one hook interval against the lease's budget; `max == 0` means no
+/// budget is configured.
+fn check_instruction_budget(counter: &AtomicU64, max: u64) -> LuaResult<()> {
+    if max == 0 {
+        return Ok(());
+    }
+
+    let step = u64::from(HOOK_EVERY_NTH_INSTRUCTION);
+    let count = counter.fetch_add(step, Ordering::Relaxed);
+
+    if count + step > max {
+        return Err(RuntimeError(
+            "Lua execution exceeded instruction limit".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -296,6 +367,7 @@ mod tests {
     use std::thread;
 
     use super::*;
+    use crate::hooks::lifecycle::types::{ExecutionDeadline, ExecutionDeadlineGuard};
 
     /// A pool whose factory builds bare VMs and counts how many it built.
     fn make_pool_counting(prewarm: usize, cap: usize) -> (Arc<VmPool>, Arc<AtomicUsize>) {
@@ -543,6 +615,120 @@ mod tests {
             .load(burn)
             .exec()
             .expect("after re-arming, the same call fits again");
+    }
+
+    /// A loop long enough to cross the hook interval many times.
+    const LONG_LOOP: &str = "local s = 0; for i = 1, 1000000 do s = s + i end; return s";
+
+    /// Regression: the VM hook was armed on every lease, so with no
+    /// instruction budget configured every hook still paid the per-interval
+    /// hook overhead. A lease with no budget now runs hook-free: even an
+    /// expired deadline (which the hook would enforce) goes unnoticed by a
+    /// pure loop until a [`DeadlineHookGuard`] arms the hook — and once the
+    /// guard is gone the VM is hook-free again.
+    #[test]
+    fn a_lease_without_a_budget_runs_hook_free_until_a_deadline_arms_it() {
+        let pool = make_pool(1, 1);
+        let guard = pool.acquire().expect("should acquire VM");
+        let _deadline = ExecutionDeadlineGuard::install(&guard, ExecutionDeadline::new(0));
+
+        guard
+            .load(LONG_LOOP)
+            .exec()
+            .expect("no hook is armed without a budget or a deadline hook");
+
+        {
+            let _hook = DeadlineHookGuard::arm(&guard).expect("arm the deadline hook");
+
+            let err = guard
+                .load(LONG_LOOP)
+                .exec()
+                .expect_err("the armed hook enforces the deadline");
+            assert!(
+                err.to_string().contains("exceeded its timeout"),
+                "unexpected error: {err}"
+            );
+        }
+
+        guard
+            .load(LONG_LOOP)
+            .exec()
+            .expect("dropping the guard disarms the hook");
+    }
+
+    /// With a budget configured the lease is already armed: the deadline
+    /// guard leaves that hook alone, before and after.
+    #[test]
+    fn a_deadline_hook_keeps_the_budget_hook_of_a_budgeted_lease() {
+        let pool = make_pool_with_instruction_limit(1, 50_000);
+        let guard = pool.acquire().expect("should acquire VM");
+
+        drop(DeadlineHookGuard::arm(&guard).expect("arm the deadline hook"));
+
+        assert_budget_armed(&guard, "budgeted");
+    }
+
+    /// Regression: a job handler that never reaches a database or HTTP call
+    /// had no way to notice its timeout — with no instruction budget
+    /// configured the VM carried no hook at all, so a CPU loop ran on past the
+    /// deadline while the scheduler already retried the run. The deadline
+    /// hook stops the loop once the deadline has passed.
+    #[test]
+    fn a_cpu_loop_stops_at_the_job_deadline_without_an_instruction_budget() {
+        let pool = make_pool(1, 1);
+        let guard = pool.acquire().expect("should acquire VM");
+        let _deadline = ExecutionDeadlineGuard::install(&guard, ExecutionDeadline::new(0));
+        let _hook = DeadlineHookGuard::arm(&guard).expect("arm the deadline hook");
+
+        let err = guard
+            .load("while true do end")
+            .exec()
+            .expect_err("the loop must stop at the deadline");
+
+        assert!(
+            err.to_string().contains("exceeded its timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The deadline follows a coroutine like the budget does.
+    #[test]
+    fn the_job_deadline_applies_inside_a_coroutine() {
+        let pool = make_pool(1, 1);
+        let guard = pool.acquire().expect("should acquire VM");
+        let _deadline = ExecutionDeadlineGuard::install(&guard, ExecutionDeadline::new(0));
+        let _hook = DeadlineHookGuard::arm(&guard).expect("arm the deadline hook");
+
+        let err = guard
+            .load("coroutine.wrap(function() while true do end end)()")
+            .exec()
+            .expect_err("a coroutine must not escape the deadline");
+
+        assert!(
+            err.to_string().contains("exceeded its timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A deadline still ahead leaves ordinary code alone, with a budget
+    /// configured or not.
+    #[test]
+    fn a_future_job_deadline_leaves_normal_code_alone() {
+        for pool in [
+            make_pool(1, 1),
+            make_pool_with_instruction_limit(1, 10_000_000),
+        ] {
+            let guard = pool.acquire().expect("should acquire VM");
+            let _deadline = ExecutionDeadlineGuard::install(&guard, ExecutionDeadline::new(3600));
+            let _hook = DeadlineHookGuard::arm(&guard).expect("arm the deadline hook");
+
+            let result: i64 = guard
+                .load("local s = 0; for i = 1, 100000 do s = s + i end; return s")
+                .eval()
+                .expect("normal code should succeed");
+
+            assert_eq!(result, 5_000_050_000);
+        }
     }
 
     #[test]

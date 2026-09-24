@@ -37,7 +37,10 @@ use crap_cms::{
         collection::*,
         field::{FieldDefinition, FieldType, LocalizedString},
     },
-    db::{DbPool, query},
+    db::{
+        DbPool,
+        query::{self, TokenGrant},
+    },
 };
 use crap_cms_e2e::spawn_grpc_server;
 
@@ -75,8 +78,11 @@ fn proto_struct(pairs: &[(&str, &str)]) -> DataMap {
 fn plant_token(pool: &DbPool, user_id: &str, token: &str) {
     let conn = pool.get().expect("pool");
     let exp = Utc::now().timestamp() + 3600;
-    query::set_verification_token(&conn, "users", user_id, token, exp)
-        .expect("set verification token");
+    query::set_verification_token(
+        &conn,
+        &TokenGrant::builder("users", user_id, token, exp).build(),
+    )
+    .expect("set verification token");
 }
 
 // ── verify_email_valid_token_marks_verified_and_allows_login ─────────────

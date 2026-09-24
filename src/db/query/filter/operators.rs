@@ -1,5 +1,7 @@
 //! Operator SQL generation for individual filter conditions.
 
+use std::slice::from_ref;
+
 use anyhow::{Result, bail};
 
 use super::{
@@ -79,6 +81,43 @@ pub(super) fn coerce_filter_value(
         FieldType::Date => Ok(DbValue::Text(normalize_date_value(value))),
         _ => Ok(DbValue::Text(value.to_string())),
     }
+}
+
+/// Whether SQL accepts `op`'s operands against a value of `field_type` — the
+/// conditions [`build_op_condition`] refuses (an operand that is no number for
+/// a Number, no boolean for a Checkbox, a `like` pattern ending in a lone
+/// escape) fail it. The in-memory evaluator matches nothing for such an
+/// operand, as SQL returns nothing for it: the query is refused, or — where
+/// block types read a path differently — that block type's reading is
+/// dropped.
+pub(super) fn operand_fits(field_type: Option<&FieldType>, op: &FilterOp) -> bool {
+    if let FilterOp::Like(pattern) = op
+        && ends_with_lone_escape(&canonical_operand(field_type, pattern))
+    {
+        return false;
+    }
+
+    // A bare-day operand on a date covers its whole day, never coerced.
+    if matches!(field_type, Some(FieldType::Date)) && day_filter(op).is_some() {
+        return true;
+    }
+
+    let operands: &[String] = match op {
+        FilterOp::Equals(v)
+        | FilterOp::NotEquals(v)
+        | FilterOp::Like(v)
+        | FilterOp::Contains(v)
+        | FilterOp::GreaterThan(v)
+        | FilterOp::LessThan(v)
+        | FilterOp::GreaterThanOrEqual(v)
+        | FilterOp::LessThanOrEqual(v) => from_ref(v),
+        FilterOp::In(values) | FilterOp::NotIn(values) => values,
+        FilterOp::Exists | FilterOp::NotExists => &[],
+    };
+
+    operands
+        .iter()
+        .all(|v| coerce_filter_value("", field_type, op, v).is_ok())
 }
 
 /// Whether a `like` pattern ends in an escape character with nothing left to

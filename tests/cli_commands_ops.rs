@@ -170,14 +170,10 @@ fn user_lookup<'a>(
     email: Option<String>,
     id: Option<String>,
 ) -> UserLookup<'a> {
-    UserLookup {
-        pool,
-        registry,
-        collection,
-        email,
-        id,
-        locale: &LOCALE,
-    }
+    UserLookup::builder(pool, registry, collection, &LOCALE)
+        .email(email)
+        .id(id)
+        .build()
 }
 
 /// The CLI's own infrastructure over the fixture project, as `user` commands

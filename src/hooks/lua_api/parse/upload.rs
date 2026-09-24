@@ -235,6 +235,17 @@ fn hidden_number_field(name: &str) -> FieldDefinition {
     hidden_field(name, FieldType::Number)
 }
 
+/// A focal-point coordinate: a hidden number bounded to the `0.0`–`1.0`
+/// fraction of the image it describes, so every write surface's validation
+/// refuses a point outside the image.
+fn focal_field(name: &str) -> FieldDefinition {
+    FieldDefinition::builder(name, FieldType::Number)
+        .min(0.0)
+        .max(1.0)
+        .admin(FieldAdmin::builder().hidden(true).build())
+        .build()
+}
+
 /// Auto-inject upload metadata fields at position 0 (before user fields).
 /// Generates typed columns for each image size instead of a JSON blob.
 pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &CollectionUpload) {
@@ -248,8 +259,8 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
         hidden_number_field("width"),
         hidden_number_field("height"),
         hidden_text_field("url"),
-        hidden_number_field("focal_x"),
-        hidden_number_field("focal_y"),
+        focal_field("focal_x"),
+        focal_field("focal_y"),
     ];
 
     // Per-size typed fields, named and typed by the upload config itself so
@@ -429,6 +440,24 @@ mod tests {
         assert_eq!(fields[6].name, "focal_x");
         assert_eq!(fields[7].name, "focal_y");
         assert_eq!(fields[8].name, "alt_text");
+    }
+
+    /// Regression: the focal point is documented as a 0–1 fraction but its
+    /// columns carried no bounds, so any surface stored a point outside the
+    /// image.
+    #[test]
+    fn focal_point_columns_are_bounded_to_the_image() {
+        let mut fields = Vec::new();
+        inject_upload_fields(&mut fields, &CollectionUpload::new());
+
+        for name in ["focal_x", "focal_y"] {
+            let field = fields.iter().find(|f| f.name == name).expect(name);
+
+            assert_eq!(field.field_type, FieldType::Number);
+            assert_eq!(field.min, Some(0.0), "{name}");
+            assert_eq!(field.max, Some(1.0), "{name}");
+            assert!(field.admin.hidden, "{name}");
+        }
     }
 
     #[test]

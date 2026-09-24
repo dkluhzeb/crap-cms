@@ -19,10 +19,10 @@ use crate::{
             shared::paths,
         },
     },
-    core::{Registry, rate_limit::IP_VERIFY_EMAIL_KEYSPACE},
-    db::DbPool,
+    core::rate_limit::IP_VERIFY_EMAIL_KEYSPACE,
     service::{
-        ServiceContext, auth::consume_verification_token as service_consume_verification_token,
+        AppInfra, ServiceContext,
+        auth::consume_verification_token as service_consume_verification_token,
     },
 };
 
@@ -31,18 +31,14 @@ use crate::{
 ///
 /// Returns `true` if the email was successfully verified, `false` if the
 /// token is invalid, expired, or the account is locked.
-fn consume_verification_token(
-    pool: &DbPool,
-    registry: &Registry,
-    token: &str,
-) -> Result<bool, Error> {
-    let mut conn = pool.write()?;
+fn consume_verification_token(infra: &AppInfra, token: &str) -> Result<bool, Error> {
+    let mut conn = infra.pool.write()?;
     // SELECT-then-UPDATE (find token row, then mark verified): take a write lock
     // up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under concurrent
     // writers — same reasoning as the gRPC verify-email path.
     let tx = conn.transaction_immediate()?;
 
-    for def in registry.collections.values() {
+    for def in infra.registry.collections.values() {
         if !def.is_auth_collection() {
             continue;
         }
@@ -51,7 +47,10 @@ fn consume_verification_token(
             continue;
         }
 
-        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
+        let ctx = ServiceContext::collection(&def.slug, def)
+            .conn(&tx)
+            .locale_config(Some(&infra.locale_config))
+            .build();
 
         if service_consume_verification_token(&ctx, token)? {
             tx.commit()?;
@@ -88,12 +87,10 @@ pub async fn verify_email(
         return Redirect::to(paths::LOGIN);
     }
 
-    let pool = state.infra.pool.clone();
-    let registry = Arc::clone(&state.infra.registry);
+    let infra = Arc::clone(&state.infra);
     let token = query.token;
 
-    let result =
-        task::spawn_blocking(move || consume_verification_token(&pool, &registry, &token)).await;
+    let result = task::spawn_blocking(move || consume_verification_token(&infra, &token)).await;
 
     match result {
         Ok(Ok(true)) => Redirect::to(&paths::login_with_success("success_email_verified")),

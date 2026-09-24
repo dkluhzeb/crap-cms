@@ -339,6 +339,54 @@ pub fn list_snapshots(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> R
     .collect()
 }
 
+/// Parents whose **latest** version is a draft whose snapshot names `value` in
+/// one of `columns` — e.g. the url of a file the draft replaced its document's
+/// file with, which no published row names yet.
+///
+/// Each column is compared as a whole value, read from the snapshot's JSON
+/// with the backend's own extraction, so a snapshot naming the value in any
+/// other field — a text field a caller typed it into — is no candidate. The
+/// match is still a candidate filter, not a verdict: the caller reads each
+/// candidate's draft through its access-checked view and confirms the
+/// reference there.
+///
+/// Every candidate is returned. `columns` are identifiers the caller derives
+/// from the upload config, never request input; an empty list matches nothing.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub fn find_draft_parents_naming(
+    conn: &dyn DbConnection,
+    slug: &str,
+    columns: &[String],
+    value: &str,
+) -> Result<Vec<String>> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let table = version_table(slug);
+    let p1 = conn.placeholder(1);
+
+    let names_value = columns
+        .iter()
+        .map(|column| format!("{} = {p1}", conn.json_extract_expr("snapshot", column)))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    conn.query_all(
+        &format!(
+            "SELECT _parent FROM {table} WHERE _latest = 1 AND _status = 'draft' \
+             AND ({names_value})"
+        ),
+        &[DbValue::Text(value.to_string())],
+    )?
+    .iter()
+    .map(|row| row.get_string("_parent"))
+    .collect()
+}
+
 /// Find a specific version by its ID.
 ///
 /// # Errors
@@ -655,6 +703,66 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// Only a parent whose LATEST version is a draft naming the value in one
+    /// of the given columns is a candidate — a published or superseded
+    /// snapshot, a longer string containing the value, and the value typed
+    /// into any other field all stay out.
+    #[test]
+    fn find_draft_parents_naming_matches_only_latest_drafts_in_the_columns() {
+        let (_dir, conn) = setup_versions_db();
+        let url = "/uploads/media/ab_c%1_photo.png";
+        let columns = ["url".to_string(), "thumb_url".to_string()];
+
+        // p1: the latest version is a draft naming the url.
+        create_version(&conn, "posts", "p1", "published", &json!({"url": "/old"})).unwrap();
+        create_version(&conn, "posts", "p1", "draft", &json!({"url": url})).unwrap();
+
+        // p2: named it once, but a newer version no longer does.
+        create_version(&conn, "posts", "p2", "draft", &json!({"url": url})).unwrap();
+        create_version(&conn, "posts", "p2", "draft", &json!({"url": "/newer"})).unwrap();
+
+        // p3: a published latest version naming it.
+        create_version(&conn, "posts", "p3", "published", &json!({"url": url})).unwrap();
+
+        // p4: a longer string that merely contains it.
+        let longer = format!("{url}.webp");
+        create_version(&conn, "posts", "p4", "draft", &json!({"url": longer})).unwrap();
+
+        // p5: the value typed into a field that names no file.
+        create_version(&conn, "posts", "p5", "draft", &json!({"caption": url})).unwrap();
+
+        // p6: a size column naming it.
+        create_version(&conn, "posts", "p6", "draft", &json!({"thumb_url": url})).unwrap();
+
+        let mut found = find_draft_parents_naming(&conn, "posts", &columns, url).unwrap();
+        found.sort();
+
+        assert_eq!(found, vec!["p1".to_string(), "p6".to_string()]);
+        assert!(
+            find_draft_parents_naming(&conn, "posts", &[], url)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Regression: the candidates were capped, so enough drafts naming the
+    /// value crowded out the one the viewer could see. Every candidate is
+    /// returned.
+    #[test]
+    fn find_draft_parents_naming_returns_every_candidate() {
+        let (_dir, conn) = setup_versions_db();
+        let url = "/uploads/media/abcdefghij_photo.png";
+
+        for n in 0..12 {
+            let parent = format!("p{n}");
+            create_version(&conn, "posts", &parent, "draft", &json!({"url": url})).unwrap();
+        }
+
+        let found = find_draft_parents_naming(&conn, "posts", &["url".to_string()], url).unwrap();
+
+        assert_eq!(found.len(), 12, "{found:?}");
     }
 
     #[test]

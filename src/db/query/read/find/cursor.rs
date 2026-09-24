@@ -184,7 +184,11 @@ mod tests {
     use crate::db::query::cursor::{CursorData, SortDirection};
     use crate::db::query::read::find::find;
     use crate::db::query::read::find::test_helpers::*;
-    use crate::db::query::{SortValue, cursor::build_cursors, write::create};
+    use crate::db::query::{
+        SortValue,
+        cursor::{CursorKey, build_cursors},
+        write::create,
+    };
     use crate::db::{
         DbConnection, DbValue, Filter, FilterClause, FilterOp, FindQuery, InMemoryConn, pool,
     };
@@ -920,7 +924,10 @@ mod tests {
         assert_eq!(page1[9].id.as_ref(), "d05");
 
         // Page 2: forward with after_cursor (overfetch limit=11)
-        let (_, end_cursor_p1) = build_cursors(&page1, "created_at", SortDirection::Desc, false);
+        let (_, end_cursor_p1) = build_cursors(
+            &page1,
+            &CursorKey::builder("created_at", SortDirection::Desc).build(),
+        );
         let end_cursor_data = CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
         let q2 = FindQuery::builder()
             .limit(Some(limit + 1))
@@ -933,8 +940,10 @@ mod tests {
 
         // Grab the start_cursor of page 2 for going back
         let page2_trimmed = &page2[..page2_count];
-        let (start_cursor_p2, _) =
-            build_cursors(page2_trimmed, "created_at", SortDirection::Desc, false);
+        let (start_cursor_p2, _) = build_cursors(
+            page2_trimmed,
+            &CursorKey::builder("created_at", SortDirection::Desc).build(),
+        );
         let start_cursor_data = CursorData::decode(start_cursor_p2.as_ref().unwrap()).unwrap();
 
         // Go back: before_cursor (overfetch limit=11)
@@ -966,8 +975,10 @@ mod tests {
         );
 
         // Forward again: end_cursor of the back-result
-        let (_, end_cursor_p1_again) =
-            build_cursors(&page1_trimmed, "created_at", SortDirection::Desc, false);
+        let (_, end_cursor_p1_again) = build_cursors(
+            &page1_trimmed,
+            &CursorKey::builder("created_at", SortDirection::Desc).build(),
+        );
         let end_cursor_data_again =
             CursorData::decode(end_cursor_p1_again.as_ref().unwrap()).unwrap();
         let q2_again = FindQuery::builder()

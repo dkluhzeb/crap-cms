@@ -20,6 +20,8 @@ use crate::core::{
 /// - Strategy with `activates_on = { header = "" }` — would
 ///   silently never match (no HTTP header has an empty name).
 /// - Strategy with empty `authenticate` — no Lua hook to invoke.
+/// - `mfa = "custom"` without `mfa_deliver` (or the reverse), and
+///   `mfa_exempt_callbacks` without an MFA mode.
 ///
 /// Soft warnings (logged, boot continues):
 /// - `Always`-activated strategies (potential footgun — fires on
@@ -84,10 +86,14 @@ fn check_one_collection_methods(
         }
         match m {
             AuthMethod::PasswordLogin {
-                mfa, mfa_deliver, ..
+                mfa,
+                mfa_deliver,
+                mfa_exempt_callbacks,
+                ..
             } => {
                 password_count += 1;
                 check_mfa_pairing(slug, *mfa, mfa_deliver.is_some(), errors);
+                check_mfa_exemptions(slug, *mfa, mfa_exempt_callbacks, errors);
             }
             AuthMethod::Bearer { .. } => bearer_count += 1,
             AuthMethod::Strategy {
@@ -138,6 +144,17 @@ fn check_mfa_pairing(slug: &Slug, mfa: MfaMode, has_deliver: bool, errors: &mut 
                 MfaMode::Custom => unreachable!(),
                 MfaMode::Totp => "totp",
             }
+        ));
+    }
+}
+
+/// `mfa_exempt_callbacks` only relaxes an MFA step that exists — without an
+/// MFA mode it is dead config that suggests a second factor the collection
+/// never asks for.
+fn check_mfa_exemptions(slug: &Slug, mfa: MfaMode, exempt: &[String], errors: &mut Vec<String>) {
+    if mfa == MfaMode::Off && !exempt.is_empty() {
+        errors.push(format!(
+            "Collection '{slug}': mfa_exempt_callbacks is only valid with an mfa mode set"
         ));
     }
 }
@@ -275,6 +292,34 @@ mod tests {
             ],
         ));
         validate_auth_methods(&registry.read().unwrap()).expect("valid pairing passes");
+    }
+
+    /// MFA-exempt callbacks without an MFA mode are a startup error.
+    #[test]
+    fn validate_auth_methods_rejects_exemptions_without_mfa() {
+        let exempt = || vec!["okta".to_string()];
+
+        let msg = auth_error(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login_builder()
+                    .mfa_exempt_callbacks(exempt())
+                    .build(),
+            ],
+        ));
+        assert!(msg.contains("mfa_exempt_callbacks is only valid"), "{msg}");
+
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login_builder()
+                    .mfa(MfaMode::Totp)
+                    .mfa_exempt_callbacks(exempt())
+                    .build(),
+            ],
+        ));
+        validate_auth_methods(&registry.read().unwrap()).expect("exemption with mfa passes");
     }
 
     #[test]

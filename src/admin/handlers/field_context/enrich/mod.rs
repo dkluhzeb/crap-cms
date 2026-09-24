@@ -5,6 +5,7 @@ mod ctx;
 mod enrichment;
 mod field_types;
 mod gated;
+mod join;
 mod nested;
 mod options;
 mod sub_field_opts;

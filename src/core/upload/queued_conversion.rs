@@ -1,6 +1,9 @@
 //! Deferred format conversion for the image processing queue.
 
-use crate::core::upload::served_url;
+use crate::core::{
+    DocumentFields,
+    upload::{CollectionUpload, key_from_served_url, served_url},
+};
 
 /// A deferred format conversion to be inserted into the image processing queue.
 #[derive(Debug, Clone)]
@@ -36,11 +39,78 @@ impl QueuedConversion {
             url_column: format!("{size_name}_{format}_url"),
         }
     }
+
+    /// Every queued (`queue = true`) conversion the stored file described by
+    /// `fields` owes: one per configured deferred format for each generated
+    /// size whose `{size}_url` the fields carry.
+    ///
+    /// Derived from the stored size files rather than remembered anywhere: a
+    /// deferred variant is a function of the size file and the collection's
+    /// format options, so every write that makes a stored file live again — a
+    /// publish adopting a drafted file, a version restore — queues exactly the
+    /// jobs the current configuration calls for.
+    #[must_use]
+    pub fn deferred_for(fields: &DocumentFields, upload: &CollectionUpload) -> Vec<Self> {
+        let mut queued = Vec::new();
+
+        for size in &upload.image_sizes {
+            let Some(size_key) = fields
+                .get_str(&format!("{}_url", size.name))
+                .and_then(key_from_served_url)
+            else {
+                continue;
+            };
+
+            for (format, opts) in upload.format_options.deferred() {
+                queued.push(Self::for_size(size_key, &size.name, format, opts.quality));
+            }
+        }
+
+        queued
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::core::upload::{FormatQuality, ImageSizeBuilder};
+
+    fn upload(queue_webp: bool) -> CollectionUpload {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumbnail")
+                .width(300)
+                .height(300)
+                .build(),
+            ImageSizeBuilder::new("card").width(600).height(400).build(),
+        ];
+        upload.format_options.webp = Some(FormatQuality::new(80, queue_webp));
+        upload.format_options.avif = Some(FormatQuality::new(50, false));
+        upload
+    }
+
+    /// One queued job per deferred format for each size the fields carry — a
+    /// size the file never produced (no `{size}_url`) owes nothing, and a
+    /// format converted synchronously owes nothing.
+    #[test]
+    fn deferred_for_queues_each_carried_size_once_per_deferred_format() {
+        let fields: DocumentFields = [(
+            "thumbnail_url".to_string(),
+            json!("/uploads/media/abc_photo_thumbnail.png"),
+        )]
+        .into_iter()
+        .collect();
+
+        let queued = QueuedConversion::deferred_for(&fields, &upload(true));
+
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert_eq!(queued[0].source_path, "media/abc_photo_thumbnail.png");
+        assert_eq!(queued[0].url_column, "thumbnail_webp_url");
+
+        assert!(QueuedConversion::deferred_for(&fields, &upload(false)).is_empty());
+    }
 
     /// The variant sits beside its source with the format as its extension, and
     /// names the column and url the conversion job fills.

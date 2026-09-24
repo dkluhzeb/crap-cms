@@ -1,195 +1,105 @@
+//! Storing an inspected upload: the original, every configured size, and the
+//! format variants converted synchronously.
+
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
-use tracing::warn;
 
-use super::{
-    exif::apply_exif_orientation,
-    resize::process_image_sizes,
-    validate::{check_image_dimensions, decodable_image, sanitize_filename, validate_upload},
-};
+use super::{exif::apply_exif_orientation, resize::process_image_sizes};
 use crate::core::upload::{
-    CollectionUpload, ProcessedUpload, SharedStorage, UploadedFile, served_url,
+    CleanupGuard, CollectionUpload, InspectedUpload, ProcessedUpload, QueuedConversion,
+    SharedStorage, SizeResult, served_url,
 };
 
-/// RAII guard that deletes written files if not committed.
-/// Returned from [`process_upload`] so callers can commit only after
-/// their DB transaction succeeds — preventing orphaned files on rollback.
-pub struct CleanupGuard {
-    keys: Vec<String>,
-    storage: SharedStorage,
-    committed: bool,
+/// Where one upload's files go. Every field is required and it is built at the
+/// one call site, so a plain literal stands in for a builder.
+pub(super) struct Destination<'a> {
+    pub upload: &'a CollectionUpload,
+    pub storage: &'a SharedStorage,
+    pub collection_slug: &'a str,
 }
 
-impl std::fmt::Debug for CleanupGuard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CleanupGuard")
-            .field("keys", &self.keys)
-            .field("committed", &self.committed)
-            // `storage: SharedStorage` (Arc<dyn StorageBackend>) intentionally
-            // omitted — its `Debug` would print backend addresses, not state
-            // operators care about.
-            .finish_non_exhaustive()
-    }
-}
-
-impl CleanupGuard {
-    fn new(storage: SharedStorage) -> Self {
-        Self {
-            keys: Vec::new(),
-            storage,
-            committed: false,
-        }
-    }
-
-    pub(super) fn push(&mut self, key: String) {
-        self.keys.push(key);
-    }
-
-    /// Mark the guard as committed — files will NOT be cleaned up on drop.
-    /// Call this after the database transaction has been committed successfully.
-    pub fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        if !self.committed {
-            for key in &self.keys {
-                // Best-effort rollback cleanup; a failure here leaves an
-                // orphaned file, so log it rather than swallowing silently
-                // (mirrors `delete_upload_files` in metadata.rs).
-                if let Err(e) = self.storage.delete(key) {
-                    warn!("Failed to clean up orphaned upload '{key}' after rollback: {e}");
-                }
-            }
-        }
-    }
-}
-
-/// Length of the generated id every stored upload name starts with
-/// (`{id}_{sanitized}`).
-///
-/// [`save_original`] writes it and [`original_filename`] strips it, so the two
-/// read the same number and cannot drift.
-pub const STORED_ID_LEN: usize = 10;
-
-/// The original filename inside a stored upload name, or `None` when `stored`
-/// does not have the `{id}_{name}` shape the write path produces.
-///
-/// The id comes from `nanoid!()`, whose alphabet contains `_`, so the
-/// separator is the underscore at exactly [`STORED_ID_LEN`] — splitting on the
-/// *first* underscore truncates every name whose id happens to contain one.
-#[must_use]
-pub fn original_filename(stored: &str) -> Option<&str> {
-    // `_` is never a UTF-8 continuation byte, so finding one at this index
-    // also proves the index is a character boundary.
-    if stored.as_bytes().get(STORED_ID_LEN) != Some(&b'_') {
-        return None;
-    }
-
-    let name = &stored[STORED_ID_LEN + 1..];
-
-    (!name.is_empty()).then_some(name)
-}
-
-/// Save the original file to storage and return `(unique_filename, url)`.
+/// Save the original file to storage and return its served url.
 fn save_original(
-    file: &UploadedFile,
-    storage: &SharedStorage,
-    collection_slug: &str,
+    inspected: &InspectedUpload<'_>,
+    dest: &Destination<'_>,
     guard: &mut CleanupGuard,
-) -> Result<(String, String)> {
-    let id = nanoid::nanoid!(STORED_ID_LEN);
-    let sanitized = sanitize_filename(&file.filename);
-    let unique_filename = format!("{id}_{sanitized}");
+) -> Result<String> {
+    let key = format!("{}/{}", dest.collection_slug, inspected.columns.filename);
 
-    let original_key = format!("{collection_slug}/{unique_filename}");
+    dest.storage
+        .put(&key, &inspected.file.data, &inspected.columns.mime_type)
+        .with_context(|| format!("Failed to write file: {key}"))?;
 
-    storage
-        .put(&original_key, &file.data, &file.content_type)
-        .with_context(|| format!("Failed to write file: {original_key}"))?;
+    guard.push(key.clone());
 
-    guard.push(original_key.clone());
-
-    let url = served_url(&original_key);
-
-    Ok((unique_filename, url))
+    Ok(served_url(&key))
 }
 
-/// Process an uploaded file: validate, save via storage backend, generate image sizes + format variants.
+/// The resized sizes of a decodable image, and the format conversions they
+/// leave to the queue. Anything else — a non-image, or an `image/*` type this
+/// build has no decoder for (SVG, and AVIF unless `image` is built with
+/// `avif-native`) — is stored exactly as uploaded, with no sizes.
+fn generate_sizes(
+    inspected: &InspectedUpload<'_>,
+    dest: &Destination<'_>,
+    guard: &mut CleanupGuard,
+) -> Result<(HashMap<String, SizeResult>, Vec<QueuedConversion>)> {
+    if !inspected.is_decodable_image() {
+        return Ok((HashMap::new(), Vec::new()));
+    }
+
+    let data = &inspected.file.data;
+    let img = image::load_from_memory(data).context("Failed to decode image")?;
+
+    // Phones and cameras commonly record images sideways with an EXIF
+    // `Orientation` tag instructing the renderer to rotate. The `image` crate
+    // ignores the tag, so without this step every portrait photo would ship
+    // sideways through the resize and format-conversion pipeline. Re-encoding
+    // into PNG/WebP/AVIF below also strips the remaining EXIF metadata (GPS
+    // coords, camera identifiers) — a privacy win for any uploads served
+    // publicly.
+    let img = apply_exif_orientation(data, img);
+
+    process_image_sizes(&img, &inspected.columns.filename, dest, guard)
+}
+
+/// Store an inspected upload: save the original, generate image sizes and
+/// format variants.
 ///
 /// Returns both the processed upload metadata and a [`CleanupGuard`].
 /// The caller **must** call `guard.commit()` after their DB transaction succeeds.
 /// If dropped without committing, the guard removes all written files.
 ///
-/// `file` and `storage` are borrowed; callers driving this from
-/// `spawn_blocking` own them in the closure and pass references in.
+/// Validation happened in [`inspect_upload`](super::inspect_upload), and the
+/// file is stored with exactly the columns it reported.
 ///
 /// # Errors
 ///
-/// Returns an error if upload validation fails or any storage write fails.
+/// Returns an error if the image cannot be decoded or any storage write fails.
 pub fn process_upload(
-    file: &UploadedFile,
+    inspected: InspectedUpload<'_>,
     upload_config: &CollectionUpload,
     storage: &SharedStorage,
     collection_slug: &str,
-    global_max_file_size: u64,
 ) -> Result<(ProcessedUpload, CleanupGuard)> {
-    validate_upload(file, upload_config, global_max_file_size)?;
+    let dest = Destination {
+        upload: upload_config,
+        storage,
+        collection_slug,
+    };
 
     let mut guard = CleanupGuard::new(storage.clone());
-    let (unique_filename, url) = save_original(file, storage, collection_slug, &mut guard)?;
 
-    // Only a type this build can decode enters the pixel pipeline. An
-    // `image/*` type without a decoder (SVG, and AVIF unless `image` is built
-    // with `avif-native`) is stored exactly as uploaded, with no dimensions
-    // and no resized or converted variants.
-    let mut width = None;
-    let mut height = None;
-    let mut sizes = HashMap::new();
-    let mut queued_conversions = Vec::new();
-
-    if decodable_image(&file.content_type) {
-        check_image_dimensions(&file.data)?;
-
-        let img = image::load_from_memory(&file.data).context("Failed to decode image")?;
-        // Phones and cameras commonly record images sideways with an EXIF
-        // `Orientation` tag instructing the renderer to rotate. The `image`
-        // crate ignores the tag, so without this step every portrait photo
-        // would ship sideways through the resize and format-conversion
-        // pipeline. Re-encoding into PNG/WebP/AVIF below also strips the
-        // remaining EXIF metadata (GPS coords, camera identifiers) — a
-        // privacy win for any uploads served publicly.
-        let img = apply_exif_orientation(&file.data, img);
-
-        width = Some(img.width());
-        height = Some(img.height());
-
-        let (s, q) = process_image_sizes(
-            &img,
-            &unique_filename,
-            collection_slug,
-            upload_config,
-            storage,
-            &mut guard,
-        )?;
-
-        sizes = s;
-        queued_conversions = q;
-    }
+    let url = save_original(&inspected, &dest, &mut guard)?;
+    let (sizes, queued_conversions) = generate_sizes(&inspected, &dest, &mut guard)?;
 
     let processed = ProcessedUpload {
-        filename: unique_filename,
-        mime_type: file.content_type.clone(),
-        filesize: file.data.len() as u64,
-        width,
-        height,
+        file: inspected.columns,
         url,
         sizes,
         queued_conversions,
-        created_files: guard.keys.clone(),
+        created_files: guard.keys().to_vec(),
     };
 
     Ok((processed, guard))
@@ -213,13 +123,13 @@ pub fn process_upload(
 mod tests {
     use std::sync::Arc;
 
+    use image::{ImageBuffer, ImageEncoder, Rgba};
+
     use super::*;
     use crate::core::upload::{
         FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder, UploadedFile,
-        storage::LocalStorage,
+        exif::jpeg_with_orientation, inspect_upload, storage::LocalStorage,
     };
-
-    use image::{ImageBuffer, ImageEncoder, Rgba};
 
     /// Default global max file size used across tests (50 MB).
     const DEFAULT_MAX: u64 = 50 * 1024 * 1024;
@@ -242,209 +152,58 @@ mod tests {
         Arc::new(LocalStorage::new(tmp.path().join("uploads")))
     }
 
-    /// Regression: the original name was recovered by splitting on the FIRST
-    /// underscore, but `nanoid!()`'s alphabet contains `_` — so roughly one id
-    /// in seven truncated the name a download was offered under.
-    #[test]
-    fn the_original_name_survives_an_id_that_contains_underscores() {
-        assert_eq!(
-            original_filename("ab_cd12_x9_quarterly-report.pdf"),
-            Some("quarterly-report.pdf"),
-        );
-        assert_eq!(
-            original_filename("V1StGXR8_Z_my_notes.txt"),
-            Some("my_notes.txt"),
-        );
+    /// Inspect `file`, then store it — the two steps an upload write takes.
+    fn process(
+        file: &UploadedFile,
+        config: &CollectionUpload,
+        storage: &SharedStorage,
+        slug: &str,
+        max: u64,
+    ) -> Result<(ProcessedUpload, CleanupGuard)> {
+        let inspected = inspect_upload(file, config, max)?;
+
+        process_upload(inspected, config, storage, slug)
     }
 
-    /// A name that is not `{id}_{name}` is not a stored upload name: no
-    /// separator at the id length, nothing after it, or too short.
+    /// The stored file carries exactly the columns its inspection reported —
+    /// the ones a check made before storing judged — under the name the
+    /// inspection chose.
     #[test]
-    fn a_name_without_the_stored_shape_yields_nothing() {
-        assert!(original_filename("photo.png").is_none());
-        assert!(original_filename("abcdefghijphoto.png").is_none());
-        assert!(original_filename("abcdefghij_").is_none());
-        assert!(original_filename("").is_none());
-    }
-
-    /// The writer and the parser agree on the id length: a name built the way
-    /// `save_original` builds one round-trips exactly.
-    #[test]
-    fn a_freshly_built_stored_name_round_trips() {
-        let id = nanoid::nanoid!(STORED_ID_LEN);
-        let stored = format!("{id}_holiday-photo.jpg");
-
-        assert_eq!(original_filename(&stored), Some("holiday-photo.jpg"));
-    }
-
-    #[test]
-    fn magic_byte_verification_rejects_mismatched_type() {
-        // PNG magic bytes but claimed as text/plain
-        let png_header = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde";
-        let file = UploadedFile {
-            filename: "evil.txt".to_string(),
-            content_type: "text/plain".to_string(),
-            data: png_header.to_vec(),
-        };
-        let upload_config = CollectionUpload::default();
-        let tmp = tempfile::tempdir().unwrap();
+    fn the_stored_file_carries_the_inspected_columns() {
+        let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let result = process_upload(&file, &upload_config, &storage, "test", 10_000_000);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("does not match claimed type"), "Error: {err}");
-    }
-
-    #[test]
-    fn magic_byte_verification_allows_matching_type() {
-        // PNG magic bytes with correct content_type
-        let png_header = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde";
         let file = UploadedFile {
-            filename: "image.png".to_string(),
-            content_type: "image/png".to_string(),
-            data: png_header.to_vec(),
-        };
-        let upload_config = CollectionUpload {
-            mime_types: vec!["image/*".into()],
-            ..Default::default()
-        };
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = test_storage(&tmp);
-        // Won't fully succeed (no valid full PNG) but passes the MIME check
-        let result = process_upload(&file, &upload_config, &storage, "test", 10_000_000);
-        // Should pass MIME validation (might fail later on image processing, that's OK)
-        let err_msg = result
-            .as_ref()
-            .err()
-            .map(std::string::ToString::to_string)
-            .unwrap_or_default();
-        assert!(
-            !err_msg.contains("does not match claimed type"),
-            "Unexpected mismatch: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn magic_byte_verification_passes_text_files() {
-        // Plain text has no magic bytes — infer returns None, so it passes through
-        let file = UploadedFile {
-            filename: "readme.txt".to_string(),
-            content_type: "text/plain".to_string(),
-            data: b"Hello, world!".to_vec(),
-        };
-        let upload_config = CollectionUpload::default();
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = test_storage(&tmp);
-        let result = process_upload(&file, &upload_config, &storage, "test", 10_000_000);
-        let err_msg = result
-            .as_ref()
-            .err()
-            .map(std::string::ToString::to_string)
-            .unwrap_or_default();
-        assert!(
-            !err_msg.contains("does not match claimed type"),
-            "Unexpected mismatch: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn mime_verification_is_one_directional() {
-        // Regression: the old bidirectional check allowed bypasses where
-        // mime_matches(claimed, detected) passed even though
-        // mime_matches(detected, claimed) failed.
-        //
-        // A PNG file claimed as "image/jpeg" must be rejected: the detected
-        // MIME "image/png" does not match claimed "image/jpeg".
-        let png_data = create_test_png(10, 10);
-        let file = UploadedFile {
-            filename: "fake.jpg".to_string(),
+            filename: "phone.jpg".to_string(),
             content_type: "image/jpeg".to_string(),
-            data: png_data,
+            data: jpeg_with_orientation(8, 4, 6),
         };
         let config = CollectionUpload {
             enabled: true,
-            mime_types: vec!["image/*".into()],
+            image_sizes: vec![
+                ImageSizeBuilder::new("thumb")
+                    .width(2)
+                    .height(4)
+                    .fit(ImageFit::Cover)
+                    .build(),
+            ],
             ..Default::default()
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = test_storage(&tmp);
 
-        let result = process_upload(&file, &config, &storage, "test", 10_000_000);
+        let inspected = inspect_upload(&file, &config, DEFAULT_MAX).expect("valid");
+        let columns = inspected.columns().clone();
+
+        let (result, _guard) =
+            process_upload(inspected, &config, &storage, "media").expect("stored");
+
+        assert_eq!(result.file.filename, columns.filename);
+        assert_eq!(result.file.mime_type, "image/jpeg");
+        assert_eq!(result.file.filesize, columns.filesize);
+        assert_eq!((result.file.width, result.file.height), (Some(4), Some(8)));
         assert!(
-            result.is_err(),
-            "Mismatched detected vs claimed MIME should fail"
+            storage
+                .exists(&format!("media/{}", columns.filename))
+                .unwrap()
         );
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("does not match claimed type"),
-            "Error should indicate MIME mismatch: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn process_upload_rejects_invalid_mime() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-        let file = UploadedFile {
-            filename: "test.txt".to_string(),
-            content_type: "text/plain".to_string(),
-            data: b"hello".to_vec(),
-        };
-        let config = CollectionUpload {
-            enabled: true,
-            mime_types: vec!["image/*".into()],
-            ..Default::default()
-        };
-        let result = process_upload(&file, &config, &storage, "posts", DEFAULT_MAX);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("text/plain"),
-            "Error should mention the rejected MIME type"
-        );
-    }
-
-    #[test]
-    fn process_upload_rejects_oversized_file() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-        let file = UploadedFile {
-            filename: "big.bin".to_string(),
-            content_type: "application/octet-stream".to_string(),
-            data: vec![0u8; 1024], // 1KB
-        };
-        let config = CollectionUpload {
-            enabled: true,
-            max_file_size: Some(512), // only allow 512 bytes
-            ..Default::default()
-        };
-        let result = process_upload(&file, &config, &storage, "posts", DEFAULT_MAX);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("exceeds"),
-            "Error should mention size exceeded"
-        );
-    }
-
-    #[test]
-    fn process_upload_uses_global_max_when_no_per_collection_limit() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-        let file = UploadedFile {
-            filename: "big.bin".to_string(),
-            content_type: "application/octet-stream".to_string(),
-            data: vec![0u8; 1024], // 1KB
-        };
-        let config = CollectionUpload {
-            enabled: true,
-            ..Default::default()
-        };
-        // Global max is 512 bytes
-        let result = process_upload(&file, &config, &storage, "posts", 512);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds"));
     }
 
     #[test]
@@ -460,18 +219,18 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(&file, &config, &storage, "docs", DEFAULT_MAX)
+        let (result, _guard) = process(&file, &config, &storage, "docs", DEFAULT_MAX)
             .expect("should succeed for non-image");
         assert!(result.url.starts_with("/uploads/docs/"));
         assert!(result.url.ends_with("document.pdf"));
-        assert_eq!(result.mime_type, "application/pdf");
-        assert_eq!(result.filesize, 21);
-        assert!(result.width.is_none());
-        assert!(result.height.is_none());
+        assert_eq!(result.file.mime_type, "application/pdf");
+        assert_eq!(result.file.filesize, 21);
+        assert!(result.file.width.is_none());
+        assert!(result.file.height.is_none());
         assert!(result.sizes.is_empty());
 
         // Verify file was written via storage
-        let key = format!("docs/{}", result.filename);
+        let key = format!("docs/{}", result.file.filename);
         assert!(
             storage.exists(&key).unwrap(),
             "File should exist in storage"
@@ -509,68 +268,19 @@ mod tests {
         };
 
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
 
-        assert_eq!(result.mime_type, "image/svg+xml");
-        assert!(result.width.is_none(), "no decoder, so no dimensions");
-        assert!(result.height.is_none());
+        assert_eq!(result.file.mime_type, "image/svg+xml");
+        assert!(result.file.width.is_none(), "no decoder, so no dimensions");
+        assert!(result.file.height.is_none());
         assert!(result.sizes.is_empty(), "an SVG is not resized");
         assert!(result.queued_conversions.is_empty());
 
-        let key = format!("media/{}", result.filename);
+        let key = format!("media/{}", result.file.filename);
         assert_eq!(
             storage.get(&key).expect("stored SVG"),
             svg.to_vec(),
             "the SVG must be stored exactly as uploaded"
-        );
-    }
-
-    /// The sanitising path is what makes storing SVGs safe, so it has to run
-    /// on the way in: a scripted SVG never reaches storage.
-    #[test]
-    fn process_upload_rejects_a_scripted_svg() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
-        let file = UploadedFile {
-            filename: "evil.svg".to_string(),
-            content_type: "image/svg+xml".to_string(),
-            data: svg.to_vec(),
-        };
-        let config = CollectionUpload {
-            enabled: true,
-            mime_types: vec!["image/*".into()],
-            ..Default::default()
-        };
-
-        let err = process_upload(&file, &config, &storage, "media", DEFAULT_MAX)
-            .expect_err("a scripted SVG must be rejected")
-            .to_string();
-        assert!(err.contains("<script>"), "unexpected error: {err}");
-    }
-
-    /// An XXE payload is rejected on the same path.
-    #[test]
-    fn process_upload_rejects_an_svg_with_a_doctype() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-        let svg = br#"<?xml version="1.0"?>
-<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
-<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>"#;
-        let file = UploadedFile {
-            filename: "xxe.svg".to_string(),
-            content_type: "image/svg+xml".to_string(),
-            data: svg.to_vec(),
-        };
-        let config = CollectionUpload {
-            enabled: true,
-            mime_types: vec!["image/*".into()],
-            ..Default::default()
-        };
-
-        assert!(
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).is_err(),
-            "an SVG carrying a DOCTYPE must not reach storage"
         );
     }
 
@@ -588,11 +298,11 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(&file, &config, &storage, "media", DEFAULT_MAX)
+        let (result, _guard) = process(&file, &config, &storage, "media", DEFAULT_MAX)
             .expect("should succeed for image");
-        assert_eq!(result.mime_type, "image/png");
-        assert_eq!(result.width, Some(50));
-        assert_eq!(result.height, Some(50));
+        assert_eq!(result.file.mime_type, "image/png");
+        assert_eq!(result.file.width, Some(50));
+        assert_eq!(result.file.height, Some(50));
         assert!(
             result.sizes.is_empty(),
             "No image_sizes configured, so no sizes generated"
@@ -621,9 +331,9 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
-        assert_eq!(result.width, Some(200));
-        assert_eq!(result.height, Some(200));
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+        assert_eq!(result.file.width, Some(200));
+        assert_eq!(result.file.height, Some(200));
         assert!(result.sizes.contains_key("thumb"));
         let thumb = &result.sizes["thumb"];
         assert_eq!(thumb.width, 50);
@@ -667,7 +377,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("webp"),
@@ -703,7 +413,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("avif"),
@@ -739,7 +449,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
         let icon = &result.sizes["icon"];
         assert!(icon.formats.contains_key("webp"));
         assert!(icon.formats.contains_key("avif"));
@@ -759,12 +469,12 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(&file, &config, &storage, "media", DEFAULT_MAX)
+        let (result, _guard) = process(&file, &config, &storage, "media", DEFAULT_MAX)
             .expect("should succeed even without extension");
         // The filename should have the nanoid prefix and sanitized name
-        assert!(result.filename.contains("noext"));
-        assert!(result.width.is_none());
-        assert!(result.height.is_none());
+        assert!(result.file.filename.contains("noext"));
+        assert!(result.file.width.is_none());
+        assert!(result.file.height.is_none());
     }
 
     #[test]
@@ -790,7 +500,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
         let thumb = &result.sizes["thumb"];
         assert!(
             thumb.url.ends_with("_thumb.png"),
@@ -825,7 +535,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
 
         // Sizes should be created but format variants should NOT exist
         let small = &result.sizes["small"];
@@ -889,7 +599,7 @@ mod tests {
             ..Default::default()
         };
         let (result, _guard) =
-            process_upload(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "media", DEFAULT_MAX).expect("should succeed");
 
         assert!(!result.queued_conversions.is_empty());
 
@@ -931,9 +641,9 @@ mod tests {
             ..Default::default()
         };
         let (processed, guard) =
-            process_upload(&file, &config, &storage, "test", DEFAULT_MAX).expect("should succeed");
+            process(&file, &config, &storage, "test", DEFAULT_MAX).expect("should succeed");
 
-        let key = format!("test/{}", processed.filename);
+        let key = format!("test/{}", processed.file.filename);
         assert!(
             storage.exists(&key).unwrap(),
             "File should exist after upload"
@@ -943,50 +653,6 @@ mod tests {
         assert!(
             !storage.exists(&key).unwrap(),
             "File should be cleaned up when guard drops without commit"
-        );
-    }
-
-    #[test]
-    fn cleanup_guard_removes_files_on_drop() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-
-        storage.put("a.txt", b"a", "text/plain").unwrap();
-        storage.put("b.txt", b"b", "text/plain").unwrap();
-
-        {
-            let mut guard = CleanupGuard::new(storage.clone());
-            guard.push("a.txt".to_string());
-            guard.push("b.txt".to_string());
-            // guard drops here without commit
-        }
-
-        assert!(
-            !storage.exists("a.txt").unwrap(),
-            "a.txt should be removed on drop"
-        );
-        assert!(
-            !storage.exists("b.txt").unwrap(),
-            "b.txt should be removed on drop"
-        );
-    }
-
-    #[test]
-    fn cleanup_guard_keeps_files_on_commit() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage = test_storage(&tmp);
-
-        storage.put("keep.txt", b"keep", "text/plain").unwrap();
-
-        {
-            let mut guard = CleanupGuard::new(storage.clone());
-            guard.push("keep.txt".to_string());
-            guard.commit();
-        }
-
-        assert!(
-            storage.exists("keep.txt").unwrap(),
-            "keep.txt should remain after commit"
         );
     }
 }

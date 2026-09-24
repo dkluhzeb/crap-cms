@@ -1,10 +1,12 @@
 //! Core types used across the lifecycle module.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::Arc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::{Arc, atomic::AtomicU64},
+};
 
-use mlua::Lua;
+use mlua::{Error as LuaError, Error::RuntimeError, Lua, Result as LuaResult};
 
 use crate::{
     config::LocaleConfig,
@@ -13,7 +15,10 @@ use crate::{
         SharedInvalidationTransport, SharedStorage,
     },
     db::{DbConnection, DbPool},
-    service::{AppInfra, DeferredQueue, EventQueue, ServiceContext, VerificationQueue},
+    service::{
+        AppInfra, DeferredQueue, EmailContext, EventQueue, OpDeadline, ServiceContext,
+        VerificationQueue,
+    },
     typegen::lua::LuaAlias,
 };
 
@@ -179,10 +184,10 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
 /// The live instruction counter armed on a leased VM (see
-/// `vm_pool::set_instruction_hook`). Kept in `app_data` so a Rust-driven batch
+/// `vm_pool::set_vm_hook`). Kept in `app_data` so a Rust-driven batch
 /// loop can re-arm the budget per document instead of spending one budget
 /// across a whole page.
-pub(crate) struct InstructionCounter(pub(crate) std::sync::Arc<std::sync::atomic::AtomicU64>);
+pub(crate) struct InstructionCounter(pub(crate) Arc<AtomicU64>);
 
 /// Marker installed in Lua `app_data` for the duration of an `after_read` hook
 /// call. The CRUD entry points refuse to run while it is present — `after_read`
@@ -205,6 +210,109 @@ impl<'a> AfterReadScopeGuard<'a> {
 impl Drop for AfterReadScopeGuard<'_> {
     fn drop(&mut self) {
         self.0.remove_app_data::<AfterReadScope>();
+    }
+}
+
+/// Wall-clock deadline of the Lua job handler running on this VM.
+///
+/// A job runs on the blocking pool, which Tokio cannot cancel, so the
+/// scheduler's timer alone could only *report* a timeout while the handler
+/// kept running — and keep committing — next to its own retry. The handler
+/// therefore stops itself instead: the VM's instruction hook and every
+/// database, HTTP and email entry point check this deadline, and once it has
+/// passed they raise [`ExecutionDeadline::error`]. The pool-mode transaction
+/// scope checks it again right before `COMMIT`, so the operation that was in
+/// flight when the deadline passed is rolled back rather than committed late.
+///
+/// Installed only for a job handler's lease (see [`ExecutionDeadlineGuard`]);
+/// every other VM use has no deadline and the checks are no-ops.
+#[derive(Clone, Copy)]
+pub(crate) struct ExecutionDeadline {
+    deadline: OpDeadline,
+    timeout_secs: u64,
+}
+
+impl ExecutionDeadline {
+    /// A deadline `timeout_secs` from now. An unrepresentable instant fails
+    /// closed (already expired) — see [`OpDeadline::in_secs`].
+    pub(crate) fn new(timeout_secs: u64) -> Self {
+        Self {
+            deadline: OpDeadline::in_secs(timeout_secs),
+            timeout_secs,
+        }
+    }
+
+    /// Whether the deadline has passed.
+    pub(crate) fn expired(self) -> bool {
+        self.deadline.expired()
+    }
+
+    /// The error every check raises once the deadline has passed.
+    pub(crate) fn error(self) -> LuaError {
+        RuntimeError(format!(
+            "job exceeded its timeout of {}s and was stopped — the operation in \
+             flight was rolled back (writes committed before the deadline stay). \
+             Raise the job's `timeout` or split the work into smaller runs.",
+            self.timeout_secs
+        ))
+    }
+}
+
+/// Refuse to continue once this VM's job deadline has passed. A no-op on a
+/// VM without one (every non-job use).
+///
+/// # Errors
+///
+/// [`ExecutionDeadline::error`] once the installed deadline has passed.
+pub(crate) fn check_execution_deadline(lua: &Lua) -> LuaResult<()> {
+    let Some(deadline) = lua.app_data_ref::<ExecutionDeadline>().map(|d| *d) else {
+        return Ok(());
+    };
+
+    if !deadline.expired() {
+        return Ok(());
+    }
+
+    Err(deadline.error())
+}
+
+/// RAII installer for [`ExecutionDeadline`]: present while held, and the
+/// previous value (normally none) restored on drop — including on unwind, so
+/// a VM never returns to the pool still carrying a job's deadline.
+pub(crate) struct ExecutionDeadlineGuard<'a> {
+    lua: &'a Lua,
+    prev: Option<ExecutionDeadline>,
+}
+
+impl<'a> ExecutionDeadlineGuard<'a> {
+    #[must_use]
+    pub(crate) fn install(lua: &'a Lua, deadline: ExecutionDeadline) -> Self {
+        let prev = lua.app_data_ref::<ExecutionDeadline>().map(|d| *d);
+
+        lua.set_app_data(deadline);
+
+        Self { lua, prev }
+    }
+
+    /// Lift the VM's deadline (if any) for the guard's lifetime and put it
+    /// back on drop.
+    ///
+    /// For the `crap.tx.on_commit` / `on_rollback` effects of a transaction
+    /// that has already resolved: they are part of that outcome — the
+    /// side effect of a committed write, the compensation of a rolled-back
+    /// one — not new work of the handler, so a job past its deadline still
+    /// runs them.
+    #[must_use]
+    pub(crate) fn suspend(lua: &'a Lua) -> Self {
+        let prev = lua.remove_app_data::<ExecutionDeadline>();
+
+        Self { lua, prev }
+    }
+}
+
+impl Drop for ExecutionDeadlineGuard<'_> {
+    fn drop(&mut self) {
+        restore_slot(self.lua, self.prev.take());
     }
 }
 
@@ -282,6 +390,14 @@ pub struct LuaCrudInfra {
     pub cache: Option<SharedCache>,
     pub event_queue: Option<EventQueue>,
     pub verification_queue: Option<VerificationQueue>,
+    /// The email context a Lua-created account's verification is issued
+    /// through. With it, `ServiceContext::maybe_send_verification` mints the
+    /// token and queues the email on the write's own transaction — exactly
+    /// as a service write does — so an account created from a job, a custom
+    /// route, a migration or `on_init` is never left without a verification
+    /// path. `None` falls back to `verification_queue` (flushed by the
+    /// enclosing service write).
+    pub email_ctx: Option<EmailContext>,
     /// Per-transaction queue for `crap.tx.on_commit` / `on_rollback`
     /// registrations. Set by the pool-write envelope (and temporarily by
     /// `crap.transaction(fn)`); `None` in contexts with no enclosing
@@ -313,13 +429,14 @@ pub struct LuaCrudInfra {
 pub type FileCleanupQueue = Rc<RefCell<Vec<String>>>;
 
 impl LuaCrudInfra {
-    /// Pool-mode CRUD infra (cache + event transport, no queues) for the
-    /// standalone surfaces that run Lua CRUD outside a service write
-    /// envelope — job handlers and custom-route handlers. Both need
-    /// writes to invalidate the populate cache and publish live events
-    /// like every other surface; the per-invocation event queue is
-    /// injected by the caller (`run_job_handler` / `run_route_handler`)
-    /// and flushed post-handler.
+    /// Pool-mode CRUD infra (cache, event transport and email context, no
+    /// queues) for the standalone surfaces that run Lua CRUD outside a
+    /// service write envelope — job handlers, custom-route handlers,
+    /// migrations and `on_init` hooks. They need writes to invalidate the
+    /// populate cache, publish live events and issue account verifications
+    /// like every other surface; the per-invocation event queue is injected
+    /// by the caller (`run_job_handler` / `run_route_handler` /
+    /// `run_in_system_tx`) and flushed post-handler.
     #[must_use]
     pub fn for_pool_crud(infra: &AppInfra) -> Self {
         Self {
@@ -327,6 +444,7 @@ impl LuaCrudInfra {
             cache: Some(infra.cache.clone()),
             event_queue: None,
             verification_queue: None,
+            email_ctx: Some(infra.email.clone()),
             deferred: None,
             file_cleanup: None,
             cache_dirty: None,
@@ -334,7 +452,8 @@ impl LuaCrudInfra {
     }
 
     /// Build from a parent `ServiceContext`, attaching the given queues.
-    /// Clones the context's event transport and cache (cheap Arc clones).
+    /// Clones the context's event transport, cache and email context (cheap
+    /// clones).
     #[must_use]
     pub fn from_ctx(
         ctx: &ServiceContext,
@@ -346,6 +465,7 @@ impl LuaCrudInfra {
             cache: ctx.cache.clone(),
             event_queue,
             verification_queue,
+            email_ctx: ctx.email_ctx.clone(),
             deferred: None,
             file_cleanup: None,
             cache_dirty: None,
@@ -647,6 +767,48 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
+    }
+
+    /// No deadline installed (every non-job VM use): the check never refuses.
+    #[test]
+    fn no_execution_deadline_never_refuses() {
+        let lua = Lua::new();
+
+        assert!(check_execution_deadline(&lua).is_ok());
+    }
+
+    /// A deadline still in the future lets the handler continue; a passed one
+    /// refuses with the timeout error naming the configured budget.
+    #[test]
+    fn a_passed_execution_deadline_refuses_with_the_timeout_error() {
+        let lua = Lua::new();
+
+        {
+            let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(60));
+            assert!(check_execution_deadline(&lua).is_ok());
+        }
+
+        let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(u64::MAX));
+        let err = check_execution_deadline(&lua)
+            .expect_err("an unrepresentable deadline fails closed")
+            .to_string();
+
+        assert!(err.contains("exceeded its timeout"), "{err}");
+    }
+
+    /// The guard removes the deadline on drop, so a VM never returns to the
+    /// pool still carrying a job's deadline.
+    #[test]
+    fn the_execution_deadline_guard_removes_the_deadline_on_drop() {
+        let lua = Lua::new();
+
+        {
+            let _guard = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(0));
+            assert!(check_execution_deadline(&lua).is_err());
+        }
+
+        assert!(lua.app_data_ref::<ExecutionDeadline>().is_none());
+        assert!(check_execution_deadline(&lua).is_ok());
     }
 
     /// Regression: the VM-infra storage must be retrievable from Lua `app_data`

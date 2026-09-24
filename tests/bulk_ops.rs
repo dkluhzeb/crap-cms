@@ -91,14 +91,10 @@ fn ctx(s: &Setup) -> ServiceContext<'_> {
 }
 
 fn update_opts(max_documents: i64) -> UpdateManyOptions<'static> {
-    UpdateManyOptions {
-        locale_ctx: None,
-        run_hooks: false,
-        draft: false,
-        ui_locale: None,
-        max_documents,
-        deadline: OpDeadline::none(),
-    }
+    UpdateManyOptions::builder()
+        .run_hooks(false)
+        .max_documents(max_documents)
+        .build()
 }
 
 fn count_all(s: &Setup) -> usize {
@@ -676,14 +672,11 @@ return M
         mode: LocaleMode::Default,
         config: config.locale.clone(),
     };
-    let opts = UpdateManyOptions {
-        locale_ctx: Some(&lctx),
-        run_hooks: true,
-        draft: false,
-        ui_locale: Some("fr".to_string()),
-        max_documents: 100,
-        deadline: OpDeadline::none(),
-    };
+    let opts = UpdateManyOptions::builder()
+        .locale_ctx(Some(&lctx))
+        .ui_locale(Some("fr".to_string()))
+        .max_documents(100)
+        .build();
     let mut data = DocumentFields::new();
     data.insert("status".to_string(), json!("published"));
 

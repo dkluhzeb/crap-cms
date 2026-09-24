@@ -48,6 +48,7 @@ fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Sta
 
     let ctx = ServiceContext::collection(&input.slug, &input.def)
         .conn(&tx)
+        .locale_config(Some(&input.infra.locale_config))
         .build();
 
     let user_id = consume_reset_token(&ctx, &input.token, &input.password)

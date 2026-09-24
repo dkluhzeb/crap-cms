@@ -212,7 +212,7 @@ GET /uploads/{collection}/{filename}
 ```
 
 ```bash
-# Public file (no access.read configured)
+# Public file (see Caching below for when a collection is public)
 curl http://localhost:3000/uploads/media/a1b2c3_photo_thumbnail.webp
 
 # Protected file (requires auth)
@@ -224,9 +224,20 @@ curl http://localhost:3000/uploads/media/a1b2c3_photo.jpg \
 
 | Access | Cache-Control |
 |--------|--------------|
-| Public (no `access.read`) | `public, max-age=31536000, immutable` |
-| Protected (`access.read` configured) | `private, no-store` |
+| Public — `[access] default_deny = false`, no `access.read`, no drafts, no `soft_delete`, and no `before_read` hook (the collection's own or a registered global one) | `public, max-age=31536000, immutable` |
+| Anything else — the file is served only when the viewer can see the document that owns it | `private, no-store` |
 | Signed URL (valid `exp`/`sig`) | `private, max-age=<remaining validity>` |
+
+Only the first row is served without a database lookup. Every condition in it
+matters: under `default_deny` a collection without a read rule denies reads;
+drafts and soft delete make visibility depend on the document's state; a
+`before_read` hook may refuse the read — so a collection with any of them goes
+through the per-document gate, which applies the same content-view model as
+every other read (published ∪ draft, downgraded to the viewer's access,
+trashed documents excluded). A file only a pending draft names — a
+replacement uploaded with a draft save — is served to the viewers whose draft
+view shows that draft, so the editor's preview works while the draft stays
+private.
 
 ### Signed URLs
 
@@ -313,4 +324,4 @@ Upload API endpoints use Bearer token authentication:
 Authorization: Bearer <jwt>
 ```
 
-Obtain a token via the `Login` gRPC RPC or the admin login flow. Access control on the upload collection (`access.create`, `access.update`, `access.delete`) is enforced the same as for gRPC operations.
+Obtain a token via the `Login` gRPC RPC or the admin login flow. Access control on the upload collection (`access.create`, `access.update`, `access.delete`) is enforced the same as for gRPC operations. A `create` / `update` rule is judged after the file has been validated but before it is stored, on the request's fields together with the file's `filename`, `mime_type`, `filesize` and (for an image) `width` / `height` — see [Upload Validation](overview.md#upload-validation). A request the rule refuses is answered `403` and nothing is stored.

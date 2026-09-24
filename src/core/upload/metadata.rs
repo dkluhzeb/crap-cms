@@ -131,41 +131,32 @@ fn collect_format_urls(
     formats
 }
 
-/// Inject upload metadata fields into form data from a processed upload.
-/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_`webp_url`, etc.)
+/// Inject upload metadata fields into form data from a processed upload: the
+/// file's own columns ([`FileColumns::inject`], which blanks every derived
+/// column first), then its `url` and per-size typed fields (`{name}_url`,
+/// `{name}_width`, `{name}_height`, `{name}_{fmt}_url`).
 ///
-/// Every server-derived column the collection defines is cleared first, so the
-/// ones the NEW file does not produce are written as explicit blanks — which the
-/// write edge coerces to NULL. Otherwise a replacement inherited the previous
-/// file's leftovers: storing a `.txt` over an image kept the image's `width`,
-/// `height` and per-size urls, leaving the row describing a thumbnail that no
-/// longer exists (and a publish over a pending image draft adopting them).
+/// Blanking first matters on a replacement: without it the new file inherited
+/// the previous file's leftovers — storing a `.txt` over an image kept the
+/// image's `width`, `height` and per-size urls, leaving the row describing a
+/// thumbnail that no longer exists (and a publish over a pending image draft
+/// adopting them).
+///
+/// [`FileColumns::inject`]: crate::core::upload::FileColumns::inject
 pub fn inject_upload_metadata(
     form_data: &mut HashMap<String, String>,
     processed: &ProcessedUpload,
     upload: &CollectionUpload,
 ) {
-    for name in upload.derived_field_names() {
-        form_data.insert(name, String::new());
-    }
+    processed.file.inject(form_data, upload);
 
-    form_data.insert("filename".into(), processed.filename.clone());
-    form_data.insert("mime_type".into(), processed.mime_type.clone());
-    form_data.insert("filesize".into(), processed.filesize.to_string());
-
-    if let Some(w) = processed.width {
-        form_data.insert("width".into(), w.to_string());
-    }
-    if let Some(h) = processed.height {
-        form_data.insert("height".into(), h.to_string());
-    }
     form_data.insert("url".into(), processed.url.clone());
 
-    // Per-size typed fields
     for (name, size) in &processed.sizes {
         form_data.insert(format!("{name}_url"), size.url.clone());
         form_data.insert(format!("{name}_width"), size.width.to_string());
         form_data.insert(format!("{name}_height"), size.height.to_string());
+
         for (fmt, result) in &size.formats {
             form_data.insert(format!("{name}_{fmt}_url"), result.url.clone());
         }
@@ -175,8 +166,8 @@ pub fn inject_upload_metadata(
 /// Every SERVER-DERIVED url column of `doc_fields` paired with the storage key
 /// it points at — the one place the "is this a managed file column" rule lives.
 ///
-/// The columns are `url`, `{size}_url` and `{size}_{fmt}_url`, restricted to the
-/// authoritative [`CollectionUpload::system_field_names`] set. A USER field that
+/// The columns are [`CollectionUpload::url_field_names`] — `url`, `{size}_url`
+/// and `{size}_{fmt}_url`, derived from the upload config. A USER field that
 /// merely ends in `_url` — an external `image_url`, a `source_url`, and so on —
 /// is never in that set, so it is never treated as a managed file: a forged
 /// value there cannot delete another document's file, and an unrelated external
@@ -185,21 +176,20 @@ pub fn inject_upload_metadata(
 /// field.)
 ///
 /// Carrying the column name matters to a caller that has to decide per column
-/// rather than per key — a column a queued conversion is about to overwrite
-/// still holds the previous file's url, so its key is not "still referenced".
+/// rather than per key — a url standing in a column a queued conversion is
+/// about to overwrite belongs to a replaced file, so its key is not "still
+/// referenced".
 #[must_use]
 pub fn upload_file_entries<'a>(
     doc_fields: &'a DocumentFields,
     upload: &CollectionUpload,
 ) -> Vec<(&'a str, String)> {
-    let system = upload.system_field_names();
+    let url_columns = upload.url_field_names();
 
     doc_fields
         .as_map()
         .iter()
-        .filter(|(key, _)| {
-            (key.as_str() == "url" || key.ends_with("_url")) && system.contains(key.as_str())
-        })
+        .filter(|(key, _)| url_columns.contains(key))
         .filter_map(|(column, value)| Some((column.as_str(), value.as_str()?)))
         .filter_map(|(column, url)| key_from_served_url(url).map(|key| (column, key.to_string())))
         .collect()
@@ -297,8 +287,8 @@ mod tests {
     use crate::core::{
         Document, DocumentId,
         upload::{
-            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUpload,
-            SizeResult, storage::LocalStorage,
+            FileColumns, FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder,
+            ProcessedUpload, SizeResult, storage::LocalStorage,
         },
     };
 
@@ -559,11 +549,13 @@ mod tests {
     #[test]
     fn inject_upload_metadata_basic() {
         let processed = ProcessedUpload {
-            filename: "abc_photo.png".to_string(),
-            mime_type: "image/png".to_string(),
-            filesize: 12345,
-            width: Some(800),
-            height: Some(600),
+            file: FileColumns {
+                filename: "abc_photo.png".to_string(),
+                mime_type: "image/png".to_string(),
+                filesize: 12345,
+                width: Some(800),
+                height: Some(600),
+            },
             url: "/uploads/media/abc_photo.png".to_string(),
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),
@@ -586,11 +578,13 @@ mod tests {
     #[test]
     fn inject_upload_metadata_no_dimensions() {
         let processed = ProcessedUpload {
-            filename: "doc.pdf".to_string(),
-            mime_type: "application/pdf".to_string(),
-            filesize: 999,
-            width: None,
-            height: None,
+            file: FileColumns {
+                filename: "doc.pdf".to_string(),
+                mime_type: "application/pdf".to_string(),
+                filesize: 999,
+                width: None,
+                height: None,
+            },
             url: "/uploads/docs/doc.pdf".to_string(),
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),
@@ -622,11 +616,13 @@ mod tests {
         upload.format_options.webp = Some(FormatQuality::new(80, false));
 
         let processed = ProcessedUpload {
-            filename: "notes.txt".to_string(),
-            mime_type: "text/plain".to_string(),
-            filesize: 12,
-            width: None,
-            height: None,
+            file: FileColumns {
+                filename: "notes.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                filesize: 12,
+                width: None,
+                height: None,
+            },
             url: "/uploads/media/notes.txt".to_string(),
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),
@@ -679,11 +675,13 @@ mod tests {
         );
 
         let processed = ProcessedUpload {
-            filename: "img.png".to_string(),
-            mime_type: "image/png".to_string(),
-            filesize: 5000,
-            width: Some(800),
-            height: Some(600),
+            file: FileColumns {
+                filename: "img.png".to_string(),
+                mime_type: "image/png".to_string(),
+                filesize: 5000,
+                width: Some(800),
+                height: Some(600),
+            },
             url: "/uploads/m/img.png".to_string(),
             sizes,
             queued_conversions: Vec::new(),
@@ -810,7 +808,7 @@ mod tests {
         let mut doc_fields = DocumentFields::new();
         // Server-derived — deleted.
         doc_fields.insert("url".into(), json!("/uploads/media/del.png"));
-        // User fields ending in `_url` — not in `system_field_names` → preserved.
+        // User fields ending in `_url` — not an upload url column → preserved.
         doc_fields.insert("image_url".into(), json!("/uploads/media/external.png"));
         doc_fields.insert("source_url".into(), json!("/uploads/media/victim.png"));
         doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));

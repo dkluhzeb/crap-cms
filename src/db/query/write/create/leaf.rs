@@ -8,10 +8,7 @@ use crate::{
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
-            helpers::{
-                column_value, companion_writes, prefixed_name, tz_column,
-                validate_no_null_byte_json,
-            },
+            helpers::{column_value, companion_writes, prefixed_name, tz_column},
             locale_write_column,
             write::create::collector::InsertCollector,
         },
@@ -53,8 +50,6 @@ pub(super) fn collect_leaf_param(
 
         return Ok(());
     };
-
-    validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
     let zone = data.get(&tz_column(&data_key)).and_then(Value::as_str);
     collector.push(conn, &col_name, column_value(field, value, zone));

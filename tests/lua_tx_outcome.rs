@@ -29,7 +29,7 @@ use crap_cms::config::CrapConfig;
 use crap_cms::core::collection::{CollectionDefinition, Hooks};
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::job::JobRun;
-use crap_cms::core::{DocumentFields, HookRef, Registry};
+use crap_cms::core::{DocumentFields, HookRef, JobDefinition, Registry};
 use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service;
@@ -294,7 +294,12 @@ fn run_job(runner: &HookRunner, pool: &DbPool, handler: &str) -> Option<String> 
         .build();
 
     runner
-        .run_job_handler(&HookRef::new(handler), &run, pool, None)
+        .run_job_handler(
+            &JobDefinition::builder("test-job", handler).build(),
+            &run,
+            pool,
+            None,
+        )
         .expect("run_job_handler")
 }
 
@@ -413,13 +418,14 @@ fn rolled_back_transaction_publishes_no_events_committed_one_does() {
             cache: None,
             event_queue: None,
             verification_queue: None,
+            email_ctx: None,
             file_cleanup: None,
             cache_dirty: None,
             deferred: None,
         };
         runner
             .run_job_handler(
-                &crap_cms::core::HookRef::new(format!("hooks.{name}.run")),
+                &JobDefinition::builder("test-job", format!("hooks.{name}.run")).build(),
                 &job_run,
                 &pool,
                 Some(infra),

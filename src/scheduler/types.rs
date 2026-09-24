@@ -1,6 +1,9 @@
 //! Scheduler types -- parameters and internal config structs.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -134,8 +137,31 @@ impl DbTimeouts {
     }
 }
 
-/// Per-tick job-execution config — the parts the poll loop reads from
-/// `JobsConfig` (image conversion concurrency, priority-decay aging,
+/// One run this process is executing: its id and the attempt it claimed.
+///
+/// The attempt is what the heartbeat's compare-and-set matches on, so a run
+/// that outlived its heartbeat window and was reclaimed — possibly claimed
+/// again as a later attempt — can never keep that later attempt's heartbeat
+/// fresh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RunningJob {
+    pub id: String,
+    pub attempt: u32,
+}
+
+impl RunningJob {
+    pub(super) fn new(id: String, attempt: u32) -> Self {
+        Self { id, attempt }
+    }
+}
+
+/// The runs this process is executing: added when a run is claimed, removed
+/// once it has ended, refreshed by every heartbeat, and listed by the
+/// shutdown drain.
+pub(super) type RunningJobs = Arc<Mutex<Vec<RunningJob>>>;
+
+/// Job-execution config shared by every poll — the parts the poll reads
+/// from `JobsConfig` (image conversion concurrency, priority-decay aging,
 /// per-queue timeouts) plus the execution infrastructure the spawned
 /// jobs need (storage for system image jobs, the Lua-CRUD infra for
 /// user handlers). Future system jobs (email retention sweeps etc.)
@@ -164,11 +190,12 @@ pub(super) struct TickJobConfig {
     /// filtered worker's poll never even sees a run outside its queues.
     pub queues: Option<Arc<[String]>>,
     pub storage: SharedStorage,
-    /// Event transport + populate cache threaded into user job handlers'
-    /// Lua CRUD calls (cloned per handler; `run_job_handler` injects and
-    /// flushes the event queue per invocation). Built from the scheduler's
-    /// [`AppInfra`] so job writes publish live-update events and invalidate
-    /// the populate cache like every other surface.
+    /// Event transport, populate cache and email context threaded into user
+    /// job handlers' Lua CRUD calls (cloned per handler; `run_job_handler`
+    /// injects and flushes the event queue per invocation). Built from the
+    /// scheduler's [`AppInfra`] so job writes publish live-update events,
+    /// invalidate the populate cache and issue account verifications like
+    /// every other surface.
     pub lua_infra: LuaCrudInfra,
     /// Tracker every job task is spawned on, so a shutdown can wait for the
     /// runs already in flight instead of dropping them mid-transaction.

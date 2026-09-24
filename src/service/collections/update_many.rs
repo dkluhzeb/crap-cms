@@ -4,14 +4,13 @@ use anyhow::Context as _;
 
 use super::bulk_access::{BulkScope, push_published_only_filter, scope_bulk_access};
 
-use crate::service::OpDeadline;
 use crate::{
     config::LocaleConfig,
-    core::{DocumentFields, event::EventOperation},
+    core::{Builder, CollectionDefinition, DocumentFields, event::EventOperation},
     db::{FilterClause, FindQuery, LocaleContext, query},
     service::{
-        ServiceContext, ServiceError, WriteInput, invalidate_user_streams_if_auth, run_pool_write,
-        update_many_single_in_conn,
+        OpDeadline, ServiceContext, ServiceError, WriteInput, invalidate_user_streams_if_auth,
+        run_pool_write, update_many_single_in_conn,
     },
     typegen::lua::LuaAnnotation,
 };
@@ -19,7 +18,7 @@ use crate::{
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a bulk update operation.
-#[derive(Debug, crate::typegen::lua::LuaAnnotation)]
+#[derive(Debug, LuaAnnotation)]
 #[lua(class = "crap.UpdateManyResult")]
 pub struct UpdateManyResult {
     /// Number of documents updated.
@@ -30,11 +29,16 @@ pub struct UpdateManyResult {
     pub updated_ids: Vec<String>,
 }
 
-/// Options controlling bulk update behavior.
+/// Options controlling bulk update behavior, via
+/// `UpdateManyOptions::builder()`. Unset options default to: no locale
+/// context, hooks run, published rows only, no UI locale, no document limit,
+/// no deadline.
+#[derive(Builder)]
 pub struct UpdateManyOptions<'a> {
     /// Locale context for the update.
     pub locale_ctx: Option<&'a LocaleContext>,
-    /// Whether to run lifecycle hooks per document.
+    /// Whether to run lifecycle hooks per document. Defaults to `true`.
+    #[builder(default = true)]
     pub run_hooks: bool,
     /// Whether to target draft versions.
     pub draft: bool,
@@ -45,6 +49,7 @@ pub struct UpdateManyOptions<'a> {
     pub max_documents: i64,
     /// Cooperative abort deadline, checked between documents (see
     /// [`OpDeadline`]).
+    #[builder(default = OpDeadline::none())]
     pub deadline: OpDeadline,
 }
 
@@ -59,6 +64,22 @@ pub(super) fn enforce_bulk_limit(verb: &str, matched: usize, max_documents: i64)
         )));
     }
     Ok(())
+}
+
+/// The bulk update gate: `access.update`, seeing the patch as `ctx.data`, with
+/// the published-only `_status` filter injected unless the caller opted into
+/// drafts, in the operation's locale.
+fn update_scope<'a>(
+    def: &'a CollectionDefinition,
+    data: &'a DocumentFields,
+    opts: &UpdateManyOptions<'a>,
+) -> BulkScope<'a> {
+    BulkScope::builder("update")
+        .access_fn(def.access.update.as_ref())
+        .data(Some(data))
+        .injecting_status(!opts.draft && def.has_drafts())
+        .locale_ctx(opts.locale_ctx)
+        .build()
 }
 
 /// Update multiple documents matching `filters` with the partial `data`.
@@ -117,12 +138,7 @@ fn update_many_pool(
             scope_bulk_access(
                 inner,
                 inner.write_hooks()?,
-                &BulkScope {
-                    operation: "update",
-                    access_fn: def.access.update.as_ref(),
-                    data: Some(data),
-                    injecting_status: !opts.draft && def.has_drafts(),
-                },
+                &update_scope(def, data, opts),
                 &mut scoped_filters,
             )?;
             push_published_only_filter(def, opts.draft, &mut scoped_filters);
@@ -202,12 +218,7 @@ fn update_many_conn(
     scope_bulk_access(
         ctx,
         ctx.write_hooks()?,
-        &BulkScope {
-            operation: "update",
-            access_fn: def.access.update.as_ref(),
-            data: Some(data),
-            injecting_status: !opts.draft && def.has_drafts(),
-        },
+        &update_scope(def, data, opts),
         &mut scoped_filters,
     )?;
     push_published_only_filter(def, opts.draft, &mut scoped_filters);
@@ -261,4 +272,23 @@ fn update_many_conn(
         modified,
         updated_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The builder's defaults are the documented ones — in particular hooks
+    /// run unless a caller opts out, matching `DeleteManyOptions`.
+    #[test]
+    fn builder_defaults_run_hooks_on_published_rows_without_limits() {
+        let opts = UpdateManyOptions::builder().build();
+
+        assert!(opts.locale_ctx.is_none());
+        assert!(opts.run_hooks);
+        assert!(!opts.draft);
+        assert!(opts.ui_locale.is_none());
+        assert_eq!(opts.max_documents, 0);
+        assert!(!opts.deadline.expired());
+    }
 }

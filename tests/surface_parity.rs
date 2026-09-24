@@ -733,12 +733,6 @@ fn revocation_scan_fires_on_synthetic_violation() {
 /// Reviewed offline-admin CLI write paths: `(path suffix, write call)`.
 /// Every entry documents which invariants the site maintains by hand.
 const CLI_WRITE_ALLOWLIST: &[(&str, &str)] = &[
-    // `user reset-totp`: TOTP-mode check + destructive confirm; clears the
-    // three `_totp_*` system columns in one atomic UPDATE. No session revoke
-    // or stream teardown: resetting the second factor grants nothing and
-    // revokes nothing until the next login re-enrolls. Outside FTS/ref-count
-    // scope by design (system columns only).
-    ("commands/user/modify.rs", "query::reset_totp("),
     // `db cleanup --confirm`: deletes junction rows of locales the project no
     // longer configures, inside the cleanup's one transaction, which then
     // recomputes every reference count (`migrate::recompute_ref_counts`) —
@@ -1228,8 +1222,8 @@ fn all_canonical_ops_exist_on_every_programmatic_surface() {
 // (`HookRunner::check_access` → `service::auth`). CRUD ops check access *inside*
 // the service layer; the event streams (gRPC Subscribe, admin SSE) resolve their
 // per-view access through the shared `service::events::EventAccessMap` (also in
-// the service layer); only a couple of non-CRUD surface ops (file upload/serve)
-// have no service op and call the evaluator directly. This guard freezes that
+// the service layer); only a few surface-level helpers call the evaluator
+// directly. This guard freezes that
 // small set of surface-level `check_access` touchpoints: a new one fails CI,
 // forcing review of whether it should instead go through a service op — and
 // preventing a surface from growing its own ad-hoc access logic.
@@ -1242,10 +1236,9 @@ const ACCESS_TOUCHPOINTS: &[&str] = &[
     // chokepoint `service::collections::bulk_access`, off-surface.)
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
-    // REST upload helpers: file upload/serve is not a document-CRUD service op,
-    // so the create/update/delete handlers gate via `check_upload_access` here,
-    // which delegates to `hook_runner.check_access`.
-    "api/upload/helpers.rs",
+    // (The REST upload routes no longer pre-check access: a rule judged there,
+    // without the request's data, refused writes the service allows. The
+    // upload service judges it, on the data and the file's own columns.)
 ];
 
 #[test]

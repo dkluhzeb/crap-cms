@@ -16,7 +16,7 @@ use crate::core::email::{
     validate_no_crlf,
 };
 use crate::core::lua_lease::LocalLease;
-use crate::hooks::lua_api::crud::get_tx_conn;
+use crate::hooks::{lifecycle::check_execution_deadline, lua_api::crud::get_tx_conn};
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Options table for `crap.email.send` / `crap.email.queue`.
@@ -70,9 +70,12 @@ fn validate_email_fields(to: &str, subject: &str) -> LuaResult<()> {
 )]
 fn email_send(
     state: &EmailState,
-    _: &Lua,
+    lua: &Lua,
     #[lua(ty = "crap.EmailOptions", doc = "Email options.")] opts: EmailOptions,
 ) -> LuaResult<bool> {
+    // A job past its timeout sends nothing more.
+    check_execution_deadline(lua)?;
+
     // `retries` only applies to the queued path — silently ignoring it on an
     // immediate send hides the caller's mistake. Reject it explicitly.
     if opts.retries.is_some() {

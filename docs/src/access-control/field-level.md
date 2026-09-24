@@ -145,7 +145,14 @@ If a field access function throws an error, the field is treated as **denied** (
 
 A field the caller cannot read is never a query oracle. On every read
 surface (`find`, `count`, search, the admin list), a `where` filter or an
-`order_by` on such a field is rejected with an access error:
+`order_by` on such a field is rejected with an access error. The bulk writes
+`update_many` and `delete_many` apply the same rule to their `where` filter
+on every surface (gRPC, Lua, the admin, and a queued bulk job — refused
+when it is queued, before a `job_id` is issued) — their
+`modified` / `deleted` / `skipped` counts and the `bulk_max_documents`
+"matched N documents" error would otherwise count rows by the hidden value.
+Contexts with `override_access` (MCP, Lua `override_access = true`) skip the check
+as they skip every access rule. A field is unreadable here when it is:
 
 - a field with `hidden = true` — always, for every caller;
 - a field with an `access.read` rule — when the rule denies for this caller
@@ -156,8 +163,11 @@ surface (`find`, `count`, search, the admin list), a `where` filter or an
 The check covers every field on the path, not just the first segment: a
 group sub-field (`seo.secret` / `seo__secret`), an array row sub-field
 (`items.secret`), a block sub-field (`content.body`), and anything nested
-inside a row (`items.sizes.label`) are rejected when their own rule — or the
-rule of any group, array or blocks field on the way — denies. A block path
+inside a row (`items.sizes.label`), and an array, blocks or has-many field
+inside a group (`seo.links.url` / `seo__links.url`, `seo.tags.id`) are
+rejected when their own rule — or the rule of any group, array or blocks field
+on the way — denies, or when any of them is `hidden`, whichever way the group
+part is spelled. A block path
 does not name its block type, so it is rejected when the field's rule denies
 in **any** block type that holds a field of that name. A relationship's
 `.id` path is judged by the relationship field's own rule.

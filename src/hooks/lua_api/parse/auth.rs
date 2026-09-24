@@ -142,6 +142,7 @@ fn validate_method_keys(method: &Table) -> Result<()> {
             "mfa",
             "mfa_when",
             "mfa_deliver",
+            "mfa_exempt_callbacks",
             "verify_email",
             "forgot_password",
         ],
@@ -167,9 +168,44 @@ fn validate_method_keys(method: &Table) -> Result<()> {
     if ty == "password_login" {
         get_bool(method, "verify_email", false)?;
         get_bool(method, "forgot_password", true)?;
+        validate_exempt_callbacks(method)?;
     }
 
     Ok(())
+}
+
+/// Strict `mfa_exempt_callbacks` validation: absent, or a list of non-empty
+/// callback names. A wrong-typed value or entry would otherwise be dropped,
+/// silently putting a callback the operator meant to exempt back behind MFA
+/// (or, for a typo'd name, exempting nothing without a word).
+fn validate_exempt_callbacks(method: &Table) -> Result<()> {
+    let list = match method.get::<Value>("mfa_exempt_callbacks")? {
+        Value::Nil => return Ok(()),
+        Value::Table(t) => t,
+        other => bail!(
+            "password_login method: `mfa_exempt_callbacks` must be a list of callback names (got {})",
+            other.type_name()
+        ),
+    };
+
+    for entry in list.sequence_values::<Value>() {
+        match entry? {
+            Value::String(s) if !s.to_str()?.is_empty() => {}
+            other => bail!(
+                "password_login method: `mfa_exempt_callbacks` entries must be non-empty callback names (got {})",
+                other.type_name()
+            ),
+        }
+    }
+
+    Ok(())
+}
+
+/// The `mfa_exempt_callbacks` names (validated by [`validate_exempt_callbacks`]).
+fn parse_exempt_callbacks(tbl: &Table) -> Vec<String> {
+    get_table(tbl, "mfa_exempt_callbacks")
+        .map(|t| t.sequence_values::<String>().flatten().collect())
+        .unwrap_or_default()
 }
 
 pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
@@ -241,6 +277,7 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
                 .ok()
                 .flatten()
                 .filter(|h| !h.reference().is_empty()),
+            mfa_exempt_callbacks: parse_exempt_callbacks(tbl),
             verify_email: get_bool(tbl, "verify_email", false).unwrap_or(false),
             // Same nil-is-false trap as `enabled`: a missing key must mean
             // the documented default (`true`), not "disabled".
@@ -461,6 +498,54 @@ mod tests {
             mfa_deliver.as_ref().map(crate::core::HookRef::reference),
             Some("hooks.mfa.send_sms")
         );
+    }
+
+    /// `mfa_exempt_callbacks` parses into the typed name list.
+    #[test]
+    fn parses_mfa_exempt_callbacks() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+        m.set("mfa", "totp").unwrap();
+        m.set("mfa_exempt_callbacks", vec!["okta", "azure"])
+            .unwrap();
+        validate_method_keys(&m).unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+
+        let auth = parse_collection_auth(&tbl).unwrap();
+        let AuthMethod::PasswordLogin {
+            mfa_exempt_callbacks,
+            ..
+        } = &auth.methods[0]
+        else {
+            panic!("expected PasswordLogin");
+        };
+        assert_eq!(mfa_exempt_callbacks, &["okta", "azure"]);
+    }
+
+    /// A malformed `mfa_exempt_callbacks` fails the load instead of being
+    /// silently dropped.
+    #[test]
+    fn malformed_mfa_exempt_callbacks_are_rejected() {
+        let lua = Lua::new();
+        let m = lua.create_table().unwrap();
+        m.set("type", "password_login").unwrap();
+
+        m.set("mfa_exempt_callbacks", "okta").unwrap();
+        let err = validate_method_keys(&m).unwrap_err().to_string();
+        assert!(err.contains("must be a list of callback names"), "{err}");
+
+        m.set("mfa_exempt_callbacks", vec![""]).unwrap();
+        let err = validate_method_keys(&m).unwrap_err().to_string();
+        assert!(err.contains("non-empty callback names"), "{err}");
+
+        m.set("mfa_exempt_callbacks", vec![1]).unwrap();
+        assert!(validate_method_keys(&m).is_err());
     }
 
     #[test]

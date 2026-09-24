@@ -22,6 +22,11 @@ The table is indexed on `parent_id` (`parent_id, _locale` when localized); see
 
 Unlike arrays (which have typed columns per sub-field), blocks use a single JSON `data` column because each block type can have a different schema.
 
+Block types are independent schemas: two types may give the same name to
+fields of different kinds (a number in one, text in another). A filter on such
+a name (`content.score`) reads each block row with its own type's field — see
+[Block Sub-Fields](../query-and-filters/overview.md#block-sub-fields).
+
 ## Definition
 
 ```lua

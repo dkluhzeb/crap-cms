@@ -9,11 +9,11 @@ use image::{
 use tracing::warn;
 
 use crate::core::upload::{
-    CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion,
-    SharedStorage, SizeResult, served_url,
+    FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion, SharedStorage, SizeResult,
+    served_url,
 };
 
-use super::{StorageBackend, process::CleanupGuard};
+use super::{CleanupGuard, StorageBackend, process::Destination};
 
 /// Resize an image according to the given size definition and fit mode.
 ///
@@ -276,81 +276,119 @@ pub(super) fn process_format_variant(
     Ok(())
 }
 
+/// What every size of one stored image shares.
+struct SizingCtx<'a> {
+    img: &'a DynamicImage,
+    /// The stored filename's stem and extension (`photo` / `jpg`).
+    stem: &'a str,
+    ext: &'a str,
+    dest: &'a Destination<'a>,
+}
+
+/// One size already resized and stored, whose format variants come next.
+struct StoredSize<'a> {
+    resized: &'a DynamicImage,
+    name: &'a str,
+    key: &'a str,
+}
+
+/// The WebP / AVIF variants the collection configures for one stored size —
+/// each converted now or queued (see [`process_format_variant`]).
+fn size_format_variants(
+    ctx: &SizingCtx<'_>,
+    size: &StoredSize<'_>,
+    guard: &mut CleanupGuard,
+    queued: &mut Vec<QueuedConversion>,
+) -> Result<HashMap<String, FormatResult>> {
+    let options = &ctx.dest.upload.format_options;
+    let mut formats = HashMap::new();
+
+    for (format_name, opts) in [("webp", &options.webp), ("avif", &options.avif)] {
+        let Some(opts) = opts else {
+            continue;
+        };
+
+        let variant = FormatVariantCtx {
+            resized: size.resized,
+            format_name,
+            opts,
+            size_name: size.name,
+            size_key: size.key,
+            storage: ctx.dest.storage,
+        };
+
+        process_format_variant(&variant, guard, &mut formats, queued)?;
+    }
+
+    Ok(formats)
+}
+
+/// Resize, store and convert one configured size. `None` when the source
+/// has zero dimensions (the size is skipped).
+fn process_size(
+    ctx: &SizingCtx<'_>,
+    size_def: &ImageSize,
+    guard: &mut CleanupGuard,
+    queued: &mut Vec<QueuedConversion>,
+) -> Result<Option<SizeResult>> {
+    let Some(resized) = resize_image(ctx.img, size_def) else {
+        warn!(
+            "Skipping size '{}' — source image has zero dimensions",
+            size_def.name
+        );
+
+        return Ok(None);
+    };
+
+    let save = SaveResizedImageInput {
+        resized: &resized,
+        stem: ctx.stem,
+        ext: ctx.ext,
+        size_name: &size_def.name,
+        collection_slug: ctx.dest.collection_slug,
+        storage: ctx.dest.storage,
+    };
+    let (size_key, url) = save_resized_image(&save, guard)?;
+
+    let stored = StoredSize {
+        resized: &resized,
+        name: &size_def.name,
+        key: &size_key,
+    };
+    let formats = size_format_variants(ctx, &stored, guard, queued)?;
+
+    Ok(Some(SizeResult {
+        url,
+        width: resized.width(),
+        height: resized.height(),
+        formats,
+    }))
+}
+
 /// Process all image sizes and their format variants.
 pub(super) fn process_image_sizes(
     img: &DynamicImage,
     unique_filename: &str,
-    collection_slug: &str,
-    upload_config: &CollectionUpload,
-    storage: &SharedStorage,
+    dest: &Destination<'_>,
     guard: &mut CleanupGuard,
 ) -> Result<(HashMap<String, SizeResult>, Vec<QueuedConversion>)> {
-    let mut sizes = HashMap::new();
-    let mut queued_conversions = Vec::new();
-
     let (stem, ext) = unique_filename
         .rsplit_once('.')
         .unwrap_or((unique_filename, "bin"));
+    let ctx = SizingCtx {
+        img,
+        stem,
+        ext,
+        dest,
+    };
 
-    for size_def in &upload_config.image_sizes {
-        let Some(resized) = resize_image(img, size_def) else {
-            warn!(
-                "Skipping size '{}' — source image has zero dimensions",
-                size_def.name
-            );
+    let mut sizes = HashMap::new();
+    let mut queued_conversions = Vec::new();
 
-            continue;
-        };
-
-        let (size_key, size_url) = save_resized_image(
-            &SaveResizedImageInput {
-                resized: &resized,
-                stem,
-                ext,
-                size_name: &size_def.name,
-                collection_slug,
-                storage,
-            },
-            guard,
-        )?;
-
-        let mut formats = HashMap::new();
-
-        if let Some(ref webp_opts) = upload_config.format_options.webp {
-            let ctx = FormatVariantCtx {
-                resized: &resized,
-                format_name: "webp",
-                opts: webp_opts,
-                size_name: &size_def.name,
-                size_key: &size_key,
-                storage,
-            };
-
-            process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
+    for size_def in &dest.upload.image_sizes {
+        if let Some(size) = process_size(&ctx, size_def, guard, &mut queued_conversions)? {
+            sizes.insert(size_def.name.clone(), size);
         }
-
-        if let Some(ref avif_opts) = upload_config.format_options.avif {
-            let ctx = FormatVariantCtx {
-                resized: &resized,
-                format_name: "avif",
-                opts: avif_opts,
-                size_name: &size_def.name,
-                size_key: &size_key,
-                storage,
-            };
-
-            process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
-        }
-
-        sizes.insert(
-            size_def.name.clone(),
-            SizeResult {
-                url: size_url,
-                width: resized.width(),
-                height: resized.height(),
-                formats,
-            },
-        );
     }
 
     Ok((sizes, queued_conversions))

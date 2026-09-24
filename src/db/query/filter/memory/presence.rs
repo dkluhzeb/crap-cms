@@ -21,10 +21,15 @@ pub(super) fn lookup<'a>(data: &'a DocumentFields, path: &str) -> Option<&'a Val
         .find_map(|group| data.get(group).filter(|value| value.is_null()))
 }
 
-/// Evaluate an operator against a NULL value, as SQL does: only `NotExists`
-/// (`IS NULL`) matches it.
+/// Evaluate an operator against a NULL value, as SQL does: `NotExists`
+/// (`IS NULL`) matches it, and so does `not_in` an empty list, which SQL
+/// renders always-true — nothing is in an empty set, NULL included.
 pub(super) fn matches_null(op: &FilterOp) -> bool {
-    matches!(op, FilterOp::NotExists)
+    match op {
+        FilterOp::NotExists => true,
+        FilterOp::NotIn(values) => values.is_empty(),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +227,24 @@ mod tests {
         });
         assert!(!matches_constraints(&d, from_ref(&in_clause)));
         assert!(!matches_constraints(&d, from_ref(&not_in_clause)));
+    }
+
+    /// Regression: SQL renders `not_in` an empty list always-true — nothing is
+    /// in an empty set — so it matches a NULL column; here it did not. `in` an
+    /// empty list matches nothing on both paths.
+    #[test]
+    fn null_value_is_not_in_an_empty_list() {
+        let d = data(&[("field", Value::Null)]);
+        let clause = |op: FilterOp| typed_single("field", op);
+
+        assert!(matches_constraints(
+            &d,
+            from_ref(&clause(FilterOp::NotIn(vec![])))
+        ));
+        assert!(!matches_constraints(
+            &d,
+            from_ref(&clause(FilterOp::In(vec![])))
+        ));
     }
 
     /// `Exists` is `IS NOT NULL` in SQL, so a NULL field does NOT exist;

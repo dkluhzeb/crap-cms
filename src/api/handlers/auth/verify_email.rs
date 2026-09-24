@@ -42,6 +42,7 @@ fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Statu
 
     let ctx = ServiceContext::collection(&input.slug, &input.def)
         .conn(&tx)
+        .locale_config(Some(&input.infra.locale_config))
         .build();
 
     let verified = consume_verification_token(&ctx, &input.token)

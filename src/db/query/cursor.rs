@@ -10,7 +10,13 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{core::Document, db::DbValue};
+use crate::{
+    core::{Builder, Document, FieldDefinition},
+    db::{
+        DbValue, LocaleContext, LocaleMode,
+        query::{column_is_localized, resolve_sort},
+    },
+};
 
 /// Sort direction for ORDER BY clauses and cursor pagination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -194,42 +200,91 @@ impl CursorData {
     }
 }
 
-/// Build start/end cursor strings from a page of documents.
-///
-/// - `start_cursor`: cursor of the **first** doc (always present if results non-empty).
-/// - `end_cursor`: cursor of the **last** doc (always present if results non-empty).
+/// What a page's cursors record of each boundary document, matching the order
+/// the `find` SQL applied.
 ///
 /// `with_status` records whether `apply_order_by` is prepending
 /// `_status ASC` to the ORDER BY (true on collections with drafts when
 /// `sort_col != "_status"`). When true, each cursor also encodes the
 /// document's `_status` so the keyset can compare against the
-/// composite `(_status, sort_col, id)` order. The caller (`find_documents`
-/// / `find_globals`) passes this consistently with what
-/// `apply_order_by` does for the same query.
-pub(crate) fn build_cursors(
-    docs: &[Document],
-    sort_col: &str,
+/// composite `(_status, sort_col, id)` order. The caller passes this
+/// consistently with what `apply_order_by` does for the same query.
+///
+/// `sort_locale` is set for an all-locales read sorted by a localized column
+/// (see [`cursor_sort_locale`]): the document holds the column as a
+/// `{ locale: value }` map, and the cursor records the one locale's value the
+/// SQL orders by.
+#[derive(Builder)]
+pub(crate) struct CursorKey<'a> {
+    #[builder(required)]
+    sort_col: &'a str,
+    #[builder(required)]
     sort_dir: SortDirection,
     with_status: bool,
+    sort_locale: Option<&'a str>,
+}
+
+/// The locale whose value an all-locales read orders the column `order_by`
+/// names by — the one the SQL sort expression reads — when that column is
+/// localized; `None` for any other read or column.
+pub(crate) fn cursor_sort_locale<'a>(
+    order_by: Option<&str>,
+    has_timestamps: bool,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&'a LocaleContext>,
+) -> Option<&'a str> {
+    let ctx =
+        locale_ctx.filter(|ctx| matches!(ctx.mode, LocaleMode::All) && ctx.config.is_enabled())?;
+
+    let (sort_col, _) = resolve_sort(order_by, has_timestamps);
+
+    (column_is_localized(&sort_col, fields) == Some(true)).then(|| ctx.access_locale())
+}
+
+/// Build start/end cursor strings from a page of documents.
+///
+/// - `start_cursor`: cursor of the **first** doc (always present if results non-empty).
+/// - `end_cursor`: cursor of the **last** doc (always present if results non-empty).
+pub(crate) fn build_cursors(
+    docs: &[Document],
+    key: &CursorKey<'_>,
 ) -> (Option<String>, Option<String>) {
-    if docs.is_empty() {
+    let (Some(first), Some(last)) = (docs.first(), docs.last()) else {
         return (None, None);
+    };
+
+    (cursor_from_doc(first, key), cursor_from_doc(last, key))
+}
+
+/// The value `doc` holds for the sort column `col`: the column itself, or —
+/// once hydration has nested a group — the group sub-field the column
+/// flattens (`meta__title` → `meta.title`).
+fn sort_field<'a>(doc: &'a Document, col: &str) -> Option<&'a Value> {
+    if let Some(value) = doc.fields.get(col) {
+        return Some(value);
     }
 
-    let start_cursor = cursor_from_doc(&docs[0], sort_col, sort_dir, with_status);
-    let end_cursor = cursor_from_doc(docs.last().unwrap(), sort_col, sort_dir, with_status);
+    let mut keys = col.split("__");
+    let root = doc.fields.get(keys.next()?)?;
 
-    (start_cursor, end_cursor)
+    keys.try_fold(root, |value, key| value.get(key))
+}
+
+/// The sort value of `value`: for a localized column of an all-locales read,
+/// its `sort_locale` entry (NULL when that translation is missing).
+fn sort_value(value: &Value, sort_locale: Option<&str>) -> SortValue {
+    match (sort_locale, value) {
+        (Some(locale), Value::Object(by_locale)) => by_locale
+            .get(locale)
+            .map(SortValue::from)
+            .unwrap_or_default(),
+        _ => SortValue::from(value),
+    }
 }
 
 /// Extract cursor data from a document.
-fn cursor_from_doc(
-    doc: &Document,
-    sort_col: &str,
-    sort_dir: SortDirection,
-    with_status: bool,
-) -> Option<String> {
-    let sort_val = match sort_col {
+fn cursor_from_doc(doc: &Document, key: &CursorKey<'_>) -> Option<String> {
+    let sort_val = match key.sort_col {
         "id" => SortValue::Text(doc.id.to_string()),
         "created_at" => doc
             .created_at
@@ -241,10 +296,12 @@ fn cursor_from_doc(
             .as_ref()
             .map(|v| SortValue::Text(v.clone()))
             .unwrap_or_default(),
-        col => doc.fields.get(col).map(SortValue::from).unwrap_or_default(),
+        col => sort_field(doc, col)
+            .map(|value| sort_value(value, key.sort_locale))
+            .unwrap_or_default(),
     };
 
-    let status_val = if with_status {
+    let status_val = if key.with_status {
         doc.fields
             .get("_status")
             .and_then(|v| v.as_str())
@@ -258,8 +315,8 @@ fn cursor_from_doc(
     };
 
     let cursor = CursorData {
-        sort_col: sort_col.to_string(),
-        sort_dir,
+        sort_col: key.sort_col.to_string(),
+        sort_dir: key.sort_dir,
         sort_val,
         id: doc.id.to_string(),
         status_val,
@@ -431,7 +488,10 @@ mod tests {
             })
             .collect();
 
-        let (start, end) = build_cursors(&docs, "created_at", SortDirection::Asc, false);
+        let (start, end) = build_cursors(
+            &docs,
+            &CursorKey::builder("created_at", SortDirection::Asc).build(),
+        );
         assert!(
             start.is_some(),
             "start_cursor should exist when results non-empty"
@@ -456,7 +516,10 @@ mod tests {
         doc.created_at = Some("2024-01-01".to_string());
         let docs = vec![doc];
 
-        let (start, end) = build_cursors(&docs, "created_at", SortDirection::Asc, false);
+        let (start, end) = build_cursors(
+            &docs,
+            &CursorKey::builder("created_at", SortDirection::Asc).build(),
+        );
         assert!(start.is_some());
         assert!(end.is_some());
 
@@ -468,7 +531,8 @@ mod tests {
 
     #[test]
     fn build_cursors_empty_docs() {
-        let (start, end) = build_cursors(&[], "id", SortDirection::Asc, false);
+        let (start, end) =
+            build_cursors(&[], &CursorKey::builder("id", SortDirection::Asc).build());
         assert!(start.is_none());
         assert!(end.is_none());
     }
@@ -520,7 +584,10 @@ mod tests {
         let mut doc = Document::new("doc1".to_string());
         doc.updated_at = Some("2024-06-15".to_string());
         let docs = vec![doc];
-        let (start, end) = build_cursors(&docs, "updated_at", SortDirection::Desc, false);
+        let (start, end) = build_cursors(
+            &docs,
+            &CursorKey::builder("updated_at", SortDirection::Desc).build(),
+        );
         let decoded_start = CursorData::decode(&start.unwrap()).unwrap();
         let decoded_end = CursorData::decode(&end.unwrap()).unwrap();
         assert_eq!(decoded_start.sort_col, "updated_at");
@@ -531,10 +598,39 @@ mod tests {
         assert_eq!(decoded_end.sort_col, "updated_at");
     }
 
+    /// Regression: a sort by a group's value read the flat column name from
+    /// the hydrated document, which holds the group nested — every cursor
+    /// carried a NULL sort value and the next page restarted at the NULLs.
+    #[test]
+    fn build_cursors_reads_a_group_sort_value_from_the_nested_group() {
+        let mut doc = Document::new("doc1".to_string());
+        doc.fields
+            .insert("meta".to_string(), json!({ "inner": { "rank": 3 } }));
+        doc.fields
+            .insert("seo".to_string(), json!({ "title": "Hello" }));
+
+        let (start, _) = build_cursors(
+            &[doc.clone()],
+            &CursorKey::builder("seo__title", SortDirection::Asc).build(),
+        );
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_val, SortValue::Text("Hello".to_string()));
+
+        let (start, _) = build_cursors(
+            &[doc],
+            &CursorKey::builder("meta__inner__rank", SortDirection::Asc).build(),
+        );
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_val, SortValue::Integer(3));
+    }
+
     #[test]
     fn build_cursors_sort_by_updated_at_none() {
         let docs = vec![Document::new("doc1".to_string())];
-        let (start, _end) = build_cursors(&docs, "updated_at", SortDirection::Asc, false);
+        let (start, _end) = build_cursors(
+            &docs,
+            &CursorKey::builder("updated_at", SortDirection::Asc).build(),
+        );
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, SortValue::Null);
     }
@@ -542,7 +638,10 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_created_at_none() {
         let docs = vec![Document::new("doc2".to_string())];
-        let (start, _end) = build_cursors(&docs, "created_at", SortDirection::Asc, false);
+        let (start, _end) = build_cursors(
+            &docs,
+            &CursorKey::builder("created_at", SortDirection::Asc).build(),
+        );
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, SortValue::Null);
     }
@@ -550,7 +649,8 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_id() {
         let docs = vec![Document::new("the-id".to_string())];
-        let (start, _end) = build_cursors(&docs, "id", SortDirection::Asc, false);
+        let (start, _end) =
+            build_cursors(&docs, &CursorKey::builder("id", SortDirection::Asc).build());
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "id");
         assert_eq!(decoded.sort_val, SortValue::Text("the-id".to_string()));
@@ -561,7 +661,10 @@ mod tests {
         let mut doc = Document::new("doc3".to_string());
         doc.fields.insert("score".to_string(), json!(42));
         let docs = vec![doc];
-        let (start, _end) = build_cursors(&docs, "score", SortDirection::Asc, false);
+        let (start, _end) = build_cursors(
+            &docs,
+            &CursorKey::builder("score", SortDirection::Asc).build(),
+        );
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "score");
         assert_eq!(decoded.sort_val, SortValue::Integer(42));
@@ -570,7 +673,10 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_arbitrary_field_missing() {
         let docs = vec![Document::new("doc4".to_string())];
-        let (start, _end) = build_cursors(&docs, "nonexistent", SortDirection::Asc, false);
+        let (start, _end) = build_cursors(
+            &docs,
+            &CursorKey::builder("nonexistent", SortDirection::Asc).build(),
+        );
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, SortValue::Null);
     }

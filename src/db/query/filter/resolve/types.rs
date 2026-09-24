@@ -73,28 +73,65 @@ pub(in crate::db::query::filter) enum SubqueryCondition {
     RelatedId,
     /// `_block_type` column on the join table. Always text.
     BlockType,
-    /// `json_extract` on a row's JSON — a block row's `data`, an array row's
-    /// group / nested array / nested blocks column — possibly with `json_each`
-    /// joins for nested blocks/arrays.
-    Json {
-        /// `json_each` joins: `(source_expr, alias)`.
-        each_joins: Vec<(String, String)>,
-        /// Final expression, e.g. `json_extract(posts_content.data, '$.body')`.
-        extract_expr: String,
-        /// Leaf field type for operand coercion. `None` falls back to Text.
-        field_type: Option<FieldType>,
-        /// The list the leaf holds — a scalar has-many list or a has-many
-        /// reference's id list — whose filter quantifies over its elements.
-        list: Option<ListLeaf>,
-    },
+    /// A value inside a row's JSON — a block row's `data`, an array row's
+    /// group / nested array / nested blocks column — read one way per block
+    /// type where block types define the path differently (see
+    /// [`JsonLeaf`]). A row matches when one of the readings holds.
+    Json(Vec<JsonLeaf>),
 }
 
-/// Result of walking a filter path through a row's JSON: the `json_each`
-/// joins needed, the final extract expression, the leaf field type for
-/// binding, and the list the leaf holds, if any.
-pub(super) type JsonWalkResult = (
-    Vec<(String, String)>,
-    String,
-    Option<FieldType>,
-    Option<ListLeaf>,
-);
+/// One reading of a filter path inside a row's JSON: the steps from the
+/// join-table row down to the value, the final extract expression, the leaf
+/// type for binding, and the list the leaf holds, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::db::query::filter) struct JsonLeaf {
+    /// `json_each` expansions and block-type conditions, in path order.
+    pub(in crate::db::query::filter) steps: Vec<JsonStep>,
+    /// Final expression, e.g. `json_extract(posts_content.data, '$.body')`.
+    pub(in crate::db::query::filter) extract_expr: String,
+    /// Leaf field type for operand coercion. `None` falls back to Text.
+    pub(in crate::db::query::filter) field_type: Option<FieldType>,
+    /// The list the leaf holds — a scalar has-many list or a has-many
+    /// reference's id list — whose filter quantifies over its elements.
+    pub(in crate::db::query::filter) list: Option<ListLeaf>,
+}
+
+impl JsonLeaf {
+    /// The `json_each` expansions, as `(source_expr, alias)`.
+    pub(in crate::db::query::filter) fn each_joins(&self) -> Vec<(&str, &str)> {
+        self.steps
+            .iter()
+            .filter_map(|step| match step {
+                JsonStep::Each { source, alias } => Some((source.as_str(), alias.as_str())),
+                JsonStep::BlockType { .. } | JsonStep::OtherBlockType { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Whether this is the reading of rows whose block type declares no field
+    /// of the filtered name — the value is absent there.
+    pub(in crate::db::query::filter) fn reads_absent(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|step| matches!(step, JsonStep::OtherBlockType { .. }))
+    }
+
+    /// Whether the reading holds in rows of every block type.
+    pub(in crate::db::query::filter) fn is_unconditional(&self) -> bool {
+        self.steps
+            .iter()
+            .all(|step| matches!(step, JsonStep::Each { .. }))
+    }
+}
+
+/// One step of a row path on the way to its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::db::query::filter) enum JsonStep {
+    /// Expand the rows of the JSON array `source` as `alias`.
+    Each { source: String, alias: String },
+    /// Only a block row whose type — read by `expr` — is `block_type`.
+    BlockType { expr: String, block_type: String },
+    /// Only a block row whose type — read by `expr` — is none of `declared`
+    /// (or missing).
+    OtherBlockType { expr: String, declared: Vec<String> },
+}

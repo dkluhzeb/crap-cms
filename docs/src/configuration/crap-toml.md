@@ -355,6 +355,8 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 
 Content-Security-Policy header configuration for the admin UI. Each field is a list of CSP sources for the corresponding directive. Theme developers can extend these lists to allow external resources (CDNs, custom fonts, analytics, etc.).
 
+The policy is added to every built-in route's response that does not set its own: a response that already carries a Content-Security-Policy keeps it — a served SVG upload, for one, keeps its `sandbox; default-src 'none'`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable the CSP header. Set to `false` to disable entirely. |
@@ -561,7 +563,7 @@ reports = { concurrency = 1, timeout = "30m", retries = 0 }
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `concurrency` | integer | `0` (unlimited) | Max concurrent runs across all slugs in this queue. `0` means no per-queue cap; only the global `[jobs] max_concurrent` and per-slug `JobDefinition::concurrency` apply. |
-| `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`, `_system_bulk`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. Accepts seconds or human-readable (`"5m"`, `"30s"`). |
+| `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`, `_system_bulk`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. A `_system_bulk` run stops itself at it and rolls back; an email or image-convert run still executing past it is logged, keeps its slot, and is never retried while it runs (see [Timeouts](../lua-api/jobs.md#timeouts)). Accepts seconds or human-readable (`"5m"`, `"30s"`). |
 | `retries` | integer | unset (worker default, see below) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. **Exception:** `_system_bulk` always runs with exactly one attempt — a retry could re-apply a committed batch — so `[jobs.queues.bulk] retries` affects only *user* jobs placed on that queue. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
 
 The three framework queues are **seeded** with defaults at startup so the

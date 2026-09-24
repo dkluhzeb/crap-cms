@@ -15,7 +15,7 @@ use crate::{
         query::{
             helpers::{
                 column_value, companion_writes, prefixed_name, quote_ident, tz_column, utc_now,
-                validate_no_null_byte_json, walk_leaf_fields,
+                walk_leaf_fields,
             },
             is_locale_locked_write, locale_write_column,
             read::find_by_id_raw,
@@ -225,8 +225,6 @@ fn collect_leaf_update(
         }
         return Ok(());
     };
-
-    validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
     let zone = data.get(&tz_column(&data_key)).and_then(Value::as_str);
     collector.push(conn, &col_name, column_value(field, value, zone));

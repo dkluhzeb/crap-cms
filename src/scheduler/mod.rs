@@ -5,8 +5,11 @@
 //! ## Submodule layout
 //!
 //! - `loop_runner.rs` -- the long-running event loop (`scheduler::start`).
-//!   Owns the tokio `select!` over poll / cron / heartbeat tickers, claims
-//!   pending jobs, and spawns timeout-bounded tasks.
+//!   Owns the tokio `select!` over the poll / cron / heartbeat tickers and
+//!   the run-finished wake-up.
+//! - `poll.rs` -- the poll: claims pending jobs up to the free capacity,
+//!   executes each claimed run on the blocking pool, and watches it to its
+//!   end (a run is never abandoned while it still executes).
 //! - `announce.rs` -- the startup announcement: the line stating this
 //!   process's effective queues, cron mode and concurrency, the queue-name
 //!   typo warnings, and the stale-job recovery that precedes the loop.
@@ -22,7 +25,7 @@
 //!   no tokio -- callable from tests directly.
 //! - `types.rs` -- `SchedulerParams` (built via `SchedulerParams::builder`,
 //!   whose defaults are `serve`'s: every queue, cron on) and the internal
-//!   `EmailQueueConfig`.
+//!   `TickJobConfig` / `RunningJob` the poll and heartbeat share.
 //!
 //! ## Conventions
 //!
@@ -32,19 +35,24 @@
 //! - Every job-row write takes a write-pool connection.
 //! - The retention purge is gated by an atomic `_crap_cron_fired`
 //!   claim so multi-node deployments don't double-purge per window.
-//! - Job execution runs inside `tokio::time::timeout` +
-//!   `spawn_blocking`; on timeout the job is failed via
-//!   `job_query::fail_job` with `should_retry` driven by
-//!   `attempt < max_attempts`.
+//! - Job execution runs inside `spawn_blocking`, which Tokio cannot
+//!   cancel. A run stops itself at its timeout (Lua handlers and
+//!   `_system_bulk` enforce a cooperative deadline and roll back the
+//!   operation in flight); the scheduler's timer is only a watchdog that
+//!   reports an overdue run and keeps waiting, so the row stays `running`
+//!   — and no retry starts — until the run has actually ended.
+//! - Every finished run wakes the loop, which polls again at once; the
+//!   poll tick is the fallback.
 //! - Wide-arg helpers take typed `*Input` structs
 //!   (`CronTickInput`, `HeartbeatTickInput`, `PurgeCollectionInput`,
-//!   `SpawnJobInput`) instead of >4 positional arguments.
+//!   `PollInput`) instead of >4 positional arguments.
 
 mod announce;
 mod bulk;
 mod cron_tick;
 mod heartbeat;
 mod loop_runner;
+mod poll;
 mod runner;
 mod types;
 

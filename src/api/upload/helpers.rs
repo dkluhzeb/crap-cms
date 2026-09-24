@@ -1,5 +1,7 @@
 //! Shared helpers for upload API handlers: auth, JSON responses, error classification.
 
+use std::sync::Arc;
+
 use axum::{
     http::{
         HeaderMap, StatusCode,
@@ -8,13 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     admin::{AdminState, FormParseError, server::evaluate_admin_request},
-    core::{AuthUser, Document, HookRef},
-    db::AccessResult,
-    hooks::AccessCheckInput,
+    core::{AuthUser, CollectionDefinition, Document},
     service::{
         ServiceError,
         auth::{AuthFailure, Resolution},
@@ -143,53 +143,42 @@ pub fn json_ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
         .into_response()
 }
 
-/// Check collection-level access, returning a JSON error response on failure.
+/// The caller of an upload API request and the upload collection it names, or
+/// the response refusing it: an unusable credential, `404` for an unknown
+/// collection, `400` for a collection without uploads.
+///
+/// The collection's access rule is not judged here. The service judges it —
+/// for a write, on the request's data together with the file's own columns
+/// and before the file is stored — and a rule judged here without that data
+/// could refuse a request the rule allows.
 #[cfg(not(tarpaulin_include))]
-pub fn check_upload_access(
+pub(super) fn resolve_upload_request(
     state: &AdminState,
-    access: Option<&HookRef>,
-    user_doc: Option<&Document>,
-    id: Option<&str>,
-    deny_msg: &str,
-    operation: &str,
-    collection: &str,
-) -> Result<(), Box<Response>> {
-    let db_kind = state.infra.pool.kind();
-    let mut conn = state
+    headers: &HeaderMap,
+    slug: &str,
+) -> Result<(Option<AuthUser>, Arc<CollectionDefinition>), Box<Response>> {
+    let auth_user = extract_bearer_user(state, headers)?;
+
+    let def = state
         .infra
-        .pool
-        .get()
-        .map_err(|e| Box::new(db_error_response(e, db_kind)))?;
+        .registry
+        .get_collection(slug)
+        .cloned()
+        .ok_or_else(|| {
+            Box::new(json_error(
+                StatusCode::NOT_FOUND,
+                &format!("Collection '{slug}' not found"),
+            ))
+        })?;
 
-    let tx = conn
-        .transaction()
-        .map_err(|e| Box::new(db_error_response(e, db_kind)))?;
-
-    let result = state.infra.hook_runner.check_access(
-        &AccessCheckInput::builder(operation, collection)
-            .access(access)
-            .user(user_doc)
-            .id(id)
-            .build(),
-        &tx,
-    );
-
-    if let Err(e) = tx.commit() {
-        warn!("tx commit failed: {e}");
+    if !def.is_upload_collection() {
+        return Err(Box::new(json_error(
+            StatusCode::BAD_REQUEST,
+            &format!("Collection '{slug}' is not an upload collection"),
+        )));
     }
 
-    match result {
-        Ok(AccessResult::Denied) => Err(Box::new(json_error(StatusCode::FORBIDDEN, deny_msg))),
-        Err(e) => {
-            error!("Upload access check failed: {}", e);
-
-            Err(Box::new(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Access check failed",
-            )))
-        }
-        _ => Ok(()),
-    }
+    Ok((auth_user, def))
 }
 
 /// The response to a failed connection checkout or transaction start: an

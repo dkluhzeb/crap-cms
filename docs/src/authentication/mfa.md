@@ -26,9 +26,11 @@ disable the second factor.
 ## Shared machinery (all modes)
 
 Every mode rides the same challenge flow on both login surfaces (the admin
-login page and the gRPC `Login` RPC):
+login page and the gRPC `Login` RPC) and on the admin
+[auth callbacks](#auth-callbacks-oauth--oidc):
 
-1. The password is verified first. No token or session is issued.
+1. The password (or the custom strategy, or the callback's identity
+   provider) is verified first. No token or session is issued.
 2. The optional `mfa_when` hook decides whether THIS login needs the
    second factor (per surface, per user field, …). No hook = always
    required; a hook error fails closed.
@@ -132,7 +134,10 @@ crap-cms user reset-totp -e admin@example.com          # prompts to confirm
 crap-cms user reset-totp -c editors --id abc123 -y     # non-interactive
 ```
 
-The next login challenge re-provisions from scratch. Resetting re-opens
+The next login challenge re-provisions from scratch. Like a password
+change, the reset ends the user's existing sessions — every cookie and
+token issued before it is rejected — and, with Redis live updates, tears
+down their open live streams on `serve`. Resetting re-opens
 the trust-on-first-login window, so pair it with a password change when
 compromise is suspected. (The underlying `_totp_*` columns are system
 columns — never exposed through the API, hooks, or admin forms.)
@@ -159,3 +164,28 @@ end
 
 `ctx` carries `{ collection, user, surface, headers }`. A hook error
 fails closed (MFA required).
+
+## Auth callbacks (OAuth / OIDC)
+
+A session minted by an [auth callback](custom-strategies.md#auth-callbacks-oauth2--oidc)
+(`/admin/auth/callback/[{collection}/]{name}`) passes the **same** MFA
+step: on an MFA collection the callback redirects to `/admin/mfa` with a
+pending-MFA cookie — the user completes the collection's mode (TOTP, email
+code, or custom delivery) exactly as after a password login — and only then
+gets the session. `mfa_when` runs for callbacks too (`surface = "admin"`,
+the callback request's headers).
+
+When the identity provider already enforces a second factor, list the
+callback by name so its logins skip this collection's MFA step:
+
+```lua
+{ type = "password_login", mfa = "totp", mfa_exempt_callbacks = { "okta" } },
+```
+
+The name is the `{name}` of the callback route (the file
+`auth_callback/{name}.lua`). Only listed callbacks skip the step; every
+other callback, and every password or strategy login, still completes it.
+`mfa_exempt_callbacks` without an `mfa` mode is a startup error. Exempt a
+callback only when the provider *enforces* 2FA for every account that can
+reach it — the exemption trusts the provider's second factor in place of
+this collection's.

@@ -12,17 +12,30 @@ use std::collections::HashSet;
 
 use tracing::{debug, warn};
 
-use crate::core::{BLOCK_TYPE_KEY, FieldDefinition, NestStep, any_field};
-use crate::db::query::join::find_all_array_rows_with_parent;
-use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
+use super::{
+    helpers::field_display_label,
+    types::{BackRefScan, BackReference},
+};
+use crate::{
+    core::{BLOCK_TYPE_KEY, FieldDefinition, NestStep, any_field},
+    db::query::{
+        join::find_all_array_rows_with_parent,
+        ref_count::{walk_blocks_with, walk_nested_with},
+    },
+};
 
-use super::helpers::field_display_label;
-use super::types::{BackRefScan, BackReference};
+/// How one referring field inside a row is reported: its display path, its
+/// query path, and its human label.
+struct RowFieldKey {
+    field_name: String,
+    query_path: String,
+    label: String,
+}
 
 /// Accumulates matched parent document ids per discovered field path, keeping
 /// insertion order and deduplicating `(field_name, parent_id)` pairs.
 struct PathAccumulator {
-    entries: Vec<(String, String, Vec<String>)>,
+    entries: Vec<(RowFieldKey, Vec<String>)>,
     seen: HashSet<(String, String)>,
 }
 
@@ -34,33 +47,53 @@ impl PathAccumulator {
         }
     }
 
-    fn record(&mut self, field_name: String, label: String, parent_id: &str) {
+    fn record(&mut self, key: RowFieldKey, parent_id: &str) {
         if !self
             .seen
-            .insert((field_name.clone(), parent_id.to_string()))
+            .insert((key.field_name.clone(), parent_id.to_string()))
         {
             return;
         }
 
-        if let Some(entry) = self.entries.iter_mut().find(|(n, ..)| *n == field_name) {
-            entry.2.push(parent_id.to_string());
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|(k, _)| k.field_name == key.field_name)
+        {
+            entry.1.push(parent_id.to_string());
         } else {
-            self.entries
-                .push((field_name, label, vec![parent_id.to_string()]));
+            self.entries.push((key, vec![parent_id.to_string()]));
         }
     }
 
-    fn drain_into(self, scan: &BackRefScan, results: &mut Vec<BackReference>) {
-        for (field_name, label, ids) in self.entries {
-            results.push(BackReference::new(
-                scan.owner_slug.to_string(),
-                scan.owner_label.to_string(),
-                field_name,
-                label,
-                ids,
-                scan.is_global,
-            ));
-        }
+    fn into_references(self, scan: &BackRefScan) -> Vec<BackReference> {
+        self.entries
+            .into_iter()
+            .map(|(key, ids)| {
+                BackReference::builder(scan.owner_slug, key.field_name)
+                    .owner_label(scan.owner_label)
+                    .field_label(key.label)
+                    .query_path(key.query_path)
+                    .document_ids(ids)
+                    .global(scan.is_global)
+                    .build()
+            })
+            .collect()
+    }
+}
+
+/// The report key of `leaf`, reached through `path` inside the rows of the
+/// field at document path `root` (labelled `prefix`).
+fn row_field_key(
+    root: &str,
+    prefix: &str,
+    path: &[NestStep<'_>],
+    leaf: &FieldDefinition,
+) -> RowFieldKey {
+    RowFieldKey {
+        field_name: format!("{root}.{}", path_names(path, leaf, true)),
+        query_path: format!("{root}.{}", path_names(path, leaf, false)),
+        label: build_label(prefix, path, leaf),
     }
 }
 
@@ -75,13 +108,15 @@ fn fields_may_target(fields: &[FieldDefinition], target: &str) -> bool {
     })
 }
 
-/// The dotted `field_name` path: ancestor segment names plus the leaf field.
-fn path_names(path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
+/// The dotted path below a row: ancestor segment names plus the leaf field.
+/// A block row's type is a segment of the display path (`with_block_types`)
+/// but not of a query path, which never names it.
+fn path_names(path: &[NestStep<'_>], leaf: &FieldDefinition, with_block_types: bool) -> String {
     let mut parts: Vec<&str> = path
         .iter()
-        .map(|seg| match seg {
-            NestStep::Field(f) => f.name.as_str(),
-            NestStep::Block(b) => b.block_type.as_str(),
+        .filter_map(|seg| match seg {
+            NestStep::Field(f) => Some(f.name.as_str()),
+            NestStep::Block(b) => with_block_types.then_some(b.block_type.as_str()),
         })
         .collect();
     parts.push(leaf.name.as_str());
@@ -112,21 +147,22 @@ fn is_self_reference(scan: &BackRefScan, parent_id: &str) -> bool {
 }
 
 /// Scan an array join table for references at any depth inside its rows.
+/// `root` is the array field's dotted document path (`meta.items`).
 pub(super) fn scan_array_sub_fields(
     scan: &BackRefScan,
     field: &FieldDefinition,
     array_table: &str,
-    results: &mut Vec<BackReference>,
-) {
+    root: &str,
+) -> Vec<BackReference> {
     if !fields_may_target(&field.fields, scan.target_collection) {
-        return;
+        return Vec::new();
     }
 
     let rows = match find_all_array_rows_with_parent(scan.conn, array_table, &field.fields) {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::debug!("Back-ref array scan skipping {}: {}", array_table, e);
-            return;
+            debug!("Back-ref array scan skipping {}: {}", array_table, e);
+            return Vec::new();
         }
     };
 
@@ -145,29 +181,29 @@ pub(super) fn scan_array_sub_fields(
             &mut stack,
             &mut |leaf, path, coll, id, _poly| {
                 if coll == scan.target_collection && id == scan.target_id {
-                    let field_name = format!("{}.{}", field.name, path_names(path, leaf));
-                    acc.record(field_name, build_label(&prefix, path, leaf), parent_id);
+                    acc.record(row_field_key(root, &prefix, path, leaf), parent_id);
                 }
             },
         );
     }
 
-    acc.drain_into(scan, results);
+    acc.into_references(scan)
 }
 
 /// Scan a blocks join table for references at any depth inside block data.
+/// `root` is the blocks field's dotted document path (`meta.content`).
 pub(super) fn scan_blocks(
     scan: &BackRefScan,
     field: &FieldDefinition,
     blocks_table: &str,
-    results: &mut Vec<BackReference>,
-) {
+    root: &str,
+) -> Vec<BackReference> {
     if !field
         .blocks
         .iter()
         .any(|b| fields_may_target(&b.fields, scan.target_collection))
     {
-        return;
+        return Vec::new();
     }
 
     let sql = format!("SELECT parent_id, _block_type, data FROM \"{blocks_table}\"");
@@ -175,7 +211,7 @@ pub(super) fn scan_blocks(
         Ok(rows) => rows,
         Err(e) => {
             debug!("Back-ref blocks scan skipping {}: {}", blocks_table, e);
-            return;
+            return Vec::new();
         }
     };
 
@@ -213,14 +249,13 @@ pub(super) fn scan_blocks(
             &mut stack,
             &mut |leaf, path, coll, id, _poly| {
                 if coll == scan.target_collection && id == scan.target_id {
-                    let field_name = format!("{}.{}", field.name, path_names(path, leaf));
-                    acc.record(field_name, build_label(&prefix, path, leaf), &parent_id);
+                    acc.record(row_field_key(root, &prefix, path, leaf), &parent_id);
                 }
             },
         );
     }
 
-    acc.drain_into(scan, results);
+    acc.into_references(scan)
 }
 
 #[cfg(test)]
@@ -292,6 +327,8 @@ mod tests {
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].field_name, "content.hero.bg_image");
+        // A query path never names the block type.
+        assert_eq!(refs[0].query_path, "content.bg_image");
         assert_eq!(refs[0].count, 1);
     }
 
@@ -339,6 +376,11 @@ mod tests {
         );
         assert_eq!(refs[0].owner_slug, "posts");
         assert_eq!(refs[0].count, 1);
+
+        // Regression: reported without its group (`items.image`), so the
+        // report's field could not be judged against the group's access.
+        assert_eq!(refs[0].field_name, "meta.items.image");
+        assert_eq!(refs[0].query_path, "meta.items.image");
     }
 
     /// Regression: a relationship nested in a Group *inside* an array row used
@@ -453,6 +495,7 @@ mod tests {
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1, "group-in-block relationship must be found");
         assert_eq!(refs[0].field_name, "content.hero.meta.bg");
+        assert_eq!(refs[0].query_path, "content.meta.bg");
         assert_eq!(refs[0].count, 1);
     }
 

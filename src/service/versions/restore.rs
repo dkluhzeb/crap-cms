@@ -22,7 +22,10 @@ use crate::{
         invalidate_user_streams_if_auth, run_pool_write, stored_fields_for_update_rules,
         stored_global_fields_for_update_rules,
         versions::gate::versions_gate_decision,
-        write::{UploadSettle, document_file_keys, settle_upload_write},
+        write::{
+            UploadSettle, adopt_held_variants, document_file_keys, restored_file_conversions,
+            settle_upload_write,
+        },
     },
 };
 
@@ -379,6 +382,10 @@ pub(crate) fn restore_collection_version_core(
     // the settle below can release exactly the ones nothing names any more.
     let before_files = document_file_keys(ctx, def, document_id, restore_locale_ctx.as_ref())?;
 
+    // The snapshot recorded its queued variants empty: name the ones whose
+    // bytes the document still holds, and owe the rest as jobs (below).
+    adopt_held_variants(def, &before_files, &mut snapshot);
+
     let mut doc = query::restore_version(
         conn,
         ctx.slug,
@@ -389,11 +396,16 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
+    // The restored file's queued variants the document no longer holds.
+    let conversions =
+        restored_file_conversions(def, &before_files, &doc.fields, ctx.image_max_attempts);
+
     settle_upload_write(
         ctx,
         &UploadSettle::builder(def, document_id)
             .before(Some(&before_files))
             .updated_row(Some(&doc.fields))
+            .conversions(conversions.as_ref())
             .build(),
     )?;
 

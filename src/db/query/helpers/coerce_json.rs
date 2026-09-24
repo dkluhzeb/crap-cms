@@ -1,30 +1,14 @@
-//! Typed JSON value coercion to database values, with the value-aware NUL-byte
-//! guard.
+//! Typed JSON value coercion to database values.
 
-use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
     core::{FieldType, json_truthy},
     db::{
         DbValue,
-        query::helpers::{coerce_date_value, coerce_value, validate_no_null_byte},
+        query::helpers::{coerce_date_value, coerce_value},
     },
 };
-
-/// Value-aware null-byte guard: only checks string-typed values. Non-string
-/// JSON values (Number, Bool, Null, Array, Object) cannot carry null bytes.
-pub(crate) fn validate_no_null_byte_json(
-    field_type: &FieldType,
-    field_name: &str,
-    value: &Value,
-) -> Result<()> {
-    if let Some(s) = value.as_str() {
-        validate_no_null_byte(field_type, field_name, s)?;
-    }
-
-    Ok(())
-}
 
 /// Coerce a typed `serde_json::Value` to the appropriate database type.
 ///

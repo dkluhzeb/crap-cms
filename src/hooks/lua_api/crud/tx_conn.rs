@@ -20,7 +20,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 use crate::{
     db::DbConnection,
     hooks::{
-        lifecycle::{AfterReadScope, PoolContext, PoolMode, TxContext},
+        lifecycle::{AfterReadScope, PoolContext, PoolMode, TxContext, check_execution_deadline},
         lua_api::transaction::run_scoped_tx,
     },
 };
@@ -99,8 +99,8 @@ impl Drop for TxSlot<'_> {
 /// # Errors
 ///
 /// Returns a Lua runtime error if neither context is set, if the call
-/// comes from an `after_read` hook, or if pool acquisition / `BEGIN
-/// IMMEDIATE` / `COMMIT` fail.
+/// comes from an `after_read` hook, if the running job's deadline has
+/// passed, or if pool acquisition / `BEGIN IMMEDIATE` / `COMMIT` fail.
 pub(crate) fn with_lua_db<R>(
     lua: &Lua,
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
@@ -111,6 +111,10 @@ pub(crate) fn with_lua_db<R>(
     // otherwise reach the pass-through and write on the read connection.
     ensure_writable(lua)?;
     refuse_in_after_read(lua)?;
+
+    // A job past its timeout stops at its next database call — including one
+    // that spends its time waiting on I/O and never trips the VM hook.
+    check_execution_deadline(lua)?;
 
     // Conn-mode: a shared outer tx is already open. Hand the existing
     // connection to `work` — `get_tx_conn(lua)` inside `work` sees the
@@ -209,13 +213,14 @@ fn no_db_context() -> mlua::Error {
 ///
 /// # Errors
 ///
-/// Returns a Lua runtime error if no context is set, or if pool acquisition
-/// / transaction handling fails.
+/// Returns a Lua runtime error if no context is set, if the running job's
+/// deadline has passed, or if pool acquisition / transaction handling fails.
 pub(crate) fn with_lua_db_read<R>(
     lua: &Lua,
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
 ) -> LuaResult<R> {
     refuse_in_after_read(lua)?;
+    check_execution_deadline(lua)?;
 
     if lua.app_data_ref::<TxContext>().is_some() {
         let conn = get_tx_conn(lua)?;
@@ -266,7 +271,11 @@ pub(crate) fn with_lua_db_read<R>(
 )]
 mod tests {
     use super::*;
-    use crate::{config::CrapConfig, db::pool};
+    use crate::{
+        config::CrapConfig,
+        db::pool,
+        hooks::lifecycle::{ExecutionDeadline, ExecutionDeadlineGuard},
+    };
     use mlua::Lua;
 
     /// A throwaway pool over a temp-dir database — the tests below only need
@@ -329,6 +338,37 @@ mod tests {
         );
     }
 
+    /// Regression: a Lua job past its timeout kept reading and writing — the
+    /// scheduler could only record the timeout while the handler ran on. Its
+    /// next database call, read or write, is now refused before any work.
+    #[test]
+    fn a_job_past_its_deadline_is_refused_at_its_next_database_call() {
+        let lua = Lua::new();
+        let (_dir, pool) = test_pool();
+        lua.set_app_data(PoolContext {
+            pool,
+            mode: PoolMode::Write,
+        });
+        let _deadline = ExecutionDeadlineGuard::install(&lua, ExecutionDeadline::new(0));
+
+        let write = with_lua_db(&lua, |_| -> LuaResult<()> {
+            panic!("the write body must not run past the deadline")
+        });
+        let read = with_lua_db_read(&lua, |_| -> LuaResult<()> {
+            panic!("the read body must not run past the deadline")
+        });
+
+        for result in [write, read] {
+            let Err(err) = result else {
+                panic!("a call past the deadline must be refused");
+            };
+            assert!(
+                err.to_string().contains("exceeded its timeout"),
+                "got: {err}"
+            );
+        }
+    }
+
     /// Regression: a panic in the CRUD body must not leave a `TxContext`
     /// behind on the VM.
     ///
@@ -358,7 +398,6 @@ mod tests {
     }
 
     /// Regression: the gate must be checked BEFORE the conn-mode
-    /// pass-through, not after.    /// Regression: the gate must be checked BEFORE the conn-mode
     /// pass-through, not after.
     ///
     /// `with_lua_db_read` installs a `TxContext` (the read-pool connection)

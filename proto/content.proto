@@ -1573,13 +1573,14 @@ message JobDefinitionInfo {
   // Number of retry attempts after failure. 0 = no retries.
   uint32 retries = 4;
 
-  // Maximum execution time in seconds before the job is considered timed out.
+  // Seconds a run may execute before it is stopped.
   uint64 timeout = 5;
 
   // Maximum number of simultaneous runs of this job.
   uint32 concurrency = 6;
 
-  // When true, a new run is skipped if another run of this job is already active.
+  // When true, a scheduled run is skipped while another run of this job is
+  // still queued or running.
   bool skip_if_running = 7;
 
   // Human-readable label for the job (from Lua definition labels.singular).

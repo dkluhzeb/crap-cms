@@ -84,20 +84,24 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             // fails first.
             let infra = cli_infra(config_dir, &registry, &cfg, &pool)?;
 
-            let lookup = UserLookup {
-                pool: &pool,
-                registry: &registry,
-                collection: &collection,
-                email,
-                id,
-                locale: &cfg.locale,
-            };
+            let lookup = UserLookup::builder(&pool, &registry, &collection, &cfg.locale)
+                .email(email)
+                .id(id)
+                .build();
 
             user_change_password(
                 &lookup,
                 &infra,
                 UserChangePasswordParams::new(password, password_stdin),
             )
+        }
+        ref reset @ UserAction::ResetTotp { .. } => {
+            // Built — and a configured Redis reached — before the
+            // confirmation prompt, so a reset that couldn't reach `serve`'s
+            // live streams fails first.
+            let infra = cli_infra(config_dir, &registry, &cfg, &pool)?;
+
+            run_reset_totp(&infra, &cfg, reset)
         }
         ref other => {
             let Some(account) = account_action(other) else {
@@ -177,20 +181,28 @@ fn run_account_action(
 ) -> Result<()> {
     let (collection, email, id, _) = lookup_args(action);
 
-    let lookup = UserLookup {
-        pool: &infra.pool,
-        registry: &infra.registry,
-        collection: &collection,
-        email,
-        id,
-        locale: &cfg.locale,
-    };
+    let lookup = UserLookup::builder(&infra.pool, &infra.registry, &collection, &cfg.locale)
+        .email(email)
+        .id(id)
+        .build();
 
     user_account_action(&lookup, infra, account)
 }
 
-/// The read-or-reset subcommands that only need to find one user and act on
-/// it — `info` and `reset-totp`.
+/// Reset one user's TOTP enrollment on the CLI's infrastructure.
+#[cfg(not(tarpaulin_include))]
+fn run_reset_totp(infra: &AppInfra, cfg: &CrapConfig, action: &UserAction) -> Result<()> {
+    let (collection, email, id, confirm) = lookup_args(action);
+
+    let lookup = UserLookup::builder(&infra.pool, &infra.registry, &collection, &cfg.locale)
+        .email(email)
+        .id(id)
+        .build();
+
+    user_reset_totp(&lookup, infra, confirm)
+}
+
+/// The read-only subcommand that only needs to find one user — `info`.
 #[cfg(not(tarpaulin_include))]
 fn run_lookup_action(
     pool: &DbPool,
@@ -198,20 +210,15 @@ fn run_lookup_action(
     cfg: &CrapConfig,
     action: &UserAction,
 ) -> Result<()> {
-    let (collection, email, id, confirm) = lookup_args(action);
+    let (collection, email, id, _) = lookup_args(action);
 
-    let lookup = UserLookup {
-        pool,
-        registry,
-        collection: &collection,
-        email,
-        id,
-        locale: &cfg.locale,
-    };
+    let lookup = UserLookup::builder(pool, registry, &collection, &cfg.locale)
+        .email(email)
+        .id(id)
+        .build();
 
     match action {
         UserAction::Info { .. } => user_info(&lookup),
-        UserAction::ResetTotp { .. } => user_reset_totp(&lookup, confirm),
         _ => unreachable!("handled in run()"),
     }
 }

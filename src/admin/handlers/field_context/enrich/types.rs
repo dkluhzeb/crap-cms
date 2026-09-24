@@ -8,9 +8,9 @@ use tracing::warn;
 use crate::{
     admin::{
         context::field::{
-            ArrayField, ArrayRow, BlockRow, BlocksField, FieldContext, JoinField, JoinItem,
-            RelationshipField, RelationshipSelectedItem, RichtextField, RichtextNodeAttrCtx,
-            RichtextNodeAttrOption, RichtextNodeDefCtx, UploadField,
+            ArrayField, ArrayRow, BlockRow, BlocksField, FieldContext, RelationshipField,
+            RelationshipSelectedItem, RichtextField, RichtextNodeAttrCtx, RichtextNodeAttrOption,
+            RichtextNodeDefCtx, UploadField,
         },
         handlers::{
             field_context::{
@@ -18,7 +18,7 @@ use crate::{
                 enrich::{
                     EnrichCtx, SubFieldOpts, build_enriched_sub_field_context,
                     enrich_nested_fields, enrich_polymorphic_selected, field_types::row_identity,
-                    gated_find, gated_find_by_id,
+                    gated_find_by_id,
                 },
                 inject_lang_values_from_row, inject_timezone_values_from_row,
                 locale_locked_display,
@@ -30,7 +30,6 @@ use crate::{
         BLOCK_TYPE_KEY, BlockDefinition, CollectionDefinition, Document, DocumentFields,
         FieldDefinition, FieldType, Registry, upload,
     },
-    db::{Filter, FilterClause, FilterOp},
 };
 
 /// Extract selected IDs from a has-many field value.
@@ -566,49 +565,6 @@ pub(super) fn enrich_blocks(
     // Enrich block definition templates so new block rows have upload/relationship options.
     for (def_ctx, block_def) in bf.block_definitions.iter_mut().zip(field_def.blocks.iter()) {
         enrich_nested_fields(&mut def_ctx.fields, &block_def.fields, enrich);
-    }
-}
-
-/// Enrich a top-level Join field context with reverse-lookup items from DB.
-pub(super) fn enrich_join(
-    jf: &mut JoinField,
-    field_def: &FieldDefinition,
-    ctx: &EnrichCtx,
-    doc_id: Option<&str>,
-) {
-    // Reverse lookup of another collection — access-gated so the join never
-    // enumerates, labels, or counts rows the viewer cannot read.
-    if let Some(ref jc) = field_def.join
-        && let Some(doc_id_str) = doc_id
-        && let Some(target_def) = ctx.reg.get_collection(&jc.collection)
-    {
-        let title_field = target_def
-            .title_field()
-            .map(std::string::ToString::to_string);
-
-        let base = vec![FilterClause::Single(Filter {
-            field: jc.on.clone(),
-            op: FilterOp::Equals(doc_id_str.to_string()),
-        })];
-
-        let docs = gated_find(ctx, &jc.collection, target_def, base);
-        let items: Vec<JoinItem> = docs
-            .iter()
-            .map(|doc| {
-                let label = title_field
-                    .as_ref()
-                    .and_then(|f| doc.get_str(f))
-                    .unwrap_or(&doc.id)
-                    .to_string();
-                JoinItem {
-                    id: doc.id.to_string(),
-                    label,
-                }
-            })
-            .collect();
-
-        jf.join_count = Some(items.len());
-        jf.join_items = Some(items);
     }
 }
 

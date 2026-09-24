@@ -24,8 +24,8 @@ use axum::{
     http::{
         Method, Request, StatusCode,
         header::{
-            CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HeaderName, HeaderValue,
-            SET_COOKIE,
+            CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE,
+            HeaderName, HeaderValue, SET_COOKIE,
         },
     },
     middleware::{self, Next},
@@ -659,12 +659,21 @@ async fn security_headers(
     // admin templates emit. Custom routes render their own bodies (no nonce),
     // so they must NOT inherit this CSP — they get the static protective
     // headers via `static_security_headers` on the full router instead.
+    //
+    // A handler that already chose a policy owns it: the upload serve route
+    // pins `sandbox; default-src 'none'` on SVG, and replacing that with the
+    // admin page policy would let a script inside an uploaded SVG run with
+    // the admin origin's authority.
+    if response.headers().contains_key(CONTENT_SECURITY_POLICY) {
+        return response;
+    }
+
     if let Some(csp) = state.config.admin.csp.build_header_value(Some(&nonce_str))
         && let Ok(value) = HeaderValue::from_str(&csp)
     {
         response
             .headers_mut()
-            .insert(HeaderName::from_static("content-security-policy"), value);
+            .insert(CONTENT_SECURITY_POLICY, value);
     }
 
     response

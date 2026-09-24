@@ -3,15 +3,38 @@
 use crate::core::{FieldDefinition, FieldType, find_field};
 use crate::db::FilterClause;
 
+use super::container::container_root;
+
 /// Rewrite dot notation for group fields: `seo.meta_title` → `seo__meta_title`.
 ///
 /// Array, Blocks, and Relationship fields keep their dots (resolved at SQL
-/// generation time via subqueries). Only Group fields are converted here
-/// because they map to flat `{group}__{sub}` columns on the parent table.
+/// generation time via subqueries). Only a path naming a group's value is
+/// converted here, because it maps to a flat `{group}__{sub}` column on the
+/// parent table; a path reaching an array, blocks or has-many field inside a
+/// group (`seo.items.name`) is kept as written — the resolver finds that
+/// field's own join table, and errors name the path the caller wrote.
 pub fn normalize_filter_fields(filters: &mut [FilterClause], fields: &[FieldDefinition]) {
     for clause in filters.iter_mut() {
         normalize_clause(clause, fields);
     }
+}
+
+/// Rewrite the dotted group form of an `order_by` (`seo.title`, `-seo.title`)
+/// to the flat column it sorts by (`seo__title`, `-seo__title`) — the form
+/// filters accept, so a sort and a filter name a group's value alike.
+/// Anything else is left as written, for the sort validation to judge.
+#[must_use]
+pub fn normalize_order_by(order_by: &str, fields: &[FieldDefinition]) -> String {
+    let (descending, column) = match order_by.strip_prefix('-') {
+        Some(column) => ("-", column),
+        None => ("", order_by),
+    };
+
+    let mut column = column.to_string();
+
+    normalize_field_name(&mut column, fields);
+
+    format!("{descending}{column}")
 }
 
 /// Rewrite group dot-paths in one [`FilterClause`] tree node, recursing through
@@ -28,9 +51,10 @@ fn normalize_clause(clause: &mut FilterClause, fields: &[FieldDefinition]) {
 }
 
 fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
-    if !field.contains('.') {
+    if !field.contains('.') || container_root(field, fields).is_some() {
         return;
     }
+
     let Some(first_segment) = field.split('.').next() else {
         return;
     };
@@ -243,5 +267,55 @@ mod tests {
             FilterClause::Single(f) => assert_eq!(f.field, "seo__title"),
             _ => panic!("expected single"),
         }
+    }
+
+    /// Regression: a path reaching an array, blocks or has-many field inside a
+    /// group was flattened whole (`seo__links__url`), which named no column
+    /// and no join table. It is kept as written for the resolver.
+    #[test]
+    fn normalize_keeps_a_path_into_a_groups_join_field() {
+        let seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                make_array_field("links", vec![make_field("url", FieldType::Text, false)]),
+                make_field("title", FieldType::Text, false),
+            ])
+            .build();
+        let fields = vec![seo];
+
+        for (path, expected) in [
+            ("seo.links.url", "seo.links.url"),
+            ("seo__links.url", "seo__links.url"),
+            ("seo.title", "seo__title"),
+        ] {
+            let mut filters = vec![FilterClause::Single(Filter {
+                field: path.to_string(),
+                op: FilterOp::Equals("x".to_string()),
+            })];
+
+            normalize_filter_fields(&mut filters, &fields);
+
+            let FilterClause::Single(f) = &filters[0] else {
+                panic!("expected single");
+            };
+            assert_eq!(f.field, expected, "{path}");
+        }
+    }
+
+    /// Regression: `order_by` accepted only the flat `seo__title` while
+    /// filters took `seo.title` too. Both spellings sort, in both directions.
+    #[test]
+    fn normalize_order_by_flattens_a_dotted_group_value() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![make_field("title", FieldType::Text, false)])
+                .build(),
+            make_field("title", FieldType::Text, false),
+        ];
+
+        assert_eq!(normalize_order_by("seo.title", &fields), "seo__title");
+        assert_eq!(normalize_order_by("-seo.title", &fields), "-seo__title");
+        assert_eq!(normalize_order_by("-seo__title", &fields), "-seo__title");
+        assert_eq!(normalize_order_by("title", &fields), "title");
+        assert_eq!(normalize_order_by("nope.x", &fields), "nope.x");
     }
 }

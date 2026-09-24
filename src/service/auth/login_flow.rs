@@ -19,16 +19,15 @@ use crate::{
     core::{
         CollectionDefinition, Document,
         auth::PasswordProvider,
-        collection::{Activation, Auth, MfaMode, StrategyCfg, Surface},
+        collection::{Activation, Auth, StrategyCfg, Surface},
     },
     db::BoxedConnection,
-    hooks::{
-        HookRunner,
-        lifecycle::{AuthStrategyInput, MfaWhenInput},
-    },
+    hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{
         AppInfra, ServiceContext, ServiceError,
-        auth::{authenticate_local, get_session_version, is_locked, is_verified, load_user},
+        auth::{
+            MfaGateRequest, StrategyAdmission, admit_strategy_user, authenticate_local, mfa_gate,
+        },
     },
 };
 
@@ -43,9 +42,9 @@ pub enum LoginOutcome {
     /// Credentials verified and no MFA required — the surface may mint a
     /// session.
     Verified(LoginVerified),
-    /// Credentials verified but the collection requires email MFA. The
-    /// surface must run its MFA step; minting a full session here would
-    /// bypass the second factor.
+    /// Credentials verified but the collection requires its second factor
+    /// (see [`mfa_gate`]). The surface must run its MFA step; minting a full
+    /// session here would bypass the second factor.
     MfaRequired(LoginVerified),
     /// Recoverable failure (unknown user, wrong password, locked,
     /// unverified) — deny uniformly, leaking nothing about which.
@@ -121,7 +120,7 @@ pub fn verify_login(
                 return Ok(mfa_gate(
                     infra,
                     &conn,
-                    req,
+                    &gate_request(req),
                     LoginVerified {
                         user: result.user,
                         session_version: result.session_version,
@@ -139,43 +138,9 @@ pub fn verify_login(
         }
     }
 
-    // Fallback: custom auth strategies (Lua). Credentials and the client
-    // address are exposed so a strategy can verify against an external system.
-    if let Some(named) = try_strategy_auth(&conn, req, &infra.hook_runner) {
-        let ctx = ServiceContext::collection(req.slug, req.def)
-            .conn(&conn)
-            .locale_config(Some(&infra.locale_config))
-            .build();
-
-        // The strategy's table only names the user; the login continues with
-        // the stored document, read as every authenticated request reads its
-        // user. An id naming no stored, non-trashed user is refused.
-        let Some(user) = load_user(&ctx, &named.id)? else {
-            return Ok(LoginOutcome::Denied);
-        };
-
-        // Strategy-authenticated users still need locked/verified checks. A
-        // lookup failure must fail CLOSED (deny) — letting a locked account
-        // in on a transient DB error is an auth bypass.
-        if is_locked(&ctx, &user.id)? {
-            return Ok(LoginOutcome::Denied);
-        }
-
-        if require_verified && !is_verified(&ctx, &user.id)? {
-            return Ok(LoginOutcome::Denied);
-        }
-
-        let session_version = get_session_version(&ctx, &user.id)?;
-
-        return Ok(mfa_gate(
-            infra,
-            &conn,
-            req,
-            LoginVerified {
-                user,
-                session_version,
-            },
-        ));
+    // Fallback: custom auth strategies (Lua).
+    if let Some(outcome) = strategy_login(infra, &conn, req, require_verified)? {
+        return Ok(outcome);
     }
 
     // Equalize timing when all auth methods fail — prevents distinguishing
@@ -188,51 +153,50 @@ pub fn verify_login(
     Ok(LoginOutcome::Denied)
 }
 
-/// Route a verified login through the collection's MFA requirement.
+/// Log in through the collection's custom auth strategies (Lua): `None` when
+/// no strategy named a user. Credentials and the client address are exposed
+/// so a strategy can verify against an external system.
 ///
-/// When an `mfa_when` gate hook is configured it decides whether THIS login
-/// needs the second factor (per surface / per user field); a hook error
-/// fails CLOSED — an auth gate that breaks must require more proof, not
-/// less.
-fn mfa_gate(
+/// The strategy's table only names the user; the login continues with the
+/// stored document, admitted exactly as a strategy-authenticated request is
+/// ([`admit_strategy_user`]): the stored row decides lock / verification
+/// state, the hook's flags may only restrict. A lookup failure propagates
+/// (fail CLOSED) — letting a locked account in on a transient DB error is an
+/// auth bypass.
+fn strategy_login(
     infra: &AppInfra,
     conn: &BoxedConnection,
     req: &LoginFlowRequest<'_>,
-    verified: LoginVerified,
-) -> LoginOutcome {
-    let mfa_enabled = req
-        .def
-        .auth
-        .as_ref()
-        .is_some_and(|a| a.mfa() != MfaMode::Off);
+    require_verified: bool,
+) -> Result<Option<LoginOutcome>, ServiceError> {
+    let Some(named) = try_strategy_auth(conn, req, &infra.hook_runner) else {
+        return Ok(None);
+    };
 
-    if !mfa_enabled {
-        return LoginOutcome::Verified(verified);
-    }
+    let ctx = ServiceContext::collection(req.slug, req.def)
+        .conn(conn)
+        .locale_config(Some(&infra.locale_config))
+        .build();
 
-    if let Some(hook) = req.def.auth.as_ref().and_then(Auth::mfa_when) {
-        let input = MfaWhenInput {
-            collection: req.slug,
-            user: &verified.user,
-            surface: req.surface.as_str(),
-            headers: req.headers,
-        };
+    let StrategyAdmission::Admitted {
+        user,
+        session_version,
+    } = admit_strategy_user(&ctx, &named, require_verified)?
+    else {
+        return Ok(Some(LoginOutcome::Denied));
+    };
 
-        match infra.hook_runner.run_mfa_when(hook, &input, conn) {
-            Ok(false) => return LoginOutcome::Verified(verified),
-            Ok(true) => {}
-            Err(e) => {
-                error!(
-                    collection = req.slug,
-                    hook = hook.reference(),
-                    error = ?e,
-                    "mfa_when hook failed; failing closed (requiring MFA)"
-                );
-            }
-        }
-    }
+    let verified = LoginVerified {
+        user,
+        session_version,
+    };
 
-    LoginOutcome::MfaRequired(verified)
+    Ok(Some(mfa_gate(infra, conn, &gate_request(req), verified)))
+}
+
+/// The MFA gate request for this login.
+fn gate_request<'a>(req: &LoginFlowRequest<'a>) -> MfaGateRequest<'a> {
+    MfaGateRequest::builder(req.slug, req.def, req.surface, req.headers).build()
 }
 
 /// Try each configured auth strategy in order, returning the first match.

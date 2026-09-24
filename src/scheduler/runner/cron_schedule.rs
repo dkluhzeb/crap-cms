@@ -126,9 +126,15 @@ fn fire_if_due(conn: &dyn DbConnection, tick: &CronTick<'_>) -> Result<()> {
     }
 
     // skip_if_running is atomic with the insert inside the same IMMEDIATE
-    // transaction.
-    if tick.def.skip_if_running && job_query::count_running(conn, Some(tick.slug))? > 0 {
-        debug!("Skipping cron job '{}' — still running", tick.slug);
+    // transaction. A previous run still waiting to be claimed — queued, or
+    // failed and waiting out its retry backoff — is as active as one that is
+    // executing; counting only `running` would let every fire stack another
+    // run behind it.
+    if tick.def.skip_if_running && job_query::count_active(conn, tick.slug)? > 0 {
+        debug!(
+            "Skipping cron job '{}' — a previous run is still queued or running",
+            tick.slug
+        );
 
         return Ok(());
     }
@@ -405,6 +411,56 @@ mod tests {
             job_query::list_job_runs(&conn, Some("skip_job"), Some(JobStatus::Pending), 100, 0)
                 .unwrap();
         assert_eq!(pending.len(), 0);
+    }
+
+    /// Regression: `skip_if_running` counted only `running` rows, so a run
+    /// still waiting to be claimed — or failed and waiting out its retry
+    /// backoff — did not block the next fire, and a slow queue stacked one
+    /// more run per cron tick behind it.
+    #[test]
+    fn skip_if_running_also_skips_while_a_previous_run_is_still_pending() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("pending_job", "some.handler")
+                .schedule("* * * * *")
+                .skip_if_running(true)
+                .build(),
+        ]);
+
+        // A previous run that failed once and waits out its retry backoff.
+        {
+            let conn = pool.get().unwrap();
+            job_query::insert_job(
+                &conn,
+                "pending_job",
+                "{}",
+                ScheduledBy::Cron,
+                3,
+                "default",
+                0,
+            )
+            .unwrap();
+            conn.execute_batch(
+                "UPDATE _crap_jobs SET attempt = 1, error = 'boom', \
+                 retry_after = '2999-01-01T00:00:00Z'",
+            )
+            .unwrap();
+        }
+
+        let now = Utc::now();
+        let last_check = now - Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
+
+        let conn = pool.get().unwrap();
+        let pending =
+            job_query::list_job_runs(&conn, Some("pending_job"), Some(JobStatus::Pending), 100, 0)
+                .unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "the fire must be skipped while the previous run is still pending"
+        );
     }
 
     #[test]

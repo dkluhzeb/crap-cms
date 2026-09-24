@@ -32,8 +32,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::core::{
-    Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, JsonRoot, NestStep,
-    Registry, VisitAction, any_field, walk_nested_mut,
+    Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, JoinConfig, JsonRoot,
+    NestStep, Registry, VisitAction, any_field, walk_nested_mut,
 };
 use crate::hooks::lifecycle::access::has_any_field_access;
 use crate::service::{helpers::collect_api_hidden_field_names, hooks::ReadHooks};
@@ -124,23 +124,45 @@ impl<'a> EmbeddedDocStripper<'a> {
                     self.strip_ref(&mut obj, depth);
                     VisitAction::Replace(Value::Object(obj))
                 }
-                // Populated has-many: an array of embedded objects (unpopulated
-                // ids stay strings and are left untouched).
+                // Populated has-many or join: an array of embedded objects
+                // (unpopulated ids stay strings and are left untouched).
                 Value::Array(items) if items.iter().any(value_is_embedded_ref) => {
-                    let mut items = items.clone();
-                    for item in &mut items {
-                        if let Value::Object(obj) = item
-                            && is_embedded_ref(obj)
-                        {
-                            self.strip_ref(obj, depth);
-                        }
-                    }
-                    VisitAction::Replace(Value::Array(items))
+                    VisitAction::Replace(Value::Array(self.strip_items(items, field, depth)))
                 }
                 // Unpopulated (bare id string) or anything else — nothing to strip.
                 _ => VisitAction::Keep,
             }
         });
+    }
+
+    /// Strip every embedded target of a populated has-many or join array. A
+    /// join then keeps only the children whose `on` value survived the strip
+    /// ([`join_child_readable`]).
+    fn strip_items(&self, items: &[Value], field: &FieldDefinition, depth: usize) -> Vec<Value> {
+        let mut items = items.to_vec();
+
+        for item in &mut items {
+            if let Value::Object(obj) = item
+                && is_embedded_ref(obj)
+            {
+                self.strip_ref(obj, depth);
+            }
+        }
+
+        if field.field_type != FieldType::Join {
+            return items;
+        }
+
+        let Some(join) = &field.join else {
+            return items;
+        };
+
+        items.retain(|item| {
+            item.as_object()
+                .is_none_or(|obj| join_child_readable(join, obj))
+        });
+
+        items
     }
 
     /// Strip one embedded target against its own collection's denials — data-aware
@@ -198,6 +220,17 @@ impl<'a> EmbeddedDocStripper<'a> {
 
         denials
     }
+}
+
+/// Whether a join lists `child` — one of its target documents, already
+/// stripped of what the viewer may not read. A join's children are exactly
+/// the documents whose `on` field holds this document, so listing a child
+/// whose `on` value the viewer may not read (a `hidden` field, or an
+/// `access.read` rule denying it for that child) would reveal that value. The
+/// one rule behind every join listing: the populated join array and the admin
+/// join field's items and count.
+pub(crate) fn join_child_readable<R: JsonRoot + ?Sized>(join: &JoinConfig, child: &R) -> bool {
+    child.root_get(&join.on).is_some()
 }
 
 /// A populated relationship target carries both `collection` and `id` markers
@@ -398,7 +431,14 @@ mod tests {
     /// target leaked while the identical field on a relationship target did not.
     #[test]
     fn strips_denied_field_from_populated_join_target() {
-        let posts = collection("posts", vec![text("title"), denied("secret")]);
+        let posts = collection(
+            "posts",
+            vec![
+                text("title"),
+                denied("secret"),
+                rel("author", "authors", false),
+            ],
+        );
         let mut authors = collection("authors", vec![text("name")]);
         authors.fields.push(
             FieldDefinition::builder("recent_posts", FieldType::Join)
@@ -413,8 +453,8 @@ mod tests {
         doc.fields.insert(
             "recent_posts".into(),
             json!([
-                { "id": "p1", "collection": "posts", "title": "A", "secret": "x" },
-                { "id": "p2", "collection": "posts", "title": "B", "secret": "y" }
+                { "id": "p1", "collection": "posts", "title": "A", "secret": "x", "author": "au1" },
+                { "id": "p2", "collection": "posts", "title": "B", "secret": "y", "author": "au1" }
             ]),
         );
 
@@ -441,7 +481,14 @@ mod tests {
     /// group and treats the Join leaf as an embedding type.
     #[test]
     fn strips_denied_field_from_join_nested_in_group() {
-        let posts = collection("posts", vec![text("title"), denied("secret")]);
+        let posts = collection(
+            "posts",
+            vec![
+                text("title"),
+                denied("secret"),
+                rel("author", "authors", false),
+            ],
+        );
         let mut authors = collection("authors", vec![]);
         let mut group = FieldDefinition::builder("section", FieldType::Group).build();
         group.fields = vec![
@@ -459,7 +506,10 @@ mod tests {
             "section".into(),
             json!({
                 "recent": [
-                    { "id": "p1", "collection": "posts", "title": "A", "secret": "x" }
+                    {
+                        "id": "p1", "collection": "posts", "title": "A", "secret": "x",
+                        "author": "au1"
+                    }
                 ]
             }),
         );
@@ -481,6 +531,134 @@ mod tests {
             arr[0].get("secret").is_none(),
             "a denied field on a Join target nested in a group must be stripped"
         );
+    }
+
+    /// Read hooks whose strip denies a `public_only` rule unless the field's
+    /// own level holds `public = true`, and every other rule outright.
+    struct PublicOnlyReadHooks;
+
+    impl ReadHooks for PublicOnlyReadHooks {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    impl FieldReadStrip for PublicOnlyReadHooks {
+        fn strip_read_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+            strip_read_access_data_aware(fields, level, &|hook, data| {
+                hook.reference() != "public_only" || data.get("public") != Some(&json!(true))
+            });
+        }
+    }
+
+    /// `authors.recent_posts` joins `posts` on `author`, whose read rule is
+    /// `rule` (or which is `hidden` when `rule` is `None`).
+    fn join_on_gated_author(rule: Option<&str>) -> Registry {
+        let mut author = rel("author", "authors", false);
+        match rule {
+            Some(rule) => author.access.read = Some(HookRef::new(rule)),
+            None => author.hidden = true,
+        }
+
+        let posts = collection("posts", vec![text("title"), text("public"), author]);
+        let mut authors = collection("authors", vec![text("name")]);
+        authors.fields.push(
+            FieldDefinition::builder("recent_posts", FieldType::Join)
+                .join(JoinConfig::new("posts", "author"))
+                .build(),
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts);
+        registry.register_collection(authors);
+        registry
+    }
+
+    /// Strip `au1`'s populated `recent_posts` (children `p1` public, `p2` not)
+    /// and return the ids left in the join.
+    fn joined_ids_after_strip(registry: &Registry, hooks: &dyn ReadHooks) -> Vec<String> {
+        let mut doc = Document::new("au1".to_string());
+        doc.fields.insert(
+            "recent_posts".into(),
+            json!([
+                { "id": "p1", "collection": "posts", "title": "A", "public": true,
+                  "author": "au1" },
+                { "id": "p2", "collection": "posts", "title": "B", "public": false,
+                  "author": "au1" }
+            ]),
+        );
+
+        EmbeddedDocStripper::new(registry, hooks, None, None).strip(
+            &mut doc,
+            &registry.get_collection("authors").unwrap().fields.clone(),
+        );
+
+        doc.fields
+            .get("recent_posts")
+            .and_then(Value::as_array)
+            .expect("join array present")
+            .iter()
+            .filter_map(|child| child.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Regression: a join listed its target documents even when the viewer
+    /// could not read their `on` field — the strip removed the value, but the
+    /// child's membership in the join still revealed it.
+    #[test]
+    fn join_drops_children_whose_on_field_is_read_denied() {
+        let registry = join_on_gated_author(Some("deny"));
+
+        assert!(joined_ids_after_strip(&registry, &DenyAccessReadHooks).is_empty());
+    }
+
+    #[test]
+    fn join_drops_children_whose_on_field_is_hidden() {
+        let registry = join_on_gated_author(None);
+
+        assert!(joined_ids_after_strip(&registry, &PublicOnlyReadHooks).is_empty());
+    }
+
+    /// The `on` rule is judged per child, on that child's data.
+    #[test]
+    fn join_keeps_exactly_the_children_whose_on_field_is_readable() {
+        let registry = join_on_gated_author(Some("public_only"));
+
+        assert_eq!(
+            joined_ids_after_strip(&registry, &PublicOnlyReadHooks),
+            vec!["p1".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_child_readable_follows_the_on_key() {
+        let join = JoinConfig::new("posts", "author");
+
+        let with_on: Map<String, Value> = json!({ "id": "p1", "author": "au1" })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let without_on: Map<String, Value> = json!({ "id": "p1" }).as_object().cloned().unwrap();
+
+        assert!(join_child_readable(&join, &with_on));
+        assert!(!join_child_readable(&join, &without_on));
     }
 
     #[test]

@@ -18,21 +18,29 @@
     clippy::unreadable_literal
 )]
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
-use crap_cms::config::CrapConfig;
-use crap_cms::core::DocumentFields;
-use crap_cms::core::HookRef;
-use crap_cms::core::JobRun;
-use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
-use crap_cms::db::{migrate, pool, query};
-use crap_cms::hooks;
-use crap_cms::hooks::ConditionContext;
-use crap_cms::hooks::lifecycle::{
-    HookContext, HookEvent, HookRunner, MigrationCall, RenderCrud, RenderInfo, RenderParams,
-};
 use serde_json::json;
+use tokio::time::timeout;
+
+use crap_cms::{
+    config::CrapConfig,
+    core::{
+        ConditionExpr, ConditionOp, Document, DocumentFields, HookRef, JobDefinition, JobRun,
+        Registry, ReqContext, SharedEventTransport, event::InProcessEventBus,
+    },
+    db::{
+        DbPool, migrate, ops, pool,
+        query::{self, FindQuery},
+    },
+    hooks::{
+        self, ConditionContext, LuaCrudInfra,
+        lifecycle::{
+            DisplayConditionResult, HookContext, HookEvent, HookRunner, MigrationCall, RenderCrud,
+            RenderInfo, RenderParams,
+        },
+    },
+};
 
 /// A throwaway condition context for `call_display_condition` tests (the
 /// condition functions under test only read the form data, not the context).
@@ -51,12 +59,7 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
 }
 
-fn setup() -> (
-    tempfile::TempDir,
-    crap_cms::db::DbPool,
-    std::sync::Arc<crap_cms::core::Registry>,
-    HookRunner,
-) {
+fn setup() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
@@ -77,11 +80,7 @@ fn setup() -> (
 }
 
 #[allow(dead_code)]
-fn create_article(
-    pool: &crap_cms::db::DbPool,
-    registry: &std::sync::Arc<crap_cms::core::Registry>,
-    data: &DocumentFields,
-) -> crap_cms::core::Document {
+fn create_article(pool: &DbPool, registry: &Arc<Registry>, data: &DocumentFields) -> Document {
     let def = registry
         .get_collection("articles")
         .expect("articles not found")
@@ -154,7 +153,7 @@ fn call_display_condition_bool_true() {
     );
     assert!(result.is_some());
     match result.unwrap() {
-        crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(b),
+        DisplayConditionResult::Bool(b) => assert!(b),
         other => panic!("Expected Bool(true), got {other:?}"),
     }
 }
@@ -171,7 +170,7 @@ fn call_display_condition_bool_false() {
     );
     assert!(result.is_some());
     match result.unwrap() {
-        crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(!b),
+        DisplayConditionResult::Bool(b) => assert!(!b),
         other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
@@ -188,7 +187,7 @@ fn call_display_condition_table() {
     );
     assert!(result.is_some());
     match result.unwrap() {
-        crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible } => {
+        DisplayConditionResult::Table { condition, visible } => {
             assert!(visible, "status=published should be visible");
             let row = match &condition {
                 ConditionExpr::Single(row) => row,
@@ -213,7 +212,7 @@ fn call_display_condition_table_not_visible() {
     );
     assert!(result.is_some());
     match result.unwrap() {
-        crap_cms::hooks::lifecycle::DisplayConditionResult::Table { visible, .. } => {
+        DisplayConditionResult::Table { visible, .. } => {
             assert!(
                 !visible,
                 "status=draft should not be visible when condition says equals=published"
@@ -337,7 +336,7 @@ fn run_migration_executes_lua_file() {
     // Create a temporary migration file
     let migration_dir = tempfile::tempdir().expect("tempdir");
     let migration_path = migration_dir.path().join("001_test.lua");
-    std::fs::write(
+    fs::write(
         &migration_path,
         r#"
         local M = {}
@@ -370,8 +369,7 @@ fn run_migration_executes_lua_file() {
     // Verify the migration ran by checking the article was created
     let def = registry.get_collection("articles").unwrap().clone();
 
-    let count =
-        crap_cms::db::ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
+    let count = ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
     assert_eq!(count, 1, "Migration should have created 1 article");
 }
 
@@ -381,7 +379,7 @@ fn run_migration_invalid_direction_fails() {
 
     let migration_dir = tempfile::tempdir().expect("tempdir");
     let migration_path = migration_dir.path().join("002_test.lua");
-    std::fs::write(
+    fs::write(
         &migration_path,
         r"
         local M = {}
@@ -426,7 +424,7 @@ fn run_job_handler_with_valid_function() {
     // Actually, let's just test that run_job_handler works with a function that's already loaded.
     // The system_init function in field_hooks takes a context table and returns it.
     let result = runner.run_job_handler(
-        &HookRef::new("hooks.field_hooks.system_init"),
+        &JobDefinition::builder("test-job", "hooks.field_hooks.system_init").build(),
         &job_run("test-job", r#"{"key": "value"}"#, 1, 3),
         &pool,
         None,
@@ -443,7 +441,7 @@ fn run_job_handler_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let result = runner.run_job_handler(
-        &HookRef::new("hooks.nonexistent.handler"),
+        &JobDefinition::builder("test-job", "hooks.nonexistent.handler").build(),
         &job_run("test-job", "{}", 1, 3),
         &pool,
         None,
@@ -457,13 +455,13 @@ fn run_job_handler_invalid_ref_fails() {
 fn before_render_registered_hook_adds_marker() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
     // Register a before_render hook that adds a marker
-    std::fs::write(
+    fs::write(
         tmp.path().join("init.lua"),
         r#"
         crap.hooks.register("before_render", function(ctx)
@@ -475,8 +473,8 @@ fn before_render_registered_hook_adds_marker() {
     .unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -498,12 +496,12 @@ fn before_render_registered_hook_adds_marker() {
 fn before_render_hook_returning_nil_preserves_context() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         tmp.path().join("init.lua"),
         r#"
         crap.hooks.register("before_render", function(ctx)
@@ -514,8 +512,8 @@ fn before_render_hook_returning_nil_preserves_context() {
     .unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -535,12 +533,12 @@ fn before_render_hook_returning_nil_preserves_context() {
 fn before_render_hook_error_returns_original_context() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         tmp.path().join("init.lua"),
         r#"
         crap.hooks.register("before_render", function(ctx)
@@ -551,8 +549,8 @@ fn before_render_hook_error_returns_original_context() {
     .unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -576,22 +574,22 @@ fn before_render_hook_error_returns_original_context() {
 fn run_migration_up_standalone() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
     let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
-    let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
-    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+    let pool = pool::create_pool(tmp.path(), &pool_config).expect("pool");
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(Arc::clone(&registry))
         .config(&config)
@@ -600,7 +598,7 @@ fn run_migration_up_standalone() {
 
     // Write a migration file
     let migration_path = tmp.path().join("migration_test.lua");
-    std::fs::write(
+    fs::write(
         &migration_path,
         r#"
         local M = {}
@@ -627,14 +625,8 @@ fn run_migration_up_standalone() {
 
     // Verify the document was created
     let def = registry.get_collection("articles").expect("articles");
-    let docs = crap_cms::db::ops::find_documents(
-        &pool,
-        "articles",
-        def,
-        &crap_cms::db::query::FindQuery::default(),
-        None,
-    )
-    .expect("find");
+    let docs =
+        ops::find_documents(&pool, "articles", def, &FindQuery::default(), None).expect("find");
     assert_eq!(docs.len(), 1);
     assert_eq!(
         docs[0].fields.get("title").and_then(|v| v.as_str()),
@@ -649,13 +641,13 @@ fn run_job_handler_with_return_value() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let jobs_dir = tmp.path().join("jobs");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&jobs_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&jobs_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         jobs_dir.join("test_job.lua"),
         r"
         local M = {}
@@ -666,17 +658,17 @@ fn run_job_handler_with_return_value() {
     ",
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
     let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
-    let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
-    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+    let pool = pool::create_pool(tmp.path(), &pool_config).expect("pool");
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -685,7 +677,7 @@ fn run_job_handler_with_return_value() {
 
     let result = runner
         .run_job_handler(
-            &HookRef::new("jobs.test_job.run"),
+            &JobDefinition::builder("test-job", "jobs.test_job.run").build(),
             &job_run("test-job", r#"{"key": "hello"}"#, 1, 3),
             &pool,
             None,
@@ -716,13 +708,13 @@ fn run_job_handler_nil_return() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let jobs_dir = tmp.path().join("jobs");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&jobs_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&jobs_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         jobs_dir.join("void_job.lua"),
         r"
         local M = {}
@@ -733,16 +725,16 @@ fn run_job_handler_nil_return() {
     ",
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
     let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
-    let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
+    let pool = pool::create_pool(tmp.path(), &pool_config).expect("pool");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -751,7 +743,7 @@ fn run_job_handler_nil_return() {
 
     let result = runner
         .run_job_handler(
-            &HookRef::new("jobs.void_job.run"),
+            &JobDefinition::builder("test-job", "jobs.void_job.run").build(),
             &job_run("void-job", "{}", 1, 1),
             &pool,
             None,
@@ -764,21 +756,17 @@ fn run_job_handler_nil_return() {
 /// Shared setup for the job-event regression tests: tmp config dir with an
 /// `articles` collection and a job handler that creates one (Lua CRUD
 /// `events` defaults to `true`).
-fn setup_event_job() -> (
-    tempfile::TempDir,
-    crap_cms::db::DbPool,
-    crap_cms::hooks::lifecycle::HookRunner,
-) {
+fn setup_event_job() -> (tempfile::TempDir, DbPool, HookRunner) {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let jobs_dir = tmp.path().join("jobs");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&jobs_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&jobs_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         jobs_dir.join("create_job.lua"),
         r#"
         local M = {}
@@ -790,17 +778,17 @@ fn setup_event_job() -> (
     "#,
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
     let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
-    let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
-    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+    let pool = pool::create_pool(tmp.path(), &pool_config).expect("pool");
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -818,31 +806,30 @@ fn setup_event_job() -> (
 async fn run_job_handler_infra_publishes_crud_events() {
     let (_tmp, pool, runner) = setup_event_job();
 
-    let transport: crap_cms::core::SharedEventTransport =
-        Arc::new(crap_cms::core::event::InProcessEventBus::new(16));
+    let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
     let mut rx = transport.subscribe();
 
-    let infra = crap_cms::hooks::LuaCrudInfra {
+    let infra = LuaCrudInfra {
         event_transport: Some(transport.clone()),
         cache: None,
         event_queue: None,
         verification_queue: None,
+        email_ctx: None,
         file_cleanup: None,
         cache_dirty: None,
-
         deferred: None,
     };
 
     runner
         .run_job_handler(
-            &HookRef::new("jobs.create_job.run"),
+            &JobDefinition::builder("test-job", "jobs.create_job.run").build(),
             &job_run("create-job", "{}", 1, 1),
             &pool,
             Some(infra),
         )
         .expect("run_job_handler failed");
 
-    let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+    let ev = timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("job-created event must arrive")
         .expect("receive event");
@@ -855,20 +842,19 @@ async fn run_job_handler_infra_publishes_crud_events() {
 async fn run_job_handler_without_infra_publishes_nothing() {
     let (_tmp, pool, runner) = setup_event_job();
 
-    let transport: crap_cms::core::SharedEventTransport =
-        Arc::new(crap_cms::core::event::InProcessEventBus::new(16));
+    let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
     let mut rx = transport.subscribe();
 
     runner
         .run_job_handler(
-            &HookRef::new("jobs.create_job.run"),
+            &JobDefinition::builder("test-job", "jobs.create_job.run").build(),
             &job_run("create-job", "{}", 1, 1),
             &pool,
             None,
         )
         .expect("run_job_handler failed");
 
-    let waited = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
+    let waited = timeout(Duration::from_millis(200), rx.recv()).await;
     assert!(waited.is_err(), "no event must be published without infra");
 }
 
@@ -879,13 +865,13 @@ fn call_row_label_standalone_hook() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&hooks_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         hooks_dir.join("row_label.lua"),
         r#"
         local M = {}
@@ -896,11 +882,11 @@ fn call_row_label_standalone_hook() {
     "#,
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -917,13 +903,13 @@ fn call_display_condition_standalone_bool() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&hooks_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         hooks_dir.join("conditions.lua"),
         r#"
         local M = {}
@@ -934,11 +920,11 @@ fn call_display_condition_standalone_bool() {
     "#,
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -952,7 +938,7 @@ fn call_display_condition_standalone_bool() {
         &cond_ctx(),
     );
     match result {
-        Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(b),
+        Some(DisplayConditionResult::Bool(b)) => assert!(b),
         other => panic!("Expected Bool(true), got {other:?}"),
     }
 
@@ -963,7 +949,7 @@ fn call_display_condition_standalone_bool() {
         &cond_ctx(),
     );
     match result {
-        Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(!b),
+        Some(DisplayConditionResult::Bool(b)) => assert!(!b),
         other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
@@ -973,13 +959,13 @@ fn call_display_condition_standalone_table() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let collections_dir = tmp.path().join("collections");
     let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&collections_dir).unwrap();
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&collections_dir).unwrap();
+    fs::create_dir_all(&hooks_dir).unwrap();
+    fs::write(
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(
+    fs::write(
         hooks_dir.join("conditions.lua"),
         r#"
         local M = {}
@@ -990,11 +976,11 @@ fn call_display_condition_standalone_table() {
     "#,
     )
     .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+    fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::test_default();
-    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(registry)
         .config(&config)
@@ -1008,7 +994,7 @@ fn call_display_condition_standalone_table() {
         &cond_ctx(),
     );
     match result {
-        Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {
+        Some(DisplayConditionResult::Table { condition, visible }) => {
             assert!(visible, "status=published should match the condition");
             let row = match &condition {
                 ConditionExpr::Single(row) => row,

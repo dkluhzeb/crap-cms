@@ -204,7 +204,12 @@ Multiple workers can safely run `crap-cms work` against the same database.
 - Schema sync (`migrate up`) only needs to run once — any server that starts first handles it. Nodes starting at the same moment take turns: on Postgres, schema sync holds a database lock. Running it against a live cluster is safe for the other nodes' prepared statements: a statement whose plan the schema change invalidated is re-prepared and retried once, transparently, outside a transaction; a transaction caught mid-flight fails once and the next one succeeds.
 - **Use the same `[jobs] heartbeat_interval` on every node that runs the scheduler.** A node treats a running job as dead once its heartbeat is older than three times *that node's own* interval plus its `database.connection_timeout` and `busy_timeout`, so a node with a shorter interval reclaims — and runs again — jobs a node with a longer interval is still executing.
 - **Finish a rollout that changes indexes before an older node restarts.** Schema sync removes the crap-managed indexes (`idx_<collection>_…`) that the starting node's definitions do not declare. An old-version node that restarts mid-rollout drops the indexes the new version created; they come back the next time a new-version node starts.
-- `on_init` hooks run on every server/worker startup
+- `on_init` hooks run on every server/worker startup — concurrently, when
+  nodes start together. A find-then-create seed in `on_init` is not safe on
+  Postgres (each node's startup transaction sees the collection empty and
+  creates the row); run the seed as a `concurrency = 1` job queued from
+  `on_init` with a `unique` key instead — see
+  [Seeding on more than one node](../hooks/transaction-access.md#seeding-on-more-than-one-node)
 - Email uses the job queue automatically — password resets and verification emails are processed by workers with retries
 
 ## Email Configuration

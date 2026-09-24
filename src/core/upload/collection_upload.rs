@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, iter};
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,24 @@ impl CollectionUpload {
         names
     }
 
+    /// The server-derived columns that hold a stored file's served url: `url`
+    /// and every `{size}_url` / `{size}_{format}_url`, in injection order.
+    ///
+    /// The one answer to "which columns name a managed file" — the serve gate
+    /// matches a request against exactly these, and the file-reference walk
+    /// reads exactly these, so a user field that merely ends in `_url` is never
+    /// mistaken for one.
+    #[must_use]
+    pub fn url_field_names(&self) -> Vec<String> {
+        let sizes = self
+            .size_columns()
+            .into_iter()
+            .filter(|(_, field_type)| *field_type == FieldType::Text)
+            .map(|(name, _)| name);
+
+        iter::once("url".to_string()).chain(sizes).collect()
+    }
+
     /// The field names a user schema may not define on this upload collection:
     /// the injected columns, plus the `sizes` key a read assembles from the
     /// per-size columns. A user field named `sizes` would be overwritten on
@@ -162,6 +180,21 @@ impl CollectionUpload {
 mod tests {
     use super::*;
     use crate::core::upload::{FormatQuality, ImageSizeBuilder};
+
+    /// The url columns are `url` and every per-size url — a size's width and
+    /// height, the focal point and the other file columns are not.
+    #[test]
+    fn url_field_names_are_the_url_bearing_columns() {
+        let mut upload = CollectionUpload::new();
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumb").width(10).height(10).build()];
+        upload.format_options.webp = Some(FormatQuality::new(80, true));
+
+        assert_eq!(
+            upload.url_field_names(),
+            vec!["url", "thumb_url", "thumb_webp_url"]
+        );
+        assert_eq!(CollectionUpload::new().url_field_names(), vec!["url"]);
+    }
 
     #[test]
     fn collection_upload_default() {

@@ -4,9 +4,11 @@ use tempfile::TempDir;
 
 use crate::{
     config::CrapConfig,
-    core::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig},
+    core::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig, ValidationError},
     db::{BoxedConnection, pool},
 };
+
+use super::resolve_filter;
 
 pub(super) fn test_conn() -> (TempDir, BoxedConnection) {
     let dir = TempDir::new().unwrap();
@@ -41,4 +43,16 @@ pub(super) fn make_has_many_field(name: &str, collection: &str) -> FieldDefiniti
 
 pub(super) fn make_block_def(block_type: &str, fields: Vec<FieldDefinition>) -> BlockDefinition {
     BlockDefinition::new(block_type, fields)
+}
+
+/// The validation error `path` resolves to against `fields`, and the field it
+/// names.
+pub(super) fn path_error(fields: &[FieldDefinition], path: &str) -> (String, String) {
+    let (_dir, conn) = test_conn();
+    let err = resolve_filter(&conn, path, "posts", fields, None).unwrap_err();
+    let ve = err
+        .downcast_ref::<ValidationError>()
+        .unwrap_or_else(|| panic!("{path}: untyped error {err:#}"));
+
+    (ve.errors[0].field.clone(), ve.errors[0].message.clone())
 }

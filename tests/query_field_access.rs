@@ -1,19 +1,21 @@
 //! Filters, sorts, and searches never act as a read-access oracle: a field the
 //! caller cannot read (API-hidden, or denied by its `access.read` rule) cannot
-//! be filtered or sorted on through any read surface.
+//! be filtered or sorted on through any read surface — nor filtered on by a
+//! bulk write, whose match counts answer the same question.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crap_cms::config::CrapConfig;
+use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldAccess, FieldDefinition, FieldType};
-use crap_cms::core::{Document, HookRef, Registry};
+use crap_cms::core::{Document, DocumentFields, HookRef, Registry};
 use crap_cms::db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    CountDocumentsInput, FindDocumentsInput, RunnerReadHooks, SearchDocumentsInput, ServiceContext,
-    ServiceError, count_documents, find_documents, search_documents,
+    CountDocumentsInput, DeleteManyOptions, FindDocumentsInput, RunnerReadHooks,
+    SearchDocumentsInput, ServiceContext, ServiceError, UpdateManyOptions, count_documents,
+    delete_many, find_documents, search_documents, update_many,
 };
 use serde_json::json;
 
@@ -189,4 +191,100 @@ fn count_and_search_apply_the_same_rule() {
         include_drafts: false,
     };
     assert_denied(search_documents(&ctx, &search_input).map(|_| ()), "secret");
+}
+
+/// A pool-mode write context for the bulk operations.
+fn bulk_ctx<'a>(
+    h: &'a Harness,
+    user: Option<&'a Document>,
+    override_access: bool,
+) -> ServiceContext<'a> {
+    ServiceContext::collection("vault", &h.def)
+        .pool(&h.pool)
+        .runner(&h.runner)
+        .user(user)
+        .override_access(override_access)
+        .build()
+}
+
+fn update_many_as(
+    h: &Harness,
+    user: Option<&Document>,
+    override_access: bool,
+    filters: &[FilterClause],
+) -> Result<(), ServiceError> {
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("renamed"));
+
+    let opts = UpdateManyOptions::builder().run_hooks(false).build();
+
+    let ctx = bulk_ctx(h, user, override_access);
+
+    update_many(&ctx, filters, &data, &LocaleConfig::default(), &opts).map(|_| ())
+}
+
+fn delete_many_as(
+    h: &Harness,
+    user: Option<&Document>,
+    override_access: bool,
+    filters: &[FilterClause],
+) -> Result<(), ServiceError> {
+    let opts = DeleteManyOptions {
+        run_hooks: false,
+        ..Default::default()
+    };
+
+    let ctx = bulk_ctx(h, user, override_access);
+
+    delete_many(&ctx, filters, &LocaleConfig::default(), &opts).map(|_| ())
+}
+
+/// Regression: `update_many` / `delete_many` only validated the filter's
+/// syntax, so their `modified` / `deleted` / `skipped` counts and the
+/// `bulk_max_documents` "matched N" error binary-searched a read-denied or
+/// hidden value. They now refuse the filter exactly as a find does.
+#[test]
+fn bulk_writes_reject_a_filter_on_an_unreadable_field() {
+    let h = setup();
+
+    assert_denied(
+        update_many_as(&h, None, false, &eq_filter("notes")),
+        "notes",
+    );
+    assert_denied(
+        delete_many_as(&h, None, false, &eq_filter("notes")),
+        "notes",
+    );
+
+    assert_denied(
+        update_many_as(&h, Some(&admin()), false, &eq_filter("secret")),
+        "secret",
+    );
+    assert_denied(
+        delete_many_as(&h, Some(&admin()), false, &eq_filter("secret")),
+        "secret",
+    );
+}
+
+/// The bulk check follows the same read rule: a reader the rule allows may
+/// filter on the field, and a plain field is always fine.
+#[test]
+fn bulk_writes_allow_a_filter_the_read_rule_allows() {
+    let h = setup();
+
+    update_many_as(&h, Some(&admin()), false, &eq_filter("notes")).expect("admin may filter");
+    delete_many_as(&h, Some(&admin()), false, &eq_filter("notes")).expect("admin may filter");
+
+    update_many_as(&h, None, false, &eq_filter("title")).expect("plain field is fine");
+    delete_many_as(&h, None, false, &eq_filter("title")).expect("plain field is fine");
+}
+
+/// `override_access` (MCP, internal callers) skips the bulk gate entirely,
+/// the unreadable-filter check included — as it skips every access rule.
+#[test]
+fn bulk_writes_under_override_access_are_unaffected() {
+    let h = setup();
+
+    update_many_as(&h, None, true, &eq_filter("notes")).expect("override may filter");
+    delete_many_as(&h, None, true, &eq_filter("secret")).expect("override may filter");
 }

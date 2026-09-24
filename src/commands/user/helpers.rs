@@ -15,8 +15,8 @@ use crate::{
     commands::cli_find,
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, FieldDefinition, FieldType, Registry, collection::Auth,
-        flatten_array_sub_fields,
+        Builder, CollectionDefinition, Document, FieldDefinition, FieldType, Registry,
+        collection::Auth, flatten_array_sub_fields,
     },
     db::{BoxedConnection, DbPool, FindQuery, LocaleContext, query},
 };
@@ -113,12 +113,18 @@ pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str)
 /// What every user subcommand needs to find the user it operates on.
 /// `locale` is required because a LOCALIZED auth collection's rows can only
 /// be selected under a locale context (bare column names don't exist there).
+/// Without `email` or `id` the user is picked interactively.
+#[derive(Builder)]
 pub struct UserLookup<'a> {
+    #[builder(required)]
     pub pool: &'a DbPool,
+    #[builder(required)]
     pub registry: &'a Registry,
+    #[builder(required)]
     pub collection: &'a str,
     pub email: Option<String>,
     pub id: Option<String>,
+    #[builder(required)]
     pub locale: &'a LocaleConfig,
 }
 

@@ -68,6 +68,7 @@ pub fn search_documents(
     }
 
     let mut fq = input.query.clone();
+    helpers::normalize_sort(&mut fq, &def.fields);
     fq.filters.extend(scope.into_filters());
 
     let overfetch = helpers::begin_cursor_overfetch(&mut fq, input.cursor_enabled);
@@ -107,6 +108,8 @@ pub fn search_documents(
         docs: &docs,
         total,
         fq: &fq,
+        fields: &def.fields,
+        locale_ctx: input.locale_ctx,
         cursor_enabled: input.cursor_enabled,
         has_timestamps: def.timestamps,
         has_drafts: def.has_drafts(),

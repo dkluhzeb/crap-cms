@@ -37,7 +37,7 @@ use tower::ServiceExt;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::collection::{Auth, CollectionDefinition};
-use crap_cms::db::query;
+use crap_cms::db::query::{self, TokenGrant};
 use crap_cms_e2e::helpers::*;
 use crap_cms_e2e::{extract_token, find_queued_email, wait_for_queued_email};
 
@@ -54,8 +54,11 @@ async fn verify_email_valid_token_marks_verified() {
     let exp = Utc::now().timestamp() + 3600;
     {
         let conn = app.pool.get().unwrap();
-        query::set_verification_token(&conn, "users", &user_id, token, exp)
-            .expect("set verification token");
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", &user_id, token, exp).build(),
+        )
+        .expect("set verification token");
     }
 
     // Before verification: login is blocked because user is unverified.

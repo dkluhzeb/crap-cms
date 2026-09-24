@@ -196,7 +196,8 @@ Semantics worth knowing:
   those hooks fire after the batch commits, as usual. A hook error fails
   the whole batch atomically and the run is marked failed.
 - **Checked before it is stored.** Queueing runs the collection's access
-  gate and the `bulk_max_documents` cap up front, so a caller who may not
+  gate, the [unreadable-field filter check](../access-control/field-level.md#filtering-sorting-and-search)
+  and the `bulk_max_documents` cap up front, so a caller who may not
   perform the operation — or a batch that is too large — is refused
   synchronously rather than handed a `job_id` for work that can only fail.
   The full per-document gate still runs at execution.
@@ -209,12 +210,15 @@ Semantics worth knowing:
 - **Runs as you.** The caller's identity is snapshotted at queue time and
   the job executes under it. Anonymous callers are rejected
   (`UNAUTHENTICATED`): there must be an actor for the access hooks to see.
-  Only a **reference** (user id + auth collection) is stored, never a
-  document snapshot, and the user is **re-loaded at execution**: if the
-  account was locked or deleted in the meantime the run is abandoned with
-  that reason. There is no per-run cancel RPC yet; an operator can clear
-  *all* pending runs of a slug with
-  `crap-cms jobs cancel --slug _system_bulk`.
+  Only a **reference** (user id + auth collection + session version) is
+  stored, never a document snapshot, and the user is **re-loaded at
+  execution**: if the account was locked, deleted or moved to the trash in
+  the meantime, or its session version was bumped (force-logout, password
+  reset, unverify), the run is abandoned with that reason. Every authentication method can queue —
+  bearer token, session cookie, or a [custom
+  strategy](../authentication/custom-strategies.md) (whose user is always a
+  stored row of its collection). Besides `CancelJobRun`, an operator can clear
+  *all* pending runs of a slug with `crap-cms jobs cancel --slug _system_bulk`.
 - **Visible only to you.** A queued bulk run is readable through
   `GetJobRun` **only** by the identity that queued it (system/MCP-queued
   runs only by an override caller), and never appears in `ListJobRuns`.

@@ -12,16 +12,23 @@
 //!   accessors used by middleware to decide whether to accept a
 //!   token (session version, `is_locked`, `user_exists`).
 //! - [`mfa`] — email MFA code persistence + verification.
+//! - [`mfa_gate`] — whether a verified authentication (login or auth
+//!   callback) must complete the collection's second factor.
 //! - [`totp_flow`] — TOTP challenge/enrollment + the mode-dispatching
 //!   [`totp_flow::verify_second_factor`] chokepoint both login surfaces use.
 //! - [`evaluator`] — the unified per-request auth resolver shared
 //!   by admin middleware and the gRPC service.
+//! - [`strategy_user`] — admitting the user a custom strategy or an
+//!   external auth callback names (stored flags decide, the hook may only
+//!   restrict).
 
 pub mod account;
 pub mod evaluator;
 pub mod local;
 pub mod login_flow;
 pub mod mfa;
+pub mod mfa_gate;
+pub mod strategy_user;
 pub mod tokens;
 pub mod totp_flow;
 
@@ -31,7 +38,7 @@ mod test_support;
 pub use account::{
     AccountAction, apply_account_action, bump_session_version, check_account_action_access,
     get_session_version, is_locked, is_verified, load_user, lock_user, mark_unverified,
-    mark_verified, perform_account_action, set_password, unlock_user, user_exists,
+    mark_verified, perform_account_action, reset_totp, set_password, unlock_user, user_exists,
 };
 pub use evaluator::{
     AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,
@@ -43,6 +50,8 @@ pub use mfa::{
     MFA_PENDING_EXPIRY, deliver_mfa_code, generate_mfa_code, mint_mfa_pending_token, set_mfa_code,
     verify_mfa_code,
 };
+pub use mfa_gate::{MfaGateRequest, mfa_gate};
+pub use strategy_user::{StrategyAdmission, StrategyRefusal, admit_strategy_user};
 pub use tokens::{
     ResetTokenResult, VERIFICATION_TOKEN_EXPIRY, VerificationTokenResult, consume_reset_token,
     consume_verification_token, find_by_reset_token, generate_reset_token, generate_security_token,

@@ -12,7 +12,10 @@ use tracing::error;
 
 use crate::{
     core::DocumentId,
-    db::{DbConnection, query},
+    db::{
+        DbConnection, LocaleContext,
+        query::{self, TokenGrant},
+    },
     service::{ServiceContext, ServiceError},
 };
 
@@ -35,6 +38,24 @@ pub fn generate_security_token() -> String {
     nanoid!(SECURITY_TOKEN_LEN)
 }
 
+/// The default-locale context an account lookup reads the user row under.
+///
+/// Required, not optional: without the locale config a lookup on an auth
+/// collection with localized fields would select bare column names (`bio`
+/// where only `bio__en` exists) — a context missing it is a wiring bug, so
+/// the flow fails closed instead of issuing a query that happens to work only
+/// on non-localized collections. `Ok(None)` means localization is disabled.
+fn account_locale_ctx(ctx: &ServiceContext) -> Result<Option<LocaleContext>, ServiceError> {
+    let Some(config) = ctx.locale_config else {
+        return Err(ServiceError::Internal(anyhow!(
+            "token flow on `{}` requires the locale config on its service context",
+            ctx.slug
+        )));
+    };
+
+    Ok(LocaleContext::default_for(config))
+}
+
 /// Generate a reset token for a user found by email.
 ///
 /// Returns `Ok(None)` if the user is not found — callers should
@@ -55,7 +76,7 @@ pub fn generate_reset_token(
 
     // A soft-deleted account is disabled: don't issue a reset token for a trashed
     // user (consistent with login and the per-request evaluator).
-    let locale_ctx = ctx.default_locale_ctx();
+    let locale_ctx = account_locale_ctx(ctx)?;
     let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false, locale_ctx.as_ref())?
     else {
         return Ok(None);
@@ -69,7 +90,10 @@ pub fn generate_reset_token(
         .map_err(|_| ServiceError::Internal(anyhow!("expiry_secs exceeds i64::MAX")))?;
     let exp = Utc::now().timestamp() + expiry_i64;
 
-    query::set_reset_token(conn, ctx.slug, &user.id, &token, exp)?;
+    query::set_reset_token(
+        conn,
+        &TokenGrant::builder(ctx.slug, &user.id, &token, exp).build(),
+    )?;
 
     Ok(Some(ResetTokenResult {
         user_id: user.id,
@@ -103,7 +127,10 @@ pub fn issue_verification_token(
         .map_err(|_| ServiceError::Internal(anyhow!("expiry_secs exceeds i64::MAX")))?;
     let exp = Utc::now().timestamp() + expiry_i64;
 
-    query::set_verification_token(conn, slug, user_id, &token, exp)?;
+    query::set_verification_token(
+        conn,
+        &TokenGrant::builder(slug, user_id, &token, exp).build(),
+    )?;
 
     Ok(token)
 }
@@ -138,7 +165,7 @@ pub fn generate_verification_token(
     let def = ctx.collection_def()?;
 
     // A soft-deleted account is disabled — same rule as the reset flow.
-    let locale_ctx = ctx.default_locale_ctx();
+    let locale_ctx = account_locale_ctx(ctx)?;
     let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false, locale_ctx.as_ref())?
     else {
         return Ok(None);
@@ -187,7 +214,8 @@ pub fn consume_reset_token(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let (user, exp) = query::find_by_reset_token(conn, ctx.slug, def, token)?.ok_or(
+    let locale_ctx = account_locale_ctx(ctx)?;
+    let (user, exp) = query::find_by_reset_token(conn, def, token, locale_ctx.as_ref())?.ok_or(
         ServiceError::InvalidToken {
             kind: "reset",
             reason: "not found",
@@ -238,7 +266,10 @@ pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<b
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let Some((user, exp)) = query::find_by_verification_token(conn, ctx.slug, def, token)? else {
+    let locale_ctx = account_locale_ctx(ctx)?;
+    let Some((user, exp)) =
+        query::find_by_verification_token(conn, def, token, locale_ctx.as_ref())?
+    else {
         return Ok(false);
     };
 
@@ -274,14 +305,159 @@ pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, Se
     // Expiry counts here too: the reset PAGE uses this to decide whether to
     // render the form. Ignoring it showed the form for a dead link and only
     // failed on submit, after the user had typed a new password.
-    Ok(query::find_by_reset_token(conn, ctx.slug, def, token)?
-        .is_some_and(|(_, exp)| Utc::now().timestamp() < exp))
+    let locale_ctx = account_locale_ctx(ctx)?;
+
+    Ok(
+        query::find_by_reset_token(conn, def, token, locale_ctx.as_ref())?
+            .is_some_and(|(_, exp)| Utc::now().timestamp() < exp),
+    )
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
-    use crate::service::auth::test_support::setup;
+    use crate::{
+        config::LocaleConfig,
+        core::{CollectionDefinition, FieldDefinition, FieldType},
+        service::auth::test_support::setup,
+    };
+
+    /// Localization disabled — the config every non-localized test runs under.
+    static NO_LOCALES: LazyLock<LocaleConfig> = LazyLock::new(LocaleConfig::default);
+
+    /// The `users` context the token flows run under.
+    fn users_ctx<'a>(
+        conn: &'a dyn DbConnection,
+        def: &'a CollectionDefinition,
+    ) -> ServiceContext<'a> {
+        ServiceContext::collection("users", def)
+            .conn(conn)
+            .locale_config(Some(&*NO_LOCALES))
+            .build()
+    }
+
+    /// Regression: a context built without the locale config silently read
+    /// the user row under bare column names — right only by accident on a
+    /// non-localized collection. Every token flow now refuses such a context.
+    #[test]
+    fn a_context_without_locale_config_fails_closed() {
+        let (conn, def, _) = setup();
+        let exp = Utc::now().timestamp() + 3600;
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "rtok", exp).build(),
+        )
+        .unwrap();
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        let internal = |r: Result<_, ServiceError>| matches!(r, Err(ServiceError::Internal(_)));
+
+        assert!(internal(
+            generate_reset_token(&ctx, "test@example.com", 3600).map(|_| ())
+        ));
+        assert!(internal(
+            generate_verification_token(&ctx, "test@example.com", 3600).map(|_| ())
+        ));
+        assert!(internal(find_by_reset_token(&ctx, "rtok").map(|_| ())));
+        assert!(internal(
+            consume_verification_token(&ctx, "vtok").map(|_| ())
+        ));
+        assert!(internal(
+            consume_reset_token(&ctx, "rtok", "newpass123").map(|_| ())
+        ));
+
+        // Nothing was consumed: the tokens still work under a complete context.
+        assert!(find_by_reset_token(&users_ctx(&conn, &def), "rtok").unwrap());
+    }
+
+    fn two_locales() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    /// Regression: on an auth collection with a localized field the token
+    /// lookups selected a bare `bio` column that doesn't exist (`bio__en`
+    /// does), so the reset page, the reset submit and email verification all
+    /// failed.
+    #[test]
+    fn token_flows_work_on_a_localized_auth_collection() {
+        let (conn, mut def, _) = setup();
+        conn.execute_batch(
+            "ALTER TABLE users ADD COLUMN bio__en TEXT;
+             ALTER TABLE users ADD COLUMN bio__de TEXT;
+             UPDATE users SET _verified = 0 WHERE id = 'u1';",
+        )
+        .unwrap();
+        def.fields.push(
+            FieldDefinition::builder("bio", FieldType::Text)
+                .localized(true)
+                .build(),
+        );
+        let locales = two_locales();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .locale_config(Some(&locales))
+            .build();
+        let exp = Utc::now().timestamp() + 3600;
+
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
+        assert!(consume_verification_token(&ctx, "vtok").unwrap());
+
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "rtok", exp).build(),
+        )
+        .unwrap();
+        assert!(find_by_reset_token(&ctx, "rtok").unwrap());
+        assert_eq!(
+            consume_reset_token(&ctx, "rtok", "newpass123").unwrap(),
+            "u1"
+        );
+    }
+
+    /// Regression: a trashed user could consume a reset link.
+    #[test]
+    fn a_trashed_user_cannot_consume_a_reset_link() {
+        let (conn, mut def, _) = setup();
+        conn.execute_batch(
+            "ALTER TABLE users ADD COLUMN _deleted_at TEXT;
+             UPDATE users SET _deleted_at = '2026-01-01T00:00:00Z' WHERE id = 'u1';",
+        )
+        .unwrap();
+        def.soft_delete = true;
+        let ctx = users_ctx(&conn, &def);
+        let exp = Utc::now().timestamp() + 3600;
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "rtok", exp).build(),
+        )
+        .unwrap();
+
+        assert!(!find_by_reset_token(&ctx, "rtok").unwrap());
+        assert!(matches!(
+            consume_reset_token(&ctx, "rtok", "newpass123"),
+            Err(ServiceError::InvalidToken {
+                reason: "not found",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn security_token_is_32_chars() {
@@ -294,9 +470,7 @@ mod tests {
     #[test]
     fn generate_reset_token_success() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = generate_reset_token(&ctx, "test@example.com", 3600).unwrap();
         assert!(result.is_some());
         let r = result.unwrap();
@@ -310,26 +484,18 @@ mod tests {
     #[test]
     fn find_by_reset_token_rejects_an_expired_token() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
 
         query::set_reset_token(
             &conn,
-            "users",
-            "u1",
-            "live-token",
-            Utc::now().timestamp() + 600,
+            &TokenGrant::builder("users", "u1", "live-token", Utc::now().timestamp() + 600).build(),
         )
         .unwrap();
         assert!(find_by_reset_token(&ctx, "live-token").unwrap());
 
         query::set_reset_token(
             &conn,
-            "users",
-            "u1",
-            "dead-token",
-            Utc::now().timestamp() - 1,
+            &TokenGrant::builder("users", "u1", "dead-token", Utc::now().timestamp() - 1).build(),
         )
         .unwrap();
         assert!(
@@ -343,16 +509,11 @@ mod tests {
     #[test]
     fn changing_the_password_clears_a_pending_reset_token() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
 
         query::set_reset_token(
             &conn,
-            "users",
-            "u1",
-            "pending",
-            Utc::now().timestamp() + 600,
+            &TokenGrant::builder("users", "u1", "pending", Utc::now().timestamp() + 600).build(),
         )
         .unwrap();
         query::update_password(&conn, "users", "u1", "brand-new-password").unwrap();
@@ -366,9 +527,7 @@ mod tests {
     #[test]
     fn generate_reset_token_user_not_found() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = generate_reset_token(&ctx, "nobody@example.com", 3600).unwrap();
         assert!(result.is_none());
     }
@@ -377,11 +536,13 @@ mod tests {
     fn consume_reset_token_success() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "tok123", exp).build(),
+        )
+        .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let user_id = consume_reset_token(&ctx, "tok123", "newpass123").expect("reset succeeds");
         assert_eq!(
             user_id, "u1",
@@ -397,11 +558,13 @@ mod tests {
     fn consume_reset_token_is_single_use() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_reset_token(&conn, "users", "u1", "tok-once", exp).unwrap();
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "tok-once", exp).build(),
+        )
+        .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         consume_reset_token(&ctx, "tok-once", "newpass123").expect("first consume succeeds");
 
         let err = consume_reset_token(&ctx, "tok-once", "otherpass456")
@@ -415,9 +578,7 @@ mod tests {
     #[test]
     fn consume_reset_token_not_found() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_reset_token(&ctx, "invalid", "newpass123");
         assert!(matches!(
             result,
@@ -432,11 +593,13 @@ mod tests {
     fn consume_reset_token_expired() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() - 100;
-        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "tok123", exp).build(),
+        )
+        .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(matches!(
             result,
@@ -451,13 +614,15 @@ mod tests {
     fn consume_reset_token_locked() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_reset_token(&conn, "users", "u1", "tok123", exp).unwrap();
+        query::set_reset_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "tok123", exp).build(),
+        )
+        .unwrap();
         conn.execute("UPDATE users SET _locked = 1 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(matches!(
             result,
@@ -469,13 +634,15 @@ mod tests {
     fn consume_verification_token_success() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(result);
     }
@@ -483,9 +650,7 @@ mod tests {
     #[test]
     fn consume_verification_token_not_found() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_verification_token(&ctx, "invalid").unwrap();
         assert!(!result);
     }
@@ -494,11 +659,13 @@ mod tests {
     fn consume_verification_token_expired() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() - 100;
-        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
     }
@@ -507,13 +674,15 @@ mod tests {
     fn consume_verification_token_locked() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
         conn.execute("UPDATE users SET _locked = 1 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
     }
@@ -526,9 +695,7 @@ mod tests {
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let issued = generate_verification_token(&ctx, "test@example.com", 3600)
             .unwrap()
             .expect("an unverified account gets a token");
@@ -548,9 +715,7 @@ mod tests {
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let issued = generate_verification_token(&ctx, "TEST@Example.COM", 3600)
             .unwrap()
             .expect("the lookup is case-insensitive");
@@ -566,9 +731,7 @@ mod tests {
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         let first = generate_verification_token(&ctx, "test@example.com", 3600)
             .unwrap()
             .unwrap();
@@ -589,9 +752,7 @@ mod tests {
     #[test]
     fn generate_verification_token_declines_silently() {
         let (conn, def, _) = setup();
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
 
         // Seeded as verified.
         assert!(
@@ -624,11 +785,13 @@ mod tests {
     fn a_declined_resend_does_not_disturb_an_existing_token() {
         let (conn, def, _) = setup();
         let exp = Utc::now().timestamp() + 3600;
-        query::set_verification_token(&conn, "users", "u1", "vtok", exp).unwrap();
+        query::set_verification_token(
+            &conn,
+            &TokenGrant::builder("users", "u1", "vtok", exp).build(),
+        )
+        .unwrap();
 
-        let ctx = ServiceContext::collection("users", &def)
-            .conn(&conn)
-            .build();
+        let ctx = users_ctx(&conn, &def);
         // The seeded user is verified, so the resend declines.
         assert!(
             generate_verification_token(&ctx, "test@example.com", 3600)

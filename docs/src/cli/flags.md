@@ -377,7 +377,8 @@ crap-cms user reset-totp [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 
 Clears a user's TOTP enrollment (secret, confirmation, replay guard); they
 re-enroll on their next login. Requires `mfa = "totp"` on the collection;
-prompts for confirmation unless `-y` is passed.
+prompts for confirmation unless `-y` is passed. Like `user change-password`,
+it ends the user's sessions and live streams the way `user lock` does.
 
 #### `user verify` / `user unverify`
 
@@ -589,7 +590,7 @@ crap-cms make job [SLUG] [-s <SCHEDULE>] [-q <QUEUE>] [-r <RETRIES>] [-t <TIMEOU
 | `--schedule` | `-s` | — | Cron expression (e.g., `"0 3 * * *"`); day-of-week is crontab-numbered (`0`/`7` Sunday … `6` Saturday) |
 | `--queue` | `-q` | `default` | Queue name |
 | `--retries` | `-r` | *(queue default)* | Max retry attempts. Omit to let the job inherit `[jobs.queues.<queue>] retries` at runtime; pass an explicit value (including `0`) to write a fixed `retries` into the generated Lua |
-| `--timeout` | `-t` | 60 | Timeout in seconds |
+| `--timeout` | `-t` | 60 | Timeout in seconds (at least 1) |
 | `--force` | `-f` | — | Overwrite existing file |
 
 ```bash

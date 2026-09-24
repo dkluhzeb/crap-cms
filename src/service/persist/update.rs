@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields},
+    core::{Document, DocumentFields, reject_nul_characters},
     db::query,
     service::{
         PersistOptions, ServiceContext,
@@ -34,6 +34,7 @@ pub fn persist_update(
     // Final post-hook data: a before-hook that injected a locale-locked field
     // is rejected here rather than silently skipped at the DB edge.
     reject_locale_locked_fields(&def.fields, data, opts.locale_ctx)?;
+    reject_nul_characters(data, &def.fields)?;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
 
@@ -139,6 +140,7 @@ pub(crate) fn persist_bulk_update(
     let def = ctx.collection_def()?;
 
     reject_locale_locked_fields(&def.fields, data, opts.locale_ctx)?;
+    reject_nul_characters(data, &def.fields)?;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
 

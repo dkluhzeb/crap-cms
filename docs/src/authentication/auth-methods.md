@@ -15,7 +15,7 @@ crap.collections.define("users", {
 
 | Type | Purpose | Default surfaces | Notes |
 |---|---|---|---|
-| `password_login` | Enables the `Login` RPC; issues JWTs. Owns the password-only knobs (`mfa`, `mfa_when`, `mfa_deliver`, `verify_email`, `forgot_password`). | n/a (Login is one RPC) | At most one per collection. |
+| `password_login` | Enables the `Login` RPC; issues JWTs. Owns the password-only knobs (`mfa`, `mfa_when`, `mfa_deliver`, `mfa_exempt_callbacks`, `verify_email`, `forgot_password`). | n/a (Login is one RPC) | At most one per collection. |
 | `bearer` | Accept JWTs in `Authorization: Bearer …` (HTTP) / gRPC metadata. | `{"grpc", "admin"}` | At most one per collection. |
 | `session_cookie` | Accept the `crap_session` cookie. | `{"admin"}` | Admin-HTTP only in practice. |
 | `strategy` | Custom Lua authenticator (API keys, SSO headers, mTLS). Declares its own `activates_on` discriminator. | `{"admin"}` | Any number per collection. |
@@ -189,6 +189,7 @@ Startup errors (boot fails):
 - Any method with an empty `surfaces` list — it could never fire.
 - `activates_on = { header = "" }` — no request carries an empty header name.
 - `mfa = "custom"` without `mfa_deliver` (or `mfa_deliver` without `mfa = "custom"`).
+- `mfa_exempt_callbacks` without an `mfa` mode, or with an entry that is not a non-empty callback name.
 - A hook ref (`authenticate`, `mfa_when`, `mfa_deliver`) that does not resolve.
 
 Startup warnings (logged, boot continues):

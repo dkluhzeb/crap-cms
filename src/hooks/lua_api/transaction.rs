@@ -52,7 +52,8 @@ use crate::{
     db::DbConnection,
     hooks::{
         lifecycle::{
-            FileCleanupQueue, LuaCrudInfra, LuaVmInfra, PoolContext, TxContext, run_effects_on_vm,
+            FileCleanupQueue, LuaCrudInfra, LuaVmInfra, PoolContext, TxContext,
+            check_execution_deadline, run_effects_on_vm,
         },
         lua_api::crud::{TxSlot, ensure_writable},
     },
@@ -130,13 +131,7 @@ impl ScopedQueues {
     /// publish, delete and clear now. Needs no database connection.
     fn settle_after_commit(&self, lua: &Lua, label: &str) {
         self.hand_up_events(label);
-
-        if let Some(outer) = &self.outer_verifications {
-            outer
-                .borrow_mut()
-                .extend(self.tx_verifications.borrow_mut().drain(..));
-        }
-
+        self.hand_up_verifications(label);
         self.settle_files(lua);
 
         flush_cache_dirty(
@@ -162,6 +157,34 @@ impl ScopedQueues {
                 "{label}: {} event(s) from a committed transaction had no ambient queue \
                  to flush into and were dropped",
                 self.tx_events.borrow().len()
+            );
+        }
+    }
+
+    /// Hand the transaction's pending verifications up to the enclosing
+    /// service write, which sends them after its own commit.
+    ///
+    /// A verification only lands in this queue when the write had no email
+    /// context to issue it in-transaction; every surface that owns its
+    /// transaction (jobs, routes, migrations, `on_init`) carries one, so with
+    /// no enclosing scope the queue stays empty. Should anything arrive here
+    /// anyway it is reported, never dropped silently — an account without its
+    /// verification can neither verify nor sign up again.
+    fn hand_up_verifications(&self, label: &str) {
+        if let Some(outer) = &self.outer_verifications {
+            outer
+                .borrow_mut()
+                .extend(self.tx_verifications.borrow_mut().drain(..));
+
+            return;
+        }
+
+        for pending in self.tx_verifications.borrow_mut().drain(..) {
+            warn!(
+                "{label}: account {} in '{}' requires email verification, but this \
+                 transaction has no email context to issue it through — no \
+                 verification was sent",
+                pending.doc_id, pending.slug
             );
         }
     }
@@ -209,16 +232,24 @@ impl ScopedQueues {
 ///
 /// `label` prefixes the pool/begin/commit error text.
 ///
+/// A job handler's deadline (see `ExecutionDeadline`) is checked on entry and
+/// again right before `COMMIT`: an operation still in flight when the
+/// deadline passes — one blocked on the database lock, say — is rolled back
+/// instead of committing after the job was already reported as timed out.
+///
 /// # Errors
 ///
 /// Returns a Lua runtime error when no pool context is installed, when the
-/// transaction cannot be opened or committed, or when `work` errors (the
-/// transaction is rolled back and compensations run first).
+/// running job's deadline has passed, when the transaction cannot be opened
+/// or committed, or when `work` errors (the transaction is rolled back and
+/// compensations run first).
 pub(crate) fn run_scoped_tx<R>(
     lua: &Lua,
     label: &str,
     work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
 ) -> LuaResult<R> {
+    check_execution_deadline(lua)?;
+
     let pool = lua
         .app_data_ref::<PoolContext>()
         .ok_or_else(|| {
@@ -271,6 +302,10 @@ pub(crate) fn run_scoped_tx<R>(
 
         work(&tx)
     };
+
+    // The last point at which a job past its deadline can still be stopped
+    // without committing late.
+    let call_result = call_result.and_then(|value| check_execution_deadline(lua).map(|()| value));
 
     let effects: Vec<DeferredEffect> = dq.borrow_mut().drain(..).collect();
 
@@ -411,15 +446,22 @@ function crap.transaction(fn) end
 mod tests {
     use std::{path::PathBuf, sync::Arc};
 
+    use mlua::{Error::RuntimeError, Lua};
+
     use crate::{
         config::CrapConfig,
         core::{
-            CollectionDefinition, FieldDefinition, FieldType, HookRef, JobRun, Registry,
-            collection::Hooks,
+            CollectionDefinition, FieldDefinition, FieldType, HookRef, JobDefinition, JobRun,
+            Registry, collection::Hooks,
         },
-        db::{DbPool, migrate, pool, query},
-        hooks::HookRunner,
+        db::{DbConnection, DbPool, migrate, pool, query},
+        hooks::{
+            HookRunner,
+            lifecycle::{ExecutionDeadline, PoolContext, PoolMode},
+        },
     };
+
+    use super::run_scoped_tx;
 
     /// The `crap.tx` fixture tree: `jobs.tx_job.run_commit` wraps a create in
     /// `crap.transaction` and registers `hooks.effects.log_commit`, which
@@ -509,7 +551,7 @@ mod tests {
             .build();
         runner
             .run_job_handler(
-                &HookRef::new("jobs.tx_job.run_commit"),
+                &JobDefinition::builder("tx_test", "jobs.tx_job.run_commit").build(),
                 &run,
                 &db_pool,
                 None,
@@ -547,7 +589,7 @@ mod tests {
             .build();
         runner
             .run_job_handler(
-                &HookRef::new("jobs.tx_job.run_rollback"),
+                &JobDefinition::builder("tx_test", "jobs.tx_job.run_rollback").build(),
                 &run,
                 &db_pool,
                 None,
@@ -561,6 +603,60 @@ mod tests {
             messages,
             vec!["rollback:doomed:rollback", "rollback:job:rollback"],
             "both on_rollback compensations must have written their row"
+        );
+    }
+
+    /// Regression: an operation still in flight when a job's deadline passed
+    /// (one waiting on the database lock, say) committed after the scheduler
+    /// had already recorded the timeout and re-queued the run. The scope now
+    /// re-checks the deadline right before `COMMIT` and rolls back instead.
+    #[test]
+    fn an_operation_in_flight_when_the_job_deadline_passes_is_rolled_back() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
+
+        db_pool
+            .write()
+            .expect("write connection")
+            .execute("CREATE TABLE deadline_probe (id TEXT)", &[])
+            .expect("probe table");
+
+        let lua = Lua::new();
+        lua.set_app_data(PoolContext {
+            pool: db_pool.clone(),
+            mode: PoolMode::Write,
+        });
+
+        let result = run_scoped_tx(&lua, "test", |conn| {
+            conn.execute("INSERT INTO deadline_probe (id) VALUES ('late')", &[])
+                .map_err(|e| RuntimeError(e.to_string()))?;
+
+            // The deadline passes while the operation is still running.
+            lua.set_app_data(ExecutionDeadline::new(0));
+
+            Ok(())
+        });
+        lua.remove_app_data::<ExecutionDeadline>();
+
+        let Err(err) = result else {
+            panic!("an operation that outlived the job deadline must not commit");
+        };
+        assert!(
+            err.to_string().contains("exceeded its timeout"),
+            "got: {err}"
+        );
+
+        let conn = db_pool.get().expect("read connection");
+        let row = conn
+            .query_one("SELECT COUNT(*) FROM deadline_probe", &[])
+            .expect("count probe rows");
+
+        assert_eq!(
+            row.and_then(|r| r.i64_at(0)),
+            Some(0),
+            "the late write must have been rolled back"
         );
     }
 }

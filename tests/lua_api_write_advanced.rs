@@ -115,6 +115,45 @@ fn lua_create_many_keeps_password_field_on_non_auth_collection() {
     );
 }
 
+/// Regression: a NUL was refused only in top-level text columns, and bulk
+/// writes with `hooks = false` skip validation altogether — so a NUL inside a
+/// blocks row reached the row's JSON, which Postgres' `::jsonb` cast rejects on
+/// every later row-path filter. The persisted data is checked on every path.
+#[test]
+fn lua_writes_refuse_a_nul_at_any_depth() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+
+    for (label, code) in [
+        (
+            "create_many without hooks",
+            r#"crap.collections.create_many("products", {
+                { name = "p", content = { { _block_type = "text", body = "a\0b" } } },
+            }, { hooks = false })"#,
+        ),
+        (
+            "create",
+            r#"crap.collections.create("products", {
+                name = "p", variants = { { dimensions = { width = "\0" } } },
+            })"#,
+        ),
+        (
+            "update_many without hooks",
+            r#"crap.collections.create("products", { name = "q" })
+            crap.collections.update_many("products", {}, { seo = { meta_title = "\0" } },
+                { hooks = false })"#,
+        ),
+    ] {
+        let err = runner
+            .eval_lua_with_conn(code, &conn, None)
+            .expect_err("a NUL must be refused");
+        assert!(
+            err.to_string().contains("must not contain NUL characters"),
+            "{label}: {err}"
+        );
+    }
+}
+
 /// Regression: `update_many` rejected `password` only when it arrived as a
 /// STRING — a table-valued password slipped past the stringified-map check
 /// and reached the write via the composite merge. The guard now inspects the

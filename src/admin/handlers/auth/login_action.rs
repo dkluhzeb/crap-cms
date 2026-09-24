@@ -3,21 +3,17 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use axum::{
     extract::{ConnectInfo, Form, State},
     http::HeaderMap,
-    response::{IntoResponse, Redirect, Response},
+    response::Response,
 };
-use chrono::Utc;
 use tokio::task;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     admin::{
         AdminState, auth_middleware,
-        handlers::{
-            auth::{
-                LoginForm, append_cookies, client_ip, create_session_token, is_totp_collection,
-                login_error, mfa_pending_cookie, session_redirect,
-            },
-            shared::paths,
+        handlers::auth::{
+            LoginForm, SessionGrant, client_ip, create_session_token, issue_mfa_challenge,
+            login_error, session_redirect,
         },
         server::headers_to_map,
     },
@@ -25,11 +21,10 @@ use crate::{
         CollectionDefinition, Document, SharedPasswordProvider,
         collection::{Auth, Surface},
         normalize_email,
-        rate_limit::MFA_ISSUE_KEYSPACE,
     },
     service::{
         AppInfra, ServiceError,
-        auth::{self, LoginFlowRequest, LoginOutcome, verify_login},
+        auth::{LoginFlowRequest, LoginOutcome, LoginVerified, verify_login},
     },
 };
 
@@ -47,7 +42,7 @@ struct VerifyParams {
 }
 
 /// Run the shared credential-verification flow
-/// ([`service::auth::verify_login`]) on the blocking pool — the same flow the
+/// ([`verify_login`]) on the blocking pool — the same flow the
 /// gRPC login uses, so the two surfaces cannot drift.
 async fn verify_credentials(
     params: VerifyParams,
@@ -70,79 +65,23 @@ async fn verify_credentials(
     .await
 }
 
-/// Generate a 6-digit MFA code, store it, send it by email, and redirect to the MFA page.
-fn handle_mfa_challenge(
-    state: &AdminState,
-    user: &Document,
-    form: &LoginForm,
-    session_version: u64,
-) -> Response {
-    let is_totp = is_totp_collection(state, &form.collection);
-
-    // Throttle MFA code ISSUANCE per user (email / custom delivery). The login
-    // limiter is cleared on each successful password, so without this a
-    // password-holder could loop /admin/login to flood the victim's inbox. A
-    // code is single-use and expires with the pending token, so there is no
-    // earlier code to fall back on: over budget, the login is refused outright
-    // rather than handed a challenge no code can complete.
-    if !is_totp
-        && state
-            .forgot_password_limiter
-            .rescoped(MFA_ISSUE_KEYSPACE)
-            .check_and_block(user.id.as_ref())
-    {
-        warn!(user = %user.id, "MFA code issuance throttled");
-        return login_error(state, "error_mfa_too_many_codes", &form.email);
-    }
-
-    let user_email = user
-        .fields
+/// The address a session / MFA challenge for `user` carries: the stored
+/// email, falling back to the one the login form submitted.
+fn login_email(user: &Document, form: &LoginForm) -> String {
+    user.fields
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or(&form.email)
-        .to_string();
+        .to_string()
+}
 
-    // Create a short-lived MFA pending token (5 min) via the shared
-    // chokepoint (same token the gRPC challenge flow issues).
-    let mfa_token = match auth::mint_mfa_pending_token(
-        &state.infra,
-        &form.collection,
-        user,
-        &user_email,
-        session_version,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("MFA pending token error: {}", e);
-            return login_error(state, "error_internal", &form.email);
-        }
-    };
+/// Issue the MFA challenge for a password-verified login; a refusal
+/// re-renders the login form with its error.
+fn handle_mfa_challenge(state: &AdminState, login: &LoginVerified, form: &LoginForm) -> Response {
+    let email = login_email(&login.user, form);
 
-    // TOTP has nothing to generate or deliver — the user verifies against
-    // their authenticator app; enrollment (if still unconfirmed) is resolved
-    // when the MFA page renders.
-    if !is_totp {
-        // Generate a 6-digit code, store it, and deliver it (built-in email or
-        // the collection's `mfa_deliver` hook) in the background — the shared
-        // body the gRPC challenge flow also uses.
-        let code = auth::generate_mfa_code();
-        let infra = Arc::clone(&state.infra);
-        let slug = form.collection.clone();
-        let user_owned = user.clone();
-        let auth_secret = AsRef::<str>::as_ref(&state.config.auth.secret).to_string();
-
-        task::spawn_blocking(move || {
-            auth::deliver_mfa_code(&infra, &auth_secret, &slug, &user_owned, &user_email, &code);
-        });
-    }
-
-    // Set MFA pending cookie and redirect to MFA page
-    let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
-    let mut response = Redirect::to(&paths::mfa_with_collection(&form.collection)).into_response();
-
-    append_cookies(&mut response, &[cookie]);
-
-    response
+    issue_mfa_challenge(state, &form.collection, login, &email)
+        .unwrap_or_else(|refusal| login_error(state, refusal.error_key(), &form.email))
 }
 
 /// Build the authenticated session response (JWT + cookies + redirect).
@@ -152,21 +91,17 @@ fn build_session_response(
     form: &LoginForm,
     session_version: u64,
 ) -> Response {
-    let user_email = user
-        .fields
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&form.email)
-        .to_string();
+    let user_email = login_email(user, form);
 
-    let session = match create_session_token(
-        state,
+    let grant = SessionGrant::builder(
         user.id.to_string(),
         &form.collection,
         user_email,
         session_version,
-        Utc::now().timestamp().max(0).cast_unsigned(),
-    ) {
+    )
+    .build();
+
+    let session = match create_session_token(state, grant) {
         Ok(s) => s,
         Err(e) => {
             error!("{}", e);
@@ -275,7 +210,7 @@ pub async fn login_action(
 
     // MFA requirement is decided inside the shared flow.
     if mfa_required {
-        return handle_mfa_challenge(&state, &login.user, &form, login.session_version);
+        return handle_mfa_challenge(&state, &login, &form);
     }
 
     build_session_response(&state, &login.user, &form, login.session_version)

@@ -3,7 +3,10 @@
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, collection::GlobalDefinition, event::EventOperation},
+    core::{
+        Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
+        reject_nul_characters,
+    },
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{
         AccessCheckInput, HookContext, ValidationCtx, lifecycle::access::has_any_field_access,
@@ -315,6 +318,10 @@ fn persist_global_update(
     def: &GlobalDefinition,
     persist: &GlobalPersist<'_>,
 ) -> Result<Document> {
+    // Final post-hook data, draft or published (see the collection persist
+    // path).
+    reject_nul_characters(&persist.final_ctx.data, &def.fields)?;
+
     if persist.is_draft && def.has_versions() {
         let existing_doc = query::get_global(conn, ctx.slug, def, persist.locale_ctx)?;
         let snapshot = versions::save_draft_version(&versions::SaveDraftArgs {

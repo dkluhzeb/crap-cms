@@ -37,6 +37,6 @@ pub(crate) use pending_verification::flush_verification_queue;
 pub use pending_verification::{PendingVerification, VerificationQueue};
 pub use persist_options::PersistOptions;
 pub use search_documents_input::SearchDocumentsInput;
-pub use write_input::{UploadConversions, WriteInput, values_from_strings};
+pub use write_input::{UploadConversions, WriteInput, WriteInputBuilder, values_from_strings};
 pub(crate) use write_result::Gated;
 pub use write_result::WriteResult;

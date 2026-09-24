@@ -1,7 +1,7 @@
 //! Webhook email provider — sends emails via HTTP POST.
 //! Works with `SendGrid`, Mailgun, Resend, or any HTTP API.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use reqwest::blocking::Client;
@@ -47,7 +47,7 @@ impl WebhookEmailProvider {
             .to_string();
 
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(Duration::from_secs(30))
             .build()
             .context("Failed to create webhook HTTP client")?;
 

@@ -101,6 +101,7 @@ fn setup_app(default_deny: bool) -> TestApp {
         ("priv_files", "a_secret.txt"),
         ("orphan_files", "lost.txt"),
         ("pub_files", "open.txt"),
+        ("pub_files", "logo.svg"),
     ] {
         let dir = tmp.path().join("uploads").join(slug);
         std::fs::create_dir_all(&dir).unwrap();
@@ -334,5 +335,68 @@ async fn garbage_signature_on_public_file_falls_through() {
     assert!(
         cache.contains("public"),
         "public fast path applies: {cache}"
+    );
+}
+
+/// Regression: the admin security-headers layer wraps the serve route and
+/// used to overwrite every response's Content-Security-Policy with the admin
+/// page policy — replacing the `sandbox; default-src 'none'` policy the serve
+/// handler sets on SVG, so a script inside an uploaded SVG ran with the
+/// admin origin's authority when opened directly.
+#[tokio::test]
+async fn served_svg_keeps_its_sandbox_csp_on_the_wire() {
+    let app = setup();
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/uploads/pub_files/logo.svg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let csp: Vec<_> = resp
+        .headers()
+        .get_all("content-security-policy")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(csp, vec!["sandbox; default-src 'none'".to_string()]);
+}
+
+/// The admin page policy still applies to responses that carry none of their
+/// own — the fix must not drop CSP from ordinary served files.
+#[tokio::test]
+async fn served_non_svg_still_carries_the_admin_csp() {
+    let app = setup();
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/uploads/pub_files/open.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    assert!(
+        csp.contains("default-src"),
+        "admin CSP expected, got {csp:?}"
     );
 }

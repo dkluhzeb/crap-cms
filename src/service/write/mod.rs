@@ -14,6 +14,7 @@ mod pending_draft;
 mod update;
 mod update_many_single;
 mod upload_files;
+mod upload_restore;
 mod validate;
 
 use crate::service::ServiceError;
@@ -39,4 +40,5 @@ pub(in crate::service::write) use upload_files::stored_row;
 pub(crate) use upload_files::{
     UploadSettle, document_file_keys, owned_file_keys, settle_upload_write, warn_orphaned_files,
 };
+pub(crate) use upload_restore::{adopt_held_variants, restored_file_conversions};
 pub use validate::{ValidateContext, validate_document, validate_outcome};

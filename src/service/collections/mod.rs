@@ -12,7 +12,7 @@ mod unpublish;
 mod update;
 mod update_many;
 
-pub(crate) use bulk_access::delete_scope;
+pub(crate) use bulk_access::{delete_scope, reject_unreadable_bulk_filters};
 pub use create::create_document;
 pub use create_many::{CreateManyItem, CreateManyOptions, CreateManyResult, create_many};
 pub use delete::delete_document;

@@ -17,8 +17,7 @@ use crate::{
 };
 
 use super::helpers::{
-    SuccessBody, check_upload_access, extract_bearer_user, json_error, json_ok,
-    service_error_to_response,
+    SuccessBody, json_error, json_ok, resolve_upload_request, service_error_to_response,
 };
 
 /// Owned bundle for the upload-delete spawn-blocking body. Storage, locale
@@ -56,57 +55,14 @@ pub(super) async fn delete_upload(
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    // The entire gate prologue — auth, the Lua access hook, and the existence
-    // probe — is synchronous DB/VM work; run it on the blocking pool instead of
-    // parking an async worker.
-    let (auth_user, def) = match on_blocking_section(|| {
-        let auth_user = extract_bearer_user(&state, &headers)?;
-
-        let def = state
-            .infra
-            .registry
-            .get_collection(&slug)
-            .cloned()
-            .ok_or_else(|| {
-                Box::new(json_error(
-                    StatusCode::NOT_FOUND,
-                    &format!("Collection '{slug}' not found"),
-                ))
-            })?;
-
-        if !def.is_upload_collection() {
-            return Err(Box::new(json_error(
-                StatusCode::BAD_REQUEST,
-                &format!("Collection '{slug}' is not an upload collection"),
-            )));
-        }
-
-        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let access_fn = if def.soft_delete {
-            def.access.resolve_trash()
-        } else {
-            def.access.delete.as_ref()
+    // Auth (a read-pool checkout + queries) is synchronous and must not park
+    // an async worker — run it on the blocking pool. The collection's delete
+    // (or trash) rule is judged by the service delete.
+    let (auth_user, def) =
+        match on_blocking_section(|| resolve_upload_request(&state, &headers, &slug)) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
         };
-
-        check_upload_access(
-            &state,
-            access_fn,
-            user_doc,
-            Some(&id),
-            if def.soft_delete {
-                "Trash access denied"
-            } else {
-                "Delete access denied"
-            },
-            if def.soft_delete { "trash" } else { "delete" },
-            &def.slug,
-        )?;
-
-        Ok((auth_user, def))
-    }) {
-        Ok(v) => v,
-        Err(resp) => return *resp,
-    };
 
     let input = UploadDeleteBlockingInput {
         infra: state.infra.clone(),

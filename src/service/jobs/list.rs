@@ -35,7 +35,7 @@ pub struct JobDefinitionInfo {
     /// Cron expression, absent for manually triggered jobs.
     #[lua(optional)]
     pub schedule: Option<String>,
-    /// Seconds before a running job is considered timed out.
+    /// Seconds a run may execute before it is stopped.
     pub timeout: u64,
     /// Default scheduling priority; higher is claimed sooner.
     pub priority: i32,
@@ -43,7 +43,8 @@ pub struct JobDefinitionInfo {
     pub retries: u32,
     /// Maximum simultaneous runs of this job.
     pub concurrency: u32,
-    /// Whether a scheduled run is skipped while another is active.
+    /// Whether a scheduled run is skipped while another is still queued or
+    /// running.
     pub skip_if_running: bool,
     /// Human-readable label from the Lua definition.
     #[lua(optional)]

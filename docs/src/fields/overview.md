@@ -179,6 +179,22 @@ The admin UI rendering caps layout nesting at **5 levels deep**. Beyond this, fi
 
 The data layer (DDL, read, write, versions) has no depth limit.
 
+## NUL characters
+
+No stored value may contain a NUL character (`U+0000`), on any backend and at
+any depth: top-level values, group sub-fields, array and blocks rows at any
+nesting, has-many lists, the content of `json` and `richtext` values (a
+`\u0000` escape inside their JSON text, and object keys, included), and draft
+saves. Postgres cannot store a NUL in a text column, and one inside a row's
+JSON breaks every row-path filter on the collection there — so the rule holds
+on SQLite too, keeping content portable.
+
+A write carrying one fails with the `validation.nul_character` error on the
+offending field (`title`, `seo__title`, `items[0][label]`). The check runs with
+the other validation checks and again on the final data a write stores — after
+`before_change` hooks, and on writes that skip validation (`hooks = false` bulk
+writes) — and `crap-cms import` refuses a document holding one.
+
 ## Custom Validation
 
 The `validate` property references a Lua function in `module.function` format. The function receives `(value, context)` and returns:

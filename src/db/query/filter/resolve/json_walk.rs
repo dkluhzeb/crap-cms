@@ -6,45 +6,70 @@
 //! One walker for both row kinds, so a path reaches the same depth whichever
 //! row it starts in: groups extend the JSON path, a nested array or blocks
 //! field expands its rows, at any depth.
+//!
+//! A block row holds its own block type's fields. Where block types define a
+//! name differently the walk forks, one reading per block type, each only for
+//! rows of that type (see `filter::row_fields`); a path that holds for at
+//! least one block type is accepted. Rows of a block type declaring no field
+//! of that name get one more reading: the value is absent there and reads as
+//! NULL — as it does when every declaring type defines the name alike, where
+//! the one unconditional extract finds no key in such a row.
 
 use anyhow::{Result, anyhow, bail};
 
 use crate::{
     core::{
         BLOCK_TYPE_KEY, BlockDefinition, FieldChildren, FieldDefinition, FieldType, field_children,
-        flatten_array_sub_fields,
     },
-    db::{DbConnection, query::filter::elements::ListLeaf},
+    db::{
+        DbConnection,
+        query::filter::{
+            elements::ListLeaf,
+            row_fields::{
+                RowField, RowLookup, block_row_fields, lookup_row_field, plain_row_fields,
+            },
+        },
+    },
 };
 
-use super::types::JsonWalkResult;
+use super::types::{JsonLeaf, JsonStep};
+
+/// The value a row whose block type declares no field of the filtered name
+/// holds there: NULL, typed so every backend compares it.
+const ABSENT_VALUE: &str = "CAST(NULL AS TEXT)";
 
 /// A walk's position: the JSON value the next segment is looked up in —
-/// `path` below `base` — the fields that value holds, and whether it is a
-/// block row (the only level that carries a `_block_type`).
+/// `path` below `base` — the steps taken so far, the fields that value holds,
+/// and, in a block row, the expression of the row's block type.
+#[derive(Clone)]
 pub(super) struct JsonWalk<'a> {
     base: String,
     path: Vec<String>,
-    each_joins: Vec<(String, String)>,
-    fields: Vec<&'a FieldDefinition>,
-    block_row: bool,
+    steps: Vec<JsonStep>,
+    fields: Vec<RowField<'a>>,
+    row_type: Option<String>,
 }
 
 impl<'a> JsonWalk<'a> {
-    fn at(base: String, fields: Vec<&'a FieldDefinition>, block_row: bool) -> Self {
+    fn at(base: String, fields: Vec<RowField<'a>>, row_type: Option<String>) -> Self {
         Self {
             base,
             path: Vec::new(),
-            each_joins: Vec::new(),
+            steps: Vec::new(),
             fields,
-            block_row,
+            row_type,
         }
     }
 
     /// A walk starting in a block row's `data` object of `join_table`, which
-    /// holds every block type's fields.
+    /// holds its block type's fields; the type itself is the row's
+    /// `_block_type` column.
     pub(super) fn block_row(join_table: &str, blocks: &'a [BlockDefinition]) -> Self {
-        Self::at(format!("{join_table}.data"), block_fields(blocks), true)
+        Self::at(
+            format!("{join_table}.data"),
+            block_row_fields(blocks),
+            Some(format!("{join_table}.{BLOCK_TYPE_KEY}")),
+        )
     }
 
     /// A walk starting in the JSON an array row's `container` sub-field holds
@@ -59,14 +84,15 @@ impl<'a> JsonWalk<'a> {
         column: String,
         container: &'a FieldDefinition,
     ) -> Result<Self> {
-        let mut walk = Self::at(column, Vec::new(), false);
+        let mut walk = Self::at(column, Vec::new(), None);
 
         walk.enter(conn, container, None)?;
 
         Ok(walk)
     }
 
-    /// Walk `segments` to their leaf.
+    /// Walk `segments` to their leaf — one reading per block type where block
+    /// types define a segment differently.
     ///
     /// At each segment:
     /// - **Array/Blocks** field → a `json_each` join over its rows, descend
@@ -82,50 +108,133 @@ impl<'a> JsonWalk<'a> {
     /// # Errors
     ///
     /// Returns an error for an empty path, an unknown field, a sub-path into a
-    /// value, `_block_type` outside a block row or before the last segment, and
-    /// a path that ends on a container.
-    pub(super) fn walk(
-        mut self,
-        conn: &dyn DbConnection,
-        segments: &[&str],
-    ) -> Result<JsonWalkResult> {
-        let Some(last) = segments.last() else {
+    /// value, a field storing no value (a join), `_block_type` outside a block
+    /// row or before the last segment, and a path that ends on a container —
+    /// for a segment block types define differently, only when the path fails
+    /// for every one of them (the first block type's error).
+    pub(super) fn walk(self, conn: &dyn DbConnection, segments: &[&str]) -> Result<Vec<JsonLeaf>> {
+        let Some((segment, rest)) = segments.split_first() else {
             bail!("Empty path for a row filter");
         };
 
-        let mut remaining = segments;
-
-        while let Some((seg, rest)) = remaining.split_first() {
-            if *seg == BLOCK_TYPE_KEY {
-                return self.block_type(conn, rest);
-            }
-
-            let field = self.field(seg)?;
-
-            if matches!(field_children(field), FieldChildren::Leaf) {
-                if !rest.is_empty() {
-                    bail!("Scalar field '{seg}' cannot have sub-paths");
-                }
-
-                let field_type = Some(field.field_type.clone());
-
-                return Ok(self.leaf(conn, seg, field_type, ListLeaf::of(field)));
-            }
-
-            self.enter(conn, field, Some(*seg))?;
-            remaining = rest;
+        if *segment == BLOCK_TYPE_KEY {
+            return Ok(vec![self.block_type(rest)?]);
         }
 
-        bail!("Filter path must end on a value field, not the container '{last}'")
+        match lookup_row_field(&self.fields, segment) {
+            RowLookup::Unknown => bail!("Unknown field '{segment}' in row filter path"),
+            RowLookup::Uniform(field) => self.step(conn, field, segment, rest),
+            RowLookup::PerBlockType(candidates) => {
+                self.per_block_type(conn, &candidates, segment, rest)
+            }
+        }
     }
 
-    /// The field `name` at the current level.
-    fn field(&self, name: &str) -> Result<&'a FieldDefinition> {
-        self.fields
+    /// Continue the walk through `field`, reached by `segment`, with `rest`
+    /// below it.
+    fn step(
+        mut self,
+        conn: &dyn DbConnection,
+        field: &'a FieldDefinition,
+        segment: &str,
+        rest: &[&str],
+    ) -> Result<Vec<JsonLeaf>> {
+        if !matches!(field_children(field), FieldChildren::Leaf) {
+            self.enter(conn, field, Some(segment))?;
+
+            if rest.is_empty() {
+                bail!("Filter path must end on a value field, not the container '{segment}'");
+            }
+
+            return self.walk(conn, rest);
+        }
+
+        if !rest.is_empty() {
+            bail!("Scalar field '{segment}' cannot have sub-paths");
+        }
+
+        if !field.field_type.is_writable() {
+            bail!(
+                "Field '{segment}' (type {:?}) stores no value to filter on",
+                field.field_type
+            );
+        }
+
+        let field_type = Some(field.field_type.clone());
+
+        Ok(vec![self.leaf(
+            conn,
+            segment,
+            field_type,
+            ListLeaf::of(field),
+        )])
+    }
+
+    /// The readings of `segment` in a block row whose block types define it
+    /// differently: each candidate's, for rows of its block type only, and the
+    /// absent reading for rows of every other type. Fails only when the path
+    /// fails for every declaring block type.
+    fn per_block_type(
+        &self,
+        conn: &dyn DbConnection,
+        candidates: &[(&'a str, &'a FieldDefinition)],
+        segment: &str,
+        rest: &[&str],
+    ) -> Result<Vec<JsonLeaf>> {
+        let mut leaves = Vec::new();
+        let mut first_error = None;
+
+        for &(block_type, field) in candidates {
+            match self
+                .of_block_type(block_type)
+                .step(conn, field, segment, rest)
+            {
+                Ok(found) => leaves.extend(found),
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+
+        if leaves.is_empty() {
+            return Err(first_error.unwrap_or_else(|| anyhow!("Unknown field '{segment}'")));
+        }
+
+        leaves.extend(self.absent(candidates));
+
+        Ok(leaves)
+    }
+
+    /// The reading of a block row whose type declares none of `candidates`:
+    /// the value is absent, read as NULL. `None` outside a block row.
+    fn absent(&self, candidates: &[(&'a str, &'a FieldDefinition)]) -> Option<JsonLeaf> {
+        let expr = self.row_type.clone()?;
+
+        let mut declared: Vec<String> = candidates
             .iter()
-            .find(|f| f.name == name)
-            .copied()
-            .ok_or_else(|| anyhow!("Unknown field '{name}' in row filter path"))
+            .map(|(block_type, _)| (*block_type).to_string())
+            .collect();
+        declared.sort();
+        declared.dedup();
+
+        let mut walk = self.clone();
+        walk.steps.push(JsonStep::OtherBlockType { expr, declared });
+
+        Some(walk.finish(ABSENT_VALUE.to_string(), None, None))
+    }
+
+    /// This walk, restricted to block rows of `block_type`.
+    fn of_block_type(&self, block_type: &str) -> Self {
+        let mut walk = self.clone();
+
+        if let Some(expr) = &self.row_type {
+            walk.steps.push(JsonStep::BlockType {
+                expr: expr.clone(),
+                block_type: block_type.to_string(),
+            });
+        }
+
+        walk
     }
 
     /// Descend into the container `field` — reached by its `key` below the
@@ -142,18 +251,18 @@ impl<'a> JsonWalk<'a> {
 
         match field_children(field) {
             FieldChildren::Group(sub) => {
-                self.fields = flatten_array_sub_fields(sub);
-                self.block_row = false;
+                self.fields = plain_row_fields(sub);
+                self.row_type = None;
             }
             FieldChildren::Array(sub) => {
                 self.expand_rows(conn);
-                self.fields = flatten_array_sub_fields(sub);
-                self.block_row = false;
+                self.fields = plain_row_fields(sub);
+                self.row_type = None;
             }
             FieldChildren::Blocks(blocks) => {
                 self.expand_rows(conn);
-                self.fields = block_fields(blocks);
-                self.block_row = true;
+                self.fields = block_row_fields(blocks);
+                self.row_type = Some(conn.json_extract_expr(&self.base, BLOCK_TYPE_KEY));
             }
             // Never among the flattened fields: a wrapper holds no value of
             // its own.
@@ -173,11 +282,16 @@ impl<'a> JsonWalk<'a> {
     /// move into one of them.
     fn expand_rows(&mut self, conn: &dyn DbConnection) {
         let source = self.extract(conn);
-        let alias = format!("j{}", self.each_joins.len());
+        let joins = self
+            .steps
+            .iter()
+            .filter(|step| matches!(step, JsonStep::Each { .. }))
+            .count();
+        let alias = format!("j{joins}");
 
         self.base = format!("{alias}.value");
         self.path.clear();
-        self.each_joins.push((source, alias));
+        self.steps.push(JsonStep::Each { source, alias });
     }
 
     /// The expression of the value at the current position.
@@ -196,35 +310,41 @@ impl<'a> JsonWalk<'a> {
         key: &str,
         field_type: Option<FieldType>,
         list: Option<ListLeaf>,
-    ) -> JsonWalkResult {
+    ) -> JsonLeaf {
         self.path.push(key.to_string());
-        let expr = self.extract(conn);
+        let extract_expr = self.extract(conn);
 
-        (self.each_joins, expr, field_type, list)
+        self.finish(extract_expr, field_type, list)
+    }
+
+    /// The reading ending in `extract_expr`, after the steps taken so far.
+    fn finish(
+        self,
+        extract_expr: String,
+        field_type: Option<FieldType>,
+        list: Option<ListLeaf>,
+    ) -> JsonLeaf {
+        JsonLeaf {
+            steps: self.steps,
+            extract_expr,
+            field_type,
+            list,
+        }
     }
 
     /// The `_block_type` of the block row the walk is in — the last segment,
     /// and only inside a blocks field's rows.
-    fn block_type(self, conn: &dyn DbConnection, rest: &[&str]) -> Result<JsonWalkResult> {
+    fn block_type(self, rest: &[&str]) -> Result<JsonLeaf> {
         if !rest.is_empty() {
             bail!("{BLOCK_TYPE_KEY} must be the last segment in a filter path");
         }
 
-        if !self.block_row {
+        let Some(extract_expr) = self.row_type.clone() else {
             bail!("{BLOCK_TYPE_KEY} names a block row's type; this path is not in a block row");
-        }
+        };
 
-        Ok(self.leaf(conn, BLOCK_TYPE_KEY, Some(FieldType::Text), None))
+        Ok(self.finish(extract_expr, Some(FieldType::Text), None))
     }
-}
-
-/// Every block type's fields, layout wrappers flattened: a block row holds
-/// them all under its own keys.
-fn block_fields(block_defs: &[BlockDefinition]) -> Vec<&FieldDefinition> {
-    block_defs
-        .iter()
-        .flat_map(|bd| flatten_array_sub_fields(&bd.fields))
-        .collect()
 }
 
 #[cfg(test)]
@@ -232,23 +352,272 @@ mod tests {
     use super::*;
     use crate::db::query::filter::resolve::test_helpers::*;
 
+    /// A reading's joins, extract expression, leaf type and list.
+    type Parts = (
+        Vec<(String, String)>,
+        String,
+        Option<FieldType>,
+        Option<ListLeaf>,
+    );
+
+    /// The one reading a path has in every row — no block-type condition.
+    fn single(leaves: Vec<JsonLeaf>) -> Parts {
+        let [leaf] = <[JsonLeaf; 1]>::try_from(leaves).expect("exactly one reading");
+        assert!(leaf.is_unconditional(), "unexpected block-type step");
+
+        let joins = leaf
+            .each_joins()
+            .into_iter()
+            .map(|(source, alias)| (source.to_string(), alias.to_string()))
+            .collect();
+
+        (joins, leaf.extract_expr, leaf.field_type, leaf.list)
+    }
+
     fn walk_block_fields(
         conn: &dyn DbConnection,
         segments: &[&str],
         blocks: &[BlockDefinition],
         join_table: &str,
-    ) -> Result<JsonWalkResult> {
-        JsonWalk::block_row(join_table, blocks).walk(conn, segments)
+    ) -> Result<Parts> {
+        JsonWalk::block_row(join_table, blocks)
+            .walk(conn, segments)
+            .map(single)
     }
 
     fn walk_array_column(
         conn: &dyn DbConnection,
         container: &FieldDefinition,
         segments: &[&str],
-    ) -> Result<JsonWalkResult> {
+    ) -> Result<Parts> {
         let column = format!("\"posts_items\".\"{}\"", container.name);
 
-        JsonWalk::array_column(conn, column, container)?.walk(conn, segments)
+        JsonWalk::array_column(conn, column, container)?
+            .walk(conn, segments)
+            .map(single)
+    }
+
+    /// One reading of a blocks path: block-type steps, extract, type, list.
+    type Reading = (Vec<JsonStep>, String, Option<FieldType>, Option<ListLeaf>);
+
+    /// Every reading of a blocks path.
+    fn readings(
+        conn: &dyn DbConnection,
+        blocks: &[BlockDefinition],
+        segments: &[&str],
+    ) -> Vec<Reading> {
+        JsonWalk::block_row("posts_content", blocks)
+            .walk(conn, segments)
+            .unwrap()
+            .into_iter()
+            .map(|leaf| (leaf.steps, leaf.extract_expr, leaf.field_type, leaf.list))
+            .collect()
+    }
+
+    fn guard(expr: &str, block_type: &str) -> JsonStep {
+        JsonStep::BlockType {
+            expr: expr.to_string(),
+            block_type: block_type.to_string(),
+        }
+    }
+
+    fn other(expr: &str, declared: &[&str]) -> JsonStep {
+        JsonStep::OtherBlockType {
+            expr: expr.to_string(),
+            declared: declared.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    /// Two block types, `stat` and `note`, naming fields alike but defining
+    /// them differently: a number vs text, a has-many list vs a single value,
+    /// a scalar vs a group.
+    fn mixed_blocks() -> Vec<BlockDefinition> {
+        let tags_list = FieldDefinition::builder("tags", FieldType::Text)
+            .has_many(true)
+            .build();
+        let mut info_group = make_field("info", FieldType::Group, false);
+        info_group.fields = vec![make_field("x", FieldType::Text, false)];
+
+        vec![
+            make_block_def(
+                "stat",
+                vec![
+                    make_field("score", FieldType::Number, false),
+                    tags_list,
+                    make_field("info", FieldType::Text, false),
+                    make_field("title", FieldType::Text, false),
+                ],
+            ),
+            make_block_def(
+                "note",
+                vec![
+                    make_field("score", FieldType::Text, false),
+                    make_field("tags", FieldType::Text, false),
+                    info_group,
+                    make_field("title", FieldType::Text, false),
+                ],
+            ),
+        ]
+    }
+
+    /// Regression: the first declared block type's definition was taken for
+    /// every row, so a number in one block type and text in another cast the
+    /// text on Postgres (an error), and compared the other type's rows as the
+    /// wrong type. Each block type now has its own reading, for its own rows.
+    #[test]
+    fn a_name_typed_differently_per_block_type_is_read_per_type() {
+        let (_dir, conn) = test_conn();
+
+        let found = readings(&conn, &mixed_blocks(), &["score"]);
+
+        let column = "posts_content._block_type";
+        assert_eq!(
+            found,
+            vec![
+                (
+                    vec![guard(column, "stat")],
+                    "json_extract(posts_content.data, '$.score')".to_string(),
+                    Some(FieldType::Number),
+                    None
+                ),
+                (
+                    vec![guard(column, "note")],
+                    "json_extract(posts_content.data, '$.score')".to_string(),
+                    Some(FieldType::Text),
+                    None
+                ),
+                (
+                    vec![other(column, &["note", "stat"])],
+                    ABSENT_VALUE.to_string(),
+                    None,
+                    None
+                ),
+            ]
+        );
+    }
+
+    /// Regression: a row of a block type declaring no field of the name
+    /// matched nothing once the declaring types defined it differently — while
+    /// with one shared definition it reads NULL. It reads NULL in both.
+    #[test]
+    fn rows_of_an_undeclaring_block_type_read_the_value_as_absent() {
+        let (_dir, conn) = test_conn();
+        let mut blocks = mixed_blocks();
+        blocks.push(make_block_def(
+            "blank",
+            vec![make_field("title", FieldType::Text, false)],
+        ));
+
+        let found = readings(&conn, &blocks, &["score"]);
+        let absent = found.last().expect("readings");
+
+        assert_eq!(found.len(), 3);
+        assert_eq!(
+            absent.0,
+            vec![other("posts_content._block_type", &["note", "stat"])]
+        );
+        assert_eq!(absent.1, ABSENT_VALUE);
+        assert_eq!(absent.2, None);
+    }
+
+    /// Regression: a has-many list in one block type and a single value in
+    /// another expanded the single value as a list ("malformed JSON").
+    #[test]
+    fn a_list_in_one_block_type_and_a_value_in_another_are_read_per_type() {
+        let (_dir, conn) = test_conn();
+
+        let lists: Vec<Option<ListLeaf>> = readings(&conn, &mixed_blocks(), &["tags"])
+            .into_iter()
+            .map(|(_, _, _, list)| list)
+            .collect();
+
+        assert_eq!(
+            lists,
+            vec![Some(ListLeaf::Scalar(FieldType::Text)), None, None]
+        );
+    }
+
+    /// Regression: a group in one block type was unreachable when another
+    /// block type named a scalar the same. A path valid for one block type is
+    /// accepted, read only in that type's rows.
+    #[test]
+    fn a_path_valid_for_one_block_type_is_read_in_its_rows_only() {
+        let (_dir, conn) = test_conn();
+        let column = "posts_content._block_type";
+
+        // The declaring readings that hold, then the absent one.
+        let deep = readings(&conn, &mixed_blocks(), &["info", "x"]);
+        assert_eq!(deep.len(), 2);
+        assert_eq!(deep[0].0, vec![guard(column, "note")]);
+        assert_eq!(deep[0].1, "json_extract(posts_content.data, '$.info.x')");
+        assert_eq!(deep[1].0, vec![other(column, &["note", "stat"])]);
+
+        let scalar = readings(&conn, &mixed_blocks(), &["info"]);
+        assert_eq!(scalar.len(), 2);
+        assert_eq!(scalar[0].0, vec![guard(column, "stat")]);
+
+        let err = JsonWalk::block_row("posts_content", &mixed_blocks())
+            .walk(&conn, &["info", "x", "y"])
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot have sub-paths"), "{err}");
+    }
+
+    /// A name every block type defines alike keeps one reading for all rows.
+    #[test]
+    fn a_name_defined_alike_keeps_one_reading() {
+        let (_dir, conn) = test_conn();
+
+        let (joins, expr, leaf, _) = JsonWalk::block_row("posts_content", &mixed_blocks())
+            .walk(&conn, &["title"])
+            .map(single)
+            .unwrap();
+
+        assert!(joins.is_empty());
+        assert_eq!(expr, "json_extract(posts_content.data, '$.title')");
+        assert_eq!(leaf, Some(FieldType::Text));
+    }
+
+    /// A nested block row's type is read from its own JSON, so a fork there
+    /// conditions on the nested row.
+    #[test]
+    fn a_nested_block_row_forks_on_its_own_type() {
+        let (_dir, conn) = test_conn();
+        let mut nested = make_field("nested", FieldType::Blocks, false);
+        nested.blocks = mixed_blocks();
+        let blocks = vec![make_block_def("wrap", vec![nested])];
+
+        let found = readings(&conn, &blocks, &["nested", "score"]);
+
+        assert_eq!(found.len(), 3);
+        assert_eq!(
+            found[0].0,
+            vec![
+                JsonStep::Each {
+                    source: "json_extract(posts_content.data, '$.nested')".to_string(),
+                    alias: "j0".to_string(),
+                },
+                guard("json_extract(j0.value, '$._block_type')", "stat"),
+            ]
+        );
+    }
+
+    /// Regression: a join field inside a row was accepted as a filter leaf,
+    /// though it stores nothing (top level refuses it). Refused at any depth.
+    #[test]
+    fn a_join_field_inside_a_row_is_refused() {
+        let (_dir, conn) = test_conn();
+        let posts = make_field("posts", FieldType::Join, false);
+        let mut meta = make_field("meta", FieldType::Group, false);
+        meta.fields = vec![make_field("posts", FieldType::Join, false)];
+        let blocks = vec![make_block_def("card", vec![posts, meta.clone()])];
+
+        for segments in [&["posts"][..], &["meta", "posts"][..]] {
+            let err = walk_block_fields(&conn, segments, &blocks, "posts_content").unwrap_err();
+            assert!(err.to_string().contains("stores no value"), "{err}");
+        }
+
+        let err = walk_array_column(&conn, &meta, &["posts"]).unwrap_err();
+        assert!(err.to_string().contains("stores no value"), "{err}");
     }
 
     /// A group column of an array row is read by its JSON path, groups nesting.
@@ -523,7 +892,7 @@ mod tests {
         let (joins, expr, _leaf, _list) =
             walk_block_fields(&conn, &["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
-        assert_eq!(expr, "json_extract(posts_content.data, '$._block_type')");
+        assert_eq!(expr, "posts_content._block_type");
     }
 
     #[test]

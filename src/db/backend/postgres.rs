@@ -178,6 +178,10 @@ macro_rules! pg_shared_methods {
             pg_json_number_cast(expr)
         }
 
+        fn json_checkbox_cast(&self, expr: &str) -> String {
+            pg_json_checkbox_cast(expr)
+        }
+
         fn lock_row(&self, table: &str, id: &str) -> Result<()> {
             self.execute(
                 &format!(
@@ -319,6 +323,16 @@ fn pg_json_extract_expr(column: &str, field: &str) -> String {
 /// infer the operand as `numeric`, which the `f64` binder can't produce).
 fn pg_json_number_cast(expr: &str) -> String {
     format!("({expr})::double precision")
+}
+
+/// Map a JSON-extract of a `Checkbox` (`#>>` yields the text `'true'` /
+/// `'false'`) to the integer its operand binds as — `1`/`0`, as `SQLite`'s
+/// `json_extract` reads it; a stored `1`/`0` maps the same way, anything else
+/// to `NULL`.
+fn pg_json_checkbox_cast(expr: &str) -> String {
+    format!(
+        "(CASE ({expr}) WHEN 'true' THEN 1 WHEN '1' THEN 1 WHEN 'false' THEN 0 WHEN '0' THEN 0 END)"
+    )
 }
 
 /// The `FROM` item that expands a JSON array into one row per element.
@@ -773,6 +787,18 @@ mod tests {
         );
     }
 
+    /// Regression: a checkbox inside a row's JSON compared its `#>>` text
+    /// with the integer operand — a parameter error. The text maps to the
+    /// integer the operand binds as.
+    #[test]
+    fn json_checkbox_cast_maps_the_stored_text_to_one_and_zero() {
+        assert_eq!(
+            pg_json_checkbox_cast("t.data::jsonb#>>'{done}'"),
+            "(CASE (t.data::jsonb#>>'{done}') WHEN 'true' THEN 1 WHEN '1' THEN 1 \
+             WHEN 'false' THEN 0 WHEN '0' THEN 0 END)"
+        );
+    }
+
     #[test]
     fn greatest_expr_wraps_in_greatest() {
         assert_eq!(pg_greatest_expr("a", "b"), "GREATEST(a, b)");
@@ -815,7 +841,11 @@ mod tests {
     fn json_extract_and_each_use_jsonb() {
         assert_eq!(
             pg_json_extract_expr("data", "title"),
-            "data::jsonb->>'title'"
+            "data::jsonb#>>'{title}'"
+        );
+        assert_eq!(
+            pg_json_extract_expr("data", "meta.title"),
+            "data::jsonb#>>'{meta,title}'"
         );
         assert_eq!(
             pg_json_each_source("col", "x"),

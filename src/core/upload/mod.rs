@@ -1,10 +1,12 @@
 //! Upload handling: file validation, image resizing, and format conversion (WebP/AVIF).
 
+mod cleanup_guard;
 mod collection_upload;
 mod exif;
 mod format;
 mod image_fit;
 mod image_size;
+mod inspect;
 mod metadata;
 pub mod process;
 mod processed_upload;
@@ -14,19 +16,23 @@ mod read_shape;
 mod resize;
 mod size_result;
 pub mod storage;
+mod stored_name;
+mod svg;
 mod uploaded_file;
 mod validate;
 
+pub use cleanup_guard::CleanupGuard;
 pub use collection_upload::CollectionUpload;
 pub use format::{FormatOptions, FormatQuality, FormatResult};
 pub use image_fit::ImageFit;
 pub use image_size::{ImageSize, ImageSizeBuilder};
+pub use inspect::{FileColumns, InspectedUpload, inspect_upload};
 pub use metadata::{
     assemble_sizes_object, delete_storage_keys, delete_upload_files, enqueue_conversions,
     inject_upload_metadata, shape_read_document, snapshot_file_keys, upload_file_entries,
     upload_file_keys,
 };
-pub use process::{CleanupGuard, STORED_ID_LEN, original_filename, process_upload};
+pub use process::process_upload;
 pub use processed_upload::ProcessedUpload;
 pub use queue::{
     FALLBACK_MAX_ATTEMPTS, IMAGE_CONVERT_QUEUE, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
@@ -43,5 +49,6 @@ pub use storage::{
     create_storage_with_lease, key_from_served_url, served_url, sign_upload_path,
     signed_upload_url, verify_upload_sig,
 };
+pub use stored_name::{STORED_ID_LEN, original_filename};
 pub use uploaded_file::UploadedFile;
 pub use validate::format_filesize;

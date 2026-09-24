@@ -29,10 +29,8 @@ mod sql;
 pub use date::utc_to_local;
 pub use limits::{apply_pagination_limits, clamp_depth, floor_optional_limit};
 
-pub(crate) use coerce::{coerce_date_value, coerce_value, validate_no_null_byte};
-pub(crate) use coerce_json::{
-    coerce_date_value_json, coerce_json_value, validate_no_null_byte_json,
-};
+pub(crate) use coerce::{coerce_date_value, coerce_value};
+pub(crate) use coerce_json::{coerce_date_value_json, coerce_json_value};
 pub(crate) use date::{DayRange, normalize_date_value, normalize_date_with_timezone, utc_now};
 pub(crate) use document::stored_document_values;
 pub(in crate::db::query) use encode::companion_writes;

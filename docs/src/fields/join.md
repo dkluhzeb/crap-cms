@@ -40,6 +40,7 @@ are meaningless — they are rejected rather than silently ignored).
 - **No validation** — since no data is submitted, validation is skipped entirely.
 - **Admin UI** — shows a list of linked documents with clickable links to edit each one. Displays "No related items" when empty.
 - **API responses** — at `depth >= 1`, join fields return an array of document objects from the target collection. At `depth = 0`, join fields are omitted (no stored value).
+- **Access** — a join lists only target documents the viewer may read, stripped of the fields the viewer may not read. It also lists only documents whose `on` field the viewer may read: being listed says what that field holds, so a document whose `on` field is `hidden`, or denied by its `access.read` rule (judged per document, on its own data), is left out of the list and of the admin count.
 
 ## Example
 

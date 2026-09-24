@@ -12,24 +12,23 @@ use crate::{
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{auth::ResetPasswordQuery, shared::render_auth_page},
     },
-    core::Registry,
-    db::DbPool,
-    service::{self, ServiceContext},
+    service::{self, AppInfra, ServiceContext},
 };
 
 /// Check whether a reset token exists across all auth collections.
-fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool {
-    let Ok(conn) = pool.get() else {
+fn is_valid_reset_token(infra: &AppInfra, token: &str) -> bool {
+    let Ok(conn) = infra.pool.get() else {
         return false;
     };
 
-    for def in registry.collections.values() {
+    for def in infra.registry.collections.values() {
         if !def.is_auth_collection() {
             continue;
         }
 
         let ctx = ServiceContext::collection(&def.slug, def)
             .conn(&conn)
+            .locale_config(Some(&infra.locale_config))
             .build();
 
         if service::auth::find_by_reset_token(&ctx, token).unwrap_or(false) {
@@ -45,11 +44,10 @@ pub async fn reset_password_page(
     State(state): State<AdminState>,
     Query(query): Query<ResetPasswordQuery>,
 ) -> Response {
-    let pool = state.infra.pool.clone();
-    let registry = Arc::clone(&state.infra.registry);
+    let infra = Arc::clone(&state.infra);
     let token = query.token.clone();
 
-    let valid = task::spawn_blocking(move || is_valid_reset_token(&pool, &registry, &token))
+    let valid = task::spawn_blocking(move || is_valid_reset_token(&infra, &token))
         .await
         .unwrap_or(false);
 

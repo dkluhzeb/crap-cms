@@ -903,7 +903,15 @@ changing a representation is a breaking change to every consumer.
   array-row, block and nested-row sub-fields and their containers; a block
   path in every block type holding the field) — and is out of the default
   search index (listing it in `list_searchable_fields` is an explicit
-  opt-in). Enforced at the service find/count/search chokepoint.
+  opt-in). Enforced at the service find/count/search chokepoint, and for
+  the `where` filter of `update_many` / `delete_many` at the bulk scope
+  chokepoint (their counts answer the same question); `override_access`
+  is exempt. The same rule decides which referring fields the
+  back-reference report may list.
+- **A join lists only children whose `on` value the reader may read.** A
+  child whose `on` field the read strip removed is left out of a populated
+  join and of the admin join items and count — judged per child, on its
+  own data.
 - **The full-text index is row-backed and write-path complete.** The
   per-document sync reads the indexed columns from the row itself (both
   backends index exactly `get_fts_columns`), so it cannot depend on the
@@ -1067,6 +1075,18 @@ changing a representation is a breaking change to every consumer.
   validation rejects a non-`session` token, so an MFA-pending token can never
   authenticate a request. A token minted before the claim existed decodes as
   `session`. Never accept `mfa_pending` as a session, or MFA becomes bypassable.
+  The in-memory claims of a custom-strategy-authenticated request carry a
+  third value, `strategy`: the token provider refuses to sign them, and any
+  handler minting a session from a request's claims (session refresh) accepts
+  only a request the session cookie authenticated. A strategy credential is
+  never exchangeable for a signed token.
+- **Every session-minting authentication passes the MFA gate**
+  (`service::auth::mfa_gate`): the password login, a custom-strategy login and
+  the admin auth callbacks alike. On a collection with an `mfa` mode the
+  surface issues the MFA-pending step, never the session; the only skip is the
+  `mfa_when` verdict or, for a callback, its name in the `password_login`
+  method's `mfa_exempt_callbacks`. A new way to mint a session must go through
+  the same gate.
 - **Single-use security tokens are minted at one chokepoint.** Password-reset
   and email-verification tokens both come from `generate_security_token()` — a
   32-character nanoid. Any new single-use-token flow uses the same helper so the
@@ -1125,6 +1145,16 @@ changing a representation is a breaking change to every consumer.
   crashes (heartbeat expires past `heartbeat_interval × 3`), is **requeued** and
   re-runs; an exhausted one goes terminal `stale`. **Handlers must be
   idempotent.** `max_attempts = retries + 1`.
+- **A job's `timeout` is enforced, and a run never overlaps its own retry.** A
+  Lua handler stops at its deadline (VM hook + every database / HTTP / email
+  entry point), the operation in flight rolls back (writes committed before the
+  deadline stay), and the run is requeued only once it has returned — until
+  then its row stays `running` with a fresh heartbeat. `timeout >= 1`. The
+  `crap.tx` effects of an already-resolved transaction still run past the
+  deadline.
+- **`skip_if_running` counts `pending` and `running` runs** of the slug.
+- **A heartbeat is written for (id, attempt)** — compare-and-set like every
+  other job-row write.
 - **Retry backoff curve** `min(2^(attempt-1) × 5, 300)` seconds — 5,10,20,…,300 —
   hardcoded, no config knob.
 - **Cron** is UTC-only and catches up at most once after downtime — a schedule that came due while the process was down fires once on the next check, anchored on its stored last fire, never once per missed slot (missed runs beyond that are
@@ -1306,11 +1336,13 @@ alpha.10 on:
   `ListJobRuns`. Unparseable run data fails closed.
 - **Identity is a reference, re-checked at execution.** Only the user id,
   auth collection, and session version are stored — never a user document —
-  and the user is re-loaded when the run executes: a locked or deleted
-  account, or a session-version bump (force-logout, password reset,
-  unverify), abandons the run. Strategy-authenticated callers cannot queue
-  (their identity may be synthetic and is not re-resolvable). Anonymous callers cannot queue (`UNAUTHENTICATED`), and `CreateMany`
-  with `queue` plus any per-item password is `INVALID_ARGUMENT`.
+  and the user is re-loaded when the run executes: a locked, deleted or
+  trashed account, or a session-version bump (force-logout, password reset,
+  unverify), abandons the run. Every authentication method can queue — a
+  custom strategy's user is always a stored row of its collection, and its
+  in-memory claims carry that row's session version. Anonymous callers
+  cannot queue (`UNAUTHENTICATED`), and `CreateMany` with `queue` plus any
+  per-item password is `INVALID_ARGUMENT`.
 - **Exactly one attempt.** `_system_bulk` runs are pinned to
   `max_attempts = 1` at insert, independent of `[jobs.queues.bulk]
   retries` — a retry could re-apply an already-committed batch.

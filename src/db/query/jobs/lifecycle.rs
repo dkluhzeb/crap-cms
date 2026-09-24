@@ -478,19 +478,31 @@ pub fn fail_job(
     Ok(())
 }
 
-/// Update the heartbeat timestamp for a running job.
+/// Update the heartbeat timestamp of one attempt of a running job.
+///
+/// Compare-and-set on `(running, attempt)` like every other job-row write: a
+/// run that outlived its heartbeat window and was reclaimed (and possibly
+/// claimed again as a later attempt, on this node or a peer) must not keep
+/// that later attempt's heartbeat fresh — the later attempt's own worker owns
+/// it, and a zombie refreshing it would hide that worker's death from stale
+/// recovery.
 ///
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
-pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
+pub fn update_heartbeat(conn: &dyn DbConnection, id: &str, attempt: u32) -> Result<()> {
     conn.execute(
         &format!(
-            "UPDATE _crap_jobs SET heartbeat_at = {} WHERE id = {}",
+            "UPDATE _crap_jobs SET heartbeat_at = {} \
+             WHERE id = {} AND status = 'running' AND attempt = {}",
             conn.now_expr(),
-            conn.placeholder(1)
+            conn.placeholder(1),
+            conn.placeholder(2)
         ),
-        &[DbValue::Text(id.to_string())],
+        &[
+            DbValue::Text(id.to_string()),
+            DbValue::Integer(i64::from(attempt)),
+        ],
     )
     .context("Failed to update heartbeat")?;
 
@@ -676,19 +688,62 @@ mod tests {
         let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 1, "default", 0).unwrap();
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
         // Update heartbeat should succeed
-        update_heartbeat(&conn, &job.id).unwrap();
+        update_heartbeat(&conn, &job.id, 1).unwrap();
 
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert!(
             fetched.heartbeat_at.is_some(),
             "heartbeat should be set after update"
         );
+    }
+
+    /// Regression: the heartbeat write had no compare-and-set, so a run that
+    /// was reclaimed and claimed again as a later attempt kept that attempt's
+    /// heartbeat fresh from the original (zombie) worker — hiding the later
+    /// worker's death from stale recovery.
+    #[test]
+    fn a_heartbeat_for_a_superseded_attempt_changes_nothing() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 2, heartbeat_at = NULL \
+             WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        update_heartbeat(&conn, &job.id, 1).unwrap();
+
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert!(
+            fetched.heartbeat_at.is_none(),
+            "attempt 1's worker must not refresh attempt 2's heartbeat"
+        );
+    }
+
+    /// A heartbeat for a run that is no longer `running` (completed, failed,
+    /// re-queued) changes nothing either.
+    #[test]
+    fn a_heartbeat_for_a_row_that_left_running_changes_nothing() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", ScheduledBy::Cli, 3, "default", 0).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'pending', attempt = 1, heartbeat_at = NULL \
+             WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        update_heartbeat(&conn, &job.id, 1).unwrap();
+
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert!(fetched.heartbeat_at.is_none());
     }
 
     #[test]

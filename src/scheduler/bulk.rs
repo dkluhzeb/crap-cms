@@ -13,17 +13,18 @@ use serde_json::json;
 use tracing::{error, info};
 
 use crate::{
-    core::{Document, job::JobRun},
+    core::{Document, DocumentFields, job::JobRun},
     db::{
-        DbConnection, DbPool, LocaleContext, query, query::filter::decode_where_json_str,
+        DbConnection, DbPool, LocaleContext, query::filter::decode_where_json_str,
         query::jobs as job_query,
     },
     service::{
-        AppInfra, CreateManyItem, OpDeadline, ServiceContext,
+        AppInfra, CreateManyItem, OpDeadline, ServiceContext, ServiceError,
+        auth::{get_session_version, is_locked, load_user},
         jobs::bulk_queue::{BulkJobData, BulkOpKind, QueuedBy, finished_payload},
         op::{
-            self, CreateMany, CreateManyArgs, DeleteMany, DeleteManyArgs, Principal, TargetRef,
-            UpdateMany, UpdateManyArgs,
+            self, CoreError, CreateMany, CreateManyArgs, DeleteMany, DeleteManyArgs, Principal,
+            TargetRef, UpdateMany, UpdateManyArgs,
         },
     },
 };
@@ -213,15 +214,15 @@ pub(super) fn strip_finished_payload(conn: &dyn DbConnection, job_run: &JobRun) 
 /// server-side and replaced with a generic message — the same discipline
 /// the synchronous codecs apply, which a raw `{:?}` of the error chain
 /// (SQL text, column names) would bypass.
-fn user_facing_error(e: crate::service::op::CoreError) -> String {
+fn user_facing_error(e: CoreError) -> String {
     let service_error = e.into_service_error();
 
     match &service_error {
-        crate::service::ServiceError::Internal(detail) => {
+        ServiceError::Internal(detail) => {
             error!("bulk job internal error: {detail:#}");
             "internal error (see server logs)".to_string()
         }
-        crate::service::ServiceError::Transient(detail) => {
+        ServiceError::Transient(detail) => {
             error!("bulk job transient error: {detail:#}");
             "temporary backend failure — re-queue the operation".to_string()
         }
@@ -253,34 +254,63 @@ fn resolve_run_principal(
     }
 }
 
+/// The run's stored error for a lookup that failed for an internal reason.
+/// The detail (SQL text, column names) is logged, never stored on the run —
+/// the same discipline `user_facing_error` applies.
+fn unresolved_queuer(detail: &str) -> String {
+    error!("bulk job: resolving the queuing user failed: {detail}");
+
+    "the queuing user could not be resolved — the run was abandoned".to_string()
+}
+
 /// Re-load the user a run was queued by, refusing to execute when the
-/// account no longer exists or has been locked since.
+/// account no longer exists — deleted or moved to the trash — or has been
+/// locked or had its sessions revoked since.
 fn load_queuing_user(
     infra: &AppInfra,
     collection: &str,
     id: &str,
     session_version: u64,
 ) -> Result<Document, String> {
-    // Internal detail (SQL text, column names) is logged, never stored on
-    // the run — the same discipline `user_facing_error` applies.
-    let abandoned = |detail: String| {
-        error!("bulk job: resolving the queuing user failed: {detail}");
-        "the queuing user could not be resolved — the run was abandoned".to_string()
-    };
+    let def = infra
+        .registry
+        .get_collection(collection)
+        .ok_or_else(|| format!("auth collection '{collection}' is no longer defined"))?;
 
     let conn = infra
         .pool
         .get()
-        .map_err(|e| abandoned(format!("DB connection: {e}")))?;
+        .map_err(|e| unresolved_queuer(&format!("DB connection: {e}")))?;
 
-    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    // The locale config lets `load_user` read a localized auth collection's
+    // default-locale columns.
+    let ctx = ServiceContext::collection(collection, def)
+        .conn(&conn)
+        .locale_config(Some(&infra.locale_config))
+        .build();
 
-    if !crate::service::auth::user_exists(&ctx, id).map_err(|e| abandoned(format!("{e}")))? {
+    // `None` for a trashed account as for a deleted one: neither may act.
+    let Some(user) = load_user(&ctx, id).map_err(|e| unresolved_queuer(&e.to_string()))? else {
         return Err(format!(
             "the queuing user ({collection}/{id}) no longer exists — the run was abandoned"
         ));
-    }
-    if crate::service::auth::is_locked(&ctx, id).map_err(|e| abandoned(format!("{e}")))? {
+    };
+
+    ensure_queuer_still_active(&ctx, id, session_version)?;
+
+    Ok(user)
+}
+
+/// Refuse a queuer that was locked, or whose sessions were revoked, after
+/// the run was queued.
+fn ensure_queuer_still_active(
+    ctx: &ServiceContext,
+    id: &str,
+    session_version: u64,
+) -> Result<(), String> {
+    let collection = ctx.slug;
+
+    if is_locked(ctx, id).map_err(|e| unresolved_queuer(&e.to_string()))? {
         return Err(format!(
             "the queuing user ({collection}/{id}) is locked — the run was abandoned"
         ));
@@ -288,26 +318,16 @@ fn load_queuing_user(
 
     // A session-version bump (force-logout, password reset, unverify)
     // revokes every live token; it must revoke pending work too.
-    let current_version = crate::service::auth::get_session_version(&ctx, id)
-        .map_err(|e| abandoned(format!("session version: {e}")))?;
+    let current_version = get_session_version(ctx, id)
+        .map_err(|e| unresolved_queuer(&format!("session version: {e}")))?;
+
     if current_version != session_version {
         return Err(format!(
             "the queuing user's session was revoked ({collection}/{id}) — the run was abandoned"
         ));
     }
 
-    let def = infra
-        .registry
-        .get_collection(collection)
-        .ok_or_else(|| format!("auth collection '{collection}' is no longer defined"))?;
-
-    // A localized auth collection needs a locale context or the SELECT
-    // references bare logical columns and errors.
-    let locale_ctx = LocaleContext::default_for(&infra.locale_config);
-
-    query::find_by_id(&conn, collection, def, id, locale_ctx.as_ref())
-        .map_err(|e| abandoned(format!("find_by_id: {e}")))?
-        .ok_or_else(|| format!("the queuing user ({collection}/{id}) could not be loaded"))
+    Ok(())
 }
 
 /// The decoded pieces of a bulk job payload, ready to rebuild op args.
@@ -319,9 +339,9 @@ struct RunBulkOp {
     hooks: bool,
     events: bool,
     max_documents: i64,
-    documents: Option<Vec<crate::core::DocumentFields>>,
+    documents: Option<Vec<DocumentFields>>,
     where_clause: Option<String>,
-    data: Option<crate::core::DocumentFields>,
+    data: Option<DocumentFields>,
     force_hard_delete: bool,
 }
 

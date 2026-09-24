@@ -131,6 +131,12 @@ when the user is about to be logged out by token expiry.
   reload; a URL-encoded body over 2 MiB answers 413; an `Authorization:
   Bearer` header skips the CSRF check only when it carries a non-empty
   token.
+- **Only a cookie session is extended.** The handler refreshes only a
+  request the `crap_session` cookie authenticated. A request
+  authenticated by a bearer token or a
+  [custom strategy](../../authentication/custom-strategies.md) has no
+  cookie session to extend and gets `401` — a strategy credential is
+  never exchanged for a session token.
 - **Re-validates the user before reissuing.** Checks that the user
   still exists, is not `_locked`, and that the token's
   `session_version` matches the current value in the auth

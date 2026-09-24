@@ -48,7 +48,7 @@ mod presence;
 mod rows;
 mod schema;
 
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 use serde_json::Value;
 
@@ -69,7 +69,7 @@ use crate::{
     db::{
         Filter, FilterClause, FilterOp,
         query::{
-            filter::day::day_filter,
+            filter::{day::day_filter, operators::operand_fits, resolve::container_root},
             helpers::{ListPlace, normalize_date_value},
         },
     },
@@ -146,7 +146,13 @@ fn matches_filter(data: &DocumentFields, filter: &Filter, schema: &Schema<'_>) -
         return matched;
     }
 
-    let leaf = schema.types.get(&filter.field);
+    let path = schema_key(&filter.field, schema.fields);
+    let leaf = schema.types.get(path.as_ref());
+
+    // An operand SQL refuses for the field matches nothing here either.
+    if !operand_fits(leaf.map(Leaf::operand_type).as_ref(), &filter.op) {
+        return false;
+    }
 
     // A path the payload does not carry cannot be judged: no operator — not
     // even a negative one — matches it (fail-closed).
@@ -159,6 +165,15 @@ fn matches_filter(data: &DocumentFields, filter: &Filter, schema: &Schema<'_>) -
     };
 
     matches_leaf(value, &filter.op, leaf)
+}
+
+/// A filter path as the schema keys it: a join field inside groups by its
+/// flat name (`seo.tags.id` → `seo__tags.id`), any other path as written.
+fn schema_key<'p>(path: &'p str, fields: &[FieldDefinition]) -> Cow<'p, str> {
+    match container_root(path, fields) {
+        Some(root) => Cow::Owned(format!("{}.{}", root.name, root.rest)),
+        None => Cow::Borrowed(path),
+    }
 }
 
 /// Evaluate an operator against the value a document carries for a leaf —
@@ -240,12 +255,14 @@ fn matches_value(value: &Value, op: &FilterOp, ft: Option<&FieldType>) -> bool {
 /// The operand of an ordered comparison as SQL's `coerce_filter_value` binds
 /// it: in the field's canonical form, a date normalized to its stored form —
 /// so `> 2026-01-15T09:00` compares against `2026-01-15T09:00:00.000Z` on
-/// both paths.
+/// both paths — and a checkbox's boolean spelling as the `1`/`0` it binds as.
 fn ordered_operand(ft: Option<&FieldType>, raw: &str) -> String {
     let canonical = canonical_operand(ft, raw);
 
     match ft {
         Some(FieldType::Date) => normalize_date_value(&canonical),
+        Some(FieldType::Checkbox) => parse_bool(&canonical)
+            .map_or_else(|| canonical.into_owned(), |b| u8::from(b).to_string()),
         _ => canonical.into_owned(),
     }
 }
@@ -253,20 +270,19 @@ fn ordered_operand(ft: Option<&FieldType>, raw: &str) -> String {
 /// Type-aware equality between a stored JSON value and a constraint string,
 /// mirroring SQL's per-column coercion (`coerce_filter_value`) so the in-memory
 /// path agrees with SQL. Falls back to string comparison for non-typed fields.
+/// An operand SQL refuses for the field (no boolean for a Checkbox, no finite
+/// number for a Number) never reaches here: `operand_fits` rejects it first.
 fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
     match ft {
         Some(FieldType::Checkbox) => match bool_from_str(expected) {
             Some(b) => checkbox_value(stored) == Some(b),
-            // Unrecognized boolean spelling: SQL falls back to a text compare.
-            None => value_to_string(stored) == *expected,
+            None => false,
         },
         Some(FieldType::Number) => {
-            // Mirror SQL `coerce_filter_value`: only a *finite* parse binds as a
-            // number; `inf`/`NaN` fall through to a text compare on both sides.
             let parsed = parse_number(expected).filter(|f| f.is_finite());
             match (num_repr(stored), parsed) {
                 (Some(a), Some(b)) => a == b,
-                // Non-numeric on either side: SQL falls back to a text compare.
+                // A stored value that is no number: SQL compares it as text.
                 _ => value_to_string(stored) == *expected,
             }
         }
@@ -325,7 +341,8 @@ fn order_is(value: &Value, expected: &str, want: Ordering, allow_eq: bool) -> bo
 /// Order a field value against a string comparand, choosing the comparison by
 /// the field's JSON type so the in-memory path mirrors SQL column affinity: a
 /// **numeric** field compares numerically (matching a numeric column), a
-/// **text** field lexicographically (matching a text column). This avoids the
+/// **text** field lexicographically (matching a text column), and a stored
+/// checkbox `true`/`false` as the `1`/`0` SQL reads it as. This avoids the
 /// "text field holding `\"100\"` vs `\"50\"`" divergence a blanket numeric
 /// coercion would cause. Non-scalar / incomparable operands yield `None` (the
 /// caller fails closed). Exotic mixed-type SQL affinity edges are not replicated
@@ -333,6 +350,7 @@ fn order_is(value: &Value, expected: &str, want: Ordering, allow_eq: bool) -> bo
 fn compare_typed(value: &Value, expected: &str) -> Option<Ordering> {
     match value {
         Value::Number(n) => n.as_f64()?.partial_cmp(&parse_number(expected)?),
+        Value::Bool(checked) => f64::from(u8::from(*checked)).partial_cmp(&parse_number(expected)?),
         Value::String(s) => Some(s.as_str().cmp(expected)),
         _ => None,
     }
@@ -843,6 +861,28 @@ mod tests {
         }
     }
 
+    /// Regression: an ordered comparison on a checkbox never matched here —
+    /// a stored `true` had no order, and a `true`/`false` operand was no
+    /// number — while SQL compares the `1`/`0` both bind as.
+    #[test]
+    fn checkbox_ordered_comparisons_read_one_and_zero() {
+        let fields = vec![FieldDefinition::builder("active", FieldType::Checkbox).build()];
+        let matches = |stored: Value, op: FilterOp| {
+            let d = data(&[("active", stored)]);
+
+            matches_constraints_typed(&d, &[typed_single("active", op)], &fields)
+        };
+
+        assert!(matches(json!(true), FilterOp::GreaterThan("false".into())));
+        assert!(matches(
+            json!(true),
+            FilterOp::GreaterThanOrEqual("1".into())
+        ));
+        assert!(matches(json!(false), FilterOp::LessThan("true".into())));
+        assert!(matches(json!(0), FilterOp::LessThanOrEqual("false".into())));
+        assert!(!matches(json!(false), FilterOp::GreaterThan("0".into())));
+    }
+
     /// A number spelled with surrounding whitespace compares as the number it
     /// spells, on both the equality and the ordered path — the shared
     /// `core::parse_number` reading, so a constraint isn't silently demoted to
@@ -917,28 +957,35 @@ mod tests {
         assert!(!matches_constraints_typed(&d, from_ref(&neq), &fields));
     }
 
-    /// SQL `coerce_filter_value` only binds a *finite* parse as a number; `inf`/
-    /// `NaN` fall through to a text compare. The in-memory matcher must do the
-    /// same so the two paths can't diverge (`NotEquals "inf"` must not fail-open).
+    /// Regression: an operand SQL refuses for the field — `inf`/`NaN` or a
+    /// word for a Number, a non-boolean for a Checkbox — was compared here as
+    /// text, so `not_equals`/`not_in` matched (fail-open) where SQL refuses
+    /// the query and returns nothing. Every operator now matches nothing.
     #[test]
-    fn non_finite_number_constraint_matches_sql_text_fallback() {
-        let fields = vec![FieldDefinition::builder("score", FieldType::Number).build()];
-        let d = data(&[("score", json!(3.0))]);
+    fn an_operand_sql_refuses_matches_nothing() {
+        let fields = vec![
+            FieldDefinition::builder("score", FieldType::Number).build(),
+            FieldDefinition::builder("active", FieldType::Checkbox).build(),
+        ];
+        let d = data(&[("score", json!(3.0)), ("active", json!(true))]);
+        let matches = |field: &str, op: FilterOp| {
+            matches_constraints_typed(&d, &[typed_single(field, op)], &fields)
+        };
 
-        // `inf`/`NaN` are not numeric comparands: a finite stored value never
-        // equals them, and (the divergence guard) NotEquals must hold true.
-        for spelling in ["inf", "Infinity", "NaN", "-inf"] {
-            let eq = typed_single("score", FilterOp::Equals(spelling.into()));
-            assert!(
-                !matches_constraints_typed(&d, from_ref(&eq), &fields),
-                "Equals {spelling} must not match a finite number"
-            );
-
-            let neq = typed_single("score", FilterOp::NotEquals(spelling.into()));
-            assert!(
-                matches_constraints_typed(&d, from_ref(&neq), &fields),
-                "NotEquals {spelling} must hold (text fallback, like SQL) — not fail-open"
-            );
+        for spelling in ["inf", "Infinity", "NaN", "-inf", "high"] {
+            assert!(!matches("score", FilterOp::Equals(spelling.into())));
+            assert!(!matches("score", FilterOp::NotEquals(spelling.into())));
+            assert!(!matches("score", FilterOp::NotIn(vec![spelling.into()])));
+            assert!(!matches(
+                "score",
+                FilterOp::NotIn(vec!["4".into(), spelling.into()])
+            ));
         }
+
+        assert!(!matches("active", FilterOp::NotEquals("maybe".into())));
+        assert!(!matches("active", FilterOp::NotIn(vec!["maybe".into()])));
+
+        assert!(matches("score", FilterOp::NotIn(vec!["4".into()])));
+        assert!(matches("active", FilterOp::NotEquals("no".into())));
     }
 }

@@ -100,9 +100,7 @@ impl ContentService {
                 Status::unauthenticated("Queueing a bulk operation requires authentication")
             }
             QueueError::Core(core) => self.core_error_status(core),
-            QueueError::Service(e) => {
-                self.core_error_status(crate::service::op::CoreError::Service(e))
-            }
+            QueueError::Service(e) => self.core_error_status(op::CoreError::Service(e)),
             QueueError::UnknownCollection(slug) => {
                 Status::not_found(format!("Collection '{slug}' not found"))
             }

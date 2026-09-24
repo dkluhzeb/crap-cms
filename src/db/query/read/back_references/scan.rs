@@ -2,19 +2,25 @@
 //! scanners (has-one column / has-many junction).
 
 use anyhow::Result;
+use tracing::debug;
 
-use crate::config::LocaleConfig;
-use crate::core::{FieldChildren, FieldDefinition, FieldType, Registry, field_children};
-use crate::db::query::helpers::{global_table, join_table, prefixed_name as prefixed};
-use crate::db::query::poly_ref;
-use crate::db::query::{column_is_localized, stored_columns};
-use crate::db::{DbConnection, DbValue};
-
-use super::helpers::query_ids;
-use super::sub_fields::{scan_array_sub_fields, scan_blocks};
-use super::types::{BackRefScan, BackReference};
-
-use super::helpers::field_display_label;
+use super::{
+    helpers::{field_display_label, query_ids},
+    sub_fields::{scan_array_sub_fields, scan_blocks},
+    types::{BackRefScan, BackReference},
+};
+use crate::{
+    config::LocaleConfig,
+    core::{FieldChildren, FieldDefinition, FieldType, Registry, field_children},
+    db::{
+        DbConnection, DbValue,
+        query::{
+            column_is_localized,
+            helpers::{global_table, join_table, prefixed_name as prefixed},
+            poly_ref, stored_columns,
+        },
+    },
+};
 
 /// Scan all collections and globals for back-references to `target_id` in `target_collection`.
 ///
@@ -33,32 +39,23 @@ pub fn find_back_references(
     // Scan collections
     for (slug, def) in &registry.collections {
         let table: &str = slug;
-        let scan = BackRefScan {
-            conn,
-            target_collection,
-            target_id,
-            locale_config,
-            root_fields: &def.fields,
-            owner_slug: slug,
-            owner_label: def.display_name(),
-            is_global: false,
-        };
+        let scan = BackRefScan::builder(conn, locale_config, target_collection, target_id)
+            .root_fields(&def.fields)
+            .owner_slug(slug)
+            .owner_label(def.display_name())
+            .build();
         scan_fields(&scan, &def.fields, table, "", &mut results)?;
     }
 
     // Scan globals
     for (slug, def) in &registry.globals {
         let table = global_table(slug);
-        let scan = BackRefScan {
-            conn,
-            target_collection,
-            target_id,
-            locale_config,
-            root_fields: &def.fields,
-            owner_slug: slug,
-            owner_label: def.display_name(),
-            is_global: true,
-        };
+        let scan = BackRefScan::builder(conn, locale_config, target_collection, target_id)
+            .root_fields(&def.fields)
+            .owner_slug(slug)
+            .owner_label(def.display_name())
+            .is_global(true)
+            .build();
         scan_fields(&scan, &def.fields, &table, "", &mut results)?;
     }
 
@@ -94,12 +91,19 @@ fn scan_fields(
                 }
             }
             FieldChildren::Array(_) => {
-                let table = join_table(parent_table, &prefixed(prefix, &field.name));
-                scan_array_sub_fields(scan, field, &table, results);
+                let col = prefixed(prefix, &field.name);
+                let table = join_table(parent_table, &col);
+                results.extend(scan_array_sub_fields(
+                    scan,
+                    field,
+                    &table,
+                    &dotted_path(&col),
+                ));
             }
             FieldChildren::Blocks(_) => {
-                let table = join_table(parent_table, &prefixed(prefix, &field.name));
-                scan_blocks(scan, field, &table, results);
+                let col = prefixed(prefix, &field.name);
+                let table = join_table(parent_table, &col);
+                results.extend(scan_blocks(scan, field, &table, &dotted_path(&col)));
             }
             // Relationship/Upload leaves carry an incoming reference to scan;
             // scalars and the virtual Join carry none.
@@ -151,18 +155,27 @@ fn scan_relationship(
         )
     };
 
-    if !ids.is_empty() {
-        results.push(BackReference::new(
-            scan.owner_slug.to_string(),
-            scan.owner_label.to_string(),
-            field.name.clone(),
-            field_label,
-            ids,
-            scan.is_global,
-        ));
+    if ids.is_empty() {
+        return Ok(());
     }
 
+    results.push(
+        BackReference::builder(scan.owner_slug, dotted_path(&col))
+            .owner_label(scan.owner_label)
+            .field_label(field_label)
+            .document_ids(ids)
+            .global(scan.is_global)
+            .build(),
+    );
+
     Ok(())
+}
+
+/// The dotted document path of a parent-table column: a flattened group
+/// column (`meta__hero`) is the field `meta.hero`. A field name never contains
+/// `__` (the load rejects it), so every `__` is a group boundary.
+fn dotted_path(col: &str) -> String {
+    col.replace("__", ".")
 }
 
 /// Query has-one relationship column for a reference.
@@ -197,39 +210,19 @@ fn query_has_one(
             table,
             conditions.join(" OR ")
         );
-        Ok(query_ids(
-            scan.conn,
-            &sql,
-            &[DbValue::Text(match_value)],
-            scan.owner_slug,
-            scan.target_id,
-            scan.target_collection,
-            scan.is_global,
-        ))
+        Ok(query_ids(scan, &sql, &[DbValue::Text(match_value)]))
     } else if is_polymorphic {
         let match_value = poly_ref::format(scan.target_collection, scan.target_id);
         let p1 = scan.conn.placeholder(1);
         let sql = format!("SELECT id FROM \"{table}\" WHERE \"{col}\" = {p1}");
-        Ok(query_ids(
-            scan.conn,
-            &sql,
-            &[DbValue::Text(match_value)],
-            scan.owner_slug,
-            scan.target_id,
-            scan.target_collection,
-            scan.is_global,
-        ))
+        Ok(query_ids(scan, &sql, &[DbValue::Text(match_value)]))
     } else {
         let p1 = scan.conn.placeholder(1);
         let sql = format!("SELECT id FROM \"{table}\" WHERE \"{col}\" = {p1}");
         Ok(query_ids(
-            scan.conn,
+            scan,
             &sql,
             &[DbValue::Text(scan.target_id.to_string())],
-            scan.owner_slug,
-            scan.target_id,
-            scan.target_collection,
-            scan.is_global,
         ))
     }
 }
@@ -257,7 +250,7 @@ fn query_has_many(
                 .filter_map(|row| row.opt_text_at(0))
                 .collect(),
             Err(e) => {
-                tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
+                debug!("Back-ref scan skipping {}: {}", junction_table, e);
                 Vec::new()
             }
         }
@@ -272,7 +265,7 @@ fn query_has_many(
                 .filter_map(|row| row.opt_text_at(0))
                 .collect(),
             Err(e) => {
-                tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
+                debug!("Back-ref scan skipping {}: {}", junction_table, e);
                 Vec::new()
             }
         }
@@ -476,9 +469,19 @@ mod tests {
         insert_doc(&conn, "media", "m1");
         insert_doc_with_field(&conn, "posts", "p1", "meta__hero", "m1");
 
+        // Reported by its full path (it used to be the bare `hero`, so the
+        // report's field could not be judged against the group's access).
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].field_name, "hero");
+        assert_eq!(refs[0].field_name, "meta.hero");
+        assert_eq!(refs[0].query_path, "meta.hero");
+    }
+
+    #[test]
+    fn dotted_path_splits_group_columns() {
+        assert_eq!(dotted_path("hero"), "hero");
+        assert_eq!(dotted_path("meta__hero"), "meta.hero");
+        assert_eq!(dotted_path("a__b__c"), "a.b.c");
     }
 
     #[test]

@@ -5,13 +5,13 @@ use std::collections::HashSet;
 use anyhow::{Result, bail};
 
 use crate::{
-    core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children},
+    core::{CollectionDefinition, FieldChildren, FieldDefinition, field_children, prefixed_name},
     db::{FilterClause, FindQuery, LocaleContext},
 };
 
 use super::{
     columns::get_valid_filter_columns,
-    filter::{invalid_query, lookup_column_field},
+    filter::{invalid_query, lookup_column_field, normalize_order_by},
 };
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
@@ -161,10 +161,13 @@ pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Resu
 /// Validate all filter fields and `order_by` in a `FindQuery` against a collection definition.
 ///
 /// Filter fields support dot notation for array/block/relationship sub-fields
-/// (e.g., `items.name`, `content.body`, `tags.id`). The first segment must match
-/// a known field; deeper segments are validated at SQL generation time.
+/// (e.g., `items.name`, `content.body`, `tags.id`), also inside groups
+/// (`seo.items.name`, `seo__items.name`). The path up to the join-table field
+/// must match a known one; deeper segments are validated at SQL generation
+/// time.
 ///
-/// `order_by` only supports flat columns (no dot notation).
+/// `order_by` supports columns holding one value per document; a group's
+/// value may be named `seo__title` or `seo.title`.
 ///
 /// # Errors
 ///
@@ -190,9 +193,10 @@ pub fn validate_query_fields(
         .map_err(|e| invalid_query("order_by", e.to_string()))
 }
 
-/// Validate `order_by`: a flat column (no sub-field sorting) holding one value
-/// per document — a has-many list has no order of its own, so sorting by its
-/// stored JSON text would be meaningless.
+/// Validate `order_by`: a parent-table column (no array, blocks or row
+/// sub-field sorting) holding one value per document — a has-many list has no
+/// order of its own, so sorting by its stored JSON text would be meaningless.
+/// A group's value is named `seo__title` or `seo.title`.
 ///
 /// `_rank` is the one virtual sort: relevance order for the current `search`
 /// term (best first). It is only meaningful with a search and has no stable
@@ -218,7 +222,8 @@ fn validate_order_by(
         bail!("order_by '_rank' is always best-first — drop the '-' prefix");
     }
 
-    let col = order.strip_prefix('-').unwrap_or(order);
+    let order = normalize_order_by(order, &def.fields);
+    let col = order.strip_prefix('-').unwrap_or(&order);
 
     validate_field_name(col, exact_columns)?;
 
@@ -235,7 +240,9 @@ fn validate_order_by(
 ///
 /// Returns `(exact_columns, prefix_roots)` where:
 /// - `exact_columns`: flat column names valid for filtering and `order_by`
-/// - `prefix_roots`: field names that accept dot-path sub-filters (Array, Blocks, has-many Relationship)
+/// - `prefix_roots`: the join-table fields that accept dot-path sub-filters
+///   (Array, Blocks, has-many Relationship/Upload), by their flat names — a
+///   field inside groups as `{group}__{field}`
 #[must_use]
 pub fn get_valid_filter_paths(
     def: &CollectionDefinition,
@@ -244,43 +251,49 @@ pub fn get_valid_filter_paths(
     let exact = get_valid_filter_columns(def, locale_ctx);
     let mut prefixes = HashSet::new();
 
-    collect_prefix_roots(&def.fields, &mut prefixes);
+    collect_prefix_roots(&def.fields, "", &mut prefixes);
 
     (exact, prefixes)
 }
 
 /// Recursively collect Array/Blocks/has-many Relationship field names,
-/// descending into transparent layout wrappers (Row, Collapsible, Tabs).
-fn collect_prefix_roots(fields: &[FieldDefinition], prefixes: &mut HashSet<String>) {
+/// descending into transparent layout wrappers (Row, Collapsible, Tabs) and
+/// into groups, whose join-table fields are named `{group}__{field}` — the
+/// suffix of their join table.
+fn collect_prefix_roots(fields: &[FieldDefinition], prefix: &str, prefixes: &mut HashSet<String>) {
     for field in fields {
         match field_children(field) {
             FieldChildren::Array(_) | FieldChildren::Blocks(_) => {
-                prefixes.insert(field.name.clone());
+                prefixes.insert(prefixed_name(prefix, &field.name));
             }
             FieldChildren::Wrapper(sub) => {
-                collect_prefix_roots(sub, prefixes);
+                collect_prefix_roots(sub, prefix, prefixes);
             }
             FieldChildren::Tabs(tabs) => {
                 for tab in tabs {
-                    collect_prefix_roots(&tab.fields, prefixes);
+                    collect_prefix_roots(&tab.fields, prefix, prefixes);
                 }
             }
-            // A container nested in a Group uses `{group}__{field}` naming that
-            // `resolve_filter` does not accept as a filter root, so registering
-            // a group's inner arrays/blocks here would validate paths the
-            // resolver then rejects. Groups are deliberately not descended.
-            FieldChildren::Group(_) => {}
-            FieldChildren::Leaf => {
-                // A has-many relationship is the one leaf that accepts dot-path
-                // sub-filters (`rel.field`).
-                if let Some(ref rc) = field.relationship
-                    && rc.has_many
-                {
-                    prefixes.insert(field.name.clone());
-                }
+            FieldChildren::Group(sub) => {
+                collect_prefix_roots(sub, &prefixed_name(prefix, &field.name), prefixes);
             }
+            // A has-many relationship or upload is the one leaf that accepts
+            // dot-path sub-filters (`rel.id`).
+            FieldChildren::Leaf if field.is_has_many_reference() => {
+                prefixes.insert(prefixed_name(prefix, &field.name));
+            }
+            FieldChildren::Leaf => {}
         }
     }
+}
+
+/// Whether `field` continues with a `.` below one of the `prefix_roots` — the
+/// part before that `.` naming the root with its groups spelled either way
+/// (`seo.items.name`, `seo__items.name`).
+fn starts_at_prefix_root(field: &str, prefix_roots: &HashSet<String>) -> bool {
+    field
+        .match_indices('.')
+        .any(|(at, _)| prefix_roots.contains(&field[..at].replace('.', "__")))
 }
 
 /// Validate a single filter field name against exact columns or dot-path
@@ -304,13 +317,9 @@ pub(crate) fn validate_filter_field(
         return Ok(());
     }
 
-    // Dot notation — check if the first segment is a valid prefix root
-    if let Some(dot_pos) = field.find('.') {
-        let root = &field[..dot_pos];
-
-        if prefix_roots.contains(root) {
-            return Ok(());
-        }
+    // Dot notation — the path continues below a join-table field.
+    if starts_at_prefix_root(field, prefix_roots) {
+        return Ok(());
     }
 
     let mut valid: Vec<String> = exact_columns.iter().cloned().collect();
@@ -581,5 +590,87 @@ mod tests {
 
         assert_eq!(field_of(&bad_filter), "nope");
         assert_eq!(field_of(&bad_sort), "order_by");
+    }
+
+    /// A group holding a title, an array and a has-many relationship.
+    fn seo_def() -> CollectionDefinition {
+        CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("title", FieldType::Text).build(),
+                        FieldDefinition::builder("links", FieldType::Array)
+                            .fields(vec![
+                                FieldDefinition::builder("url", FieldType::Text).build(),
+                            ])
+                            .build(),
+                        FieldDefinition::builder("tags", FieldType::Relationship)
+                            .relationship(RelationshipConfig::new("tags", true))
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build()
+    }
+
+    fn filter_query(field: &str) -> FindQuery {
+        FindQuery {
+            filters: vec![FilterClause::Single(Filter {
+                field: field.to_string(),
+                op: FilterOp::Equals("x".to_string()),
+            })],
+            ..FindQuery::default()
+        }
+    }
+
+    /// Regression: groups were not descended for prefix roots, so a path into
+    /// an array or has-many field inside a group was rejected. It is accepted
+    /// with the group part spelled either way; the field alone is not a path.
+    #[test]
+    fn filter_paths_reach_join_fields_inside_groups() {
+        let def = seo_def();
+
+        let (_, prefixes) = get_valid_filter_paths(&def, None);
+        assert!(prefixes.contains("seo__links"));
+        assert!(prefixes.contains("seo__tags"));
+
+        for path in [
+            "seo.links.url",
+            "seo__links.url",
+            "seo.tags.id",
+            "seo__tags.id",
+        ] {
+            assert!(
+                validate_query_fields(&def, &filter_query(path), None).is_ok(),
+                "{path}"
+            );
+        }
+
+        for path in ["seo.links", "seo__links__url", "seo.nope.url", "links.url"] {
+            assert!(
+                validate_query_fields(&def, &filter_query(path), None).is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    /// Regression: `order_by` took only `seo__title`, though filters accept
+    /// `seo.title` as well. Both sort, either direction.
+    #[test]
+    fn order_by_accepts_the_dotted_group_form() {
+        let def = seo_def();
+        let query = |order: &str| FindQuery {
+            order_by: Some(order.to_string()),
+            ..FindQuery::default()
+        };
+
+        for order in ["seo.title", "-seo.title", "seo__title", "-seo__title"] {
+            assert!(
+                validate_query_fields(&def, &query(order), None).is_ok(),
+                "{order}"
+            );
+        }
+
+        assert!(validate_query_fields(&def, &query("seo.links.url"), None).is_err());
     }
 }

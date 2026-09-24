@@ -20,14 +20,19 @@ pub struct JobDefinitionConfig {
     /// handler as `ctx.options`.
     #[lua(ty = "string | crap.HookRef", optional)]
     pub handler: Option<HookRef>,
-    /// Cron expression (e.g., `"0 3 * * *"`). When set, the job runs on
-    /// this schedule. Accepts both 5-field and 6/7-field forms.
+    /// Cron expression (e.g., `"0 3 * * *"`), evaluated in UTC. When set,
+    /// the job runs on this schedule. Accepts both 5-field and 6/7-field
+    /// forms.
     pub schedule: Option<String>,
     /// Queue name (default: `"default"`).
     pub queue: Option<String>,
-    /// Max retry attempts on failure (default: `0`).
+    /// Max retry attempts on failure. Omit to inherit the queue's
+    /// `[jobs.queues.<queue>] retries` (else `0`).
     pub retries: Option<u32>,
-    /// Seconds before a running job is marked failed (default: `60`).
+    /// Wall-clock budget in seconds (default: `60`, minimum `1`). Once it
+    /// passes, the handler is stopped at its next Lua instruction batch or
+    /// database / HTTP / email call, the operation in flight is rolled back,
+    /// and the run is failed (and retried if attempts remain).
     pub timeout: Option<u64>,
     /// Max concurrent runs of this job (default: `1`).
     pub concurrency: Option<u32>,
@@ -36,8 +41,8 @@ pub struct JobDefinitionConfig {
     /// claimed sooner; negative = run only when otherwise idle.
     /// Default: `0`.
     pub priority: Option<i32>,
-    /// Skip scheduled run if a previous run is still active (default:
-    /// `true`).
+    /// Skip a scheduled run while a previous run of this job is still
+    /// queued or running (default: `true`).
     pub skip_if_running: Option<bool>,
     /// Display labels for the admin UI.
     #[lua(ty = "crap.JobLabels", optional)]
@@ -96,6 +101,16 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
         builder = builder.queue(queue);
     }
     if let Some(timeout) = config.timeout {
+        // `0` is not "no timeout": the handler would be stopped the moment it
+        // starts, on every attempt. Refuse it here rather than let the job
+        // fail at run time.
+        if timeout == 0 {
+            bail!(
+                "Job '{slug}' has `timeout = 0` — a job's timeout must be at least 1 \
+                 second (omit it for the default of 60)"
+            );
+        }
+
         builder = builder.timeout(timeout);
     }
     if let Some(concurrency) = config.concurrency {
@@ -205,6 +220,21 @@ mod tests {
                 .to_string()
                 .contains("missing required 'handler'")
         );
+    }
+
+    /// Regression: `timeout = 0` was accepted, and every run of the job then
+    /// timed out the moment it was spawned — while its handler kept running
+    /// next to the retry. A timeout must be at least one second.
+    #[test]
+    fn parse_job_definition_rejects_a_zero_timeout() {
+        let lua = Lua::new();
+        let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run", timeout = 0 }"#);
+
+        let err = parse_job_definition("zero", cfg)
+            .expect_err("timeout = 0 must be rejected")
+            .to_string();
+
+        assert!(err.contains("timeout = 0"), "unexpected: {err}");
     }
 
     #[test]

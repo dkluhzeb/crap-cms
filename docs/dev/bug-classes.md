@@ -322,6 +322,20 @@ next round is where most of a round's reading goes, so they are recorded
 here per round; a lens prompt carries the instruction to skip them unless the
 files changed since. Entries are dropped when the area is touched.
 
+- **R26 (2026-09-24)**
+  - *Jobs:* system-tx scope/flush, in-tx migration records, retention
+    batching/resume/claim, `PurgeEvents` settle, claim, backoff docs,
+    `ctx.job` fields, `ScheduledBy`, unique-key index, jobs CLI write pool,
+    email send vs queue.
+  - *Read access:* version find/list strip, `auth me`, admin label enrich,
+    relationship search endpoint, unique-validation echo, describe (names
+    only), restore gap report.
+  - *Filter paths:* probe vs resolver, has-many list coverage, polymorphic
+    has-many elements, localized junctions, MCP/gRPC docs.
+  - *Uploads:* body-limit layering, derived-column strip on the trusted path,
+    retention purge file deletion, hard-delete file ownership (row +
+    snapshots).
+
 - **R25 (2026-09-24)**
   - *Live events:* Subscribe and SSE share gate, access map and coalescing;
     delete/undelete/purge delivery verified at runtime on PG.
@@ -1257,6 +1271,69 @@ files changed since. Entries are dropped when the area is touched.
     chokepoint pass needs its own completeness review — the new primitive's
     call sites are exactly where the next copies are written — and a scan
     guard the day the chokepoint lands, not later. UNCOMMITTED.
+- 2026-09-24 (36) — **CONVERGENCE ROUND 26** (budget lifted; live Postgres 16
+  for the harness and the example; 5 Opus lenses — authentication paths,
+  jobs/scheduler, read access beyond find, uploads, filter-path grammar —
+  5 Opus fix batches, 4 post-fix reviews, 4 follow-up batches, 1 split).
+  **~50 confirmed — 2 HIGH (both security), ~20 MED, ~28 LOW — NOT quiet; no
+  new class.**
+  - **F (HIGH, security) — OAuth/external auth callbacks skipped MFA.**
+    Password and strategy login passed the collection's MFA gate; the
+    callback minted a session directly. User decision: gated by default, with
+    a per-collection `mfa_exempt_callbacks` list for IdPs that enforce their
+    own 2FA. One `service::auth::mfa_gate` + one admin challenge step now
+    serve every session-minting path (frozen-contracts rule added).
+  - **F (HIGH, security) — a hidden field was filterable through its other
+    spelling.** `is_hidden_path` compared the query path with the denial's
+    flat form, so `seo.links.url` reached a hidden `seo__links.url`. Both
+    sides are canonicalised (`__` ≡ `.`) before comparing.
+  - **F (security, MED):** session refresh signed a JWT from strategy claims
+    (claims now carry `TokenUse::Strategy`; the signer refuses them; refresh
+    requires a cookie session); bulk update/delete were a filter oracle on
+    read-denied fields (checked at scope and at queue time); back-references
+    and joins listed children through a field the viewer can't read; the
+    in-memory evaluator matched operands SQL refuses (event gating fail-open);
+    the upload serve path overwrote the SVG sandbox CSP; the extension check
+    read the raw, not the stored, filename; wildcard MIME claims were stored.
+  - **L — a job timeout didn't stop the job.** The outer `timeout` wrapped
+    `spawn_blocking`; the Lua kept running and its run was re-queued beside
+    it. Cooperative `ExecutionDeadline` (VM hook, DB access, pre-COMMIT,
+    HTTP/email); the scheduler timer is now a watchdog that never stamps a
+    live run; `timeout = 0` refused; finished runs wake the poll loop.
+  - **M — Lua-created accounts got no verification** (jobs, routes,
+    migrations, `on_init`: no email context); reset/verify token lookups
+    broke on a localized auth collection and accepted trashed users.
+  - **Filter grammar:** Postgres checkbox inside row JSON (parameter error);
+    block types defining a name differently now read per type, with rows of
+    undeclaring types reading the name as absent; arrays/blocks/has-many
+    inside groups filterable; Join leaves in rows refused; dotted `order_by`
+    normalised at the service chokepoint; cursors read the sort value the SQL
+    orders by (nested groups, all-locales reads).
+  - **NUL characters at any depth** (row JSON, has-many lists, rich text,
+    snapshots) made every row-path `::jsonb` cast on Postgres fail — one
+    `core::nul` rule at validation and every persist path; the narrow
+    top-level guard removed.
+  - **Uploads:** drafted replacement files served to draft viewers (lookup by
+    exact url column, no cap — a capped LIKE was a denial-of-service); restore
+    re-queues only variants it can't adopt (a leak otherwise); the write
+    pre-check sees the file's derived columns; the REST pre-check with no
+    data (wrongly refused data-aware rules) removed.
+  - **Found by running it:** one committed Postgres unit test had asserted a
+    superseded SQL form since the dotted-path change — it only runs under
+    `--all-features`. A fix's CHANGELOG premise (a localized access row
+    filter) was unreachable by design and was corrected.
+  - **Splits:** `tests/admin_auth.rs` (2,626 lines → 5 binaries),
+    `core/collection/auth.rs`, `document_info`, `uploads/serve.rs`,
+    `core/upload/process.rs`, `filter/resolve/path.rs`, scheduler `poll.rs`.
+    Gates (2026-09-24): clippy clean in both forms; full suite 8,620 green
+    over 120 binaries (default features) + lib 6,825 under `--all-features`;
+    Postgres harness 27/27 on a fresh PG16; example seeded, served and
+    queried live on PG (checkbox-in-row filters, per-type readings, jobs
+    drained); LuaLS clean on the golden and the whole example; all five
+    `gen-*` checks, `cargo fmt`, `crap-cms fmt`, biome clean; e2e 341 green
+    over 81 binaries (per binary). The field-dispatch guard caught two new
+    `field_type` value maps in the filter resolver (reviewed, allowlisted).
+    Streak: 0 quiet rounds.
 - 2026-09-24 (35) — **CONVERGENCE ROUND 25** (budget lifted; live Postgres 16
   + a real SSE subscriber on PG; 5 Opus lenses — external API surfaces after
   the event/filter rework, locale × the new mechanisms, admin client-side,

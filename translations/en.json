@@ -232,6 +232,7 @@
   "validation.invalid_date_type": "{{field}} must be an ISO-8601 date string",
   "validation.date_shape": "{{field}} must be {{expected}} for a {{appearance}} picker",
   "validation.invalid_text": "{{field}} must be text",
+  "validation.nul_character": "{{field}} must not contain NUL characters",
   "validation.invalid_number": "{{field}} must be a number",
   "validation.finite_number": "{{field}} must be a finite number",
   "validation.whole_number": "{{field}} must be a whole number",

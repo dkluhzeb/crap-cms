@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::{
-    hooks::lua_api::to_lua_value,
+    hooks::{lifecycle::check_execution_deadline, lua_api::to_lua_value},
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -92,6 +92,11 @@ fn http_request(
     let mut redirects: u8 = 0;
 
     loop {
+        // A job past its timeout stops before its next request (or redirect
+        // hop) instead of carrying on while the scheduler records it as timed
+        // out.
+        check_execution_deadline(lua)?;
+
         let mut req = current_client.request(current_method.clone(), &current_url);
 
         // Sensitive headers (Authorization, Cookie, …) are only replayed to

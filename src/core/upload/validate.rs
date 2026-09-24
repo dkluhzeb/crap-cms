@@ -1,10 +1,12 @@
-use std::{io::Cursor, str, sync::LazyLock};
+use std::io::Cursor;
 
 use anyhow::{Context as _, Result, bail};
 use image::{ImageFormat, ImageReader};
-use regex::{Captures, Regex};
 
-use crate::core::upload::{CollectionUpload, UploadedFile};
+use crate::core::upload::{
+    CollectionUpload, UploadedFile,
+    svg::{is_svg, validate_svg_content},
+};
 
 /// Longest sanitised filename an upload may carry.
 ///
@@ -31,13 +33,39 @@ fn validate_filename_length(filename: &str) -> Result<()> {
     );
 }
 
+/// Reject a claimed content type that is not one concrete `type/subtype`.
+///
+/// The claim is matched against the allowlist and the sniffed bytes, and is
+/// what an unrecognisable file is stored as — so a pattern posing as a type
+/// (`image/*`, `*/*`) would pass an `image/*` allowlist, match whatever the
+/// bytes turn out to be, and be stored as the file's type verbatim.
+fn validate_claimed_type(claimed: &str) -> Result<()> {
+    let essence = claimed.split(';').next().unwrap_or_default().trim();
+
+    let concrete = !essence.contains('*')
+        && essence
+            .split_once('/')
+            .is_some_and(|(kind, sub)| !kind.is_empty() && !sub.is_empty() && !sub.contains('/'));
+
+    if concrete {
+        return Ok(());
+    }
+
+    bail!("File type '{claimed}' is not a concrete content type");
+}
+
 /// Validate MIME type, magic bytes, and file size of an uploaded file.
+///
+/// Returns the content type every later step uses — the one sniffed from the
+/// bytes when they are recognisable, the (concrete) claimed one otherwise. It
+/// is what the file is stored and described as.
 pub(super) fn validate_upload(
     file: &UploadedFile,
     upload_config: &CollectionUpload,
     global_max_file_size: u64,
-) -> Result<()> {
+) -> Result<String> {
     validate_filename_length(&file.filename)?;
+    validate_claimed_type(&file.content_type)?;
 
     if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
         bail!("File type '{}' is not allowed", file.content_type);
@@ -66,8 +94,11 @@ pub(super) fn validate_upload(
     // derived from the stored filename's extension (via `mime_guess`), so a
     // mismatch between the extension and the real content lets an attacker
     // smuggle `text/html` past an `image/*` allowlist. Reject when the
-    // extension's MIME disagrees with what the bytes actually are.
-    validate_filename_extension_matches(&file.filename, &effective_mime)?;
+    // extension's MIME disagrees with what the bytes actually are. Judged on
+    // the SANITIZED name — the one that is stored and served — since
+    // sanitizing can turn an inert extension into a renderable one
+    // (`evil.htm l` is stored as `evil.html`).
+    validate_filename_extension_matches(&sanitize_filename(&file.filename), &effective_mime)?;
 
     // SVG-specific: reject XXE / external-entity vectors. SVGs are served
     // with `Content-Disposition: attachment` and a sandbox CSP today, but a
@@ -89,11 +120,11 @@ pub(super) fn validate_upload(
         );
     }
 
-    Ok(())
+    Ok(effective_mime)
 }
 
 /// MIME types that browsers render as executable/interpretable content —
-/// the XSS surface for the H-4 attack. When the stored filename's extension
+/// the stored-XSS surface of an upload. When the stored filename's extension
 /// resolves to one of these, the actual content MUST match exactly, because
 /// anything else would let an attacker smuggle active markup past an
 /// `image/*` (or other innocent-looking) allowlist.
@@ -163,7 +194,8 @@ pub(super) fn decodable_image(content_type: &str) -> bool {
     format.reading_enabled()
 }
 
-/// Check image dimensions against the decompression bomb limit.
+/// Check image dimensions against the decompression bomb limit, returning the
+/// `(width, height)` the header declares.
 ///
 /// Two guards run:
 /// 1. Absolute pixel cap (100 MP) — rejects e.g. a 20k×20k image that
@@ -174,7 +206,7 @@ pub(super) fn decodable_image(content_type: &str) -> bool {
 ///    Threshold is 500 pixels per byte: a 10 kB file is capped at 5 MP,
 ///    a 1 MB file can declare up to 500 MP (also caught by guard 1). Real
 ///    photographs sit in the single-digit range, so normal uploads pass.
-pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
+pub(super) fn check_image_dimensions(data: &[u8]) -> Result<(u32, u32)> {
     const MAX_PIXELS: u64 = 100_000_000;
     const MAX_PIXELS_PER_BYTE: u64 = 500;
 
@@ -213,157 +245,7 @@ pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
         );
     }
 
-    Ok(())
-}
-
-/// Best-effort check whether an uploaded file is an SVG. `infer` does not
-/// classify text-based formats, so we also peek at the raw bytes.
-fn is_svg(effective_mime: &str, data: &[u8]) -> bool {
-    if effective_mime == "image/svg+xml" {
-        return true;
-    }
-
-    // Look only at the first 1 kB — enough to find the XML / <svg> prolog
-    // without paying for a full scan on non-SVG content.
-    let head = &data[..data.len().min(1024)];
-    let prefix = str::from_utf8(head).unwrap_or("");
-    let trimmed = prefix.trim_start();
-    let lower = trimmed.to_ascii_lowercase();
-
-    lower.starts_with("<?xml") && lower.contains("<svg") || lower.starts_with("<svg")
-}
-
-/// Reject SVGs that carry the classic XXE indicators — a DOCTYPE
-/// declaration (gateway to external/general entity abuse) or an explicit
-/// ENTITY declaration — or an embedded `<script>` element. Case-insensitive
-/// because XML is case-sensitive-but-tags-are-conventionally-lowercase and
-/// the attack strings are well-known ASCII tokens.
-/// Every quoted `href` / `xlink:href` attribute value (group 1), and every
-/// `url(…)` argument in a style or paint attribute (group 2) — the two places
-/// an SVG names something for the renderer to fetch.
-static REFERENCE_VALUES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)(?:(?:xlink:)?href\s*=\s*["']([^"']*)["'])|(?:url\(\s*["']?([^"')]*))"#)
-        .expect("static regex")
-});
-
-/// A value that starts with a URL scheme or a protocol-relative `//`; group 1
-/// is the scheme. `data:` is the only scheme an uploaded asset legitimately
-/// embeds.
-static LEADING_SCHEME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?://|([a-z][a-z0-9+.\-]*):)").expect("static regex"));
-
-/// An inline event handler (`onload=`, `onclick=`, …) runs script without a
-/// `<script>` element.
-/// Numeric character references plus the named ones that can spell a scheme.
-static CHARACTER_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)&(?:#x([0-9a-f]+)|#([0-9]+)|(colon|sol|tab|newline));").expect("static regex")
-});
-
-static EVENT_HANDLER_ATTRIBUTE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)[\s"'/]on[a-z]+\s*="#).expect("static regex"));
-
-/// The value as a renderer reads it: numeric and the scheme-relevant named
-/// character references decoded, ASCII controls and whitespace removed —
-/// browsers strip those inside a URL, so `java&#9;script:` is `javascript:`.
-fn normalized_reference(raw: &str) -> String {
-    let decoded = CHARACTER_REFERENCE.replace_all(raw, |caps: &Captures<'_>| {
-        let code = caps
-            .get(1)
-            .and_then(|m| u32::from_str_radix(m.as_str(), 16).ok())
-            .or_else(|| caps.get(2).and_then(|m| m.as_str().parse().ok()))
-            .or_else(
-                || match caps.get(3).map(|m| m.as_str().to_ascii_lowercase()) {
-                    Some(name) if name == "colon" => Some(u32::from(':')),
-                    Some(name) if name == "sol" => Some(u32::from('/')),
-                    Some(_) => Some(u32::from(' ')),
-                    None => None,
-                },
-            );
-
-        code.and_then(char::from_u32)
-            .map(String::from)
-            .unwrap_or_default()
-    });
-
-    decoded
-        .chars()
-        .filter(|c| !c.is_ascii_control() && !c.is_whitespace())
-        .collect()
-}
-
-/// A reference that makes a renderer fetch (or execute) something outside the
-/// file: any scheme except `data:`, or a protocol-relative URL. Fragments,
-/// relative paths and `data:` URIs stay inside the file.
-fn external_reference(text: &str) -> Option<String> {
-    REFERENCE_VALUES.captures_iter(text).find_map(|caps| {
-        let raw = caps
-            .get(1)
-            .or_else(|| caps.get(2))
-            .map_or("", |m| m.as_str());
-        let value = normalized_reference(raw).to_ascii_lowercase();
-        let scheme = LEADING_SCHEME.captures(&value)?;
-        let is_data = scheme.get(1).is_some_and(|m| m.as_str() == "data");
-
-        (!is_data).then(|| raw.chars().take(60).collect())
-    })
-}
-
-fn validate_svg_content(data: &[u8]) -> Result<()> {
-    let text = str::from_utf8(data).context("SVG is not valid UTF-8")?;
-    let lower = text.to_ascii_lowercase();
-
-    // A remote reference turns every render into a request the uploader chose:
-    // a tracking beacon at best, `javascript:` at worst. Fragments, relative
-    // paths and `data:` URIs stay inside the file and are allowed; `mailto:`
-    // and `tel:` links are refused with the rest — an uploaded image is a
-    // static asset, not a document with links.
-    if let Some(reference) = external_reference(text) {
-        bail!(
-            "SVG references an external resource ({reference}…). Remove it — \
-             uploaded images must not load or execute anything outside the file \
-             (only fragments, relative paths and data: URIs are allowed)."
-        );
-    }
-
-    if EVENT_HANDLER_ATTRIBUTE.is_match(text) {
-        bail!(
-            "SVG contains an inline event handler (on…= attribute). Remove it — \
-             uploaded images are static assets and must not run script."
-        );
-    }
-
-    if lower.contains("@import") {
-        bail!(
-            "SVG contains a CSS @import. Remove it — uploaded images must not \
-             load anything outside the file."
-        );
-    }
-
-    // An SVG is served as a download under a sandbox CSP, so a script inside
-    // one cannot run from the serve route. It would still run if the file is
-    // ever opened directly from disk or re-served by a consumer that does not
-    // reproduce those headers, and no legitimate uploaded asset needs one.
-    if lower.contains("<script") {
-        bail!(
-            "SVG contains a <script> element. Remove it — uploaded images are \
-             static assets, and a scripted SVG is a stored-XSS vector for any \
-             consumer that renders it inline."
-        );
-    }
-
-    if lower.contains("<!doctype") {
-        bail!(
-            "SVG contains a <!DOCTYPE> declaration. Remove it — DOCTYPE is \
-             an XXE gateway and not required for SVGs that render in any \
-             modern browser."
-        );
-    }
-
-    if lower.contains("<!entity") {
-        bail!("SVG contains an <!ENTITY> declaration — reject as a potential XXE vector.");
-    }
-
-    Ok(())
+    Ok((w, h))
 }
 
 /// Check if a content type matches a MIME glob pattern.
@@ -478,6 +360,66 @@ pub fn format_filesize(bytes: u64) -> String {
 mod tests {
     use super::*;
     use crate::core::upload::STORED_ID_LEN;
+
+    const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    fn uploaded(filename: &str, content_type: &str, data: &[u8]) -> UploadedFile {
+        UploadedFile {
+            filename: filename.to_string(),
+            content_type: content_type.to_string(),
+            data: data.to_vec(),
+        }
+    }
+
+    fn allowing(patterns: &[&str]) -> CollectionUpload {
+        let mut upload = CollectionUpload::new();
+        upload.mime_types = patterns.iter().map(ToString::to_string).collect();
+        upload
+    }
+
+    /// Regression: the extension check read the RAW filename while the stored
+    /// name is the sanitized one. `evil.htm l` has no known extension raw, but
+    /// is stored — and served — as `evil.html`.
+    #[test]
+    fn the_extension_check_judges_the_stored_name() {
+        let file = uploaded("evil.htm l", "text/plain", b"hello");
+
+        let err = validate_upload(&file, &allowing(&[]), u64::MAX)
+            .expect_err("a name stored as .html must carry HTML");
+        assert!(err.to_string().contains("text/html"), "{err}");
+    }
+
+    /// Regression: a wildcard claim was used as a pattern — `image/*` matched
+    /// any sniffed image and passed an `image/*` allowlist — and stored
+    /// verbatim as the file's type.
+    #[test]
+    fn a_wildcard_claim_is_rejected() {
+        for claim in ["image/*", "*/*", "*", "image", "image/", "/png"] {
+            let file = uploaded("a.png", claim, &PNG_SIGNATURE);
+
+            assert!(
+                validate_upload(&file, &allowing(&["image/*"]), u64::MAX).is_err(),
+                "claim {claim:?} must be rejected"
+            );
+        }
+    }
+
+    /// The type a validated upload is stored as is the sniffed one when the
+    /// bytes are recognisable, the claimed one otherwise.
+    #[test]
+    fn a_validated_upload_reports_the_detected_type() {
+        let png = uploaded("a.png", "image/png", &PNG_SIGNATURE);
+        assert_eq!(
+            validate_upload(&png, &allowing(&["image/*"]), u64::MAX).unwrap(),
+            "image/png"
+        );
+
+        let text = uploaded("a.txt", "text/plain; charset=utf-8", b"hello");
+        assert_eq!(
+            validate_upload(&text, &allowing(&[]), u64::MAX).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+    }
 
     /// Regression: dimensions that can't be read must FAIL the bomb check, not
     /// fall through to a full decode. A valid PNG signature with no IHDR is
@@ -658,7 +600,7 @@ mod tests {
         assert_eq!(format_filesize(1024 * 1024 * 1024), "1.0 GB");
     }
 
-    // ── Extension ↔ content cross-check (audit finding H-4) ───────────────
+    // ── Extension ↔ content cross-check ───────────────────────────────────
 
     #[test]
     fn extension_match_accepts_aligned_filename_and_mime() {
@@ -674,7 +616,7 @@ mod tests {
 
     #[test]
     fn extension_match_rejects_html_posing_as_image() {
-        // Core H-4 attack: attacker names a file `.html` while the content
+        // The core attack: an uploader names a file `.html` while the content
         // is validated as PNG. If allowed, the file would later be served
         // as `text/html` and the PNG polyglot executed as a script.
         let err = validate_filename_extension_matches("evil.html", "image/png").unwrap_err();
@@ -736,39 +678,6 @@ mod tests {
         assert!(validate_filename_extension_matches("logo.svg", "image/svg+xml").is_ok(),);
     }
 
-    // ── SVG XXE scan (audit finding M-5) ─────────────────────────────────
-
-    #[test]
-    fn is_svg_recognises_svg_mime() {
-        assert!(is_svg("image/svg+xml", b""));
-    }
-
-    #[test]
-    fn is_svg_recognises_raw_svg_prolog() {
-        assert!(is_svg(
-            "application/octet-stream",
-            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
-        ));
-        assert!(is_svg(
-            "application/octet-stream",
-            b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
-        ));
-    }
-
-    #[test]
-    fn is_svg_rejects_non_svg_content() {
-        assert!(!is_svg("image/png", &[0x89, 0x50, 0x4E, 0x47]));
-        assert!(!is_svg("text/html", b"<html><body></body></html>"));
-    }
-
-    #[test]
-    fn svg_scan_accepts_clean_svg() {
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-            <rect width="10" height="10" fill="red"/>
-        </svg>"#;
-        assert!(validate_svg_content(svg).is_ok());
-    }
-
     /// Regression: `image/*` was taken to mean "decodable", so an SVG (no
     /// raster decoder) and an AVIF (encode-only build) were rejected with
     /// "Failed to detect image format" instead of being stored.
@@ -787,141 +696,70 @@ mod tests {
         assert!(!decodable_image(""));
     }
 
-    /// Entity-encoded or whitespace-split schemes are what a renderer sees
-    /// after decoding, so the scan judges the decoded value.
-    #[test]
-    fn svg_scan_decodes_the_reference_before_judging_it() {
-        for href in [
-            "&#x6a;avascript:alert(1)",
-            "&#104;ttps://evil.example/x.png",
-            "java&#9;script:alert(1)",
-            "javascript&colon;alert(1)",
-            " \n https://evil.example/x.png",
-        ] {
-            let svg = format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg"><a href="{href}"><text>x</text></a></svg>"#
-            );
-            assert!(
-                validate_svg_content(svg.as_bytes()).is_err(),
-                "{href} must be rejected"
-            );
+    // ── Image decompression ratio ────────────────────────────────────────
+
+    /// CRC-32 (ISO-HDLC), as every PNG chunk carries it.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFF_u32;
+
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
         }
+
+        !crc
     }
 
-    /// Script runs from an event-handler attribute without any `<script>`
-    /// element, and a stylesheet import or a `url(…)` paint reference fetches
-    /// from outside the file.
-    #[test]
-    fn svg_scan_rejects_event_handlers_and_style_fetches() {
-        let handler = br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#;
-        assert!(validate_svg_content(handler).is_err());
+    /// One PNG chunk: length, type, data, CRC over type and data.
+    fn chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
 
-        let import = br#"<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://evil.example/a.css);</style></svg>"#;
-        assert!(validate_svg_content(import).is_err());
-
-        let paint = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://evil.example/p.svg#g)"/></svg>"#;
-        assert!(validate_svg_content(paint).is_err());
-
-        let local_paint = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#grad)" font-family="Onyx"/></svg>"#;
-        assert!(validate_svg_content(local_paint).is_ok());
+        let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+        out
     }
 
-    #[test]
-    fn svg_scan_rejects_external_href() {
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="https://evil.example/pixel.png"/></svg>"#;
-        let err = validate_svg_content(svg).expect_err("remote image must be rejected");
-        assert!(err.to_string().contains("external resource"), "{err}");
+    /// A PNG that declares `width`×`height` 8-bit grayscale pixels but carries
+    /// only a few bytes of image data — the header is all the check reads.
+    fn declared_png(width: u32, height: u32) -> Vec<u8> {
+        let mut ihdr = width.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 0, 0, 0, 0]);
 
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><text>x</text></a></svg>"#;
-        assert!(validate_svg_content(svg).is_err());
-
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><image href = '//cdn.example/x.png'/></svg>"#;
-        assert!(validate_svg_content(svg).is_err());
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend(chunk(*b"IHDR", &ihdr));
+        png.extend(chunk(
+            *b"IDAT",
+            &[0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+        ));
+        png.extend(chunk(*b"IEND", &[]));
+        png
     }
 
-    /// The `xmlns:xlink` declaration, fragment references and embedded
-    /// `data:` images are the legitimate shapes and must keep passing.
+    /// A tiny file declaring dimensions far beyond what its bytes can hold is
+    /// the decompression-bomb shape: refused before any decode, though under
+    /// the absolute pixel cap.
     #[test]
-    fn svg_scan_accepts_internal_and_data_hrefs() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><circle id="c" r="1"/></defs><use xlink:href="#c"/><use href="#c"/><image href="data:image/png;base64,iVBORw0KGgo="/><image href="logo.png"/></svg>"##;
-        assert!(validate_svg_content(svg).is_ok());
+    fn a_tiny_file_declaring_huge_dimensions_is_refused() {
+        let err = check_image_dimensions(&declared_png(5_000, 5_000))
+            .expect_err("pixel-to-byte ratio above the cap");
+
+        assert!(err.to_string().contains("ratio"), "{err}");
     }
 
+    /// A declared size in proportion to the file's bytes passes, and reports
+    /// the dimensions the header declares.
     #[test]
-    fn svg_scan_rejects_script_element() {
-        let payload = br#"<svg xmlns="http://www.w3.org/2000/svg">
-            <script>alert(document.domain)</script>
-        </svg>"#;
-        let err = validate_svg_content(payload).unwrap_err().to_string();
-        assert!(err.contains("<script>"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn svg_scan_rejects_script_element_in_any_case() {
-        let payload = b"<svg><SCRIPT type=\"text/javascript\">x()</SCRIPT></svg>";
-        assert!(validate_svg_content(payload).is_err());
-    }
-
-    #[test]
-    fn svg_scan_rejects_doctype() {
-        let payload = br#"<?xml version="1.0"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "svg11.dtd">
-<svg xmlns="http://www.w3.org/2000/svg"/>"#;
-        let err = validate_svg_content(payload).unwrap_err();
-        assert!(err.to_string().to_lowercase().contains("doctype"));
-    }
-
-    #[test]
-    fn svg_scan_rejects_classic_xxe_payload() {
-        // Textbook SVG XXE: DOCTYPE + ENTITY + use-of-entity to
-        // exfiltrate a local file through a text node.
-        let payload = br#"<?xml version="1.0"?>
-<!DOCTYPE svg [
-  <!ENTITY xxe SYSTEM "file:///etc/passwd">
-]>
-<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>"#;
-        assert!(validate_svg_content(payload).is_err());
-    }
-
-    #[test]
-    fn svg_scan_rejects_entity_even_without_doctype() {
-        // Some XML parsers accept inline entity declarations even without
-        // a DOCTYPE. Belt-and-braces: catch both markers independently.
-        let payload = br#"<svg xmlns="http://www.w3.org/2000/svg">
-            <!ENTITY evil SYSTEM "http://attacker.example/beacon"/>
-        </svg>"#;
-        assert!(validate_svg_content(payload).is_err());
-    }
-
-    #[test]
-    fn svg_scan_is_case_insensitive() {
-        // Attackers can vary case to try to bypass a naive scan. Reject
-        // the lowercase form too.
-        let payload = b"<!doctype svg><svg/>";
-        assert!(validate_svg_content(payload).is_err());
-    }
-
-    // ── Image decompression ratio (audit finding M-7) ────────────────────
-    //
-    // The concrete decode path uses `image::ImageReader`, which needs real
-    // format bytes to parse. Rather than crafting a PNG bomb fixture here,
-    // we cover the threshold arithmetic directly — the ratio path is
-    // exercised end-to-end by the `process_upload_image_*` tests in
-    // `process.rs`.
-
-    #[test]
-    fn decompression_ratio_threshold_catches_obvious_bomb() {
-        // 10 kB file claiming 20 000 × 20 000 = 400 MP. Ratio = 40 000.
-        let pixels: u64 = 20_000 * 20_000;
-        let bytes: u64 = 10_000;
-        assert!(pixels / (bytes + 1) > 500);
-    }
-
-    #[test]
-    fn decompression_ratio_threshold_allows_normal_photo() {
-        // 4032 × 3024 JPEG (typical phone photo), ~2 MB file. Ratio ≈ 6.
-        let pixels: u64 = 4032 * 3024;
-        let bytes: u64 = 2 * 1024 * 1024;
-        assert!(pixels / (bytes + 1) < 500);
+    fn an_image_in_proportion_to_its_bytes_passes() {
+        assert_eq!(check_image_dimensions(&declared_png(8, 8)).unwrap(), (8, 8));
     }
 }

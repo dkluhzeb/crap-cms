@@ -19,7 +19,7 @@ use crate::{
         BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
         query::{LocaleContext, helpers::global_table},
     },
-    hooks::HookRunner,
+    hooks::{HookRunner, LuaCrudInfra},
     service::{
         AppInfra, ServiceError, VerificationRecipient,
         hooks::{ReadHooks, WriteHooks},
@@ -407,13 +407,24 @@ impl<'a> ServiceContext<'a> {
 
         // No email context here — the enclosing scope owns one and flushes
         // this queue after its commit.
-        if let Some(ref queue) = self.verification_queue {
-            queue.borrow_mut().push(PendingVerification {
-                slug: self.slug.to_string(),
-                doc_id: doc.id.to_string(),
-                email: email.to_string(),
-            });
-        }
+        let Some(ref queue) = self.verification_queue else {
+            // Nothing can issue it: say so rather than leave an account that
+            // silently never gets a verification link.
+            warn!(
+                "Account {} in '{}' requires email verification, but this write has \
+                 no email context to issue it through — no verification token was \
+                 minted and no email was queued",
+                doc.id, self.slug
+            );
+
+            return Ok(());
+        };
+
+        queue.borrow_mut().push(PendingVerification {
+            slug: self.slug.to_string(),
+            doc_id: doc.id.to_string(),
+            email: email.to_string(),
+        });
 
         Ok(())
     }
@@ -671,19 +682,28 @@ impl<'a> ServiceContextBuilder<'a> {
     }
 
     /// Apply infrastructure from a `LuaCrudInfra` bundle (event transport,
-    /// cache, event queue, verification queue). Used by Lua CRUD functions
-    /// to transfer the parent's infrastructure in a single call. Optional
-    /// shape mirrors the other per-context attachments so callers can pass
-    /// the result of `hook_lua_infra(lua).as_ref()` directly without an
-    /// `if let` wrapper.
-    pub fn lua_infra(mut self, infra: Option<&crate::hooks::LuaCrudInfra>) -> Self {
+    /// cache, email context, event queue, verification queue). Used by Lua
+    /// CRUD functions to transfer the parent's infrastructure in a single
+    /// call. Optional shape mirrors the other per-context attachments so
+    /// callers can pass the result of `hook_lua_infra(lua).as_ref()`
+    /// directly without an `if let` wrapper.
+    ///
+    /// The email context is what lets an account created through Lua CRUD
+    /// get its verification token and email on the write's own transaction,
+    /// exactly like a service write (see [`Self::maybe_send_verification`]).
+    pub fn lua_infra(mut self, infra: Option<&LuaCrudInfra>) -> Self {
         let Some(infra) = infra else { return self };
+
         if infra.event_transport.is_some() {
             self.event_transport.clone_from(&infra.event_transport);
         }
         if infra.cache.is_some() {
             self.cache.clone_from(&infra.cache);
         }
+        if infra.email_ctx.is_some() {
+            self.email_ctx.clone_from(&infra.email_ctx);
+        }
+
         self.event_queue.clone_from(&infra.event_queue);
         self.file_cleanup.clone_from(&infra.file_cleanup);
         self.cache_dirty.clone_from(&infra.cache_dirty);
@@ -788,7 +808,45 @@ impl<'a> ServiceContextBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::{
+        config::{EmailConfig, ServerConfig},
+        core::email::EmailRenderer,
+    };
+
+    /// Regression: `lua_infra` forwarded the event transport, cache and queues
+    /// but no email context, so an account created through Lua CRUD in a job,
+    /// a custom route, a migration or `on_init` never had its verification
+    /// issued — the pending entry went into a queue nothing flushed.
+    #[test]
+    fn lua_infra_forwards_the_email_context() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let email = EmailContext {
+            email_config: EmailConfig::default(),
+            email_renderer: Arc::new(EmailRenderer::new(tmp.path()).expect("renderer")),
+            server_config: ServerConfig::default(),
+            email_max_attempts: 1,
+        };
+        let infra = LuaCrudInfra {
+            email_ctx: Some(email),
+            ..LuaCrudInfra::default()
+        };
+
+        let forwarded = ServiceContext::slug_only("members")
+            .lua_infra(Some(&infra))
+            .build();
+        assert!(
+            forwarded.email_ctx.is_some(),
+            "the email context must be forwarded"
+        );
+
+        let bare = ServiceContext::slug_only("members")
+            .lua_infra(Some(&LuaCrudInfra::default()))
+            .build();
+        assert!(bare.email_ctx.is_none());
+    }
 
     /// Regression: every pool-mode `inner_ctx` rebuild forwards the write-infra
     /// set — `update_many` previously dropped `password_policy`. `inherit_write_infra`

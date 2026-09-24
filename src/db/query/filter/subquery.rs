@@ -1,12 +1,12 @@
 //! EXISTS subqueries of filters on join tables — array and blocks rows and
 //! has-many relationship/upload junctions.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use super::{
     elements::{ListExpr, ListLeaf, build_list_condition, build_quantified},
     operators::{build_filter_condition, build_op_condition},
-    resolve::{RowsLocale, SubqueryCondition},
+    resolve::{JsonLeaf, JsonStep, RowsLocale, SubqueryCondition},
 };
 use crate::core::{BLOCK_TYPE_KEY, FieldType};
 use crate::db::{
@@ -30,7 +30,8 @@ pub(super) struct SubqueryScope<'a> {
 /// Array and blocks rows are records — the filter asks for some row whose
 /// sub-field satisfies the operator, and a list inside that row — a scalar
 /// has-many list, or a has-many reference's id list — then quantifies over its
-/// own elements.
+/// own elements. Where block types define the path differently, a row is
+/// tested with its own block type's reading (see [`json_subquery`]).
 pub(super) fn build_subquery_sql(
     conn: &dyn DbConnection,
     scope: &SubqueryScope<'_>,
@@ -70,22 +71,7 @@ pub(super) fn build_subquery_sql(
 
             Ok(exists_row(conn, scope, None, &op_sql, params))
         }
-        SubqueryCondition::Json {
-            each_joins,
-            extract_expr,
-            field_type,
-            list,
-        } => {
-            let leaf = SubqueryLeaf {
-                expr: extract_expr,
-                field_type: field_type.as_ref(),
-                list: list.as_ref(),
-            };
-            let op_sql = json_condition(conn, &leaf, f, params)?;
-            let from = json_from(conn, scope.join_table, each_joins);
-
-            Ok(exists_row(conn, scope, Some(&from), &op_sql, params))
-        }
+        SubqueryCondition::Json(leaves) => json_subquery(conn, scope, leaves, f, params),
     }
 }
 
@@ -95,6 +81,121 @@ struct SubqueryLeaf<'a> {
     expr: &'a str,
     field_type: Option<&'a FieldType>,
     list: Option<&'a ListLeaf>,
+}
+
+impl<'a> SubqueryLeaf<'a> {
+    /// The value a reading inside a row's JSON tests.
+    fn json(leaf: &'a JsonLeaf) -> Self {
+        Self {
+            expr: &leaf.extract_expr,
+            field_type: leaf.field_type.as_ref(),
+            list: leaf.list.as_ref(),
+        }
+    }
+}
+
+/// The subquery of a filter on a value inside a row's JSON.
+///
+/// A reading that holds in every row keeps its `json_each` expansions in the
+/// row select's FROM. Readings of block types defining the path differently
+/// are each tested only in rows of their block type, and nest their
+/// expansions below that test (see [`typed_reading`]), so a row of another
+/// type never has its value read — or expanded — as this type's. A row
+/// matches when one reading holds: a negative operator stays inside its
+/// reading, as it does in a row of a single block type (some row whose own
+/// value satisfies it; a list inside the row read element by element).
+///
+/// A reading whose operand does not fit its field (text against a number)
+/// matches none of its block type's rows; the operand is refused only when it
+/// fits no declaring block type's reading — the absent reading of the other
+/// types' rows (NULL, untyped) alone never makes a filter valid.
+fn json_subquery(
+    conn: &dyn DbConnection,
+    scope: &SubqueryScope<'_>,
+    leaves: &[JsonLeaf],
+    f: &Filter,
+    params: &mut Vec<DbValue>,
+) -> Result<String> {
+    if let [leaf] = leaves
+        && leaf.is_unconditional()
+    {
+        let op_sql = json_condition(conn, &SubqueryLeaf::json(leaf), f, params)?;
+        let from = json_from(conn, scope.join_table, &leaf.each_joins());
+
+        return Ok(exists_row(conn, scope, Some(&from), &op_sql, params));
+    }
+
+    let mut readings = Vec::new();
+    let mut declared_reading = false;
+    let mut first_error = None;
+
+    for leaf in leaves {
+        let bound = params.len();
+
+        match typed_reading(conn, leaf, &leaf.steps, f, params) {
+            Ok(sql) => {
+                declared_reading |= !leaf.reads_absent();
+                readings.push(sql);
+            }
+            Err(e) => {
+                params.truncate(bound);
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+
+    if !declared_reading {
+        return Err(first_error.unwrap_or_else(|| anyhow!("No reading of '{}'", f.field)));
+    }
+
+    let op_sql = format!("({})", readings.join(" OR "));
+
+    Ok(exists_row(conn, scope, None, &op_sql, params))
+}
+
+/// The per-row test of one reading, `steps` at a time: a block-type step
+/// guards everything below it — `CASE` evaluates the rest only for rows of
+/// that type — and each expansion becomes its own `EXISTS` over the rows it
+/// expands.
+fn typed_reading(
+    conn: &dyn DbConnection,
+    leaf: &JsonLeaf,
+    steps: &[JsonStep],
+    f: &Filter,
+    params: &mut Vec<DbValue>,
+) -> Result<String> {
+    let Some((step, rest)) = steps.split_first() else {
+        return json_condition(conn, &SubqueryLeaf::json(leaf), f, params);
+    };
+
+    match step {
+        JsonStep::BlockType { expr, block_type } => {
+            let type_ph = push_text(conn, block_type, params);
+            let inner = typed_reading(conn, leaf, rest, f, params)?;
+
+            Ok(format!(
+                "CASE WHEN {expr} = {type_ph} THEN {inner} ELSE FALSE END"
+            ))
+        }
+        JsonStep::OtherBlockType { expr, declared } => {
+            let type_phs: Vec<String> = declared
+                .iter()
+                .map(|block_type| push_text(conn, block_type, params))
+                .collect();
+            let inner = typed_reading(conn, leaf, rest, f, params)?;
+
+            Ok(format!(
+                "CASE WHEN {expr} IS NULL OR {expr} NOT IN ({}) THEN {inner} ELSE FALSE END",
+                type_phs.join(", ")
+            ))
+        }
+        JsonStep::Each { source, alias } => {
+            let inner = typed_reading(conn, leaf, rest, f, params)?;
+            let rows = conn.json_each_source(source, alias);
+
+            Ok(format!("EXISTS (SELECT 1 FROM {rows} WHERE {inner})"))
+        }
+    }
 }
 
 /// The per-row test of a has-many junction: the element operator on its
@@ -157,12 +258,13 @@ fn json_condition(
         return build_list_condition(conn, f, &ListExpr::new(leaf.expr, list), params);
     }
 
-    // A Number sub-field's JSON extract is text on Postgres — cast it so the
-    // comparison is numeric, not lexical (or a type error).
-    let extract = if matches!(leaf.field_type, Some(FieldType::Number)) {
-        conn.json_number_cast(leaf.expr)
-    } else {
-        leaf.expr.to_string()
+    // A JSON extract is text on Postgres: a Number sub-field is cast so the
+    // comparison is numeric, not lexical (or a type error), and a Checkbox
+    // reads its stored `true`/`false` as the integer its operand binds as.
+    let extract = match leaf.field_type {
+        Some(FieldType::Number) => conn.json_number_cast(leaf.expr),
+        Some(FieldType::Checkbox) => conn.json_checkbox_cast(leaf.expr),
+        _ => leaf.expr.to_string(),
     };
 
     build_op_condition(conn, &f.field, &extract, &f.op, leaf.field_type, params)
@@ -170,7 +272,7 @@ fn json_condition(
 
 /// The FROM list of a JSON subquery: the join table, then each `json_each`
 /// expansion down to the filtered value.
-fn json_from(conn: &dyn DbConnection, join_table: &str, each_joins: &[(String, String)]) -> String {
+fn json_from(conn: &dyn DbConnection, join_table: &str, each_joins: &[(&str, &str)]) -> String {
     let mut parts = vec![format!("\"{join_table}\"")];
 
     for (source, alias) in each_joins {
@@ -405,12 +507,12 @@ mod tests {
     fn a_json_list_value_expands_the_extracted_array() {
         let conn = InMemoryConn::open();
         let mut params = Vec::new();
-        let condition = SubqueryCondition::Json {
-            each_joins: vec![],
+        let condition = SubqueryCondition::Json(vec![JsonLeaf {
+            steps: vec![],
             extract_expr: "json_extract(data, '$.tags')".to_string(),
             field_type: Some(FieldType::Number),
             list: Some(ListLeaf::Scalar(FieldType::Number)),
-        };
+        }]);
 
         let sql = build_subquery_sql(
             &conn,
@@ -455,5 +557,229 @@ mod tests {
             sql,
             "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND \"name\" != ?1)"
         );
+    }
+
+    fn content_scope() -> SubqueryScope<'static> {
+        SubqueryScope {
+            join_table: "posts_content",
+            parent_table: "posts",
+            rows_locale: None,
+        }
+    }
+
+    fn block_type_step(expr: &str, block_type: &str) -> JsonStep {
+        JsonStep::BlockType {
+            expr: expr.to_string(),
+            block_type: block_type.to_string(),
+        }
+    }
+
+    /// `score` is a number in `stat` blocks and text in `note` blocks, read
+    /// at `base`'s JSON after `steps` for each.
+    fn score_readings(steps: &[JsonStep], row_type: &str, base: &str) -> Vec<JsonLeaf> {
+        [("stat", FieldType::Number), ("note", FieldType::Text)]
+            .into_iter()
+            .map(|(block_type, field_type)| {
+                let mut leaf_steps = steps.to_vec();
+                leaf_steps.push(block_type_step(row_type, block_type));
+
+                JsonLeaf {
+                    steps: leaf_steps,
+                    extract_expr: format!("json_extract({base}, '$.score')"),
+                    field_type: Some(field_type),
+                    list: None,
+                }
+            })
+            .collect()
+    }
+
+    /// Readings of block types defining a path differently are each tested
+    /// only in rows of their own type, the type bound before the operand.
+    #[test]
+    fn per_block_type_readings_test_each_row_by_its_type() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+        let leaves = score_readings(&[], "posts_content._block_type", "posts_content.data");
+
+        let sql = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(leaves),
+            &filter("content.score", FilterOp::Equals("10".into())),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE parent_id = \"posts\".id AND \
+             (CASE WHEN posts_content._block_type = ?1 THEN json_extract(posts_content.data, '$.score') = ?2 ELSE FALSE END \
+             OR CASE WHEN posts_content._block_type = ?3 THEN json_extract(posts_content.data, '$.score') = ?4 ELSE FALSE END))"
+        );
+        assert_eq!(
+            params,
+            vec![
+                DbValue::Text("stat".into()),
+                DbValue::Real(10.0),
+                DbValue::Text("note".into()),
+                DbValue::Text("10".into()),
+            ]
+        );
+    }
+
+    /// Below a block-type test, a nested value's rows are expanded inside
+    /// it, so a row of another type never has its value expanded.
+    #[test]
+    fn a_nested_reading_expands_below_its_block_type_test() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+        let expand = JsonStep::Each {
+            source: "json_extract(posts_content.data, '$.nested')".to_string(),
+            alias: "j0".to_string(),
+        };
+        let leaves = score_readings(
+            &[expand],
+            "json_extract(j0.value, '$._block_type')",
+            "j0.value",
+        );
+
+        let sql = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(leaves),
+            &filter("content.nested.score", FilterOp::Equals("10".into())),
+            &mut params,
+        )
+        .unwrap();
+
+        assert!(
+            sql.contains(
+                "(EXISTS (SELECT 1 FROM json_each(json_extract(posts_content.data, '$.nested')) AS j0 \
+                 WHERE CASE WHEN json_extract(j0.value, '$._block_type') = ?1 \
+                 THEN json_extract(j0.value, '$.score') = ?2 ELSE FALSE END) OR EXISTS"
+            ),
+            "{sql}"
+        );
+    }
+
+    /// An operand that does not fit one block type's field matches none of
+    /// that type's rows; it is refused only when it fits no reading.
+    #[test]
+    fn an_operand_fitting_one_reading_drops_the_others() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+        let leaves = score_readings(&[], "posts_content._block_type", "posts_content.data");
+
+        let sql = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(leaves.clone()),
+            &filter("content.score", FilterOp::Equals("high".into())),
+            &mut params,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE parent_id = \"posts\".id AND \
+             (CASE WHEN posts_content._block_type = ?1 THEN json_extract(posts_content.data, '$.score') = ?2 ELSE FALSE END))"
+        );
+        assert_eq!(
+            params,
+            vec![DbValue::Text("note".into()), DbValue::Text("high".into())]
+        );
+
+        let numbers: Vec<JsonLeaf> = leaves
+            .into_iter()
+            .map(|mut leaf| {
+                leaf.field_type = Some(FieldType::Number);
+                leaf
+            })
+            .collect();
+        let mut params = Vec::new();
+
+        let err = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(numbers),
+            &filter("content.score", FilterOp::Equals("high".into())),
+            &mut params,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not a valid number"), "{err}");
+        assert!(params.is_empty());
+    }
+
+    /// The reading of rows whose block type declares none of the readings'
+    /// types: the untyped NULL a shared definition reads in such a row.
+    fn absent_reading() -> JsonLeaf {
+        JsonLeaf {
+            steps: vec![JsonStep::OtherBlockType {
+                expr: "posts_content._block_type".to_string(),
+                declared: vec!["note".to_string(), "stat".to_string()],
+            }],
+            extract_expr: "CAST(NULL AS TEXT)".to_string(),
+            field_type: None,
+            list: None,
+        }
+    }
+
+    /// A row of a block type declaring no field of the name is tested as the
+    /// NULL it reads — `not_exists` holds there.
+    #[test]
+    fn rows_of_other_block_types_are_tested_as_null() {
+        let conn = InMemoryConn::open();
+        let mut params = Vec::new();
+        let mut leaves = score_readings(&[], "posts_content._block_type", "posts_content.data");
+        leaves.push(absent_reading());
+
+        let sql = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(leaves),
+            &filter("content.score", FilterOp::NotExists),
+            &mut params,
+        )
+        .unwrap();
+
+        assert!(
+            sql.ends_with(
+                "OR CASE WHEN posts_content._block_type IS NULL OR posts_content._block_type \
+                 NOT IN (?3, ?4) THEN CAST(NULL AS TEXT) IS NULL ELSE FALSE END))"
+            ),
+            "{sql}"
+        );
+        assert_eq!(
+            &params[2..],
+            &[DbValue::Text("note".into()), DbValue::Text("stat".into())]
+        );
+    }
+
+    /// The absent reading takes any operand; it never validates one that fits
+    /// no declaring block type's field.
+    #[test]
+    fn the_absent_reading_alone_does_not_accept_an_operand() {
+        let conn = InMemoryConn::open();
+        let mut leaves: Vec<JsonLeaf> =
+            score_readings(&[], "posts_content._block_type", "posts_content.data")
+                .into_iter()
+                .map(|mut leaf| {
+                    leaf.field_type = Some(FieldType::Number);
+                    leaf
+                })
+                .collect();
+        leaves.push(absent_reading());
+
+        let err = build_subquery_sql(
+            &conn,
+            &content_scope(),
+            &SubqueryCondition::Json(leaves),
+            &filter("content.score", FilterOp::Equals("high".into())),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not a valid number"), "{err}");
     }
 }

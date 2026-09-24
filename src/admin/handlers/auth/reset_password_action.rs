@@ -18,13 +18,10 @@ use crate::{
         },
     },
     config::PasswordViolation,
-    core::{
-        Registry, SharedInvalidationTransport, collection::Auth,
-        rate_limit::IP_RESET_PASSWORD_KEYSPACE,
-    },
-    db::DbPool,
+    core::{collection::Auth, rate_limit::IP_RESET_PASSWORD_KEYSPACE},
     service::{
-        ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
+        AppInfra, ServiceContext, ServiceError,
+        auth::consume_reset_token as service_consume_reset_token,
     },
 };
 
@@ -97,20 +94,14 @@ fn render_policy_violation(
 /// never makes another request to pick up the bumped `_session_version`).
 /// Publishing after commit ensures a rolled-back reset never spuriously tears
 /// down a stream.
-fn consume_reset_token(
-    pool: &DbPool,
-    registry: &Registry,
-    token: &str,
-    password: &str,
-    invalidation_transport: &SharedInvalidationTransport,
-) -> Result<(), ServiceError> {
-    let mut conn = pool.write()?;
+fn consume_reset_token(infra: &AppInfra, token: &str, password: &str) -> Result<(), ServiceError> {
+    let mut conn = infra.pool.write()?;
     // SELECT-then-UPDATE (find token row, then write the new hash): take a write
     // lock up front. A DEFERRED tx would risk `SQLITE_BUSY_SNAPSHOT` under
     // concurrent writers — same reasoning as the gRPC reset path.
     let tx = conn.transaction_immediate()?;
 
-    for def in registry.collections.values() {
+    for def in infra.registry.collections.values() {
         if !def.is_auth_collection() {
             continue;
         }
@@ -119,14 +110,17 @@ fn consume_reset_token(
             continue;
         }
 
-        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
+        let ctx = ServiceContext::collection(&def.slug, def)
+            .conn(&tx)
+            .locale_config(Some(&infra.locale_config))
+            .build();
 
         match service_consume_reset_token(&ctx, token, password) {
             Ok(user_id) => {
                 tx.commit()?;
                 // Tear down the user's open live-update streams POST-COMMIT.
                 ServiceContext::slug_only(&def.slug)
-                    .invalidation_transport(Some(invalidation_transport.clone()))
+                    .invalidation_transport(Some(infra.invalidation_transport.clone()))
                     .build()
                     .publish_user_invalidation(&user_id);
                 return Ok(());
@@ -185,16 +179,11 @@ pub async fn reset_password_action(
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 
-    let pool = state.infra.pool.clone();
-    let registry = Arc::clone(&state.infra.registry);
+    let infra = Arc::clone(&state.infra);
     let token = form.token.clone();
     let password = form.password.clone();
-    let invalidation_transport = state.infra.invalidation_transport.clone();
 
-    let result = task::spawn_blocking(move || {
-        consume_reset_token(&pool, &registry, &token, &password, &invalidation_transport)
-    })
-    .await;
+    let result = task::spawn_blocking(move || consume_reset_token(&infra, &token, &password)).await;
 
     match result {
         Ok(Ok(())) => {

@@ -128,8 +128,14 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
     ),
     (
         "src/db/query/filter/resolve/path.rs",
+        2,
+        "container resolver dispatch (delegates, does not descend) + \
+         the no-container error message per root type (value map)",
+    ),
+    (
+        "src/db/query/filter/subquery.rs",
         1,
-        "root-field resolver dispatch — delegates, does not descend",
+        "json_condition — per-type SQL cast of a row-JSON leaf (value map)",
     ),
     (
         "src/db/query/helpers/coerce.rs",

@@ -147,6 +147,64 @@ return M
 
 If an `on_init` hook fails, the server aborts startup.
 
+### Seeding on more than one node
+
+`on_init` runs on **every** server and worker at startup. The find-then-create
+above is safe on SQLite, where the startup transaction takes the database's
+write lock up front, so a second process only reads after the first has
+committed. It is **not** safe on Postgres with several nodes: the startup
+transactions run concurrently under `READ COMMITTED`, both see an empty
+collection, and both create the row.
+
+For a multi-node Postgres deployment, make the seed idempotent by running it
+as a job with `concurrency = 1` — the cap is enforced by the database for the
+whole cluster, so two seed runs never overlap and the second one sees the
+first one's row — and queue it from `on_init` with a `unique` key, so the
+nodes starting together queue it once:
+
+```lua
+-- jobs/seed.lua
+local M = {}
+
+M.run = crap.any.job_handler(function(ctx)
+    crap.transaction(function()
+        local result = crap.collections.posts.find({ where = { slug = "welcome" } })
+        if result.pagination.total_docs == 0 then
+            crap.collections.posts.create({
+                title = "Welcome",
+                slug = "welcome",
+                status = "published",
+                content = "Welcome to your new site!",
+            })
+        end
+    end)
+end)
+
+crap.jobs.define("seed", {
+    handler = "jobs.seed.run",
+    concurrency = 1,
+})
+
+return M
+```
+
+```lua
+-- hooks/seed.lua
+local M = {}
+
+function M.run(ctx)
+    crap.jobs.queue("seed", {}, { unique = "seed" })
+    return ctx
+end
+
+return M
+```
+
+Give the seeded field `unique = true` as well where the data allows it: a
+duplicate then fails loudly instead of landing silently. The seed job runs
+after startup rather than inside it, so nothing that must exist before the
+first request should depend on it.
+
 The startup transaction carries the same scope as every other Lua write: the
 hooks' live events are published, the cache is cleared, and the files of upload
 documents they hard-delete are removed only after it commits. A failed startup

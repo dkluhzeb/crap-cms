@@ -1,7 +1,7 @@
 //! The heartbeat tick: refresh this node's running-job heartbeats, then
 //! reclaim any dead peer's jobs — and the stale threshold both halves share.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use tracing::{error, warn};
@@ -12,7 +12,10 @@ use crate::{
     service,
 };
 
-use super::{runner::recover_stale_jobs, types::DbTimeouts};
+use super::{
+    runner::recover_stale_jobs,
+    types::{DbTimeouts, RunningJob, RunningJobs},
+};
 
 /// Seconds without a heartbeat after which a `running` job counts as dead,
 /// with this module's timeout bundle unpacked for the shared rule.
@@ -31,7 +34,7 @@ pub(super) fn stale_threshold_secs(heartbeat_interval: u64, timeouts: &DbTimeout
 pub(super) struct HeartbeatTickInput {
     pub pool: DbPool,
     pub registry: Arc<Registry>,
-    pub running_jobs: Arc<Mutex<Vec<String>>>,
+    pub running_jobs: RunningJobs,
     pub stale_threshold_secs: u64,
 }
 
@@ -57,15 +60,16 @@ pub(super) fn heartbeat_tick(t: &HeartbeatTickInput) {
     }
 }
 
-/// Update heartbeats for all currently running jobs.
+/// Update heartbeats for all currently running jobs — each for the attempt
+/// this process claimed, never a later one.
 #[cfg(not(tarpaulin_include))]
-fn update_heartbeats(pool: &DbPool, running_jobs: &Arc<Mutex<Vec<String>>>) {
-    let ids: Vec<String> = running_jobs
+fn update_heartbeats(pool: &DbPool, running_jobs: &RunningJobs) {
+    let jobs: Vec<RunningJob> = running_jobs
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default();
 
-    if ids.is_empty() {
+    if jobs.is_empty() {
         return;
     }
 
@@ -80,9 +84,9 @@ fn update_heartbeats(pool: &DbPool, running_jobs: &Arc<Mutex<Vec<String>>>) {
         }
     };
 
-    for id in &ids {
-        if let Err(e) = job_query::update_heartbeat(&conn, id) {
-            warn!("Heartbeat update error for {}: {}", id, e);
+    for job in &jobs {
+        if let Err(e) = job_query::update_heartbeat(&conn, &job.id, job.attempt) {
+            warn!("Heartbeat update error for {}: {}", job.id, e);
         }
     }
 }

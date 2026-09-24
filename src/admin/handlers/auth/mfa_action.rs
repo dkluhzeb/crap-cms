@@ -8,7 +8,6 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
-use chrono::Utc;
 use tokio::task;
 use tracing::error;
 
@@ -17,8 +16,8 @@ use crate::{
         AdminState,
         handlers::{
             auth::{
-                MfaForm, append_cookies, clear_mfa_pending_cookie, client_ip, create_session_token,
-                extract_mfa_token, render_mfa, session_redirect,
+                MfaForm, SessionGrant, append_cookies, clear_mfa_pending_cookie, client_ip,
+                create_session_token, extract_mfa_token, render_mfa, session_redirect,
             },
             shared::paths,
         },
@@ -52,14 +51,15 @@ fn verify_mfa_blocking(input: &VerifyMfaInput) -> anyhow::Result<bool> {
 
 /// Build the final session response after successful MFA verification.
 async fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response {
-    let session = match create_session_token(
-        state,
+    let grant = SessionGrant::builder(
         pending.sub.to_string(),
         &pending.collection,
         pending.email.clone(),
         pending.session_version,
-        Utc::now().timestamp().max(0).cast_unsigned(),
-    ) {
+    )
+    .build();
+
+    let session = match create_session_token(state, grant) {
         Ok(s) => s,
         Err(e) => {
             error!("MFA session: {}", e);

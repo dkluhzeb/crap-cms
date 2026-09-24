@@ -44,13 +44,13 @@ When uploads are enabled, these fields are automatically injected before your cu
 | Field | Type | Admin form | Description |
 |-------|------|------------|-------------|
 | `filename` | text | Visible (readonly) | Sanitized filename with unique prefix |
-| `mime_type` | text | Hidden | MIME type of the uploaded file |
+| `mime_type` | text | Hidden | MIME type of the uploaded file — the type sniffed from its bytes when they are recognisable, the claimed type otherwise |
 | `filesize` | number | Hidden | File size in bytes |
 | `width` | number | Hidden | Image width (images only) |
 | `height` | number | Hidden | Image height (images only) |
 | `url` | text | Hidden | URL path to the original file |
-| `focal_x` | number | Hidden | Focal point X coordinate (0.0–1.0, default center) |
-| `focal_y` | number | Hidden | Focal point Y coordinate (0.0–1.0, default center) |
+| `focal_x` | number | Hidden | Focal point X coordinate (0.0–1.0, default center; a value outside the range is a validation error on every surface) |
+| `focal_y` | number | Hidden | Focal point Y coordinate (0.0–1.0, default center; a value outside the range is a validation error on every surface) |
 
 > All auto-injected fields are **always returned in API responses** (gRPC, Lua, MCP, REST, admin JSON). They use `admin.hidden = true` only — that flag suppresses standard form rendering because the upload preview widget and focal-point selector render these values directly. Consumers (and the admin's own preview widget) need them to display thumbnails, focal crops, and image variants.
 
@@ -214,7 +214,17 @@ Binary data is passed natively between Rust and Lua (no base64 encoding). The `c
   pruning versions releases the files they were the last reference to, and a
   hard delete removes every file the document's row or snapshots ever named.
   A draft save with a new file leaves the published file in place; the
-  drafted file becomes live when the draft is published.
+  drafted file becomes live when the draft is published. Until then it is
+  served to exactly the viewers whose draft view shows that draft — the
+  editor's preview works, a reader without draft access gets `404`.
+- **Restoring a version** makes the snapshot's file live again, with the
+  format variants that snapshot recorded empty: a variant converted on the
+  background queue (`queue = true`) is filled in on the live row by its job,
+  never in the snapshot taken when the file was stored. A variant whose bytes
+  the document still holds (the live row or another version names it) is
+  named again as it is; any other is queued for conversion again. A restore
+  that swaps the file cancels the previous file's still-queued conversions,
+  like any other replacement.
 
 ## URL Structure
 
@@ -264,13 +274,13 @@ Empty `mime_types` array also accepts any file.
 
 ## Upload Validation
 
-Every upload passes a fixed validation chain before anything is written to storage:
+Every upload passes a fixed validation chain before anything is written to storage. Once the chain has passed — and still before a byte is stored or an image resized — the collection's `create` (or, for a replacement, `update`) access rule is consulted on the request's fields together with the columns the file already determines: `filename` (the stored name), `mime_type` (the detected type), `filesize`, and `width` / `height` for an image the server decodes. A caller the rule refuses is refused as access denied without the file being stored, so a rule may gate uploads on `ctx.data.mime_type` or `ctx.data.filesize`. The columns that only exist once the file is stored — `url` and every per-size column — are empty at that point; the write consults the rule again on the final data, where they are set.
 
 1. **Size** — the file must not exceed the collection's `max_file_size` (or the global `[upload] max_file_size`). On the routes that carry a file — the collection's admin create/update and the `/api/upload` routes — the request body limit follows that collection's limit (plus 1 MiB for the other form fields), so a collection may allow larger files than the global default. Every other route keeps the global limit plus 1 MiB. In the admin UI the file input refuses an oversized pick as soon as it is made; a request that exceeds the body limit anyway is answered `413` with an error toast, and the form keeps every edit.
-2. **MIME allowlist** — the claimed `Content-Type` must match the collection's `mime_types` patterns.
-3. **Magic-byte verification** — the file's leading bytes are sniffed; when the content is recognisable, the detected type must agree with the claimed type (`File content does not match claimed type 'image/png' (detected 'text/html')`), and the detected type is what every later check uses. A renamed `.html` cannot pass as `image/*`.
-4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
-5. **SVG sanitising** — SVG uploads are scanned once for `<script>` elements, inline event handlers (`onload=` …), `<!DOCTYPE>` / `<!ENTITY>` declarations, CSS `@import`, and external references in `href` / `xlink:href` or `url(…)` (any scheme other than `data:` — `mailto:` and `tel:` included — or a protocol-relative `//` URL, judged after entity decoding). Any hit rejects the upload (stored-XSS, XXE and data-exfiltration vectors), so only clean SVGs ever reach storage; fragments, relative paths and `data:` URIs are fine. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP.
+2. **MIME allowlist** — the claimed `Content-Type` must be one concrete `type/subtype` (a pattern such as `image/*` or `*/*` is rejected) and must match the collection's `mime_types` patterns.
+3. **Magic-byte verification** — the file's leading bytes are sniffed; when the content is recognisable, the detected type must agree with the claimed type (`File content does not match claimed type 'image/png' (detected 'text/html')`), and the detected type is what every later check uses and what `mime_type` stores. A renamed `.html` cannot pass as `image/*`.
+4. **Extension ↔ content cross-check** — for extensions that resolve to a type a browser would *execute* on serve (HTML, XHTML, SVG, XML, JavaScript) the actual content type must match exactly; a PNG saved as `logo.svg` is rejected. The extension is read from the *sanitized* name — the one stored and served — so `evil.htm l`, stored as `evil.html`, is judged as HTML. Inert extensions (`.txt`, `.pdf`, `.zip`, …) are not cross-checked because they are served with non-executing content types regardless.
+5. **SVG sanitising** — SVG uploads are scanned once for `<script>` elements, inline event handlers (`onload=` …), `<!DOCTYPE>` / `<!ENTITY>` declarations, CSS `@import`, and external references in `href` / `xlink:href` or `url(…)` (any scheme other than `data:` — `mailto:` and `tel:` included — or a protocol-relative `//` URL, judged after entity decoding). Any hit rejects the upload (stored-XSS, XXE and data-exfiltration vectors), so only clean SVGs ever reach storage; fragments, relative paths and `data:` URIs are fine. Served SVGs additionally carry `Content-Disposition: attachment` and a sandboxing CSP (`sandbox; default-src 'none'`) — which the admin's own Content-Security-Policy never replaces.
 
 For processed images, the EXIF `Orientation` tag is applied before resizing so phone photos come out upright, and the re-encoded outputs (generated sizes and format conversions) carry **no EXIF metadata** — camera details and GPS coordinates are stripped as a side effect of re-encoding. The original upload is stored byte-for-byte.
 
@@ -282,7 +292,7 @@ If an error occurs during upload processing (e.g., image resize fails partway th
 
 ## Content Negotiation
 
-When serving image files, the upload handler performs automatic content negotiation based on the browser's `Accept` header. If a modern format variant exists on disk, it is served instead of the original:
+When serving image files, the upload handler performs automatic content negotiation based on the browser's `Accept` header. If a modern format variant of the requested file exists, it is served instead:
 
 1. **AVIF** — served if the client sends `Accept: image/avif` and a `.avif` variant exists
 2. **WebP** — served if the client sends `Accept: image/webp` and a `.webp` variant exists
@@ -290,7 +300,7 @@ When serving image files, the upload handler performs automatic content negotiat
 
 AVIF is preferred over WebP when both are accepted. The response includes a `Vary: Accept` header so caches store format-specific versions correctly.
 
-This works for all image URLs (`/uploads/...`) including originals and resized variants. Non-image files (PDFs, etc.) are always served as-is.
+Negotiation applies to the generated size files only (`…_thumbnail.jpg`), and only for the formats the collection's `format_options` configure — variants are never generated for the original, so an original, a non-image file, or a collection without `format_options` is served as-is with no variant lookup and no `Vary: Accept`.
 
 ## Focal Point
 
@@ -318,4 +328,5 @@ The values are available in API responses as `focal_x` and `focal_y` number fiel
 
 ## File Deletion
 
-When a document in an upload collection is deleted, all associated files (original + resized + format variants) are deleted from disk.
+- **Soft delete** (collections with `soft_delete = true`) moves the document to the trash and keeps every file: a trashed document's files stop serving (the serve gate excludes trashed rows) and come back with a restore from the trash.
+- **Hard delete** — a delete on a collection without soft delete, emptying the trash, or the retention purge — removes every file the document owns once the delete commits: the original, its resized sizes and format variants, and every file a draft or version snapshot of the document named.

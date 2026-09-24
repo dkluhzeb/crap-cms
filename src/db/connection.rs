@@ -276,6 +276,16 @@ pub trait DbConnection {
         expr.to_string()
     }
 
+    /// Wrap a JSON-extract expression so a `Checkbox` sub-field — stored as
+    /// JSON `true`/`false` — compares as the integer its operand binds as.
+    /// `SQLite`'s `json_extract` already yields `1`/`0` (default identity);
+    /// Postgres `#>>` yields the text `'true'`/`'false'`, which PG overrides to
+    /// map to `1`/`0` (as it does a stored `1`/`0`), so the comparison is not a
+    /// `text = bigint` error.
+    fn json_checkbox_cast(&self, expr: &str) -> String {
+        expr.to_string()
+    }
+
     /// FROM-clause fragment for iterating a JSON array.
     ///
     /// `SQLite`: `"json_each(source) AS alias"`
@@ -469,6 +479,9 @@ macro_rules! impl_db_connection_delegate {
             }
             fn json_number_cast(&self, expr: &str) -> String {
                 self.inner.json_number_cast(expr)
+            }
+            fn json_checkbox_cast(&self, expr: &str) -> String {
+                self.inner.json_checkbox_cast(expr)
             }
             fn lock_row(&self, table: &str, id: &str) -> Result<()> {
                 self.inner.lock_row(table, id)

@@ -2,7 +2,7 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
 
 use crate::cli;
@@ -52,10 +52,17 @@ pub struct MakeJobOptions<'a> {
 ///
 /// # Errors
 ///
-/// Returns an error if the slug is invalid, the file already exists without
-/// `--force`, or writing the file fails.
+/// Returns an error if the slug is invalid, the timeout is `0`, the file
+/// already exists without `--force`, or writing the file fails.
 pub fn make_job(opts: &MakeJobOptions) -> Result<()> {
     validate_slug(opts.slug)?;
+
+    // `crap.jobs.define` refuses `timeout = 0`; scaffolding it would only
+    // produce a file that fails at load (the template would otherwise drop
+    // the falsy `0` and quietly fall back to the default).
+    if opts.timeout == Some(0) {
+        bail!("--timeout must be at least 1 second (omit it for the default of 60)");
+    }
 
     let jobs_dir = paths::jobs_dir(opts.config_dir);
     fs::create_dir_all(&jobs_dir).context("Failed to create jobs/ directory")?;
@@ -158,6 +165,29 @@ mod tests {
         assert!(content.contains("crap.jobs.define(\"cleanup\""));
         assert!(content.contains("handler = \"jobs.cleanup.run\""));
         assert!(content.contains("return M"));
+    }
+
+    /// Regression: `--timeout 0` was silently dropped by the template (a
+    /// falsy `0`) and the job got the default timeout instead. A zero
+    /// timeout is invalid, so the scaffolder refuses it.
+    #[test]
+    fn zero_timeout_is_rejected() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let err = make_job(&opts(
+            tmp.path(),
+            "cleanup",
+            None,
+            None,
+            None,
+            Some(0),
+            false,
+        ))
+        .expect_err("--timeout 0 must be rejected")
+        .to_string();
+
+        assert!(err.contains("at least 1 second"), "unexpected: {err}");
+        assert!(!tmp.path().join("jobs/cleanup.lua").exists());
     }
 
     #[test]

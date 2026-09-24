@@ -497,6 +497,11 @@ Each only bites a definition that was already relying on ignored input:
   row has no block type) is now a validation error instead of reading as an
   absent value. Point `_block_type` at the block row it names
   (`content._block_type`, `content.nested._block_type`).
+- **A `join` field inside an array or blocks row is refused as a filter
+  path**: `items.posts` or `content.meta.posts` naming a `join` field compared
+  a value that is never stored; it is now a validation error, as it already
+  was at the top level. Drop the condition, or filter the joined collection
+  instead.
 - **Relationship, upload and join targets must be defined collections.**
   A `relationship` / `upload` field (at any depth, including every target
   of a polymorphic list) or a `join` field naming a collection that is not
@@ -793,7 +798,10 @@ holds at any depth: a filter on a group sub-field (`seo.secret`), an array
 row or block sub-field (`items.secret`, `content.body`), or a field nested
 inside a row is judged by that field's own rule and by the rules of the
 containers on its path — a block path in every block type that holds the
-field.
+field. The `where` filter of `update_many` and `delete_many` (gRPC, Lua, a
+queued bulk job) is refused the same way, since their counts and the
+`bulk_max_documents` error report how many rows match; an `override_access`
+context (MCP, Lua `override_access = true`) is exempt.
 
 This closes a leak rather than tightening a preference: a `like` filter or an
 ordering over a stripped field let a caller recover the value the read strip
@@ -1478,6 +1486,21 @@ running.
 now runs one day later — subtract one from each numeric weekday. Check the
 startup log for schedule errors after upgrading.
 
+### 47c. Job authors: `timeout` stops the handler
+
+A Lua job's `timeout` used to be reported, not enforced: the handler kept
+running after it, while the run was failed and re-queued, so the retry could
+run next to it. The handler is now stopped at its deadline — its next Lua
+instruction batch, database, `crap.http` or `crap.email` call raises
+`job exceeded its timeout`, and the operation in flight rolls back — and a run
+is never retried while it is still executing. `timeout = 0` (which made every
+run time out at once) is now a load error, and cron schedules are documented
+as evaluated in UTC (they always were).
+
+**Action:** make sure each job's `timeout` covers its real run time, replace
+any `timeout = 0`, and don't swallow the timeout error with `pcall` — see
+[Timeouts](../lua-api/jobs.md#timeouts).
+
 ### 48a. Write clients: publishing means "the latest draft plus this request"
 
 An update with `draft = false` while a draft is pending now takes the latest
@@ -1807,11 +1830,28 @@ found through a Lua read lacked its hidden fields.
   only in its return value.
 - Fields the strategy adds to or changes on the returned table are not carried
   into `ctx.user`.
+- The stored `_locked` / `_verified` state decides, and the returned table may
+  only **restrict** it: `_locked = true` refuses the user and `_verified =
+  false` refuses them where the collection requires verification, but a
+  returned `_verified = true` no longer verifies an account the stored row
+  says is unverified, and an absent or falsy `_locked` never unlocks a locked
+  one. This holds on the per-request path, the login path and the
+  [auth callbacks](../authentication/custom-strategies.md#auth-callbacks-oauth2--oidc)
+  alike (the login path used to ignore a returned `_locked`).
+- A strategy-authenticated request is no longer exchangeable for a session:
+  `POST /admin/api/session-refresh` extends only a session the `crap_session`
+  cookie established, and answers `401` to a request a strategy — or a bearer
+  token — authenticated.
 
 **Action:** make sure every strategy returns a user stored in its auth
 collection (look it up, or create it first — a create commits with the
 successful authentication). Store any per-user attribute a rule needs as a
-field of the collection instead of computing it in the strategy.
+field of the collection instead of computing it in the strategy. A strategy
+that verified users by returning `_verified = true` must mark them verified in
+the collection instead (`crap-cms user verify`, or the user's
+admin edit form). A client that kept a strategy or bearer credential
+alive by calling the session-refresh endpoint must sign in with the password
+login (or re-present its credential per request) instead.
 
 ### 66. Schema authors: a join's `on` must reference the owning collection
 
@@ -1827,6 +1867,97 @@ working join is affected.
 **Action:** if the load fails naming a join, point `on` at the back-reference
 field (for a group-nested one, move it to the top level of the target
 collection), or remove the join.
+
+### 67. Upload clients: send the file's real content type; `mime_type` is the detected one
+
+The content type a multipart file part claims must now be one concrete
+`type/subtype`. A pattern such as `image/*` or `*/*` used to be taken as a
+pattern itself — it matched whatever the bytes turned out to be and passed an
+`image/*` allowlist — and was stored verbatim as the document's `mime_type`;
+it is now refused (`File type 'image/*' is not a concrete content type`). The
+stored `mime_type` is now the type sniffed from the bytes whenever they are
+recognisable (a claim that disagrees with them was already refused), and the
+claimed type only otherwise.
+
+**Action:** make upload clients send the file's actual content type (browsers
+and most HTTP libraries already do). Documents stored before the upgrade keep
+the `mime_type` they were stored with — look for `mime_type` values containing
+`*` if a client ever sent a pattern.
+
+### 68. Upload data: the focal point must lie within `0.0`–`1.0`
+
+`focal_x` / `focal_y` are fractions of the image, as documented, and a value
+outside `0.0`–`1.0` is now a validation error on every write surface. Values
+stored before the upgrade are not changed — but the admin edit form of an
+image sends the stored focal point back with every save, so a document holding
+an out-of-range point fails validation on its next edit there.
+
+**Action:** find such documents in every upload collection and clamp (or
+clear) the point, for example:
+
+```sql
+UPDATE media SET focal_x = MIN(MAX(focal_x, 0.0), 1.0),
+                 focal_y = MIN(MAX(focal_y, 0.0), 1.0)
+ WHERE focal_x < 0 OR focal_x > 1 OR focal_y < 0 OR focal_y > 1;
+```
+
+(On Postgres use `LEAST(GREATEST(…))`.)
+
+### 69. Auth-callback logins on MFA collections complete the second factor
+
+An [auth callback](../authentication/custom-strategies.md#auth-callbacks-oauth2--oidc)
+(`/admin/auth/callback/{name}` or `/admin/auth/callback/{collection}/{name}`)
+used to mint the session as soon as its hook named a user — on a collection
+with an `mfa` mode, an OAuth / OIDC login skipped the second factor. It now
+passes the same MFA gate as a password login (including `mfa_when`): the
+callback redirects to `/admin/mfa`, the user completes the collection's mode
+(TOTP, email code or custom delivery), and only then gets the session.
+Collections without an `mfa` mode are unaffected.
+
+**Action:** nothing, if callback users should complete this collection's
+second factor — for `mfa = "totp"`, their first callback login now enrolls an
+authenticator. If the identity provider already enforces 2FA for every account
+that can reach the callback, exempt the callback by name on the
+`password_login` method:
+
+```lua
+{ type = "password_login", mfa = "totp", mfa_exempt_callbacks = { "okta" } },
+```
+
+See [MFA → Auth callbacks](../authentication/mfa.md#auth-callbacks-oauth--oidc).
+
+### 70. Write clients: no NUL characters anywhere in a document
+
+A NUL character (`U+0000`) used to be refused only in top-level `text`,
+`textarea` and `email` values. It is now refused in every stored string at any
+depth — group sub-fields, array and blocks rows, has-many lists, `code`, `json`
+and `richtext` values (including a `\u0000` escape inside JSON text, and object
+keys) and draft saves — on both backends, with a `validation.nul_character`
+error naming the field (`items[0][label]`). The check also runs on the final
+data a write stores, so a `before_change` hook or a `hooks = false` bulk write
+cannot store one, and `crap-cms import` refuses a document holding one. On
+Postgres such a value used to fail the write with an internal error, or — inside
+a row's JSON — be stored and break every row-path filter on the collection.
+
+**Action:** strip NUL characters from what clients and hooks send. Values
+stored before the upgrade are not changed; on SQLite, find them before moving
+to Postgres (a row's JSON holds the `\u0000` escape), for example:
+
+```sql
+SELECT id FROM posts_content WHERE instr(data, '\u0000') > 0;
+```
+
+### 71. Filter clients: undeclared block-type rows read a name as absent
+
+A filter on a name inside block rows reads a row whose block type declares no
+field of that name as absent (NULL). That was already so when every declaring
+block type defined the name alike; when they define it differently (a number
+in one, text in another) such rows used to match nothing. They now read NULL
+there too: `not_exists` and `not_in = {}` match a document holding such a row.
+
+**Action:** none, unless a filter relied on those rows never matching a
+`not_exists` — add a `_block_type` condition to restrict it to the types you
+mean.
 
 ## Admin UI behavior
 

@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use crate::{
     core::{
         CollectionDefinition, DocumentFields,
-        upload::{CollectionUpload, QueuedConversion, key_from_served_url},
+        upload::{CollectionUpload, QueuedConversion},
     },
     db::query,
     service::{ServiceContext, UploadConversions, WriteInput, write::stored_row},
@@ -90,39 +90,6 @@ fn drafted_metadata(snapshot: &Map<String, Value>, upload: &CollectionUpload) ->
         .collect()
 }
 
-/// The conversions the drafted file still owes.
-///
-/// Re-derived from the size columns the metadata carries rather than stored
-/// with the draft: a deferred variant is a function of the stored size file and
-/// the collection's format options, and deriving it here means the publish
-/// queues exactly the jobs the current configuration calls for.
-fn deferred_conversions(
-    metadata: &DocumentFields,
-    upload: &CollectionUpload,
-) -> Vec<QueuedConversion> {
-    let mut queued = Vec::new();
-
-    for size in &upload.image_sizes {
-        let Some(size_key) = metadata
-            .get_str(&format!("{}_url", size.name))
-            .and_then(key_from_served_url)
-        else {
-            continue;
-        };
-
-        for (format, opts) in upload.format_options.deferred() {
-            queued.push(QueuedConversion::for_size(
-                size_key,
-                &size.name,
-                format,
-                opts.quality,
-            ));
-        }
-    }
-
-    queued
-}
-
 /// Carry the pending draft's file over to the published row.
 ///
 /// Adds the drafted server-derived columns to `input.data` and attaches the
@@ -159,7 +126,7 @@ pub(super) fn adopt_drafted_file(
     }
 
     input.upload_conversions = Some(UploadConversions::new(
-        deferred_conversions(&drafted, upload),
+        QueuedConversion::deferred_for(&drafted, upload),
         ctx.image_max_attempts,
     ));
 
@@ -218,7 +185,7 @@ mod tests {
         let upload = def.upload.as_ref().expect("upload");
         let drafted = drafted_metadata(&snapshot(), upload);
 
-        let queued = deferred_conversions(&drafted, upload);
+        let queued = QueuedConversion::deferred_for(&drafted, upload);
 
         assert_eq!(queued.len(), 1, "{queued:?}");
         assert_eq!(queued[0].source_path, "media/abc_photo_thumbnail.png");
@@ -238,7 +205,7 @@ mod tests {
 
         let drafted = drafted_metadata(&snapshot(), upload);
 
-        assert!(deferred_conversions(&drafted, upload).is_empty());
+        assert!(QueuedConversion::deferred_for(&drafted, upload).is_empty());
     }
 
     /// A request that carried a file of its own owns every server-derived

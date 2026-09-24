@@ -19,7 +19,8 @@ pub struct JobDefinition {
     /// value. Resolve via [`Self::effective_max_attempts`] at queue
     /// time — never compute `retries + 1` directly.
     pub retries: Option<u32>,
-    /// Timeout in seconds before a running job is marked failed. Default: 60.
+    /// Wall-clock budget of one run, in seconds (at least 1): a Lua handler
+    /// is stopped once it passes and the run fails. Default: 60.
     pub timeout: u64,
     /// Maximum concurrent runs of this specific job. Default: 1.
     pub concurrency: u32,
@@ -29,7 +30,8 @@ pub struct JobDefinition {
     /// Higher = sooner; negative = run only when otherwise idle.
     /// Default: 0.
     pub priority: i32,
-    /// Skip scheduled run if a previous run is still running. Default: true.
+    /// Skip a scheduled run while a previous run is still queued or
+    /// running. Default: true.
     pub skip_if_running: bool,
     /// Display labels for admin UI.
     pub labels: JobLabels,

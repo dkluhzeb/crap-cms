@@ -87,6 +87,7 @@ pub fn find_documents(
     validate_user_select(input.query.select.as_deref(), def)?;
 
     let mut fq = input.query.clone();
+    helpers::normalize_sort(&mut fq, &def.fields);
     fq.filters
         .extend(scoped_read_filters(hooks, ctx, def, input)?);
 
@@ -130,6 +131,8 @@ pub fn find_documents(
         docs: &docs,
         total,
         fq: &fq,
+        fields: &def.fields,
+        locale_ctx: input.locale_ctx,
         cursor_enabled: input.cursor_enabled,
         has_timestamps: def.timestamps,
         has_drafts: def.has_drafts(),

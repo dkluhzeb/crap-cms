@@ -287,7 +287,7 @@ mod tests {
     use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::db::query::cursor::{CursorData, SortDirection, build_cursors};
+    use crate::db::query::cursor::{CursorData, CursorKey, SortDirection, build_cursors};
     use crate::db::query::read::find::test_helpers::*;
     use crate::db::query::write::create;
     use crate::db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, pool};
@@ -770,7 +770,12 @@ mod tests {
         );
 
         // Forward to page 2 via after_cursor on page 1's last row.
-        let (_, end_cursor_p1) = build_cursors(&page1, "published_at", SortDirection::Desc, true);
+        let (_, end_cursor_p1) = build_cursors(
+            &page1,
+            &CursorKey::builder("published_at", SortDirection::Desc)
+                .with_status(true)
+                .build(),
+        );
         let end_cursor_data = CursorData::decode(&end_cursor_p1.unwrap()).unwrap();
         assert_eq!(
             end_cursor_data.status_val.as_deref(),
@@ -791,7 +796,12 @@ mod tests {
         }
 
         // Back to page 1 via before_cursor on page 2's first row.
-        let (start_cursor_p2, _) = build_cursors(&page2, "published_at", SortDirection::Desc, true);
+        let (start_cursor_p2, _) = build_cursors(
+            &page2,
+            &CursorKey::builder("published_at", SortDirection::Desc)
+                .with_status(true)
+                .build(),
+        );
         let start_cursor_data = CursorData::decode(&start_cursor_p2.unwrap()).unwrap();
 
         let q_back = FindQuery::builder()
@@ -896,7 +906,12 @@ mod tests {
         assert_eq!(p1_ids, vec!["d3", "d2"]);
 
         // Forward: after_cursor on d2. Should return d1 then p1.
-        let (_, end_p1) = build_cursors(&page1, "published_at", SortDirection::Desc, true);
+        let (_, end_p1) = build_cursors(
+            &page1,
+            &CursorKey::builder("published_at", SortDirection::Desc)
+                .with_status(true)
+                .build(),
+        );
         let after = CursorData::decode(&end_p1.unwrap()).unwrap();
         assert_eq!(after.status_val.as_deref(), Some("draft"));
         let q2 = FindQuery::builder()
@@ -913,7 +928,12 @@ mod tests {
         );
 
         // Back: before_cursor on d1 (page 2's first row, also a draft).
-        let (start_p2, _) = build_cursors(&page2, "published_at", SortDirection::Desc, true);
+        let (start_p2, _) = build_cursors(
+            &page2,
+            &CursorKey::builder("published_at", SortDirection::Desc)
+                .with_status(true)
+                .build(),
+        );
         let before = CursorData::decode(&start_p2.unwrap()).unwrap();
         assert_eq!(before.status_val.as_deref(), Some("draft"));
         let q_back = FindQuery::builder()

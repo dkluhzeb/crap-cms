@@ -27,7 +27,7 @@ use crate::{
     },
     config::ServerConfig,
     core::{
-        CollectionDefinition, Document, Registry, Slug,
+        Builder, CollectionDefinition, Document, Registry, Slug,
         auth::{Claims, ClaimsBuilder},
         email,
     },
@@ -308,21 +308,43 @@ fn session_exp(now: u64, expiry: u64, auth_time: u64, max_age: u64) -> u64 {
     exp.min(auth_time.saturating_add(max_age))
 }
 
-/// Build a JWT session token for a user, resolving expiry from collection config or global default.
+/// Who a session is minted for.
 ///
-/// `auth_time` is the Unix timestamp of the **original** authentication —
-/// login paths pass `now()`, the refresh handler forwards the previous
-/// token's `auth_time`. This lets `auth.session_absolute_max_age` cap
-/// cumulative session lifetime independently of how often the token has
-/// been refreshed.
+/// `auth_time` is the Unix timestamp of the **original** authentication.
+/// Unset, it is "now" — a fresh login; the refresh handler forwards the
+/// previous token's `auth_time` so `auth.session_absolute_max_age` caps
+/// cumulative session lifetime independently of how often the token has been
+/// refreshed.
+#[derive(Builder)]
+pub(in crate::admin::handlers) struct SessionGrant<'a> {
+    #[builder(required)]
+    user_id: String,
+    #[builder(required)]
+    collection: &'a str,
+    #[builder(required)]
+    email: String,
+    #[builder(required)]
+    session_version: u64,
+    auth_time: Option<u64>,
+}
+
+/// Build a JWT session token for `grant`, resolving expiry from collection
+/// config or global default.
 pub(in crate::admin::handlers) fn create_session_token(
     state: &AdminState,
-    user_id: String,
-    collection: &str,
-    email: String,
-    session_version: u64,
-    auth_time: u64,
+    grant: SessionGrant,
 ) -> Result<SessionToken, String> {
+    let SessionGrant {
+        user_id,
+        collection,
+        email,
+        session_version,
+        auth_time,
+    } = grant;
+
+    let now = Utc::now().timestamp().max(0).cast_unsigned();
+    let auth_time = auth_time.unwrap_or(now);
+
     let expiry = state
         .infra
         .registry
@@ -330,7 +352,6 @@ pub(in crate::admin::handlers) fn create_session_token(
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 
-    let now = Utc::now().timestamp().max(0).cast_unsigned();
     let exp = session_exp(
         now,
         expiry,

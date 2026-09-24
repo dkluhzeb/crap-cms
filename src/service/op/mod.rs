@@ -24,7 +24,10 @@ use crate::{
     db::BoxedConnection,
     service::{
         AppInfra, RunnerReadHooks, ServiceContext, ServiceError,
-        auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution, ResolvedMethod, evaluate},
+        auth::{
+            AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution,
+            ResolvedMethod, evaluate,
+        },
     },
 };
 
@@ -401,35 +404,32 @@ pub fn resolve_queue_actor(
             };
 
             match evaluate(&request, &deps) {
-                Resolution::Authenticated(auth) => {
-                    let collection = match &auth.via {
-                        ResolvedMethod::Bearer { collection }
-                        | ResolvedMethod::SessionCookie { collection } => collection.to_string(),
-                        // A strategy may synthesize a virtual user document
-                        // that is not a row of the declaring collection, so
-                        // the identity is not re-loadable at execution.
-                        ResolvedMethod::Strategy { .. } => {
-                            return Err(CoreError::Internal(anyhow!(
-                                "strategy-authenticated callers cannot queue background work — \
-                                 the identity cannot be re-resolved at execution"
-                            )));
-                        }
-                    };
-
-                    Ok((
-                        Some(QueuedActor {
-                            id: auth.user.user_doc.id.to_string(),
-                            collection,
-                            session_version: auth.user.claims.session_version,
-                            ui_locale: Some(auth.user.ui_locale),
-                        }),
-                        false,
-                    ))
-                }
+                Resolution::Authenticated(auth) => Ok((Some(queued_actor(&auth)), false)),
                 Resolution::Anonymous => Ok((None, false)),
                 Resolution::Invalid(failure) => Err(CoreError::Auth(failure)),
             }
         }
+    }
+}
+
+/// The reference a queued job stores for an authenticated caller: the
+/// stored user row of the collection that authenticated it, plus the session
+/// version the credential was issued under (execution re-loads the row and
+/// abandons the run when that version was bumped since). Every method names
+/// a stored row — a strategy's user is admitted only as one — so every
+/// method can queue.
+fn queued_actor(auth: &AuthenticatedResolution) -> QueuedActor {
+    let collection = match &auth.via {
+        ResolvedMethod::Bearer { collection }
+        | ResolvedMethod::SessionCookie { collection }
+        | ResolvedMethod::Strategy { collection, .. } => collection.to_string(),
+    };
+
+    QueuedActor {
+        id: auth.user.user_doc.id.to_string(),
+        collection,
+        session_version: auth.user.claims.session_version,
+        ui_locale: Some(auth.user.ui_locale.clone()),
     }
 }
 
@@ -519,8 +519,10 @@ mod tests {
         admin::test_support::test_infra,
         config::{CrapConfig, UploadConfig},
         core::{
-            LocalizedString, Registry, SharedTokenProvider, auth::JwtTokenProvider,
-            upload::create_storage, with_label_locale,
+            AuthUser, LocalizedString, Registry, SharedTokenProvider, Slug,
+            auth::{ClaimsBuilder, JwtTokenProvider, TokenUse},
+            upload::create_storage,
+            with_label_locale,
         },
         db::DbPool,
         hooks::HookRunner,
@@ -654,5 +656,54 @@ mod tests {
             matches!(err, CoreError::UnknownTarget { .. }),
             "a write op with a resolved principal must not touch the read pool"
         );
+    }
+
+    /// An authenticated resolution of user `u1` of `members` via `via`,
+    /// issued under session version 4.
+    fn resolution(via: ResolvedMethod, token_use: TokenUse) -> AuthenticatedResolution {
+        let claims = ClaimsBuilder::new("u1", "members")
+            .email("u1@example.com")
+            .exp(u64::MAX)
+            .session_version(4)
+            .token_use(token_use)
+            .build()
+            .unwrap();
+
+        AuthenticatedResolution {
+            user: AuthUser::new(claims, Document::builder("u1").build()),
+            via,
+        }
+    }
+
+    /// Regression: strategy-authenticated callers were refused `queue = true`
+    /// on the premise that a strategy may synthesize a user that is not a
+    /// stored row. A strategy's user is admitted only as a stored row, so it
+    /// queues like a token user — referencing the stored row and the session
+    /// version it was admitted with.
+    #[test]
+    fn a_strategy_user_queues_with_its_stored_session_version() {
+        let via = ResolvedMethod::Strategy {
+            collection: Slug::new("members"),
+            name: "sso".to_string(),
+        };
+
+        let actor = queued_actor(&resolution(via, TokenUse::Strategy));
+
+        assert_eq!(actor.id, "u1");
+        assert_eq!(actor.collection, "members");
+        assert_eq!(actor.session_version, 4);
+    }
+
+    /// A bearer caller queues the same reference.
+    #[test]
+    fn a_bearer_user_queues_with_its_session_version() {
+        let via = ResolvedMethod::Bearer {
+            collection: Slug::new("members"),
+        };
+
+        let actor = queued_actor(&resolution(via, TokenUse::Session));
+
+        assert_eq!(actor.collection, "members");
+        assert_eq!(actor.session_version, 4);
     }
 }

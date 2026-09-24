@@ -17,7 +17,8 @@ pub use status::{
     lock_user, set_session_version, unlock_user, user_exists,
 };
 pub use tokens::{
-    clear_reset_token, clear_verification_token, find_by_reset_token, find_by_verification_token,
-    mark_unverified, mark_verified, set_reset_token, set_verification_token,
+    TokenGrant, clear_reset_token, clear_verification_token, find_by_reset_token,
+    find_by_verification_token, mark_unverified, mark_verified, set_reset_token,
+    set_verification_token,
 };
 pub use totp::{TotpState, get_totp_state, record_totp_success, reset_totp, set_totp_secret};

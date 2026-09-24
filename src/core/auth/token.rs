@@ -19,9 +19,14 @@ pub type SharedTokenProvider = Arc<dyn TokenProvider>;
 pub trait TokenProvider: Send + Sync {
     /// Create a signed token from claims.
     ///
+    /// Claims of a strategy-authenticated request ([`TokenUse::Strategy`])
+    /// are never signed: a strategy's credential must not be exchangeable
+    /// for a token.
+    ///
     /// # Errors
     ///
-    /// Returns an error if signing fails (e.g. claim serialization).
+    /// Returns an error if the claims are strategy claims, or if signing
+    /// fails (e.g. claim serialization).
     fn create_token(&self, claims: &Claims) -> Result<String>;
 
     /// Validate a **session** token and return decoded claims.
@@ -70,6 +75,10 @@ impl JwtTokenProvider {
 
 impl TokenProvider for JwtTokenProvider {
     fn create_token(&self, claims: &Claims) -> Result<String> {
+        if claims.token_use == TokenUse::Strategy {
+            bail!("strategy claims are never signed into a token");
+        }
+
         let key = jsonwebtoken::EncodingKey::from_secret(self.secret.as_bytes());
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
 
@@ -308,6 +317,22 @@ mod tests {
             err.to_string().contains("not an MFA-pending token"),
             "a full session token must not complete MFA, got: {err}",
         );
+    }
+
+    /// Claims built for a strategy-authenticated request must never become a
+    /// signed token, whatever path hands them to the provider.
+    #[test]
+    fn create_token_refuses_strategy_claims() {
+        let strategy = Claims::builder("u", "users")
+            .email("a@b.com")
+            .exp((Utc::now().timestamp() as u64) + 3600)
+            .token_use(TokenUse::Strategy)
+            .build()
+            .unwrap();
+
+        let err = provider().create_token(&strategy).unwrap_err();
+
+        assert!(err.to_string().contains("never signed"), "got: {err}");
     }
 
     #[test]

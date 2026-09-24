@@ -31,6 +31,31 @@ pub fn count_running(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64>
     Ok(row.as_ref().and_then(|r| r.i64_at(0)).unwrap_or(0))
 }
 
+/// Count the runs of `slug` that are still active — waiting to be claimed
+/// (`pending`, including a retry waiting out its backoff) or executing
+/// (`running`).
+///
+/// This is the "previous run still active" of `skip_if_running`: a run that
+/// failed and is waiting to retry, or one queued but not yet claimed, is as
+/// much a previous run as one currently executing — counting only `running`
+/// lets every cron fire queue another run behind it.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
+pub fn count_active(conn: &dyn DbConnection, slug: &str) -> Result<i64> {
+    let row = conn.query_one(
+        &format!(
+            "SELECT COUNT(*) FROM _crap_jobs \
+             WHERE status IN ('pending', 'running') AND slug = {}",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(slug.to_string())],
+    )?;
+
+    Ok(row.as_ref().and_then(|r| r.i64_at(0)).unwrap_or(0))
+}
+
 /// Count running jobs per slug, returned as a `HashMap`.
 ///
 /// # Errors
@@ -449,6 +474,33 @@ mod tests {
         assert_eq!(count_running(&conn, None).unwrap(), 1);
         assert_eq!(count_running(&conn, Some("job_a")).unwrap(), 1);
         assert_eq!(count_running(&conn, Some("job_b")).unwrap(), 0);
+    }
+
+    /// Pending (queued or waiting out a retry backoff) and running runs are
+    /// active; finished ones are not, and other slugs never count.
+    #[test]
+    fn count_active_counts_pending_and_running_runs_of_the_slug() {
+        let (_dir, conn) = setup_db();
+        let a: Vec<String> = (0..4)
+            .map(|_| {
+                insert_job(&conn, "job_a", "{}", ScheduledBy::Cron, 1, "default", 0)
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        insert_job(&conn, "job_b", "{}", ScheduledBy::Cron, 1, "default", 0).unwrap();
+
+        for (id, status) in [(&a[1], "running"), (&a[2], "completed"), (&a[3], "failed")] {
+            conn.execute(
+                "UPDATE _crap_jobs SET status = ?1 WHERE id = ?2",
+                &[DbValue::Text(status.to_string()), DbValue::Text(id.clone())],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(count_active(&conn, "job_a").unwrap(), 2);
+        assert_eq!(count_active(&conn, "job_b").unwrap(), 1);
+        assert_eq!(count_active(&conn, "job_c").unwrap(), 0);
     }
 
     #[test]

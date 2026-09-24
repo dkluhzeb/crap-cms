@@ -74,7 +74,21 @@ crap.collections.pages.find({
 })
 ```
 
-The equivalent double-underscore syntax also works: `seo__title`.
+The equivalent double-underscore syntax also works: `seo__title`. Sorting takes
+either spelling as well: `order_by = "-seo.title"`.
+
+An array, blocks or has-many relationship/upload inside a group is filtered
+through the group, spelled either way, then as the top-level field would be —
+the filter reads its own join table (`{collection}_seo__links`):
+
+```lua
+crap.collections.pages.find({
+    where = {
+        ["seo.links.url"] = { contains = "example.com" },
+        ["seo.tags.id"] = "tag-123",
+    },
+})
+```
 
 See [Query & Filters](../query-and-filters/overview.md#nested-field-filters-dot-notation) for filtering on other nested field types (arrays, blocks, relationships).
 

@@ -137,18 +137,6 @@ pub fn register_api_pool_init(
     Ok(())
 }
 
-/// Register per-collection and per-global accessor tables that
-/// dispatch to the existing slug-keyed CRUD API. Type signatures live
-/// in the generated `types/hooks.lua`; the runtime mapping is
-/// just `crap.collections.<slug>.find(q)` → `crap.collections.find(slug, q)`.
-///
-/// Errors out if a slug would shadow an existing method (e.g. a
-/// collection literally named `"find"`). MUST be called AFTER
-/// `register_crud_functions` (which actually attaches `find`,
-/// `find_by_id`, … to `crap.collections`) — wiring it earlier finds
-/// the methods nil and the wrappers all fail with "converting Lua
-/// nil to function". Pool VM only; the init VM doesn't expose
-/// runtime CRUD methods.
 /// Register `crap.any.*` — the cross-collection typing-helper
 /// factories. Every entry is a pass-through (`f(fn) = fn`); the
 /// runtime never inspects the wrapped function. Type signatures
@@ -265,6 +253,18 @@ pub(crate) fn register_per_slug_typing_helpers(
     Ok(())
 }
 
+/// Register per-collection and per-global accessor tables that
+/// dispatch to the existing slug-keyed CRUD API. Type signatures live
+/// in the generated `types/hooks.lua`; the runtime mapping is
+/// just `crap.collections.<slug>.find(q)` → `crap.collections.find(slug, q)`.
+///
+/// Errors out if a slug would shadow an existing method (e.g. a
+/// collection literally named `"find"`). MUST be called AFTER
+/// `register_crud_functions` (which actually attaches `find`,
+/// `find_by_id`, … to `crap.collections`) — wiring it earlier finds
+/// the methods nil and the wrappers all fail with "converting Lua
+/// nil to function". Pool VM only; the init VM doesn't expose
+/// runtime CRUD methods.
 pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -> Result<()> {
     const COLLECTION_METHODS: &[&str] = &[
         "find",

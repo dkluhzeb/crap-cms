@@ -27,17 +27,23 @@ hits the cache and the top-level `define` does **not** re-run.
   collection and global slugs.
 - `config` (table) — Job configuration:
   - `handler` (string, required) — Lua function ref (e.g., `"jobs.cleanup.run"`)
-  - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`).
-    Five fields, or six/seven with a leading seconds field. The day-of-week
-    field uses crontab numbering — `0` (or `7`) is Sunday through `6` for
-    Saturday; names such as `MON-FRI` work too. Every schedule is parsed at
-    startup and an invalid one fails the boot with the offending job named.
+  - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`),
+    **evaluated in UTC** — `"0 3 * * *"` fires at 03:00 UTC whatever the
+    server's local timezone. Five fields, or six/seven with a leading seconds
+    field. The day-of-week field uses crontab numbering — `0` (or `7`) is
+    Sunday through `6` for Saturday; names such as `MON-FRI` work too. Every
+    schedule is parsed at startup and an invalid one fails the boot with the
+    offending job named.
   - `queue` (string, default: `"default"`) — Queue name
   - `retries` (integer, optional) — Max retry attempts. When omitted, inherits `[jobs.queues.<queue>] retries` from `crap.toml`; if the queue has no entry either, defaults to `0` (one attempt). Set explicitly (including `retries = 0`) to override the queue default.
-  - `timeout` (integer, default: 60) — Seconds before timeout
+  - `timeout` (integer, default: 60, minimum 1) — Wall-clock budget of one
+    run, in seconds. Once it passes the handler is stopped (see
+    [Timeouts](#timeouts)). `timeout = 0` is rejected at load.
   - `priority` (integer, default: 0) — Default priority of runs queued for this job; a `crap.jobs.queue` call may override it per run
   - `concurrency` (integer, default: 1) — Max concurrent runs
-  - `skip_if_running` (boolean, default: true) — Skip cron if still running
+  - `skip_if_running` (boolean, default: true) — Skip a cron fire while a
+    previous run of this job is still queued or running (including one
+    waiting out its retry backoff)
   - `labels` (table, optional) — `{ singular = "Display Name" }`
   - `access` (string, optional) — Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`); returns `true`/`false`.
 
@@ -46,7 +52,7 @@ hits the cache and the top-level `define` does **not** re-run.
 ```lua
 crap.jobs.define("send_digest", {
     handler = "jobs.digest.run",
-    schedule = "0 8 * * 1",  -- Mondays at 8am
+    schedule = "0 8 * * 1",  -- Mondays at 08:00 UTC
     retries = 2,
     timeout = 120,
 })
@@ -136,11 +142,11 @@ a listing never reveals that it exists — the same visibility gate
 | `slug` | string | The slug that triggers and identifies the job |
 | `queue` | string | Queue the job runs on |
 | `schedule` | string? | Cron expression; `nil` for manually triggered jobs |
-| `timeout` | integer | Seconds before a running job is considered timed out |
+| `timeout` | integer | Seconds a run may execute before it is stopped (see [Timeouts](#timeouts)) |
 | `priority` | integer | Default scheduling priority; higher is claimed sooner |
 | `retries` | integer | Retries after a failure, resolved against `[jobs.queues.<queue>] retries` |
 | `concurrency` | integer | Maximum simultaneous runs of this job |
-| `skip_if_running` | boolean | Whether a scheduled run is skipped while another is active |
+| `skip_if_running` | boolean | Whether a scheduled run is skipped while another is still queued or running |
 | `label` | string? | Human-readable label from the definition's `labels.singular` |
 
 ```lua
@@ -210,6 +216,35 @@ function M.run(ctx)
 end
 return M
 ```
+
+## Timeouts
+
+A run gets `timeout` seconds of wall-clock time. The handler is **stopped**
+when they run out, not merely reported: the next Lua instruction batch, or
+the next database, `crap.http` or `crap.email` call, raises a
+`job exceeded its timeout` error. The operation in flight at that moment is
+rolled back — the transaction scope re-checks the deadline right before
+`COMMIT`, so an operation that was waiting on the database lock when the
+deadline passed never commits late. Writes that committed *before* the
+deadline stay committed (each pool-mode CRUD call is its own transaction;
+wrap related writes in [`crap.transaction`](#craptransactionfn--explicit-multi-step-atomicity)
+to make them all-or-nothing). The [`crap.tx.on_commit` / `on_rollback`](../hooks/transaction-access.md#transaction-outcome-effects)
+effects of a transaction that already resolved still run — the side effect
+of a committed write, the compensation of a rolled-back one.
+
+The run is then failed like any other error, and retried if attempts remain.
+A run is **never retried while it is still executing**: its row stays
+`running` — heartbeat fresh, concurrency slot held — until the handler has
+actually returned, so a retry can never overlap it and every concurrency cap
+keeps counting it. If a run is still executing five minutes after its
+`timeout` (a handler blocked in a single long call, or one that catches the
+timeout error with `pcall` and keeps looping), the scheduler logs an error
+naming it; such a handler can no longer read or write, but it keeps its slot
+until it returns.
+
+Delivery stays **at-least-once**: a run that timed out or whose worker died
+is run again, and its earlier committed writes are still there — handlers
+must be idempotent.
 
 ## Transactions in job handlers
 
@@ -334,6 +369,10 @@ Common patterns:
 | Compensate external side-effects | `crap.tx.on_rollback("hooks.x.compensate", {...})` inside the block, or run it in the `if not ok` branch |
 | Stop the job from being marked failed | Catch with `pcall` and return success from `M.run`; the framework will treat it as completed |
 
+`pcall` also catches the [timeout](#timeouts) error. Let it propagate — a
+handler that swallows it can neither read nor write any more, and only
+delays the retry that would finish the work.
+
 ## Concurrency model
 
 Three caps stack when the scheduler decides whether to claim a job.
@@ -364,7 +403,7 @@ slug as an unknown job:
 
 | Field | What it sets |
 |---|---|
-| `timeout` | Per-job wall-clock timeout for system jobs in this queue. User Lua jobs use the timeout on their `JobDefinition` instead. |
+| `timeout` | Per-job wall-clock timeout for system jobs in this queue. User Lua jobs use the timeout on their `JobDefinition` instead. A `_system_bulk` run stops itself at it and rolls back; email and image-convert runs are bounded by their own I/O (the SMTP timeout, a finite encode) — one still running past it is logged and keeps its slot, and is never retried while it runs. |
 | `retries` | Default `max_attempts` for jobs in this queue (`max_attempts = retries + 1`). Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
 
 See [`[jobs.queues]`](../configuration/crap-toml.md#jobsqueues) in

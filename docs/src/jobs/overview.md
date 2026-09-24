@@ -21,7 +21,7 @@ Jobs are defined via `crap.jobs.define()` in `init.lua` or files under `jobs/`:
 -- jobs/cleanup_expired.lua
 crap.jobs.define("cleanup_expired", {
     handler = "jobs.cleanup_expired.run",
-    schedule = "0 3 * * *",        -- daily at 3am
+    schedule = "0 3 * * *",        -- daily at 03:00 UTC
     queue = "maintenance",
     retries = 3,
     timeout = 300,
@@ -53,13 +53,13 @@ return M
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `handler` | string | (required) | Lua function ref (e.g., `"jobs.cleanup.run"`) |
-| `schedule` | string | nil | Cron expression for automatic scheduling (5 fields, or 6/7 with a leading seconds field; day-of-week is crontab-numbered — `0`/`7` Sunday … `6` Saturday, names accepted; validated at startup) |
+| `schedule` | string | nil | Cron expression for automatic scheduling, **evaluated in UTC** (5 fields, or 6/7 with a leading seconds field; day-of-week is crontab-numbered — `0`/`7` Sunday … `6` Saturday, names accepted; validated at startup) |
 | `queue` | string | `"default"` | Queue name for grouping |
 | `retries` | integer | inherits queue, else 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below). Omit to inherit `[jobs.queues.<queue>] retries` from `crap.toml`; set explicitly (including `0`) to override the queue default. |
-| `timeout` | integer | 60 | Seconds before job is marked failed |
+| `timeout` | integer | 60 | Wall-clock seconds a run may take (minimum 1). The handler is stopped when they run out, the operation in flight rolls back, and the run fails (retried if attempts remain) — see [Timeouts](../lua-api/jobs.md#timeouts) |
 | `concurrency` | integer | 1 | Max concurrent runs of this job (cluster-wide) |
 | `priority` | integer | 0 | Default scheduling priority; higher = sooner. Per-enqueue value overrides this. |
-| `skip_if_running` | boolean | true | Skip cron trigger if previous run still active |
+| `skip_if_running` | boolean | true | Skip a cron trigger while a previous run is still queued or running (including one waiting out its retry backoff) |
 | `labels` | table | nil | Display labels (`{ singular = "..." }`) |
 | `access` | string | nil | Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`) so one function can serve both, or branch to allow read-only viewers. On `"trigger"`, `ctx.data` is the queued payload — `nil` when there is none, or when it isn't a JSON object (such a payload is then rejected, but only for a caller the rule allows), so guard against `nil`. Returns `true`/`false` only — a filter table is rejected. |
 
@@ -146,8 +146,16 @@ Concurrency caps stack, strictest wins (all cluster-wide via the shared DB):
   overrides keep framework defaults intact. Framework ships
   `images = { concurrency = 2, timeout = "5m", retries = 2 }`.
 - **Per-job**: `concurrency` field on the definition (default: 1)
-- **Timeout**: Jobs running longer than `timeout` are marked failed
-- **Skip-if-running**: Cron-triggered jobs skip if a previous run is still active
+- **Timeout**: A Lua handler (or a queued bulk op) running longer than
+  `timeout` is stopped, its in-flight operation rolled back, and the run
+  failed; a run is never retried while it is still executing, so it keeps
+  its concurrency slot until it has returned
+- **Skip-if-running**: Cron-triggered jobs skip while a previous run is still
+  queued or running
+
+A run that finishes frees its slot at once: the scheduler polls again as soon
+as any run ends, so a queue of short jobs is not held to one run per
+`poll_interval` — the interval is only the fallback.
 
 For aging-based promotion of low-priority jobs in busy queues, set
 `[jobs] priority_decay = "1m"` — see
@@ -197,6 +205,14 @@ This makes job delivery **at-least-once**: a job that times out or whose worker
 crashes will run again, so **job handlers must be idempotent**. A job that must
 never run twice needs its own guard (e.g. a unique key or an idempotency check
 at the top of the handler).
+
+A timeout never makes a run overlap with its own retry: the handler is stopped
+at its deadline (the operation in flight rolls back; writes committed before
+it stay), and the run is re-queued only once it has actually returned. Until
+then its row stays `running` with a fresh heartbeat, so it is neither
+reclaimed nor retried, and every concurrency cap keeps counting it. What
+"runs again" means is therefore: the retry starts after the timed-out attempt
+has ended, and sees whatever that attempt committed before its deadline.
 
 ### Cron schedules across restarts
 

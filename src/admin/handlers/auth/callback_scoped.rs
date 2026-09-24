@@ -17,9 +17,13 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::admin::{AdminState, handlers::shared::paths};
-
-use super::callback::complete_auth_callback;
+use crate::admin::{
+    AdminState,
+    handlers::{
+        auth::callback::{CallbackRequest, complete_auth_callback},
+        shared::paths,
+    },
+};
 
 /// GET/POST `/admin/auth/callback/{collection}/{name}` — dispatch to the Lua
 /// auth callback hook `hooks.auth_callback.{name}`, binding the resulting session
@@ -36,7 +40,7 @@ pub async fn auth_callback_scoped(
     headers: HeaderMap,
 ) -> Response {
     // The collection comes from the URL, so it must be a real auth collection.
-    // (`validate_callback_user` re-checks the user exists in it, but rejecting an
+    // (`admit_callback_user` re-checks the user is stored in it, but rejecting an
     // unknown/non-auth collection up front avoids running a hook for nothing.)
     let is_auth = state
         .infra
@@ -48,5 +52,7 @@ pub async fn auth_callback_scoped(
         return Redirect::to(paths::LOGIN).into_response();
     }
 
-    complete_auth_callback(&state, addr, &collection, &name, &params, &headers).await
+    let request = CallbackRequest::builder(addr, &collection, &name, &params, &headers).build();
+
+    complete_auth_callback(&state, &request).await
 }

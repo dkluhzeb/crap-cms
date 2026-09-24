@@ -78,7 +78,8 @@ fn setup() -> Ctx {
 }
 
 /// A minimal auth collection so a queued run can RE-LOAD its queuing user
-/// (the executor no longer trusts a stored snapshot).
+/// (the executor no longer trusts a stored snapshot). Soft-delete is on so a
+/// queuer can be moved to the trash.
 fn users_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("users");
     def.fields = vec![
@@ -87,6 +88,7 @@ fn users_def() -> CollectionDefinition {
             .build(),
     ];
     def.auth = Some(crap_cms::core::collection::Auth::enabled());
+    def.soft_delete = true;
     def
 }
 
@@ -446,6 +448,51 @@ fn locked_queuing_user_abandons_the_run() {
         find_titles(&ctx).is_empty(),
         "a revoked queuer's batch must not run"
     );
+}
+
+/// Regression: a queuing user moved to the trash after queueing passed the
+/// existence check, which counted trashed rows, so the run was abandoned as
+/// "could not be loaded" rather than saying the user is gone. A trashed
+/// queuer is now reported like a deleted one.
+#[test]
+fn trashed_queuing_user_abandons_the_run() {
+    let ctx = setup();
+    let owner_id = create_user(&ctx);
+
+    {
+        let conn = ctx.infra.pool.get().unwrap();
+        assert!(query::soft_delete(&conn, "users", &owner_id).expect("trash"));
+    }
+
+    let mut data = job_data(
+        BulkOpKind::CreateMany,
+        QueuedBy::User {
+            id: owner_id,
+            collection: "users".to_string(),
+            session_version: 0,
+        },
+    );
+    data.documents = Some(vec![
+        [("title".to_string(), json!("trashed"))]
+            .into_iter()
+            .collect(),
+    ]);
+
+    let run = bulk_queue::queue_bulk(&ctx.infra.pool, &data, ScheduledBy::Grpc).expect("queue");
+    execute(&ctx, &run);
+
+    let finished = fetch_run(&ctx, &run.id);
+    assert_eq!(finished.status, JobStatus::Failed);
+    assert!(
+        finished
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no longer exists"),
+        "error: {:?}",
+        finished.error
+    );
+    assert!(find_titles(&ctx).is_empty());
 }
 
 /// A session-version bump (force-logout / password reset / unverify —

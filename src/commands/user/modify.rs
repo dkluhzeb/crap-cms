@@ -10,8 +10,8 @@ use crate::{
     cli::{self, crap_theme},
     commands::cli_infra,
     config::CrapConfig,
-    core::{CollectionDefinition, Document, Registry},
-    db::{DbPool, query},
+    core::{CollectionDefinition, Document, Registry, collection::MfaMode},
+    db::DbPool,
     service::{self, AppInfra, ServiceContext, ServiceError, auth::AccountAction},
 };
 
@@ -75,14 +75,11 @@ fn delete_through_service(
 /// is still referenced by other documents, or the delete fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_delete(p: &UserDeleteParams<'_>) -> Result<()> {
-    let (_, doc) = resolve_user(&UserLookup {
-        pool: p.pool,
-        registry: p.registry,
-        collection: p.collection,
-        email: p.email.clone(),
-        id: p.id.clone(),
-        locale: &p.config.locale,
-    })?;
+    let lookup = UserLookup::builder(p.pool, p.registry, p.collection, &p.config.locale)
+        .email(p.email.clone())
+        .id(p.id.clone())
+        .build();
+    let (_, doc) = resolve_user(&lookup)?;
     let user_email = get_user_email(&doc);
 
     // Built — and a configured Redis reached — before the prompt, so a delete
@@ -169,23 +166,37 @@ pub fn user_account_action(
     Ok(())
 }
 
-/// Reset a user's TOTP enrollment: clears the sealed secret, the confirmed
-/// flag, and the replay guard — the next MFA challenge re-provisions from
-/// scratch (trust-on-first-login re-opens, so confirm interactively).
+/// Ask the operator to confirm a TOTP reset; `false` when they decline.
+fn confirm_reset_totp(doc: &Document, email: &str) -> Result<bool> {
+    Confirm::with_theme(&crap_theme())
+        .with_prompt(format!(
+            "Reset TOTP enrollment for {} ({email})? They re-enroll on their next login \
+             — anyone holding their password could enroll during that window.",
+            doc.id
+        ))
+        .default(false)
+        .interact()
+        .context("Failed to read confirmation")
+}
+
+/// Reset a user's TOTP enrollment through the service op, on the CLI's
+/// infrastructure (`cli_infra`): clears the sealed secret, the confirmed flag
+/// and the replay guard — the next MFA challenge re-provisions from scratch
+/// (trust-on-first-login re-opens, so confirm interactively). Like every
+/// credential change it ends the user's sessions and — with live updates over
+/// Redis — tears down their open streams on `serve`. Collection access rules
+/// don't apply to the operator's CLI.
 ///
 /// # Errors
 ///
 /// Returns an error if the user can't be resolved, the collection doesn't
 /// use `mfa = "totp"`, the prompt fails, or the DB update fails.
 #[cfg(not(tarpaulin_include))]
-pub fn user_reset_totp(lookup: &UserLookup<'_>, confirm: bool) -> Result<()> {
-    let (pool, collection) = (lookup.pool, lookup.collection);
+pub fn user_reset_totp(lookup: &UserLookup<'_>, infra: &AppInfra, confirm: bool) -> Result<()> {
+    let collection = lookup.collection;
     let (def, doc) = resolve_user(lookup)?;
 
-    let uses_totp = def
-        .auth
-        .as_ref()
-        .is_some_and(|a| a.mfa() == crate::core::collection::MfaMode::Totp);
+    let uses_totp = def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Totp);
     if !uses_totp {
         return Err(anyhow!(
             "Collection '{collection}' does not use mfa = \"totp\""
@@ -194,27 +205,20 @@ pub fn user_reset_totp(lookup: &UserLookup<'_>, confirm: bool) -> Result<()> {
 
     let user_email = get_user_email(&doc);
 
-    if !confirm {
-        let proceed = Confirm::with_theme(&crap_theme())
-            .with_prompt(format!(
-                "Reset TOTP enrollment for {} ({})? They re-enroll on their next login \
-                 — anyone holding their password could enroll during that window.",
-                doc.id, user_email
-            ))
-            .default(false)
-            .interact()
-            .context("Failed to read confirmation")?;
+    if !confirm && !confirm_reset_totp(&doc, user_email)? {
+        cli::info("Aborted.");
 
-        if !proceed {
-            cli::info("Aborted.");
-
-            return Ok(());
-        }
+        return Ok(());
     }
 
-    let conn = pool.get().context("Failed to get database connection")?;
+    let ctx = ServiceContext::collection(collection, &def)
+        .infra(infra)
+        .override_access(true)
+        .build();
 
-    query::reset_totp(&conn, collection, &doc.id).context("Failed to reset TOTP enrollment")?;
+    service::auth::reset_totp(&ctx, &doc.id)
+        .map_err(ServiceError::into_anyhow)
+        .context("Failed to reset TOTP enrollment")?;
 
     cli::success(&format!(
         "Reset TOTP enrollment for user {} ({}) in '{}' — they re-enroll on next login",

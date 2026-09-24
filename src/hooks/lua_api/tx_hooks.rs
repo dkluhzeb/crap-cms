@@ -181,13 +181,8 @@ mod tests {
 
         let queue: DeferredQueue = Rc::new(RefCell::new(Vec::new()));
         lua.set_app_data(LuaCrudInfra {
-            event_transport: None,
-            cache: None,
-            event_queue: None,
-            verification_queue: None,
             deferred: Some(queue.clone()),
-            file_cleanup: None,
-            cache_dirty: None,
+            ..LuaCrudInfra::default()
         });
 
         (lua, queue)

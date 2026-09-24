@@ -232,6 +232,7 @@
   "validation.invalid_date_type": "{{field}} muss eine ISO-8601-Datumszeichenkette sein",
   "validation.date_shape": "{{field}} muss für einen {{appearance}}-Picker {{expected}} sein",
   "validation.invalid_text": "{{field}} muss Text sein",
+  "validation.nul_character": "{{field}} darf keine NUL-Zeichen enthalten",
   "validation.invalid_number": "{{field}} muss eine Zahl sein",
   "validation.finite_number": "{{field}} muss eine endliche Zahl sein",
   "validation.whole_number": "{{field}} muss eine ganze Zahl sein",

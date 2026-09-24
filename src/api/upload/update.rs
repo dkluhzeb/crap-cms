@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::helpers::{
-    DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
-    multipart_error_response, service_error_to_response,
+    DocumentBody, json_error, json_ok, multipart_error_response, resolve_upload_request,
+    service_error_to_response,
 };
 
 /// Owned bundle for the upload-update spawn-blocking body. Storage, locale
@@ -86,47 +86,14 @@ pub(super) async fn update_upload(
     headers: HeaderMap,
     request: Request,
 ) -> Response {
-    // Run the synchronous auth + Lua access gate on the blocking pool, not the
-    // async worker. The multipart parse below stays async.
-    let (auth_user, def) = match on_blocking_section(|| {
-        let auth_user = extract_bearer_user(&state, &headers)?;
-
-        let def = state
-            .infra
-            .registry
-            .get_collection(&slug)
-            .cloned()
-            .ok_or_else(|| {
-                Box::new(json_error(
-                    StatusCode::NOT_FOUND,
-                    &format!("Collection '{slug}' not found"),
-                ))
-            })?;
-
-        if !def.is_upload_collection() {
-            return Err(Box::new(json_error(
-                StatusCode::BAD_REQUEST,
-                &format!("Collection '{slug}' is not an upload collection"),
-            )));
-        }
-
-        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-        check_upload_access(
-            &state,
-            def.access.update.as_ref(),
-            user_doc,
-            Some(&id),
-            "Update access denied",
-            "update",
-            &def.slug,
-        )?;
-
-        Ok((auth_user, def))
-    }) {
-        Ok(v) => v,
-        Err(resp) => return *resp,
-    };
+    // Auth (a read-pool checkout + queries) is synchronous and must not park
+    // an async worker — run it on the blocking pool. The collection's access
+    // rule is judged by the service, on the request's data.
+    let (auth_user, def) =
+        match on_blocking_section(|| resolve_upload_request(&state, &headers, &slug)) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        };
 
     let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,

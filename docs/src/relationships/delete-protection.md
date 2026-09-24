@@ -119,6 +119,11 @@ Returns a JSON object:
 }
 ```
 
+`field_name` is the referring field's dotted path in the owner document: a
+field inside a group, array or blocks row carries its containers
+(`meta.hero`, `slides.image`), and a block row adds its block type
+(`content.hero.bg_image`).
+
 This endpoint performs the full back-reference scan, so it's heavier than the ref count check. It's designed for on-demand use (e.g., the "Show details" button).
 
 ## Access filtering
@@ -136,7 +141,16 @@ The two questions delete protection answers are gated differently:
   through the same view scope that gates normal reads: a referrer appears only
   if the user could read it via *some* view (published, draft, or trash). For a
   collection access rule that returns row constraints, those constraints are
-  folded into the scan so only matching referrers are listed.
+  folded into the scan so only matching referrers are listed. The referring
+  **field** must be readable too: a reference held in a `hidden` field, or in
+  a field whose `access.read` rule — or the rule of a group, array or blocks
+  field on its path — denies the user without row data, is not listed, since
+  the list would reveal that field's value for those documents. This is the
+  rule that decides whether the user may filter on the field
+  ([Field-Level Access](../access-control/field-level.md#filtering-sorting-and-search)).
+  The list has no request locale, so every one of these decisions — the
+  field's rule, the collection's rule and its row constraints — is made in the
+  default locale.
 
 When the access-filtered list is **smaller** than the raw count — some referrers
 were dropped because the user cannot access them — the response sets

@@ -587,6 +587,7 @@ function crap.fields.join(config) end
 --- @field mfa? "email"|"custom"|"totp"|false MFA mode. `"email"` sends the code by email, `"custom"` hands it to the `mfa_deliver` hook, `"totp"` verifies against an authenticator app (no delivery); `false` (or omit) disables.
 --- @field mfa_when? string | crap.HookRef Optional Lua gate deciding WHETHER a verified login must complete the second factor — called after credential verification with `{ collection, user, surface, headers }`; return `false`/`nil` to skip MFA for this login, anything truthy to require it. Lets MFA apply per surface (`ctx.surface == "grpc"`) or per user field (`ctx.user.mfa_enabled`). Runs for any enabled MFA mode (`"email"` or `"custom"`); no hook = MFA always required. A hook error fails CLOSED (requires MFA).
 --- @field mfa_deliver? string | crap.HookRef Delivery hook for `mfa = "custom"`: called after credential verification with `{ collection, user, code, expires_in }` — send the code via your channel (SMS, push, …). The code is SENSITIVE: never log it. Errors are logged server-side; the previously issued code (if any) stays valid. Required with `mfa = "custom"`, rejected otherwise (startup error).
+--- @field mfa_exempt_callbacks? string[] Auth callbacks (by `{name}` of `/admin/auth/callback/[{collection}/]{name}`) whose identity provider already enforces a second factor: a session they authenticate skips this collection's MFA step. Every other callback completes the same MFA step a password login does. Only valid with an MFA mode set (startup error otherwise).
 --- @field verify_email? boolean Require email verification before login (default `false`).
 --- @field forgot_password? boolean Enable the forgot-password flow (default `true`).
 
@@ -2000,13 +2001,13 @@ function crap.jobs.define(slug, config) end
 --- Typed `config` table passed to `crap.jobs.define(slug, config)`.
 --- @class crap.JobDefinitionConfig
 --- @field handler? string | crap.HookRef Lua function ref for the job handler (required, e.g., `"jobs.cleanup.run"`). May carry per-definition options exposed to the handler as `ctx.options`.
---- @field schedule? string Cron expression (e.g., `"0 3 * * *"`). When set, the job runs on this schedule. Accepts both 5-field and 6/7-field forms.
+--- @field schedule? string Cron expression (e.g., `"0 3 * * *"`), evaluated in UTC. When set, the job runs on this schedule. Accepts both 5-field and 6/7-field forms.
 --- @field queue? string Queue name (default: `"default"`).
---- @field retries? integer Max retry attempts on failure (default: `0`).
---- @field timeout? integer Seconds before a running job is marked failed (default: `60`).
+--- @field retries? integer Max retry attempts on failure. Omit to inherit the queue's `[jobs.queues.<queue>] retries` (else `0`).
+--- @field timeout? integer Wall-clock budget in seconds (default: `60`, minimum `1`). Once it passes, the handler is stopped at its next Lua instruction batch or database / HTTP / email call, the operation in flight is rolled back, and the run is failed (and retried if attempts remain).
 --- @field concurrency? integer Max concurrent runs of this job (default: `1`).
 --- @field priority? integer Default scheduling priority for this job. Used when a queue site doesn't pass an explicit `{ priority = N }`. Higher = claimed sooner; negative = run only when otherwise idle. Default: `0`.
---- @field skip_if_running? boolean Skip scheduled run if a previous run is still active (default: `true`).
+--- @field skip_if_running? boolean Skip a scheduled run while a previous run of this job is still queued or running (default: `true`).
 --- @field labels? crap.JobLabels Display labels for the admin UI.
 --- @field access? string | crap.HookRef Lua function ref for access control on gRPC/CLI trigger.
 
@@ -2058,11 +2059,11 @@ function crap.jobs.cancel_run(id) end
 --- @field slug string The slug that triggers and identifies the job.
 --- @field queue string Queue the job runs on.
 --- @field schedule? string Cron expression, absent for manually triggered jobs.
---- @field timeout integer Seconds before a running job is considered timed out.
+--- @field timeout integer Seconds a run may execute before it is stopped.
 --- @field priority integer Default scheduling priority; higher is claimed sooner.
 --- @field retries integer Retries after a failure, resolved against the queue's setting.
 --- @field concurrency integer Maximum simultaneous runs of this job.
---- @field skip_if_running boolean Whether a scheduled run is skipped while another is active.
+--- @field skip_if_running boolean Whether a scheduled run is skipped while another is still queued or running.
 --- @field label? string Human-readable label from the Lua definition.
 
 --- List the defined jobs this caller may see.

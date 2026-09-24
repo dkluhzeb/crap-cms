@@ -31,15 +31,14 @@ use tracing::{debug, warn};
 use crate::config::LocaleConfig;
 use crate::core::{
     AuthUser, Claims, CollectionDefinition, Document, Registry, Slug, StrategyEntry,
-    auth::{ClaimsBuilder, TokenProvider},
+    auth::{ClaimsBuilder, TokenProvider, TokenUse},
     collection::{Auth, Surface},
-    json_truthy,
 };
 use crate::db::{DbConnection, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
 use crate::service::{
-    AppInfra, ServiceContext, ServiceError,
-    auth::{is_locked, is_verified, load_user},
+    AppInfra, ServiceContext,
+    auth::{StrategyAdmission, admit_strategy_user, load_user},
 };
 
 /// Per-request inputs for [`evaluate`].
@@ -385,18 +384,9 @@ fn try_strategy(
             }
         };
 
-    if let Some(state) = strategy_refusal(&doc, &entry.slug, auth, deps.conn) {
-        debug!(
-            collection = %entry.slug,
-            strategy = %entry.name,
-            user = %doc.id,
-            "strategy returned {state} user; refusing"
-        );
-        return None;
-    }
-
-    let stored = stored_strategy_user(&doc, &user_ctx(def, deps.conn, deps.locale_config))?;
-    let user = build_strategy_authuser(stored, &entry.slug, auth.token_expiry)?;
+    let ctx = user_ctx(def, deps.conn, deps.locale_config);
+    let (user, session_version) = admitted_strategy_user(&ctx, &doc, auth, &entry.name)?;
+    let user = build_strategy_authuser(user, session_version, &entry.slug, auth.token_expiry)?;
 
     Some(Resolution::Authenticated(Box::new(
         AuthenticatedResolution {
@@ -407,39 +397,6 @@ fn try_strategy(
             },
         },
     )))
-}
-
-/// The stored document of the user a strategy authenticated, read through
-/// [`load_user`] exactly as a bearer or cookie request reads its user. The
-/// strategy's table only names the user: a Lua table cannot hold a NULL field
-/// (its key is dropped), and a document found through a Lua read lacks its
-/// hidden fields, so access rules would judge a different `ctx.user` than for
-/// the same user signed in with a token. `None` — refusing the user — when the
-/// id names no stored, non-trashed user of the collection, or the read fails.
-/// `ctx` is the auth collection's [`user_ctx`].
-fn stored_strategy_user(doc: &Document, ctx: &ServiceContext<'_>) -> Option<Document> {
-    match load_user(ctx, &doc.id) {
-        Ok(Some(user)) => Some(user),
-        Ok(None) => {
-            warn!(
-                collection = %ctx.slug,
-                user = %doc.id,
-                "strategy returned a user that is not stored in the collection; refusing"
-            );
-
-            None
-        }
-        Err(e) => {
-            warn!(
-                collection = %ctx.slug,
-                user = %doc.id,
-                error = %e,
-                "reading the strategy's user failed; refusing"
-            );
-
-            None
-        }
-    }
 }
 
 /// A context for reading a user of the auth collection `def`.
@@ -454,52 +411,49 @@ fn user_ctx<'a>(
         .build()
 }
 
-/// The account state that refuses a strategy's user, if any: `"a locked"`,
-/// `"an unverified"` where the collection requires verification, or
-/// `"an unreadable"` when the stored state can't be read. The stored row
-/// decides — a document read through the API never carries `_locked` or
-/// `_verified` — and a flag set on the document the hook returns counts too.
-fn strategy_refusal(
+/// The stored document of the user a strategy's hook named, admitted through
+/// [`admit_strategy_user`] exactly as the login path and the external auth
+/// callback admit one: the stored row decides lock / verification state, the
+/// hook's table may only restrict it, and the session is built from the
+/// stored document (a Lua table can't carry a NULL field or the hidden ones,
+/// so access rules would otherwise judge a different `ctx.user` than for the
+/// same user signed in with a token). Returns the stored document with its
+/// current session version. `None` — refusing the user — on any refusal or a
+/// failed read (fail closed).
+fn admitted_strategy_user(
+    ctx: &ServiceContext<'_>,
     doc: &Document,
-    slug: &str,
     auth: &Auth,
-    conn: &dyn DbConnection,
-) -> Option<&'static str> {
-    let ctx = ServiceContext::slug_only(slug).conn(conn).build();
+    strategy: &str,
+) -> Option<(Document, u64)> {
+    match admit_strategy_user(ctx, doc, auth.requires_verify_email()) {
+        Ok(StrategyAdmission::Admitted {
+            user,
+            session_version,
+        }) => Some((user, session_version)),
+        Ok(StrategyAdmission::Refused(refusal)) => {
+            debug!(
+                collection = %ctx.slug,
+                strategy = %strategy,
+                user = %doc.id,
+                "strategy returned a {} user; refusing",
+                refusal.as_str()
+            );
 
-    let locked = bool_flag(doc, "_locked")
-        || match is_locked(&ctx, &doc.id) {
-            Ok(locked) => locked,
-            Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
-        };
-    if locked {
-        return Some("a locked");
+            None
+        }
+        Err(e) => {
+            warn!(
+                collection = %ctx.slug,
+                strategy = %strategy,
+                user = %doc.id,
+                error = %e,
+                "account state lookup failed; refusing the strategy's user"
+            );
+
+            None
+        }
     }
-
-    if !auth.requires_verify_email() {
-        return None;
-    }
-
-    let verified = bool_flag(doc, "_verified")
-        || match is_verified(&ctx, &doc.id) {
-            Ok(verified) => verified,
-            Err(e) => return Some(unreadable_account(slug, &doc.id, &e)),
-        };
-
-    (!verified).then_some("an unverified")
-}
-
-/// Log an account-state lookup that failed for a strategy's user, who is
-/// refused.
-fn unreadable_account(slug: &str, id: &str, e: &ServiceError) -> &'static str {
-    warn!(
-        collection = %slug,
-        user = %id,
-        error = %e,
-        "account state lookup failed; refusing the strategy's user"
-    );
-
-    "an unreadable"
 }
 
 enum TokenOutcome {
@@ -582,19 +536,6 @@ fn check_account(conn: &dyn DbConnection, claims: &Claims) -> Result<(), AuthFai
     Ok(())
 }
 
-/// Defensive reader for the `_locked` / `_verified` flags on a document a
-/// strategy hook returns: the shared checkbox rule ([`json_truthy`]) — the
-/// canonical DB-backed integer (0 = false, anything else = true), a bool a Lua
-/// hook returned directly, and the stringy spellings (`"1"`, `"on"`, `"true"`,
-/// case-insensitive) a hook-synthesized document ends up with.
-///
-/// Anything else reads as `false` (the safe default: don't grant special-case
-/// access on the missing-true side; do refuse on the locked/unverified side
-/// only when we can prove it).
-fn bool_flag(doc: &Document, key: &str) -> bool {
-    doc.fields.get(key).is_some_and(json_truthy)
-}
-
 /// Materialize an [`AuthUser`] from already-validated [`Claims`]:
 /// look up the user document, reject locked accounts, reject
 /// stale session versions. Returns `None` for any failure mode —
@@ -643,15 +584,25 @@ pub fn reload_authenticated_user(infra: &AppInfra, claims: &Claims) -> Option<Au
 /// Strategy auth doesn't issue a JWT to the client — the produced
 /// `Claims` are internal-only, populated to keep the downstream
 /// shape identical to the bearer / cookie paths (request
-/// extensions, hook user context, audit). The `exp` field is set
-/// from the collection's `token_expiry` for consistency but isn't
-/// re-validated; treating it as informative metadata.
+/// extensions, hook user context, audit). They carry
+/// [`TokenUse::Strategy`], so the token provider refuses to sign them and
+/// no handler can mistake them for a session's claims. They carry the
+/// user's stored `session_version` (read when the user was admitted), so
+/// work the request queues is revoked by a later session-version bump
+/// exactly like a token user's. The `exp` field is set from the
+/// collection's `token_expiry` for consistency but isn't re-validated;
+/// treating it as informative metadata.
 ///
 /// Refuses (returns `None`) any doc with an empty `id` — a strategy
 /// hook returning such a doc is operator error, and propagating an
 /// empty `sub` claim downstream would silently break session-
 /// version lookups and audit logging.
-fn build_strategy_authuser(doc: Document, slug: &Slug, token_expiry: u64) -> Option<AuthUser> {
+fn build_strategy_authuser(
+    doc: Document,
+    session_version: u64,
+    slug: &Slug,
+    token_expiry: u64,
+) -> Option<AuthUser> {
     if doc.id.is_empty() {
         warn!(collection = %slug, "strategy returned document with empty id; refusing");
         return None;
@@ -667,6 +618,8 @@ fn build_strategy_authuser(doc: Document, slug: &Slug, token_expiry: u64) -> Opt
         .email(email)
         .exp(now.saturating_add(token_expiry))
         .auth_time(now)
+        .session_version(session_version)
+        .token_use(TokenUse::Strategy)
         .build()
     {
         Ok(c) => c,
@@ -680,38 +633,34 @@ fn build_strategy_authuser(doc: Document, slug: &Slug, token_expiry: u64) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        core::collection::{Activation, AuthMethod, SurfaceSet},
-        db::InMemoryConn,
-    };
+    use serde_json::json;
 
-    /// Regression: a failed lock lookup refused a strategy's user as "locked",
-    /// with nothing logged, so an unreachable table read as a locked account.
+    use super::*;
+    use crate::core::collection::{Activation, AuthMethod, SurfaceSet};
+
+    /// Regression: strategy claims were indistinguishable from a session's
+    /// (`token_use = Session`, `session_version = 0`), so the admin
+    /// session-refresh endpoint exchanged a strategy credential for a signed
+    /// session JWT.
     #[test]
-    fn a_failed_account_lookup_refuses_with_its_own_reason() {
-        // No `members` table: every lookup fails.
-        let conn = InMemoryConn::open();
+    fn strategy_claims_are_marked_as_strategy_claims() {
         let doc = Document::builder("m1").build();
 
-        assert_eq!(
-            strategy_refusal(&doc, "members", &Auth::new(true), &conn),
-            Some("an unreadable")
-        );
+        let user = build_strategy_authuser(doc, 0, &Slug::new("members"), 3600).unwrap();
+
+        assert_eq!(user.claims.token_use, TokenUse::Strategy);
     }
 
-    /// A lock flag on the document the hook returns refuses without a lookup.
+    /// Regression: strategy claims always carried `session_version = 0`, so
+    /// work queued under them could not be revoked by a session-version
+    /// bump — they now carry the stored version the user was admitted with.
     #[test]
-    fn a_locked_flag_on_the_strategy_document_refuses() {
-        let conn = InMemoryConn::open();
-        let mut doc = Document::builder("m1").build();
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(1));
+    fn strategy_claims_carry_the_stored_session_version() {
+        let doc = Document::builder("m1").build();
 
-        assert_eq!(
-            strategy_refusal(&doc, "members", &Auth::new(true), &conn),
-            Some("a locked")
-        );
+        let user = build_strategy_authuser(doc, 7, &Slug::new("members"), 3600).unwrap();
+
+        assert_eq!(user.claims.session_version, 7);
     }
 
     /// Activation matching as the precomputed `header_strategies` /
@@ -790,61 +739,11 @@ mod tests {
     }
 
     #[test]
-    fn bool_flag_reads_integer_flags() {
-        let mut doc = Document::new("u1".to_string());
-        assert!(!bool_flag(&doc, "_locked"));
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(1));
-        assert!(bool_flag(&doc, "_locked"));
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(0));
-        assert!(!bool_flag(&doc, "_locked"));
-        doc.fields
-            .insert("_verified".to_string(), serde_json::json!(1));
-        assert!(bool_flag(&doc, "_verified"));
-        // The shared checkbox rule: any non-zero number, not integers only.
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(0.5));
-        assert!(bool_flag(&doc, "_locked"));
-    }
-
-    /// Defensive parsing: a strategy hook synthesizing a doc with
-    /// `_locked = "1"` (string) or `_locked = true` (bool) must
-    /// still register as locked — otherwise the flag on the returned
-    /// document would be a silent no-op.
-    #[test]
-    fn bool_flag_accepts_string_and_bool_shapes() {
-        let mut doc = Document::new("u1".to_string());
-        // String "1" / "true" — locked.
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!("1"));
-        assert!(bool_flag(&doc, "_locked"));
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!("true"));
-        assert!(bool_flag(&doc, "_locked"));
-        // Bool true — locked.
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(true));
-        assert!(bool_flag(&doc, "_locked"));
-        // String "0" / "false" — not locked.
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!("0"));
-        assert!(!bool_flag(&doc, "_locked"));
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!("false"));
-        assert!(!bool_flag(&doc, "_locked"));
-        // Other types read as unset; the stored row still decides a real lock.
-        doc.fields
-            .insert("_locked".to_string(), serde_json::json!(null));
-        assert!(!bool_flag(&doc, "_locked"));
-    }
-
-    #[test]
     fn build_strategy_authuser_refuses_empty_id() {
         let slug = Slug::new("users");
         let doc = Document::new(String::new());
         assert!(
-            build_strategy_authuser(doc, &slug, 7200).is_none(),
+            build_strategy_authuser(doc, 0, &slug, 7200).is_none(),
             "doc with empty id must be refused"
         );
     }
@@ -853,9 +752,8 @@ mod tests {
     fn build_strategy_authuser_accepts_well_formed_doc() {
         let slug = Slug::new("users");
         let mut doc = Document::new("u1".to_string());
-        doc.fields
-            .insert("email".to_string(), serde_json::json!("a@x.com"));
-        let user = build_strategy_authuser(doc, &slug, 7200).expect("well-formed doc");
+        doc.fields.insert("email".to_string(), json!("a@x.com"));
+        let user = build_strategy_authuser(doc, 0, &slug, 7200).expect("well-formed doc");
         assert_eq!(user.claims.sub, "u1");
         assert_eq!(user.claims.email, "a@x.com");
     }
@@ -945,7 +843,9 @@ mod strategy_user_tests {
             "the returned table alone widens the rule"
         );
 
-        let stored = stored_strategy_user(&returned, &ctx).expect("stored user");
+        let auth = def.auth.as_ref().unwrap();
+        let (stored, _) =
+            admitted_strategy_user(&ctx, &returned, auth, "sso").expect("stored user");
         assert_eq!(stored.fields.get("tenant_id"), Some(&Value::Null));
 
         let result = tenant_rule(&stored);
@@ -961,6 +861,27 @@ mod strategy_user_tests {
 
         let synthesized = Document::builder("nobody").build();
 
-        assert!(stored_strategy_user(&synthesized, &ctx).is_none());
+        let auth = def.auth.as_ref().unwrap();
+
+        assert!(admitted_strategy_user(&ctx, &synthesized, auth, "sso").is_none());
+    }
+
+    /// The admitted user comes with the stored session version, which the
+    /// strategy claims carry so a later bump revokes work queued under them.
+    #[test]
+    fn a_strategy_user_is_admitted_with_the_stored_session_version() {
+        let (conn, def) = tenantless_users();
+        conn.execute("UPDATE users SET _session_version = 3 WHERE id = 'u1'", [])
+            .unwrap();
+        let locale_config = LocaleConfig::default();
+        let ctx = user_ctx(&def, &conn, &locale_config);
+
+        let returned = Document::builder("u1").build();
+        let auth = def.auth.as_ref().unwrap();
+
+        let (_, session_version) =
+            admitted_strategy_user(&ctx, &returned, auth, "sso").expect("stored user");
+
+        assert_eq!(session_version, 3);
     }
 }

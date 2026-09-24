@@ -23,9 +23,15 @@ use crate::{
         CollectionDefinition, Document, DocumentFields, Registry, ScheduledBy,
         job::{JobRun, SYSTEM_BULK_JOB, SYSTEM_BULK_QUEUE},
     },
-    db::{AccessResult, DbConnection, DbPool, LocaleContext, query},
+    db::{
+        AccessResult, DbConnection, DbPool, FilterClause, LocaleContext, query,
+        query::filter::{decode_where_json_str, normalize_filter_fields},
+    },
     hooks::AccessCheckInput,
-    service::{AppInfra, ServiceError, collections::delete_scope},
+    service::{
+        AppInfra, FieldReadStrip, RunnerReadHooks, ServiceContext, ServiceError,
+        collections::{delete_scope, reject_unreadable_bulk_filters},
+    },
 };
 
 /// Which bulk operation a `_system_bulk` run executes.
@@ -223,15 +229,20 @@ fn resolve_queuing_user(
         .map_err(|e| ServiceError::Internal(e.context("resolving queuing user")))
 }
 
-/// The collection-level access gate, run at QUEUE time so a caller who may
-/// not perform the operation is refused synchronously instead of being
-/// handed a `job_id` for work that can only fail. Execution still runs the
-/// full per-document gate — this is an early, cheap rejection, never a
-/// replacement.
+/// The checks the operation's bulk gate applies at execution, run at QUEUE
+/// time so a caller who may not perform the operation is refused
+/// synchronously instead of being handed a `job_id` for work that can only
+/// fail: a filter on a field the caller may not read, then the
+/// collection-level access gate. Execution still runs the full per-document
+/// gate — this is an early, cheap rejection, never a replacement.
+///
+/// Called for a user-queued run only; an override caller's run skips both,
+/// as the operation does.
 ///
 /// # Errors
 ///
-/// [`ServiceError::AccessDenied`] when the collection gate denies.
+/// [`ServiceError::AccessDenied`] when a filter path is unreadable or the
+/// collection gate denies.
 pub fn check_queue_access(
     infra: &AppInfra,
     conn: &dyn DbConnection,
@@ -243,7 +254,88 @@ pub fn check_queue_access(
     // test enforces exactly this).
     let user = resolve_queuing_user(conn, &infra.registry, &infra.locale_config, &data.queued_by)?;
 
-    let gate_def = gate_definition(def, data);
+    let ctx = ServiceContext::collection(&data.collection, def)
+        .conn(conn)
+        .user(user.as_ref())
+        .locale_config(Some(&infra.locale_config))
+        .build();
+
+    let strip = RunnerReadHooks::new(
+        &infra.hook_runner,
+        conn,
+        user.as_ref(),
+        data.ui_locale.as_deref(),
+    );
+
+    reject_unreadable_queued_filters(&ctx, &strip, data)?;
+
+    check_queue_gate(infra, &ctx, conn, data)
+}
+
+/// The filters a queued `update_many` / `delete_many` matches its documents
+/// by, decoded through the chokepoint execution decodes them with and
+/// normalized as the operation normalizes them. Empty without a `where`.
+fn queued_filters(
+    def: &CollectionDefinition,
+    data: &BulkJobData,
+) -> Result<Vec<FilterClause>, ServiceError> {
+    let Some(json) = data.where_clause.as_deref() else {
+        return Ok(Vec::new());
+    };
+
+    let mut filters = decode_where_json_str(json)
+        .map_err(|e| ServiceError::HookError(format!("invalid where clause: {e}")))?;
+    normalize_filter_fields(&mut filters, &def.fields);
+
+    Ok(filters)
+}
+
+/// The locale a queued run's filters are judged in, as the operation's gate
+/// judges them: an update's own locale; a delete's default locale.
+fn queued_filter_locale(
+    data: &BulkJobData,
+    locale_config: &LocaleConfig,
+) -> Result<Option<LocaleContext>, ServiceError> {
+    if data.op != BulkOpKind::UpdateMany {
+        return Ok(None);
+    }
+
+    LocaleContext::from_locale_string(data.locale.as_deref(), locale_config)
+        .map_err(|e| ServiceError::HookError(format!("invalid locale: {e}")))
+}
+
+/// Reject a queued run whose filter names a field the queuing user may not
+/// read — through the same check the operation's bulk gate applies at
+/// execution ([`reject_unreadable_bulk_filters`]), judged through `strip`.
+fn reject_unreadable_queued_filters(
+    ctx: &ServiceContext,
+    strip: &dyn FieldReadStrip,
+    data: &BulkJobData,
+) -> Result<(), ServiceError> {
+    let filters = queued_filters(ctx.collection_def()?, data)?;
+
+    if filters.is_empty() {
+        return Ok(());
+    }
+
+    let locale_config = ctx
+        .locale_config
+        .ok_or_else(|| ServiceError::Internal(anyhow!("queue check requires locale_config")))?;
+    let locale_ctx = queued_filter_locale(data, locale_config)?;
+
+    reject_unreadable_bulk_filters(ctx, strip, locale_ctx.as_ref(), &filters)
+}
+
+/// The collection-level access gate of the operation the run executes, for
+/// `ctx.user`. A row-filter result is not a denial — the per-document gate at
+/// execution applies it; only an outright denial is refused here.
+fn check_queue_gate(
+    infra: &AppInfra,
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
+    data: &BulkJobData,
+) -> Result<(), ServiceError> {
+    let gate_def = gate_definition(ctx.collection_def()?, data);
     let (operation, access_fn) = match data.op {
         BulkOpKind::CreateMany => ("create", gate_def.access.create.as_ref()),
         BulkOpKind::UpdateMany => ("update", gate_def.access.update.as_ref()),
@@ -260,15 +352,13 @@ pub fn check_queue_access(
         .check_access(
             &AccessCheckInput::builder(operation, &data.collection)
                 .access(access_fn)
-                .user(user.as_ref())
+                .user(ctx.user)
                 .build(),
             conn,
         )
         .map_err(ServiceError::Internal)?;
 
     match result {
-        // A row-filter result is not a denial: the per-document gate at
-        // execution applies it. Only an outright denial is refused here.
         AccessResult::Allowed | AccessResult::Constrained(_) => Ok(()),
         AccessResult::Denied => Err(ServiceError::AccessDenied(format!(
             "{operation} access denied for collection '{}'",
@@ -319,13 +409,14 @@ pub fn queue_bulk(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Map, Value, json};
 
     use super::*;
     use crate::{
         config::{CrapConfig, DatabaseConfig},
-        core::{FieldDefinition, FieldType, collection::Auth},
+        core::{FieldAccess, FieldDefinition, FieldType, HookRef, collection::Auth},
         db::{migrate, pool},
+        hooks::lifecycle::access::strip_read_access_data_aware,
     };
 
     /// Regression: the queue-time gate loaded the queuing user without a
@@ -519,5 +610,96 @@ mod tests {
         for q in [&mine, &theirs, &system] {
             assert!(can_read_bulk_run(q, None, true), "override reads all");
         }
+    }
+
+    /// A read strip denying every field whose read rule is `deny`.
+    struct DenyMarked;
+
+    impl FieldReadStrip for DenyMarked {
+        fn strip_read_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+            strip_read_access_data_aware(fields, level, &|hook, _| hook.reference() == "deny");
+        }
+    }
+
+    /// `posts` with a readable `title` and a read-denied `secret`.
+    fn gated_posts() -> CollectionDefinition {
+        let mut secret = FieldDefinition::builder("secret", FieldType::Text).build();
+        secret.access = FieldAccess {
+            read: Some(HookRef::new("deny")),
+            ..Default::default()
+        };
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            secret,
+        ];
+
+        def
+    }
+
+    fn filtered(mut job: BulkJobData, field: &str) -> BulkJobData {
+        job.where_clause = Some(format!(r#"{{"{field}": {{"equals": "x"}}}}"#));
+        job
+    }
+
+    fn update_job() -> BulkJobData {
+        BulkJobData {
+            op: BulkOpKind::UpdateMany,
+            ..delete_job(false)
+        }
+    }
+
+    /// Regression: a queued `update_many` / `delete_many` whose filter names a
+    /// field the queuing user may not read was stored and refused only when it
+    /// executed. It is now refused at queue time, as the operation refuses it.
+    #[test]
+    fn a_queued_filter_on_an_unreadable_field_is_refused() {
+        let def = gated_posts();
+        let locale_config = LocaleConfig::default();
+        let ctx = ServiceContext::collection("posts", &def)
+            .locale_config(Some(&locale_config))
+            .build();
+
+        for job in [update_job(), delete_job(false)] {
+            let err = reject_unreadable_queued_filters(&ctx, &DenyMarked, &filtered(job, "secret"))
+                .expect_err("a read-denied filter field");
+
+            assert!(matches!(err, ServiceError::AccessDenied(_)), "{err:?}");
+        }
+    }
+
+    /// A readable filter field, and a run without a filter, pass.
+    #[test]
+    fn a_queued_filter_on_a_readable_field_passes() {
+        let def = gated_posts();
+        let locale_config = LocaleConfig::default();
+        let ctx = ServiceContext::collection("posts", &def)
+            .locale_config(Some(&locale_config))
+            .build();
+
+        reject_unreadable_queued_filters(&ctx, &DenyMarked, &filtered(update_job(), "title"))
+            .expect("a readable field");
+        reject_unreadable_queued_filters(&ctx, &DenyMarked, &update_job()).expect("no filter");
+    }
+
+    /// A stored `where` that doesn't decode is refused, not skipped.
+    #[test]
+    fn a_queued_filter_that_does_not_decode_is_refused() {
+        let def = gated_posts();
+        let mut job = update_job();
+        job.where_clause = Some("not json".to_string());
+
+        let err = queued_filters(&def, &job).expect_err("undecodable where");
+
+        assert!(matches!(err, ServiceError::HookError(_)), "{err:?}");
     }
 }

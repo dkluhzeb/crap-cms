@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::core::Document;
 use crate::typegen::lua::LuaAnnotation;
 
-use super::cursor::{self, SortDirection};
+use super::cursor::{self, CursorKey, SortDirection};
 
 /// Pagination metadata for a find result.
 //
@@ -61,12 +61,15 @@ impl PaginationResult {
 /// Flags driving the cursor-pagination terminal. Grouped so the
 /// `cursor()` call site doesn't take a bare run of five bool/Option args.
 #[derive(Clone, Copy)]
-pub struct CursorFlags {
+pub struct CursorFlags<'a> {
     pub has_timestamps: bool,
     pub has_drafts: bool,
     pub had_before_cursor: bool,
     pub had_any_cursor: bool,
     pub cursor_has_more: Option<bool>,
+    /// For an all-locales read sorted by a localized column, the locale whose
+    /// value the SQL orders by (see `cursor_sort_locale`).
+    pub sort_locale: Option<&'a str>,
 }
 
 /// Builder with two terminal methods: `page()` and `cursor()`.
@@ -122,11 +125,13 @@ impl<'a> PaginationResultBuilder<'a> {
     /// each cursor also encodes the row's `_status` so prev/next stays
     /// symmetric across the draft↔published boundary.
     #[must_use]
-    pub fn cursor(self, order_by: Option<&str>, flags: CursorFlags) -> PaginationResult {
+    pub fn cursor(self, order_by: Option<&str>, flags: CursorFlags<'_>) -> PaginationResult {
         let (sort_col, sort_dir) = resolve_sort(order_by, flags.has_timestamps);
-        let with_status = cursor::cursor_status_active(flags.has_drafts, &sort_col);
-        let (start_cursor, end_cursor) =
-            cursor::build_cursors(self.docs, &sort_col, sort_dir, with_status);
+        let key = CursorKey::builder(&sort_col, sort_dir)
+            .with_status(cursor::cursor_status_active(flags.has_drafts, &sort_col))
+            .sort_locale(flags.sort_locale)
+            .build();
+        let (start_cursor, end_cursor) = cursor::build_cursors(self.docs, &key);
 
         let total_pages = if self.limit > 0 {
             (self.total + self.limit - 1) / self.limit
@@ -295,6 +300,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.has_next_page);
@@ -316,6 +322,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: true,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.has_next_page);
@@ -333,6 +340,7 @@ mod tests {
                 had_before_cursor: true,
                 had_any_cursor: true,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.has_next_page);
@@ -350,6 +358,7 @@ mod tests {
                 had_before_cursor: true,
                 had_any_cursor: true,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.has_next_page);
@@ -368,6 +377,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(!pr.has_next_page, "Single page should not have next");
@@ -387,6 +397,7 @@ mod tests {
                 had_before_cursor: true,
                 had_any_cursor: true,
                 cursor_has_more: Some(false),
+                sort_locale: None,
             },
         );
         assert!(pr.has_next_page, "Should have next (came from there)");
@@ -407,6 +418,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(!pr.has_next_page);
@@ -426,6 +438,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.start_cursor.is_some());
@@ -442,6 +455,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.start_cursor.is_some());
@@ -458,6 +472,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         assert!(pr.start_cursor.is_some());
@@ -493,6 +508,7 @@ mod tests {
                 had_before_cursor: false,
                 had_any_cursor: false,
                 cursor_has_more: None,
+                sort_locale: None,
             },
         );
         let json = serde_json::to_value(&pr).unwrap();

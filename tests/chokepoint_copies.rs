@@ -151,7 +151,7 @@ const EDITOR_LOCALE_CTX: Chokepoint = Chokepoint {
              context — the editor's locale is already resolved upstream",
         ),
         (
-            "src/admin/handlers/uploads/serve.rs",
+            "src/admin/handlers/uploads/visibility.rs",
             "The file-serve gate resolves the owning row, not a translation: no request locale \
              is in scope, and the default-locale context only keeps the SELECT valid",
         ),

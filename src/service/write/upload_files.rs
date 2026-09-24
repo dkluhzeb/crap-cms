@@ -55,6 +55,11 @@ impl DocumentFiles {
     fn all(&self) -> impl Iterator<Item = &String> {
         self.live.iter().chain(&self.snapshots)
     }
+
+    /// Whether the document referenced `key` anywhere — its bytes are stored.
+    pub(in crate::service::write) fn names(&self, key: &str) -> bool {
+        self.all().any(|k| k == key)
+    }
 }
 
 /// Every storage key one document owns — the published row's AND every version
@@ -207,11 +212,12 @@ fn pending_url_columns(conversions: Option<&UploadConversions>) -> HashSet<&str>
 /// The keys the published row references once this write has landed.
 ///
 /// A column a queued conversion is about to overwrite does NOT count as a
-/// reference: only formats converted synchronously are part of the write, so a
-/// queued one leaves the PREVIOUS file's derivative url standing in its column
-/// until the job runs and replaces it. Counting that stale url as kept would
-/// leave the previous derivative's bytes in storage with nothing referencing
-/// them once the job lands.
+/// reference. Only formats converted synchronously are part of the write, and
+/// the upload pipeline blanks every derived column the new file has not
+/// produced yet, so a queued column is normally empty until its job lands. Any
+/// url still standing in one names a derivative of a file this write replaced:
+/// counting it as kept would leave those bytes in storage with nothing
+/// referencing them once the job overwrites the column.
 fn row_keys(
     after_fields: &DocumentFields,
     def: &CollectionDefinition,
@@ -402,9 +408,9 @@ mod tests {
         [("url".to_string(), json!(url))].into_iter().collect()
     }
 
-    /// The row a replacement leaves behind when the thumbnail's webp variant is
-    /// converted asynchronously: a new `url`, and the PREVIOUS file's webp url
-    /// still standing in the column the queued job will overwrite.
+    /// A replaced row whose queued webp column still carries the PREVIOUS
+    /// file's url — the upload pipeline blanks that column, but a url left
+    /// standing there by any write must not count as a reference.
     fn replaced_row(url: &str, stale_webp: &str) -> DocumentFields {
         [
             ("url".to_string(), json!(url)),

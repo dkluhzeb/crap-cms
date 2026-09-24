@@ -2,16 +2,13 @@
 
 use std::collections::HashMap;
 
-use crate::core::upload::{QueuedConversion, SizeResult, StorageBackend};
+use crate::core::upload::{FileColumns, QueuedConversion, SizeResult, StorageBackend};
 
 /// Result of processing an upload (original + generated sizes/formats).
 #[derive(Debug)]
 pub struct ProcessedUpload {
-    pub filename: String,
-    pub mime_type: String,
-    pub filesize: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    /// The columns the file determined before it was stored.
+    pub file: FileColumns,
     pub url: String,
     pub sizes: HashMap<String, SizeResult>,
     /// Format conversions deferred to the background queue (when per-format `queue = true`).
@@ -35,6 +32,16 @@ mod tests {
     use super::*;
     use crate::core::upload::storage::LocalStorage;
 
+    fn jpeg_columns() -> FileColumns {
+        FileColumns {
+            filename: "test.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            filesize: 100,
+            width: None,
+            height: None,
+        }
+    }
+
     #[test]
     fn cleanup_removes_created_files() {
         let tmp = tempfile::tempdir().unwrap();
@@ -44,11 +51,7 @@ mod tests {
         storage.put("b.txt", b"b", "text/plain").unwrap();
 
         let upload = ProcessedUpload {
-            filename: "test.jpg".to_string(),
-            mime_type: "image/jpeg".to_string(),
-            filesize: 100,
-            width: None,
-            height: None,
+            file: jpeg_columns(),
             url: "/uploads/test.jpg".to_string(),
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),
@@ -68,11 +71,7 @@ mod tests {
         let storage = LocalStorage::new(tmp.path());
 
         let upload = ProcessedUpload {
-            filename: "test.jpg".to_string(),
-            mime_type: "image/jpeg".to_string(),
-            filesize: 100,
-            width: None,
-            height: None,
+            file: jpeg_columns(),
             url: "/uploads/test.jpg".to_string(),
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),

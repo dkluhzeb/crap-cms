@@ -12,6 +12,7 @@ use crate::{
         },
         import_row::{ImportRow, ImportTarget, canonical_document, collect_import_columns},
     },
+    core::{nul_character_errors, validate::ValidationError},
     db::{
         DbConnection, LocaleContext, LocaleMode, UpsertSpec,
         query::{self, ref_count::OutgoingRef},
@@ -163,6 +164,17 @@ fn write_document(
     let (slug, def) = (target.slug, target.def);
 
     let doc = canonical_document(doc_obj, &def.fields);
+
+    // An import writes rows directly, past the write path's gates, so it
+    // applies the NUL rule itself: a stored NUL cannot move to Postgres and
+    // breaks every JSON-path filter there.
+    let nul = nul_character_errors(&doc, &def.fields, &target.locale.locales);
+
+    if !nul.is_empty() {
+        return Err(ValidationError::new(nul))
+            .with_context(|| format!("Document {id} in '{slug}' holds a NUL character"));
+    }
+
     let row = collect_import_columns(&doc, target, id)?;
 
     upsert_row(tx, slug, id, &row)?;
@@ -500,6 +512,36 @@ mod tests {
             .unwrap();
         assert_eq!(row.get_string("email").unwrap(), "ang\u{e8}le@example.com");
         assert_eq!(row.get_string("name").unwrap(), "Ren\u{e9}");
+    }
+
+    /// Regression: an import wrote rows directly, past the write path's NUL
+    /// rule, so a NUL in an exported row's JSON (from a `SQLite` database) was
+    /// stored — and on Postgres broke every row-path filter on the collection.
+    #[test]
+    fn a_nul_inside_a_row_is_refused() {
+        let mut notes = CollectionDefinition::new("notes");
+        notes.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let notes_def = notes.clone();
+
+        let (_tmp, db_pool) = synced_db(vec![notes], &LocaleConfig::default());
+
+        let mut conn = db_pool.get().unwrap();
+        let doc = json!({ "id": "n1", "items": [{ "label": "a\u{0}b" }] });
+        let tx = conn.transaction().unwrap();
+        let locale = LocaleConfig::default();
+        let target = ImportTarget::resolve(&tx, "notes", &notes_def, &locale).unwrap();
+
+        let Err(err) = import_single_document(&doc, &target, &tx) else {
+            panic!("a NUL is refused");
+        };
+
+        assert!(format!("{err:#}").contains("items[0][label]"), "{err:#}");
     }
 
     fn localized_title() -> Vec<FieldDefinition> {

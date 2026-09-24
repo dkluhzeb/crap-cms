@@ -27,13 +27,15 @@ use crate::admin::{
 };
 use crate::config::LocaleConfig;
 use crate::core::{
-    AuthUser, Registry, SharedTokenProvider, auth::Claims, collection::Surface, with_label_locale,
+    AuthUser, Registry, SharedTokenProvider, collection::Surface, with_label_locale,
 };
 use crate::db::{BoxedConnection, DbPool};
 use crate::hooks::HookRunner;
 use crate::service::{
     self,
-    auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
+    auth::{
+        AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,
+    },
     user_settings::load_user_settings,
 };
 
@@ -85,15 +87,19 @@ fn login_redirect_clearing_cookie(state: &AdminState, request: &Request<Body>) -
     response
 }
 
-/// Insert authenticated claims (and optionally user) into request
-/// extensions, checking the admin access gate first. Returns a
-/// gate-denied response if blocked.
+/// Insert the authenticated user, its claims and the method that resolved
+/// it into request extensions, checking the admin access gates first.
+/// Returns a gate-denied response if blocked.
+///
+/// The resolved method travels with the claims so a handler that acts on
+/// *how* the request authenticated (session refresh accepts only the
+/// session cookie) reads it from the evaluator, never infers it.
 #[cfg(not(tarpaulin_include))]
 async fn apply_auth_to_request(
     state: &AdminState,
     request: &mut Request<Body>,
-    claims: Claims,
     auth_user: AuthUser,
+    via: ResolvedMethod,
 ) -> Option<Response> {
     if let Some(response) = check_admin_gate(state, &auth_user).await {
         return Some(response);
@@ -109,8 +115,12 @@ async fn apply_auth_to_request(
         return Some(response);
     }
 
+    let claims = auth_user.claims.clone();
+
     request.extensions_mut().insert(auth_user);
     request.extensions_mut().insert(claims);
+    request.extensions_mut().insert(via);
+
     None
 }
 
@@ -249,8 +259,12 @@ pub(in crate::admin) async fn auth_middleware(
         return login_redirect(&request);
     };
 
-    let mut auth_user = match outcome.resolution {
-        Resolution::Authenticated(auth) => auth.user,
+    let (mut auth_user, via) = match outcome.resolution {
+        Resolution::Authenticated(auth) => {
+            let AuthenticatedResolution { user, via } = *auth;
+
+            (user, via)
+        }
         // Anonymous (no creds presented) and Invalid(Lookup) (a
         // transient pool/DB failure) both keep whatever cookie the
         // browser sent — there's no proven-dead token to clear,
@@ -272,9 +286,9 @@ pub(in crate::admin) async fn auth_middleware(
         .ui_locale
         .unwrap_or_else(|| state.config.locale.default_locale.clone());
 
-    let claims = auth_user.claims.clone();
     let ui_locale = auth_user.ui_locale.clone();
-    if let Some(response) = apply_auth_to_request(&state, &mut request, claims, auth_user).await {
+
+    if let Some(response) = apply_auth_to_request(&state, &mut request, auth_user, via).await {
         return response;
     }
 

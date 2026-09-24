@@ -11,7 +11,8 @@ use crate::{
                 builder::visible_field_defs,
                 cascaded_readonly,
                 enrich::{
-                    EnrichCtx, EnrichOptions, gated_find_by_id, nested::enrich_nested_fields, types,
+                    EnrichCtx, EnrichOptions, gated_find_by_id, join::enrich_join,
+                    nested::enrich_nested_fields, types,
                 },
             },
             shared::admin_form_fields,
@@ -169,7 +170,7 @@ fn enrich_single_field(
             enrich_tabs(tf, field_def, doc_fields, opts, enrich_ctx);
         }
         FieldContext::Join(jf) => {
-            types::enrich_join(jf, field_def, enrich_ctx, opts.doc_id);
+            enrich_join(jf, field_def, enrich_ctx, opts.doc_id);
         }
         FieldContext::Richtext(rf) => {
             types::enrich_richtext(rf, reg);

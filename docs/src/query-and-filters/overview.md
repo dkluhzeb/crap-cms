@@ -79,8 +79,8 @@ neighbouring UTC day). To select a local day in another zone, pass the zone's
 midnight bounds with an offset:
 `greater_than_or_equal = "2026-01-15T00:00:00-05:00"` and
 `less_than = "2026-01-16T00:00:00-05:00"`. A NULL date matches no comparison,
-`not_equals` and `not_in` included. SQL and the in-memory evaluator (live
-events, population gating) read dates alike.
+`not_equals` and `not_in` a non-empty list included. SQL and the in-memory
+evaluator (live events, population gating) read dates alike.
 
 ### Has-many fields: element by element
 
@@ -123,7 +123,9 @@ order — and a sort on one is rejected with a validation error.
 
 ## Sorting
 
-Prefix a field name with `-` for descending order. When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.
+Prefix a field name with `-` for descending order. A group's sub-field sorts by
+either spelling filters accept — `seo.title` or `seo__title` (`-seo.title` for
+descending). When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.
 
 **Relevance order:** `order_by = "_rank"` (only valid together with `search`) sorts by search relevance, best first — FTS5 `bm25()` on SQLite, `ts_rank` on Postgres — with a stable `id` tiebreaker. It requires page/offset pagination (relevance is not cursor-stable) and skips the drafts `_status` prepend described below: when you search ranked, relevance wins. Without an FTS index yet, it degrades to `id` order, matching the search filter's behavior.
 
@@ -242,6 +244,11 @@ grpcurl -plaintext -d '{
 ```
 
 Cursors encode the position of a document in the sorted result set. They are opaque — do not parse or construct them manually. `start_cursor` and `end_cursor` are always present when the result set is non-empty.
+
+A cursor records the value the sort orders by. For an all-locales read
+(`locale = "all"`) sorted by a localized field — top level or inside a group —
+documents hold the field as a `{ en = …, de = … }` map, and the sort (and the
+cursor) uses the default locale's value.
 
 ## Combining Filters
 
@@ -373,7 +380,7 @@ grpcurl -plaintext -d '{
 
 ## Field Validation
 
-All filter field names and `order_by` fields are validated against the collection's field definitions, and so is every dot-notation path down to its last segment: an unknown field, an array or block sub-field the rows do not have, a sub-path into a field that has none, or a path ending on a container (a group, a nested array) is rejected before any SQL runs. The error is a validation error naming the path (or `order_by`), reported the same way on every surface and for every operation that filters — `Find`, `Count`, `UpdateMany` and `DeleteMany` answer `INVALID_ARGUMENT` over gRPC, MCP reports the message, Lua raises it. This also keeps field names from ever reaching SQL unchecked.
+All filter field names and `order_by` fields are validated against the collection's field definitions, and so is every dot-notation path down to its last segment: an unknown field, an array or block sub-field the rows do not have, a sub-path into a field that has none, a path ending on a container (a group, a nested array), or one ending on a `join` field (which stores no value) is rejected before any SQL runs. The error is a validation error naming the path (or `order_by`), reported the same way on every surface and for every operation that filters — `Find`, `Count`, `UpdateMany` and `DeleteMany` answer `INVALID_ARGUMENT` over gRPC, MCP reports the message, Lua raises it. This also keeps field names from ever reaching SQL unchecked.
 
 ## Draft Parameter (Versioned Collections)
 
@@ -419,6 +426,13 @@ You can filter on sub-fields of group, array, blocks, and has-many relationship 
 ### Group Fields
 
 Group sub-fields can be filtered using dot notation. Internally, `seo.meta_title` is converted to `seo__meta_title` (the flat column name). The double-underscore syntax also continues to work.
+
+An array, blocks or has-many relationship/upload **inside a group** keeps its
+rows in its own join table (`{collection}_{group}__{field}`), and a path
+reaches it through the group spelled either way — `seo.links.url` or
+`seo__links.url`, `seo.tags.id` — then continues exactly as for a top-level
+array, blocks or has-many field (below). Groups nest: `seo.social.links.url`.
+Errors name the path as you wrote it.
 
 **Lua:**
 
@@ -467,6 +481,25 @@ crap.collections.products.find({
 ### Block Sub-Fields
 
 Filter by field values inside block rows. Uses `json_extract` on the block `data` column. Returns parent documents that have **at least one** block row matching. A field inside a layout `row`, `collapsible` or `tabs` is named directly (`content.caption`), and a has-many list or relationship inside the block is read element by element. Groups, nested arrays and nested blocks are followed at any depth; `_block_type` names the type of the block row it follows (`content._block_type`, `content.nested._block_type`) and is refused anywhere else. `content.id` filters by the block row's own id, as `variants.id` does for an array row.
+
+Each block row is read with **its own block type's** fields. When several
+block types use a name for fields of different kinds — a number in one, text
+in another; a has-many list in one, a single value in another; a text field in
+one, a group in another — the filter is read per block type: a row matches
+when its own type's field satisfies the operator, negative operators included
+(a list inside the row is still read element by element). A path valid for at
+least one block type is accepted (`content.info.x` where only one type's
+`info` is a group) and matches only rows of the types it is valid for. An
+operand that does not fit one type's field (`"high"` against a number) matches
+none of that type's rows, and is a validation error only when it fits no
+block type. A name every block type defines alike reads the same in every row.
+
+A row whose block type declares **no** field of the filtered name reads the
+value as absent (NULL) — whether the declaring types define the name alike or
+differently, at the top level and in nested block rows. So
+`content.score = { not_exists = true }` and `content.score = { not_in = {} }`
+match a document holding such a row, while `exists`, `equals`, `not_equals`
+and every other comparison never match on it (a NULL compares to nothing).
 
 **Lua:**
 
@@ -531,7 +564,7 @@ crap.collections.products.find({
 })
 ```
 
-All filter operators (equals, contains, like, in, greater_than, etc.) work with nested field filters.
+All filter operators (equals, contains, like, in, greater_than, etc.) work with nested field filters — on both backends, a checkbox inside a row's JSON included (its stored `true`/`false` compares as `1`/`0`, like a top-level checkbox). A `join` field inside a row stores no value and is refused as a filter path, as it is at the top level.
 
 ## Full-Text Search
 
@@ -580,6 +613,9 @@ path (a group, array-row, block or nested-row sub-field included). See
 A filter value that does not fit the field's type — a non-numeric string
 on a Number field, a non-boolean on a Checkbox — is a validation error
 naming the field (400 on every surface), never a silent text comparison.
+An access rule's row constraint judged in memory (live events, population
+gating) matches nothing for such a value — not even `not_equals` or
+`not_in` — just as SQL returns nothing for it.
 `like` / `contains` on a Number or Checkbox field match the value's text
 form on both backends.
 
@@ -594,7 +630,7 @@ System columns (names starting with `_`, such as `_status`, `_deleted_at`, `_ref
 
 Additionally, you can filter on sub-fields using dot notation:
 
-- **Group sub-fields:** `group_name.sub_field` (syntactic sugar for `group_name__sub_field`)
+- **Group sub-fields:** `group_name.sub_field` (syntactic sugar for `group_name__sub_field`); an array, blocks or has-many field inside a group continues from `group_name.field` or `group_name__field` (`seo.links.url`, `seo__tags.id`)
 - **Array sub-fields:** `array_name.sub_field`, `array_name.id` (the row's id), or a path into a group, nested array or nested blocks sub-field at any depth (`array_name.group.sub_field`, `array_name.nested.sub_field`)
 - **Block sub-fields:** `blocks_name.field`, `blocks_name._block_type`, `blocks_name.id` (the row's id), or a path into a group, nested array or nested blocks at any depth (`blocks_name.group.sub_field`)
 - **Has-many relationships:** `relationship_name.id`

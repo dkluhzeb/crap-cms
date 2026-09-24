@@ -6,10 +6,10 @@
 //! [`unreadable_query_paths`]; the admin list view asks it too.
 
 use crate::{
-    core::{CollectionDefinition, Document},
+    core::{CollectionDefinition, Document, FieldDefinition},
     db::FilterClause,
     service::{
-        ReadStripArgs, ServiceContext, ServiceError,
+        FieldReadStrip, ReadStripArgs, ServiceContext, ServiceError,
         helpers::{collect_api_hidden_field_names, strip_unreadable_docs},
     },
 };
@@ -40,6 +40,33 @@ pub(crate) fn reject_unreadable_query_fields(
     let paths = query_field_paths(refs);
 
     match unreadable_query_paths(ctx, locale, &paths)?.first() {
+        Some(path) => Err(unreadable(path)),
+        None => Ok(()),
+    }
+}
+
+/// Reject a filter on a field the caller may not read, judged through `strip`
+/// — for a write that matches its documents by a filter (`update_many`,
+/// `delete_many`) and so carries write hooks rather than read hooks. Its
+/// match counts would otherwise probe a read-denied value just as a find
+/// would. The rule is [`unreadable_query_paths`].
+///
+/// # Errors
+///
+/// Returns `AccessDenied` naming the first unreadable field, or the error from
+/// resolving the collection definition.
+pub(crate) fn reject_unreadable_filter_fields(
+    ctx: &ServiceContext,
+    strip: &dyn FieldReadStrip,
+    locale: Option<&str>,
+    filters: &[FilterClause],
+) -> Result<(), ServiceError> {
+    let paths = query_field_paths(&QueryFieldRefs {
+        filters,
+        order_by: None,
+    });
+
+    match unreadable_paths_by(ctx, strip, locale, &paths)?.first() {
         Some(path) => Err(unreadable(path)),
         None => Ok(()),
     }
@@ -76,13 +103,27 @@ pub fn unreadable_query_paths(
         return Ok(Vec::new());
     }
 
-    let def = ctx.collection_def()?;
-    let readable = probe_readable(ctx, locale, paths)?;
+    unreadable_paths_by(ctx, ctx.read_hooks()?, locale, paths)
+}
+
+/// [`unreadable_query_paths`] with the read strip supplied by the caller.
+fn unreadable_paths_by(
+    ctx: &ServiceContext,
+    strip: &dyn FieldReadStrip,
+    locale: Option<&str>,
+    paths: &[String],
+) -> Result<Vec<String>, ServiceError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let fields = ctx.fields()?;
+    let readable = probe_readable(ctx, strip, locale, paths)?;
 
     Ok(paths
         .iter()
         .zip(readable)
-        .filter(|(path, readable)| !readable || is_hidden_query_path(def, path))
+        .filter(|(path, readable)| !readable || is_hidden_path(fields, path))
         .map(|(path, _)| path.clone())
         .collect())
 }
@@ -92,15 +133,15 @@ pub fn unreadable_query_paths(
 /// evaluate them in one pass.
 fn probe_readable(
     ctx: &ServiceContext,
+    strip: &dyn FieldReadStrip,
     locale: Option<&str>,
     paths: &[String],
 ) -> Result<Vec<bool>, ServiceError> {
-    let hooks = ctx.read_hooks()?;
-    let def = ctx.collection_def()?;
+    let fields = ctx.fields()?;
 
     let shapes: Vec<Vec<Vec<ProbeStep>>> = paths
         .iter()
-        .map(|path| probe_shapes(&def.fields, path))
+        .map(|path| probe_shapes(fields, path))
         .collect();
 
     let mut probes: Vec<Document> = shapes
@@ -110,12 +151,12 @@ fn probe_readable(
         .map(probe_document)
         .collect();
 
-    let args = ReadStripArgs::builder(&def.fields, ctx.slug)
+    let args = ReadStripArgs::builder(fields, ctx.slug)
         .user(ctx.user)
         .locale(locale)
         .build();
 
-    strip_unreadable_docs(hooks, &args, &mut probes);
+    strip_unreadable_docs(strip, &args, &mut probes);
 
     // Every probe of a path is consumed, so the next path reads its own.
     let mut stripped = probes.iter();
@@ -139,7 +180,12 @@ fn probe_readable(
 /// for definition-time checks (an `admin.default_sort` on a hidden field).
 #[must_use]
 pub fn is_hidden_query_path(def: &CollectionDefinition, path: &str) -> bool {
-    collect_api_hidden_field_names(&def.fields, "")
+    is_hidden_path(&def.fields, path)
+}
+
+/// Whether `path` is, or lies beneath, a `hidden` field of `fields`.
+fn is_hidden_path(fields: &[FieldDefinition], path: &str) -> bool {
+    collect_api_hidden_field_names(fields, "")
         .iter()
         .any(|d| denial_covers(&d.display_path(), path))
 }
@@ -174,14 +220,19 @@ fn collect_filter_paths(clause: &FilterClause, out: &mut Vec<String>) {
     }
 }
 
-/// A denial at `denied` covers `path` when they are equal, when `path` is a
-/// dot-path beneath it (`arr.sub` under `arr`), or a flattened group child
-/// (`seo__title` under `seo`).
+/// A denial at `denied` covers `path` when they name the same field or `path`
+/// lies beneath it. A group's part of a path is spelled `seo.title` or
+/// `seo__title` alike — a denial carries the flat form (`seo__links.url` for
+/// an array inside a group), a query either — so both compare with every
+/// group separator read as `.` (no field name holds `__`).
 fn denial_covers(denied: &str, path: &str) -> bool {
+    let denied = denied.replace("__", ".");
+    let path = path.replace("__", ".");
+
     path == denied
         || path
-            .strip_prefix(denied)
-            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with("__"))
+            .strip_prefix(denied.as_str())
+            .is_some_and(|rest| rest.starts_with('.'))
 }
 
 fn unreadable(path: &str) -> ServiceError {
@@ -201,7 +252,7 @@ mod tests {
             BlockDefinition, DocumentFields, FieldAccess, FieldDefinition, FieldType, HookRef,
             RelationshipConfig, ReqContext, collection::Hooks,
         },
-        db::AccessResult,
+        db::{AccessResult, Filter, FilterOp},
         hooks::lifecycle::{AccessCheckInput, AfterReadCtx, access::strip_read_access_data_aware},
         service::{FieldReadStrip, ReadHooks},
     };
@@ -245,6 +296,12 @@ mod tests {
 
     fn text(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
+    }
+
+    fn hidden_text(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .hidden(true)
+            .build()
     }
 
     fn gated(mut field: FieldDefinition, rule: &str) -> FieldDefinition {
@@ -418,5 +475,158 @@ mod tests {
                 "token".to_string(),
             ]
         );
+    }
+
+    /// A group holding an array, blocks, a has-many relationship and a nested
+    /// group with an array — each with a denied sub-field — beside a denied
+    /// group holding a readable array, all inside a layout row.
+    fn group_container_schema() -> CollectionDefinition {
+        let links = container(
+            "links",
+            FieldType::Array,
+            vec![text("url"), gated(text("secret"), "deny")],
+        );
+        let sections = FieldDefinition::builder("sections", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "part",
+                vec![text("title"), gated(text("body"), "deny")],
+            )])
+            .build();
+        let tags = gated(
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+            "deny",
+        );
+        let rows = container(
+            "rows",
+            FieldType::Array,
+            vec![text("name"), gated(text("secret"), "deny")],
+        );
+        let inner = container("inner", FieldType::Group, vec![rows]);
+        let seo = container("seo", FieldType::Group, vec![links, sections, tags, inner]);
+        let private = gated(
+            container(
+                "private",
+                FieldType::Group,
+                vec![container("links", FieldType::Array, vec![text("url")])],
+            ),
+            "deny",
+        );
+        let layout = container("layout", FieldType::Row, vec![seo, private]);
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![layout];
+
+        def
+    }
+
+    fn unreadable_in(def: &CollectionDefinition, paths: &[&str]) -> Vec<String> {
+        let ctx = ServiceContext::collection("posts", def)
+            .read_hooks(&RuleStrip)
+            .build();
+        let paths: Vec<String> = paths.iter().map(|p| (*p).to_string()).collect();
+
+        unreadable_query_paths(&ctx, None, &paths).unwrap()
+    }
+
+    /// A join-table field inside groups is filtered through the groups in
+    /// either spelling; every rule on the way — the row's sub-field, the
+    /// relationship's, an enclosing group's — decides the path in both.
+    #[test]
+    fn paths_into_containers_inside_groups_are_judged_by_every_rule_on_the_way() {
+        let def = group_container_schema();
+
+        let readable = [
+            "seo.links.url",
+            "seo__links.url",
+            "seo.links.id",
+            "seo.sections.title",
+            "seo__sections._block_type",
+            "seo.inner.rows.name",
+            "seo__inner__rows.name",
+            "seo.inner__rows.name",
+        ];
+        let unreadable = [
+            "seo.links.secret",
+            "seo__links.secret",
+            "seo.sections.body",
+            "seo__sections.body",
+            "seo.tags.id",
+            "seo__tags.id",
+            "seo.inner.rows.secret",
+            "seo__inner__rows.secret",
+            "seo.inner__rows.secret",
+            "private.links.url",
+            "private__links.url",
+        ];
+
+        assert!(unreadable_in(&def, &readable).is_empty());
+
+        for path in unreadable {
+            assert_eq!(
+                unreadable_in(&def, &[path]),
+                vec![path.to_string()],
+                "{path}"
+            );
+        }
+    }
+
+    /// Regression: a `hidden` field inside an array inside a group was
+    /// matched only in the flat spelling its denial carries
+    /// (`seo__links.url`), so `seo.links.url` filtered on it; a hidden group
+    /// value likewise only as `seo__secret`. Both spellings are one path.
+    #[test]
+    fn a_hidden_field_is_unfilterable_in_every_spelling_of_its_path() {
+        let links = container(
+            "links",
+            FieldType::Array,
+            vec![text("title"), hidden_text("url")],
+        );
+        let seo = container(
+            "seo",
+            FieldType::Group,
+            vec![text("title"), hidden_text("secret"), links],
+        );
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![seo];
+
+        for path in [
+            "seo.links.url",
+            "seo__links.url",
+            "seo.secret",
+            "seo__secret",
+        ] {
+            assert_eq!(
+                unreadable_in(&def, &[path]),
+                vec![path.to_string()],
+                "{path}"
+            );
+        }
+
+        assert!(unreadable_in(&def, &["seo.links.title", "seo.title"]).is_empty());
+    }
+
+    fn equals(field: &str) -> Vec<FilterClause> {
+        vec![FilterClause::Single(Filter {
+            field: field.to_string(),
+            op: FilterOp::Equals("x".to_string()),
+        })]
+    }
+
+    /// The bulk-write form judges through the strip it is handed: a write
+    /// context carries no read hooks.
+    #[test]
+    fn a_bulk_filter_is_judged_through_the_given_strip() {
+        let def = schema();
+        let ctx = ServiceContext::collection("posts", &def).build();
+
+        let err = reject_unreadable_filter_fields(&ctx, &RuleStrip, None, &equals("seo.secret"))
+            .expect_err("a denied group sub-field");
+        assert!(matches!(err, ServiceError::AccessDenied(_)), "{err:?}");
+
+        reject_unreadable_filter_fields(&ctx, &RuleStrip, None, &equals("title"))
+            .expect("a plain field");
+        reject_unreadable_filter_fields(&ctx, &RuleStrip, None, &[]).expect("no filter");
     }
 }

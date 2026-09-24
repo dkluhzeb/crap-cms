@@ -11,7 +11,8 @@ use crate::{
         validate::{FieldError, ValidationError},
     },
     db::{
-        AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
+        AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+        query::{self, filter::normalize_order_by},
     },
     hooks::{HookContext, HookEvent, lifecycle::access::collect_denials_flat},
     service::{
@@ -417,6 +418,18 @@ pub(crate) fn enforce_access_constraints(
     Ok(())
 }
 
+/// Rewrite a list read's dotted group sort (`seo.title`, `-seo.title`) to the
+/// column it sorts by (`seo__title`) — the chokepoint every list read
+/// (`find_documents`, `search_documents`) passes, whichever surface or
+/// internal caller built the query — so the cursor encodes, and the sort-locale
+/// check reads, the column the SQL orders by.
+pub(crate) fn normalize_sort(fq: &mut FindQuery, fields: &[FieldDefinition]) {
+    fq.order_by = fq
+        .order_by
+        .as_deref()
+        .map(|order| normalize_order_by(order, fields));
+}
+
 /// Inputs for [`build_pagination`]. Grouped into a struct per
 /// CLAUDE.md's "more than 4 parameters" rule; constructed at the two
 /// call sites in the read service (`find_documents`,
@@ -425,6 +438,11 @@ pub(crate) struct PaginationInputs<'a> {
     pub docs: &'a [Document],
     pub total: i64,
     pub fq: &'a FindQuery,
+    /// The collection's fields and the read's locale context: an all-locales
+    /// read sorted by a localized column holds its per-locale map, and the
+    /// cursor records the locale SQL orders by.
+    pub fields: &'a [FieldDefinition],
+    pub locale_ctx: Option<&'a LocaleContext>,
     pub cursor_enabled: bool,
     pub has_timestamps: bool,
     /// Whether the collection has drafts enabled — controls cursor
@@ -442,8 +460,16 @@ pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::Paginati
     let limit = inputs.fq.limit.unwrap_or(inputs.total);
 
     if inputs.cursor_enabled {
+        let order_by = inputs.fq.order_by.as_deref();
+        let sort_locale = query::cursor_sort_locale(
+            order_by,
+            inputs.has_timestamps,
+            inputs.fields,
+            inputs.locale_ctx,
+        );
+
         query::PaginationResult::builder(inputs.docs, inputs.total, limit).cursor(
-            inputs.fq.order_by.as_deref(),
+            order_by,
             query::CursorFlags {
                 has_timestamps: inputs.has_timestamps,
                 has_drafts: inputs.has_drafts,
@@ -451,6 +477,7 @@ pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::Paginati
                 had_any_cursor: inputs.fq.after_cursor.is_some()
                     || inputs.fq.before_cursor.is_some(),
                 cursor_has_more: inputs.cursor_has_more,
+                sort_locale,
             },
         )
     } else {

@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
-    core::{Document, DocumentFields, field::FieldDefinition},
+    core::{Document, DocumentFields, field::FieldDefinition, reject_nul_characters},
     db::{LocaleContext, ops, query},
     service::{ServiceContext, versions},
 };
@@ -27,6 +27,9 @@ pub fn persist_draft_version(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
     let slug = ctx.slug;
+
+    // Final post-hook data: the draft snapshot is JSON a `::jsonb` cast reads.
+    reject_nul_characters(hook_data, &def.fields)?;
 
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;

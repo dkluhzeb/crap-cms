@@ -4,7 +4,8 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::core::{
-    DocumentFields, FieldDefinition, Registry, flatten_group_fields, validate::ValidationError,
+    DocumentFields, FieldDefinition, Registry, flatten_group_fields, nul_character_errors,
+    validate::ValidationError,
 };
 
 use super::ValidationCtx;
@@ -48,6 +49,15 @@ pub(in crate::hooks::lifecycle::validation) fn validate_fields_inner(
     // shape, matching field hooks and field access.
     let flat = flatten_group_fields(data, fields);
 
+    // A NUL anywhere in the write is refused before any check that queries the
+    // database with the value (a unique check would hand Postgres a string it
+    // cannot even compare).
+    let nul_errors = nul_character_errors(data, fields, &[]);
+
+    if !nul_errors.is_empty() {
+        return Err(ValidationError::new(nul_errors));
+    }
+
     let mut errors = Vec::new();
     ValidationWalker::new(lua, &flat, data, ctx).walk(fields, "", false, &mut errors);
 
@@ -79,6 +89,54 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    #[cfg(feature = "sqlite")]
+    use crate::{core::FieldType, db::InMemoryConn};
+
+    /// Regression: a NUL was refused only in top-level text/textarea/email
+    /// columns, so one inside an array row or a JSON field was stored — and on
+    /// Postgres, whose `::jsonb` cast rejects the `\u0000` escape, it broke
+    /// every row-path filter on the collection. Every depth is checked, and the
+    /// NUL error is returned alone: the unique check would otherwise query the
+    /// database with the value.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_nul_anywhere_in_the_write_is_rejected() {
+        let lua = Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, meta TEXT)");
+
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("meta", FieldType::Json).build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let data: DocumentFields = [
+            ("slug".to_string(), json!("a\0b")),
+            ("meta".to_string(), json!("{\"k\": \"\\u0000\"}")),
+            ("items".to_string(), json!([{ "label": "\0" }])),
+        ]
+        .into_iter()
+        .collect();
+        let ctx = ValidationCtx::builder(&conn, "test").draft(true).build();
+
+        let err = validate_fields_inner(&lua, &fields, &data, &ctx).unwrap_err();
+        let mut keys: Vec<&str> = err.errors.iter().map(|e| e.field.as_str()).collect();
+        keys.sort_unstable();
+
+        assert_eq!(keys, vec!["items[0][label]", "meta", "slug"]);
+        assert!(
+            err.errors
+                .iter()
+                .all(|e| e.key.as_deref() == Some("validation.nul_character"))
+        );
+    }
 
     #[test]
     fn absent_null_and_empty_string_are_empty() {
